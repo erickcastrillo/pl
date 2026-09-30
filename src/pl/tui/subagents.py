@@ -308,3 +308,105 @@ class SubagentsView(Widget):
                 _copy_run(argv, text)
                 break
         self.app.notify(f"copied {len(self.lines[-TAIL_ENTRIES:])} lines", markup=False)
+
+
+NOW_CHARS = 60
+TODO_MARK = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]"}
+_now_cache = {}   # session id -> (path, (size, mtime_ns), (line, todos))
+
+
+def _cut(s, n=NOW_CHARS):
+    s = " ".join(str(s).split())
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def _todos(entries):
+    """[(status, text)] of the last TodoWrite call in the entries, else []."""
+    for e in reversed(entries):
+        for b in reversed(_blocks(e)):
+            items = (b.get("input") or {}).get("todos") if b.get("type") == "tool_use" and b.get("name") == "TodoWrite" else None
+            if isinstance(items, list):
+                return [(str(t.get("status")), _cut(mask(t.get("content") or ""), 80)) for t in items[:50] if isinstance(t, dict)]
+    return []
+
+
+def _summary(entries):
+    """(one line of at most NOW_CHARS masked characters, todos): last error, else the current tool (with the todo
+    position), else the current todo, else the first line of the last reply."""
+    msgs = [e for e in entries if isinstance(e.get("message"), dict)]
+    todos = _todos(entries)
+    if not msgs:
+        return "", todos
+    last, blocks = msgs[-1], _blocks(msgs[-1])
+    bad = next((b for b in blocks if b.get("type") == "tool_result" and b.get("is_error")), None)
+    if last.get("isApiErrorMessage") or last.get("error") or bad:
+        text = _first_line(bad.get("content") if bad else [b for b in blocks if b.get("type") == "text"])
+        return _cut("error: " + (text or "failed")), todos
+    cur = next((i for i, (s, _) in enumerate(todos) if s == "in_progress"), None)
+    if cur is None:
+        cur = next((i for i, (s, _) in enumerate(todos) if s == "pending"), None)
+    where = f"todo {cur + 1}/{len(todos)}" if cur is not None else ""
+    tool = next((b for b in reversed(blocks) if b.get("type") == "tool_use"), None)
+    if tool and last["message"].get("role") == "assistant":
+        inp, cwd = _short_input(tool.get("input")), str(last.get("cwd") or "")
+        if cwd and inp.startswith(cwd + "/"):
+            inp = inp[len(cwd) + 1:]
+        line = mask(f"{tool.get('name')} {inp}")
+        both = f"{line} · {where}" if where else line
+        return _cut(both if len(both) <= NOW_CHARS else line), todos
+    if cur is not None:
+        return _cut(f"{where}: {todos[cur][1]}"), todos
+    said = next((b for b in blocks if b.get("type") == "text" and last["message"].get("role") == "assistant"), None)
+    return _cut(_first_line(said.get("text"))) if said else "", todos
+
+
+def now_line(path, ident=None):
+    """What the session is doing right now, read from the transcript's tail only. Error lines start with "error: "."""
+    return _summary(read_tail(path, ident=ident))[0]
+
+
+def _transcript(root, sid):
+    """The session's transcript under <account root>/projects, or None; linked folders and credential files are refused."""
+    from pl.usage import SID_RE
+    if not isinstance(sid, str) or not SID_RE.fullmatch(sid):
+        return None
+    try:
+        if (root / "projects").is_symlink():
+            return None
+        projects = (root / "projects").resolve()
+        for p in projects.glob(f"*/{sid}.jsonl"):
+            st = p.stat()
+            if p.resolve().is_relative_to(projects) and not harnesses.is_secret_file(root, st):
+                return p.resolve(), st
+    except (OSError, RuntimeError):
+        pass
+    return None
+
+
+def now_lines(rows):
+    """{card id: {"line", "todos"}} for cards whose Claude agent has a live window and a transcript written in the
+    last 6 hours. A transcript is read again only when its size or mtime changed."""
+    out, seen, now = {}, set(), time.time()
+    for r in rows:
+        w, c = r.get("worker") or {}, r.get("card")
+        sid, acct = w.get("session_id"), w.get("profile")
+        if not (c and sid and r.get("win") and acct in C.PROFILES and harnesses.account_harness(acct).name == "claude"):
+            continue
+        hit = _now_cache.get(sid)
+        try:
+            found = (hit[0], hit[0].stat()) if hit else None
+        except OSError:
+            found = None
+        found = found or _transcript(Path(C.PROFILES[acct]).expanduser(), sid)
+        if not found or now - found[1].st_mtime > RECENT:
+            continue
+        p, st = found
+        key = (st.st_size, st.st_mtime_ns)
+        if not (hit and hit[0] == p and hit[1] == key):
+            hit = (p, key, _summary(read_tail(p, ident=(st.st_dev, st.st_ino))))
+            _now_cache[sid] = hit
+        seen.add(sid)
+        out[c["id"]] = {"line": hit[2][0], "todos": hit[2][1]}
+    for k in [k for k in _now_cache if k not in seen]:
+        del _now_cache[k]
+    return out

@@ -8,6 +8,7 @@ from textual.widgets import DataTable, Markdown, Static
 
 from pl import config as C
 from pl.tui.chrome import header_text
+from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, checks_text, confirm_and_approve, load_review, size_text
 
 PR_WHAT = {"decide": "needs your decision (auto-review stopped on purpose)", "merge": "ready to merge",
@@ -48,7 +49,7 @@ def row_id(r):
     return f"pr:{r['pr']['repo']}#{r['pr']['number']}" if r.get("pr") else r["card"]["id"]
 
 
-def detail(r):
+def detail(r, now=None):
     """Plain text for the detail pane, from the row's own data (no board call)."""
     if r is None:
         return Text("select a row", style="dim")
@@ -58,9 +59,13 @@ def detail(r):
                                pr.get("url") or ""]))
     c = r["card"]
     m = c.get("metadata") or {}
-    return Text("\n".join([c.get("title") or "", "", f"card     {c['id']}", f"column   {r.get('col')}",
-                           f"account  {m.get('profile') or '-'}", f"tags     {', '.join(map(str, c.get('tags') or [])) or '-'}",
-                           f"updated  {str(c.get('updated_at') or '')[:16].replace('T', ' ')}"]))
+    lines = [c.get("title") or "", "", f"card     {c['id']}", f"column   {r.get('col')}",
+             f"account  {m.get('profile') or '-'}", f"tags     {', '.join(map(str, c.get('tags') or [])) or '-'}",
+             f"updated  {str(c.get('updated_at') or '')[:16].replace('T', ' ')}"]
+    if now and now.get("line"):
+        lines.append(f"now      {now['line']}")
+    lines += [f"         {TODO_MARK.get(s, '[ ]')} {t}" for s, t in (now or {}).get("todos") or []]
+    return Text("\n".join(lines))
 
 
 KIND = {"specs": "spec", "plans": "plan"}
@@ -77,11 +82,12 @@ class NeedsView(Horizontal):
         super().__init__()
         self._rows, self._kinds, self._built = {}, {}, []
         self._bodies, self._pending = {}, {}   # key → (updated_at, text); read again only when the card changed
+        self._now = {}   # card id -> {"line", "todos"} from the refresh
         self._shown, self._note = None, (None, "")   # what the pane shows; the "updated HH:MM" note
 
     def compose(self):
         t = DataTable(id="needs-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_columns("id", "title", "where")
+        t.add_columns("id", "title", "where", "now")
         yield t
         with Vertical(id="needs-side", classes="panel"):
             d = Static(Text(""), id="needs-detail")
@@ -92,6 +98,7 @@ class NeedsView(Horizontal):
 
     def show(self, data):
         rows = data["snapshot"]["rows"]
+        self._now = data.get("now") or {}
         g = needs_groups(rows)
         t = self.query_one(DataTable)
         t.border_title = f"Needs you · {waiting_total(g)}"
@@ -103,20 +110,22 @@ class NeedsView(Horizontal):
             if not g[key]:
                 continue
             built.append((f"group:{key}", (Text("■", style=colour), Text(f"{title} {len(g[key])}", style="bold"),
-                                           Text(hint, style="dim"))))
+                                           Text(hint, style="dim"), Text(""))))
             for r in g[key]:
                 rid = row_id(r)
                 if rid in self._rows:   # a duplicate row would raise DuplicateKey
                     continue
                 self._rows[rid], self._kinds[rid] = r, key
                 if r.get("pr"):
-                    cells = (f"{r['pr']['repo']}#{r['pr']['number']}", r["pr"]["title"] or "", r["pr"]["repo"])
+                    cells = (f"{r['pr']['repo']}#{r['pr']['number']}", r["pr"]["title"] or "", r["pr"]["repo"], "")
                 else:
-                    cells = (str(r["card"]["id"])[:8], r["card"].get("title") or "", str((r["card"].get("tags") or [None])[0] or r.get("profile") or ""))
-                built.append((rid, (Text(cells[0], style="dim"), Text(cells[1]), Text(cells[2], style="dim"))))
+                    cells = (str(r["card"]["id"])[:8], r["card"].get("title") or "", str((r["card"].get("tags") or [None])[0] or r.get("profile") or ""),
+                             (self._now.get(r["card"]["id"]) or {}).get("line") or "")
+                built.append((rid, (Text(cells[0], style="dim"), Text(cells[1]), Text(cells[2], style="dim"),
+                                    Text(cells[3], style="red" if cells[3].startswith("error: ") else "dim"))))
         if g["merge"]:
             built.append(("group:merge", (Text("▸", style="green"), Text(f"{len(g['merge'])} PRs ready to merge"),
-                                          Text("merge-gate passed · press 5", style="dim"))))
+                                          Text("merge-gate passed · press 5", style="dim"), Text(""))))
         old = self._built
         if [k for k, _ in built] == [k for k, _ in old]:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, old):
@@ -149,7 +158,7 @@ class NeedsView(Horizontal):
         kind = KIND.get(self._kinds.get(key))
         self.query_one("#needs-body").display = kind is not None
         if kind is None:
-            self._paint(key, detail(r))
+            self._paint(key, detail(r, self._now.get(((r or {}).get('card') or {}).get('id'))))
             return
         stamp = self._stamp(key)
         if self._bodies.get(key, (None,))[0] != stamp and self._pending.get(key) != stamp:
@@ -181,7 +190,7 @@ class NeedsView(Horizontal):
         md = None
         if text is None:
             hit = self._bodies.get(key, (None, ("loading",)))[1]
-            text = detail(self._rows[key])
+            text = detail(self._rows[key], self._now.get(key))
             if hit[0] == "ok":
                 text.append("\n")
                 text.append_text(hit[3])

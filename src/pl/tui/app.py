@@ -38,11 +38,21 @@ def default_provider():
     """The real data for one refresh: board + tmux snapshot, event metrics per window, GitHub PR activity."""
     from pl import events, memory, watch
     board.share("read")   # reuse the dispatcher's board read while it is young
-    return {"snapshot": watch.watch_snapshot(),
+    snap = watch.watch_snapshot()
+    return {"snapshot": snap,
             "metrics_by_window": {key: events.metrics(seconds) for key, _, seconds in WINDOWS},
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
             "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
-            "machine": manager.read_status()}
+            "machine": manager.read_status(), "now": _now(snap["rows"])}
+
+
+def _now(rows):
+    """The "doing now" line and todos per card with a live Claude agent; a transcript problem never fails the refresh."""
+    from pl.tui import subagents
+    try:
+        return subagents.now_lines(rows)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _usage():

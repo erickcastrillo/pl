@@ -14,6 +14,7 @@ from pl.board import card, sections
 from pl.commands import retry
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.review import ConfirmScreen, safe_link
+from pl.tui.subagents import TODO_MARK
 
 STATE = {"review": ("your review", "#e0a040"), "manual": ("yours to do", "#5f9fff"), "working": ("working", "green"),
          "needs": ("needs you", "red"), "waiting": ("in review", "dim"), "queued": ("queued", "green")}
@@ -28,13 +29,15 @@ def card_state(r):
 
 
 class CardBox(Static, can_focus=True):
-    def __init__(self, r):
+    def __init__(self, r, now=None):
         c = r["card"]
         label, colour = (r["approved"], "green") if r.get("approved") else STATE[card_state(r)]
         t = Text((c.get("title") or "") + "\n")
         t.append(str(c["id"])[:8], style="dim")
         t.append(f"  {r.get('profile') or '-'}\n", style="dim")
         t.append(label, style=colour)
+        if now and now.get("line"):
+            t.append("\n" + now["line"], style="red" if now["line"].startswith("error: ") else "dim")
         super().__init__(t, classes="card", markup=False)   # no widget id: card ids can hold / and #
         self.row = r
 
@@ -67,6 +70,12 @@ def card_markdown(description):
     return "\n\n".join(f"# {k}\n\n{v}" if k else v for k, v in sections(description).items()) or "(no description)"
 
 
+def todo_markdown(now):
+    """The agent's todo list with each item's state, as markdown to put above the card text; "" when it has none."""
+    todos = (now or {}).get("todos") or []
+    return "# Agent todos\n\n" + "\n".join(f"- {TODO_MARK.get(s, '[ ]')} {t}" for s, t in todos) + "\n\n" if todos else ""
+
+
 class CardScreen(Screen):
     """The whole card, read-only. The card is read again in a worker; its text is data, never markup."""
     DEFAULT_CSS = """
@@ -76,9 +85,9 @@ class CardScreen(Screen):
     BINDINGS = [Binding("escape", "close", "close"), Binding("q", "close", "close"),
                 Binding("y", "copy", "copy card text"), Binding("O", "open", "open in browser")]
 
-    def __init__(self, card_id, col, approved=None):
+    def __init__(self, card_id, col, approved=None, now=None):
         super().__init__()
-        self.card_id, self.col, self.card, self.approved = card_id, col, None, approved
+        self.card_id, self.col, self.card, self.approved, self.now = card_id, col, None, approved, now
 
     def compose(self):
         yield Static(Text(f"loading… {self.card_id[:8]}", style="dim"), id="card-head", markup=False)
@@ -108,7 +117,7 @@ class CardScreen(Screen):
     async def _show(self, c, url):
         self.card = c
         self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved))
-        await self.query_one("#card-md", Markdown).update(card_markdown(c.get("description")))
+        await self.query_one("#card-md", Markdown).update(todo_markdown(self.now) + card_markdown(c.get("description")))
         self.query_one("#card-doc").focus()
 
     def action_close(self):
@@ -145,20 +154,21 @@ class PipelineView(Vertical):
 
     async def show(self, data):
         rows = [r for r in data["snapshot"]["rows"] if r.get("card")]
+        now = data.get("now") or {}
         cols = [c for c in C.COLUMNS if c != "Done"]
         focused = self.app.focused.row["card"]["id"] if isinstance(self.app.focused, CardBox) else None
         n_manual = sum(1 for r in rows if (r["card"].get("metadata") or {}).get("pipeline_mode") != "auto")
         self.query_one("#pipeline-title", Label).update(
             Text(f"Feature Pipeline · {len(rows) - n_manual} in the funnel · {n_manual} manual · Done is hidden"))
         scroll = self.query_one("#pipeline-scroll", HorizontalScroll)
-        if repr(rows) == getattr(self, "_shown", None):   # unchanged cards: the columns are not remounted
+        if repr((rows, now)) == getattr(self, "_shown", None):   # unchanged cards: the columns are not remounted
             return
-        self._shown = repr(rows)
+        self._shown = repr((rows, now))
         await scroll.remove_children()
         widgets = []
         for col in cols:
             here = [r for r in rows if r.get("col") == col]
-            body = [CardBox(r) for r in here] or [Static(Text("(empty)", style="dim"), classes="empty")]
+            body = [CardBox(r, now.get(r['card']['id'])) for r in here] or [Static(Text("(empty)", style="dim"), classes="empty")]
             widgets.append(Vertical(Label(Text(f"{col} ({len(here)})", style="bold")), VerticalScroll(*body), classes="pcol"))
         await scroll.mount_all(widgets)
         if focused is not None:
@@ -207,4 +217,5 @@ class PipelineView(Vertical):
     def action_view_card(self):
         r = self._row()
         if r is not None:
-            self.app.push_screen(CardScreen(r["card"]["id"], r.get("col"), r.get("approved")))
+            self.app.push_screen(CardScreen(r["card"]["id"], r.get("col"), r.get("approved"),
+                                               ((self.app.data or {}).get("now") or {}).get(r["card"]["id"])))
