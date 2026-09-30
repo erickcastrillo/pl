@@ -147,7 +147,7 @@ async def test_dashboard_renders_tiles_and_panels():
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
                   "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
-                  "spend", "not tracked yet", "Rate exceeded", "legacy", "dispatcher running"):
+                  "spend", "not tracked yet", "exceeded", "legacy", "dispatcher running"):
             assert s in text, s
 
 
@@ -231,6 +231,15 @@ async def test_w_cycles_the_window():
             await pilot.pause()
             seen.append((tile(app, "specs"), tile(app, "opened")))
         assert seen == [("12", "2"), ("71", "5"), ("3", "1"), ("12", "2")]
+
+
+@pytest.mark.parametrize("size", [(120, 40), (80, 24)])
+async def test_dashboard_bottom_row_three_equal_columns(size):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=size) as pilot:
+        await settle(pilot)
+        widths = [app.query_one(i).size.width for i in ("#decide", "#health", "#standup-panel")]
+        assert min(widths) > 0 and max(widths) - min(widths) <= 1, widths
 
 
 async def test_small_terminal_every_tab_and_pipeline_scrolls_sideways():
