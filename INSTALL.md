@@ -1,194 +1,197 @@
-# Install and set up pl
+# Install pl
 
-This guide takes you from a fresh clone to a working `pl`. It is written for a person and for an AI coding assistant (Claude Code, Codex or Antigravity) reading it together. A person can start by telling their assistant: "Read INSTALL.md and set this up for me."
+This is the one install guide, for a person and for an AI assistant. The main path is **GitHub Projects for the cards and Claude Code for the agents**. Other choices are at the end of step 7.
 
-Each step says how to check it worked. Do not move on until the check passes.
+An AI assistant also follows the rules in [AGENTS.md](AGENTS.md). Steps marked **(you)** are for the person only: sign-ins, `sudo` commands and anything that needs a browser or a dialog box.
 
-## 0. Who does what
+## What pl is
 
-- **The assistant** runs the commands in this guide and reads their output.
-- **You**, the person, answer the questions in step 3 and do every step marked **(you)**. These are sign-ins: to GitHub and to your harness. Only you can do them, in your own terminal.
-- pl uses your own harness subscription. It runs the `claude`, `codex` or `agy` command you already installed and signed in to. pl never asks for, reads or stores an API key or a harness login.
+pl is a terminal console that moves a piece of work from an idea to a pull request. Each idea becomes a card on a board. pl starts a coding agent for each stage (spec, plan, build) in a tmux window, and stops at gates where you approve: the spec (optional), the plan and the merge.
 
-Rules for the assistant:
+pl runs the `claude` command you already signed in to, on your own subscription. pl never asks for, reads or stores an API key, a token or a password. It talks to GitHub only through the `gh` command and its sign-in.
 
-- Never run `gh auth login`, `gh auth refresh` or any harness sign-in for the person. Show the command and wait.
-- Never open or read files inside a gh config folder or a harness config folder (for example `~/.claude`, `~/.codex`, `~/.config/gh`).
-- Never print tokens or secret values.
+What gets installed and changed:
 
-## 1. Check the requirements
+| Where | What |
+| --- | --- |
+| A folder you pick, for example `~/code/pl` | the pl source code (a git clone) |
+| `~/.local/bin/pl` and `~/.local/share/uv/tools/pl-funnel` | the `pl` command, installed by uv |
+| `~/.pl-work` (one folder per profile) | settings, state, logs and a small notification script |
+| Your GitHub Project | a "pl stage" field and two views, "Pipeline" and "Needs you" |
+| Your GitHub repository | six labels: `pl:auto-review`, `pl:ready-for-review`, `pl:merge-ready`, `pl:needs-rework`, `pl:review-failed`, `pl:start` |
 
-Run each check. If one fails, install the tool with the hint on the same line, then run the check again.
+Nothing else is changed. pl does not edit your shell profile, does not need `sudo` and sends no telemetry.
 
-| Tool | Check | Install hint |
-| --- | --- | --- |
-| uv | `uv --version` | https://docs.astral.sh/uv/getting-started/installation/ |
-| Python 3.11 or newer | `uv python find '>=3.11'` | If this errors with "No interpreter found", continue. Step 2 fetches Python automatically. |
-| git | `git --version` | https://git-scm.com/downloads |
-| gh (GitHub CLI) | `gh --version` | https://cli.github.com |
-| tmux | `tmux -V` | `brew install tmux` (macOS) or `sudo apt install tmux` (Debian, Ubuntu) |
-| A harness CLI | `command -v claude`, `command -v codex` or `command -v agy` | Claude Code: https://docs.claude.com/en/docs/claude-code/setup. Codex: https://github.com/openai/codex. Antigravity: https://antigravity.google |
+## 1. Check the prerequisites
 
-pl needs tmux: the dispatcher starts every agent in a tmux window.
+pl runs on **macOS or Linux**. It needs tmux, so Windows is not supported.
 
-You need at least one harness. Installing it and signing in to it is outside pl. **(you)** Start the harness once in your own terminal and sign in. Signing in also creates its config folder (`~/.claude` for Claude Code, `~/.codex` for Codex), which pl setup checks for. Antigravity support in pl is experimental.
+Run every check. For a tool that is missing, use the install line for your system. **(you)** run the `sudo` lines and `xcode-select --install` yourself.
 
-**(you)** Sign in to GitHub before step 4, so setup can check your GitHub Project:
+| Tool | Check | macOS (Homebrew) | Linux |
+| --- | --- | --- | --- |
+| git | `git --version` | `xcode-select --install` or `brew install git` | `sudo apt install git` or `sudo dnf install git` |
+| tmux | `tmux -V` | `brew install tmux` | `sudo apt install tmux` or `sudo dnf install tmux` |
+| gh 2.21 or newer | `gh --version` | `brew install gh` | `sudo apt install gh` or `sudo dnf install gh`; older systems: https://github.com/cli/cli/blob/trunk/docs/install_linux.md |
+| uv | `uv --version` | `brew install uv` | `sudo apt install pipx` (or `sudo dnf install pipx`), then `pipx install uv` |
+| Claude Code | `claude --version` | `brew install --cask claude-code` | `npm install -g @anthropic-ai/claude-code` (needs Node.js 18 or newer) |
+| Python 3.11 or newer | `uv python find '>=3.11'` | nothing to do: if the check prints `No interpreter found`, step 4 downloads Python | same |
+
+Notes:
+
+- Homebrew itself: if `brew --version` fails, **(you)** install it from https://brew.sh.
+- Never use `sudo` with `npm install -g`. If npm says permission denied, fix npm's folder first: https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally
+- Some tools also offer a `curl ... | sh` installer. This guide avoids them on purpose: a package manager checks what it downloads.
+
+## 2. Sign in (you)
+
+Only you can do these, in your own terminal. An assistant shows you the commands and waits.
+
+**Claude Code.** Run `claude`, sign in when it asks, then type `/exit`. This also creates the folder `~/.claude`, which pl setup checks for.
+
+**GitHub.** Run:
 
 ```
-gh auth login
-gh auth refresh -s project
+gh auth login -s project
 ```
 
-The second line is needed only for GitHub Projects. Check it worked:
+Pick GitHub.com, HTTPS and "Login with a web browser". The `-s project` part adds the one extra permission pl needs, to read and change GitHub Projects.
+
+Check both. These commands print no secrets:
 
 ```
+test -d ~/.claude && echo "claude: signed in"
 gh auth status
 ```
 
-It should say "Logged in to github.com account <your login>". Look at the line that starts with "Token scopes", for example `- Token scopes: 'gist', 'read:org', 'project', 'repo'`. It must include 'project'. If it does not, **(you)** run `gh auth refresh -s project`.
+`gh auth status` must say "Logged in to github.com account <your login>", and its "Token scopes" line must include `'project'` and `'repo'`. gh always adds `'read:org'` and `'gist'` too; pl uses only `repo` and `project`. If `'project'` is missing, **(you)** run `gh auth refresh -s project`.
 
-If you use several GitHub accounts, you can give pl its own sign-in folder instead. See step 3, question 4, and [Several GitHub accounts](docs/github.md#7-several-github-accounts).
+## 3. Get the code
 
-## 2. Install pl
+Clone pl from its official repository, https://github.com/erickcastrillo/pl. Do not use a fork, a mirror, or a package with a similar name from PyPI.
+
+```
+git clone https://github.com/erickcastrillo/pl.git ~/code/pl
+cd ~/code/pl
+git log -1 --oneline
+```
+
+The last line shows the exact version you got.
+
+## 4. Install pl
 
 From the clone's folder:
 
 ```
-uv tool install .
+uv tool install . --constraints <(uv export --frozen --no-dev --no-emit-project --no-header)
 ```
 
-If you will change pl's code, install it in editable mode instead, so your edits take effect without reinstalling:
+This installs pl with the exact dependency versions in the clone's `uv.lock`, instead of whatever is newest today. It writes no file into the clone. The `<( )` part works in zsh and bash. A warning that uv's folder "is not on your PATH" is expected; the next check deals with it.
 
-```
-uv tool install --editable .
-```
-
-Check it worked. An assistant's shell often has an old PATH, so the assistant puts uv's tool folder first and checks:
+Check it:
 
 ```
 export PATH="$(uv tool dir --bin):$PATH"
+uv tool list
+pl --version
 command -v pl
 ```
 
-The path must be inside the folder `uv tool dir --bin` prints (usually `~/.local/bin/pl`). On macOS, `/usr/bin/pl` is a different program (Apple's property-list tool), not this pl. The assistant repeats that `export` line before every pl command in this guide.
+- `uv tool list` shows `pl-funnel v0.1.0` and `- pl`.
+- `pl --version` prints `pl 0.1.0`.
+- `command -v pl` prints a path inside the folder `uv tool dir --bin` names, usually `~/.local/bin/pl`. On macOS, `/usr/bin/pl` is Apple's property-list tool, not this pl.
 
-**(you)** Open a new terminal and run `command -v pl` to confirm your own shell finds it. If it shows nothing or `/usr/bin/pl`, run this and open another new terminal:
+An assistant's shell may not keep the `export` line between commands, so an assistant puts it before every `pl` command in this guide.
 
-```
-uv tool update-shell
-```
+**(you)** Open a new terminal and run `command -v pl`. If it prints nothing or `/usr/bin/pl`, run `uv tool update-shell` and open another new terminal. That command adds uv's folder to your shell profile, so it is your call.
 
-## 3. Ask the questions
+## 5. Choose your answers
 
-The assistant asks the person these questions in plain words before running setup. Each answer becomes a `pl setup` flag. Run `pl setup --help` to see every flag.
+`pl setup` asks these questions. With `--yes` it takes every answer from a flag and asks nothing.
 
-| # | Question | Flag |
+| Question | Flag | Example |
 | --- | --- | --- |
-| 1 | What should this profile be called? For example "Work". Its folder becomes `~/.pl-<slug>`. | `--name "Work"`, optional `--slug work` (lower-case letters, digits and `-`) |
-| 2 | Which harnesses will agents use? One or more of claude, codex, agy. | `--harness claude` (repeat for more) |
-| 2a | Is each harness's config folder somewhere other than the default (`~/.claude`, `~/.codex`)? | `--config-dir claude=~/.claude-work` (one per harness) |
-| 2b | With more than one harness: which one should every stage use? Default: the first. | `--default-account codex` |
-| 3 | Where do cards live? | `--tracker github-project`, `--tracker github-issues` or `--tracker mcp` |
-| 3a | GitHub Project: which user or organisation owns it? | `--owner your-org` |
-| 3b | GitHub Project: an existing one (its number, from the project URL), or a new one? | `--project-number 7`, or `--create-project` with optional `--title "pl work"` |
-| 3c | GitHub Project or Issues: which repository do new cards go in? Default: the work folder's GitHub remote. | `--repo your-org/your-repo` |
-| 3d | MCP board server: which harness MCP file lists it, and which server is it? | `--mcp-config ./.mcp.json` (default: the work folder's `.mcp.json`, then `~/.claude.json`), `--server NAME` |
-| 3e | GitHub Project: set up its views? A "Pipeline" board and a "Needs you" table of cards waiting on you. Default: yes. Views with those names are left alone; a lone default "View 1" is renamed to Pipeline. | nothing for yes; `--no-views` for none |
-| 3f | GitHub Project: add a 2-week "Sprint" iteration field and a "This sprint" board? Default: no. | `--sprint`, optional `--sprint-weeks 3` |
-| 4 | Which GitHub account? The default gh sign-in, or a separate sign-in folder (useful if you have several GitHub accounts). | nothing for the default; `--gh-config-dir ~/.config/gh-work` for a separate folder |
-| 4a | When a GitHub repo is known: which PR labels should pl use? Enter keeps the defaults `pl:auto-review`, `pl:ready-for-review`, `pl:merge-ready`, `pl:needs-rework`, `pl:review-failed`. Setup creates the ones the repo lacks and never changes a label that exists. | nothing for the defaults; `--label-review`, `--label-ready`, `--label-merge-ready`, `--label-rework`, `--label-failed NAME` change one; `--no-create-labels` writes them without creating any; `--no-labels` writes none (pl then does not track PRs) |
-| 5 | Which folder should agents work in? This is your project's local clone. Default: the current folder, if it is a git repo. | `--work-dir ~/code/your-repo` |
-| 6 | Optional: a command pl runs to notify you. It must be an executable file. Default: none. | `--attention-cmd ~/bin/notify-me` |
-| 6a | With no command: create a notification script? Default: yes. Setup writes `~/.pl-SLUG/notify` (mode 0700) and uses it. It shows a desktop notification: `osascript` on macOS, `notify-send` on Linux, else a terminal bell and a line on stderr. `PL_NOTIFY_SOUND=Glass` adds a sound on macOS. An existing `notify` file is kept unless you pass `--force`. To use your own command instead, pass `--attention-cmd` or set `[paths] attention_cmd`; pl runs it as `CMD notify "<title>" "<message>"`. | nothing for yes; `--no-notify-script` for none; `--force` replaces an existing script |
+| A name for this profile. Its folder becomes `~/.pl-<name in lower case>`. | `--name` | `--name "Work"` |
+| Which harness runs the agents? | `--harness` | `--harness claude` |
+| Where do cards live? | `--tracker` | `--tracker github-project` |
+| Which GitHub user or organisation owns the Project? Usually your own login from `gh auth status`. | `--owner` | `--owner your-login` |
+| A new Project, or an existing one? An existing one's number is the end of its web address, `.../projects/7`. | `--create-project`, or `--project-number` | `--project-number 7` |
+| Which repository do new cards go in, as issues? | `--repo` | `--repo your-login/your-repo` |
+| Which folder do agents work in? A local git clone of that repository. | `--work-dir` | `--work-dir ~/code/your-repo` |
 
-More about GitHub Projects, Issues and sign-ins: [docs/github.md](docs/github.md). More about MCP boards: [docs/mcp-trackers.md](docs/mcp-trackers.md).
+Always pass `--repo` and `--work-dir`. Without them, setup guesses from the folder it runs in, which is the pl clone.
 
-An existing Project gets a single-select field named "pl stage" with one option per pl column. Setup creates the field if it is missing. If the field lacks some options, setup adds them in one update that keeps every existing option and its id (`--no-add-missing-stages` prints them instead). `--status-field NAME` picks another field name. pl never touches GitHub's built-in Status field.
+If you have no local clone of your repository yet, make one first, for example `gh repo clone your-login/your-repo ~/code/your-repo`.
 
-## 4. Run setup
+## 6. Run setup
 
-Run `pl setup --yes` with the answers. `--yes` means pl asks nothing and takes every answer from the flags. A full example for an existing GitHub Project:
+For an **existing** Project:
 
 ```
+export PATH="$(uv tool dir --bin):$PATH"
 pl setup --yes \
   --name "Work" \
   --harness claude \
-  --tracker github-project --owner your-org --project-number 7 \
-  --repo your-org/your-repo \
+  --tracker github-project --owner your-login --project-number 7 \
+  --repo your-login/your-repo \
   --work-dir ~/code/your-repo
+echo "EXIT=$?"
 ```
 
-For GitHub Issues, drop `--owner` and `--project-number` and use `--tracker github-issues --repo your-org/your-repo`. For a new Project, use `--create-project` in place of `--project-number 7`.
+For a **new** Project, replace `--project-number 7` with `--create-project --title "pl work"`.
 
-A person working alone can run `pl setup` without flags. It asks the same questions one by one.
+Setup does this and nothing more:
 
-At the end, setup prints the shell alias for the profile under "Next:". Keep it for step 6.
+- writes `~/.pl-work/config.toml` (only you can read it) and `~/.pl-work/notify`;
+- on the Project: adds the "pl stage" field if it is missing, adds any missing stage options while keeping the existing ones, and adds the "Pipeline" and "Needs you" views. It never touches GitHub's built-in Status field;
+- on the repository: creates the six labels it lacks. It never changes or deletes a label that exists.
 
-Running setup again on a profile that already exists is fine. It says the profile exists and continues: your old values are the defaults, your answers are merged into the old `config.toml` (keys setup does not ask about are kept), and the old file is saved as `config.toml.bak-<timestamp>` (mode 0600). Setup checks the result before it replaces the old file. If the check fails, it exits 3 and the old file is unchanged. On a re-run you can leave out flags whose values are already saved.
+Read the exit code:
 
-## 5. Read the result
-
-Setup ends with an exit code. Check it with `echo $?` right after.
-
-- **Exit 0: done.** Go to step 6.
-- **Exit 2: an answer was wrong or missing.** The message names the flag, for example `pl setup: --repo: missing (owner/name; new cards are issues there)`. Nothing was written. Fix that flag and run the same setup command again.
-- **Exit 3: something is left for you.** Each line starting with `ACTION NEEDED:` is one task. The assistant shows every such line to the person and waits until they say it is done. Then it fixes the item and runs the same `pl setup --yes ...` command again. Setup continues the saved profile, so flags whose values are already saved may be left out. If setup instead says "not saved" or the profile "does not pass its checks", it lists the settings that failed. Fix those flags or lines in `~/.pl-<slug>/config.toml` and run setup again.
-
-What the person does for each ACTION NEEDED line, and how to check it before re-running setup:
-
-| ACTION NEEDED says | The person does | Then the assistant checks |
+| Exit | Meaning | Next |
 | --- | --- | --- |
-| install a harness and sign in to it | installs it and signs in | `command -v claude` (or codex, agy) |
-| sign in to gh for a folder | runs the `GH_CONFIG_DIR=<path> gh auth login -s project` line it printed | `GH_CONFIG_DIR=<path> gh auth status` exits 0 |
-| sign in to gh | runs `gh auth login -s project` | `gh auth status` exits 0 |
-| pl is not on your PATH, or another pl is first | nothing; the assistant does step 2's fix | `command -v pl` in a new terminal |
-| add options to the stage field | adds the listed options to the field in GitHub, keeping the ones it has | `pl --profile <slug> list` |
-| create the PR labels | signs in to gh, then runs the printed `gh label create` lines (or re-runs setup) | `gh label list --repo <owner/name>` |
-| add a `[tracker.tools]` table | writes the tools mapping, see [docs/mcp-trackers.md](docs/mcp-trackers.md) | `pl --profile <slug> list` |
+| 0 | Done. | Step 7. |
+| 2 | An answer is wrong or missing. The message names the flag, for example `pl setup: --repo: missing`. Nothing was written. | Fix that flag and run the same command again. |
+| 3 | Setup saved the profile, but something is left for you. Each line starting with `ACTION NEEDED:` is one task. | Do each task as the table below says, then run the same command again. That is safe: it keeps your settings and saves the old file as `config.toml.bak-<time>`. |
 
-If the person had to sign in to gh, setup could not check a GitHub Project's stage field. After they sign in, re-run setup so it checks the field (and creates it if missing).
+| `ACTION NEEDED:` says | Who does it | Check before running setup again |
+| --- | --- | --- |
+| install claude and sign in to it | **(you)** steps 1 and 2 | `claude --version` and `test -d ~/.claude` |
+| sign in to gh | **(you)** `gh auth login -s project` | `gh auth status` |
+| make sure project ... has a single-select field | nothing: it appears when gh was not signed in | run setup again after signing in |
+| could not list the labels | nothing: it appears when gh was not signed in | run setup again after signing in |
+| add these options to the ... field | **(you)** add the listed options to that field on the Project page, keeping the existing ones | `pl --profile work list` |
+| pl is not on your PATH | **(you)** `uv tool update-shell`, then a new terminal | `command -v pl` in the new terminal |
+| could not finish the Project's views | run setup again; if it repeats, **(you)** add the views by hand ([docs/github.md](docs/github.md)) | the Project page |
 
-`ACTION NEEDED (optional):` lines do not change the exit code. For a GitHub Project there is one: GitHub's API cannot choose a board's columns. **(you)** Open the Project URL setup printed, open the **Pipeline** view, and set **Column by** to the "pl stage" field. Cards then show in pl's columns. With `--no-views`, first switch the view to **Board**.
+`ACTION NEEDED (optional):` lines do not change the exit code. Every Project gets one, because GitHub's API cannot choose how a board groups its cards. **(you)** Open the Project address setup printed, open the **Pipeline** view, and set **Column by** to **pl stage**.
 
-With a GitHub repo, setup writes the five PR labels and creates the ones the repo lacks. If gh is not signed in yet, it prints the `gh label create` commands as an ACTION NEEDED line; run them after signing in, or re-run setup. With `--no-labels`, or an MCP board without `--repo`, setup says "PR checks are off until [code_host] labels are set in config.toml." See the pull requests section of [docs/github.md](docs/github.md).
-
-## 6. Confirm it works
-
-Replace `<slug>` with the profile's folder name (for "Work" it is `work`).
-
-```
-pl --profile <slug> list
-```
-
-It should print a title line, then the board's stage columns with their cards, without an error. The Done column is hidden. For example:
+## 7. Check it works
 
 ```
-FEATURE PIPELINE board
-Inbox  (0)
-Spec ready  (0)
-Plan for review  (0)
-Manual  (0)
-Approved  (0)
-In progress  (0)
-PR open  (0)
+export PATH="$(uv tool dir --bin):$PATH"
+pl --version
+pl --profile work list
+ls -l ~/.pl-work/config.toml
 ```
 
- An empty board shows empty columns.
+- `pl --profile work list` prints `FEATURE PIPELINE board`, then the columns `Inbox`, `Spec ready`, `Plan for review`, `Manual`, `Approved`, `In progress` and `PR open`, each with a count, and no error.
+- `ls -l` shows `-rw-------`: only you can read the settings.
 
-**(you)** Open the console in your own terminal. It needs a real terminal, so an assistant cannot open it for you:
-
-```
-pl --profile <slug>
-```
-
-Add the alias setup printed under "Next:" at the end of its output to your shell profile (for zsh, `~/.zshrc`), then open a new terminal:
+Then, **(you)** in your own terminal (the console needs a real terminal):
 
 ```
-alias pl-<slug>='PL_CONFIG_DIR=~/.pl-<slug> pl'
+pl --profile work
 ```
 
-One more step before agents can run: give each stage a prompt. Setup does not write them yet. Edit `~/.pl-<slug>/config.toml` and add a `prompt` under each `[stages.<stage>]` table (spec, design, plan, run), or use the console's Settings tab. `{id}` stands for the card id:
+Press `q` to quit. Opening the console also starts the dispatcher in the tmux session `pl-work`. With a GitHub Project, the dispatcher keeps one Claude agent running that reviews pull requests labelled `pl:auto-review` every 30 minutes, on your subscription. To turn it off, add this to `~/.pl-work/config.toml`:
+
+```toml
+[loops.auto-review]
+enabled = false
+```
+
+**Give each stage a prompt.** Setup does not write them, and agents do not start until they exist (`pl dispatch` stops with `set [stages.spec] prompt`). In `~/.pl-work/config.toml`, add one `prompt` line under each of `[stages.spec]`, `[stages.plan]` and `[stages.run]`, which setup already wrote. `[stages.design]` is used only for cards tagged `frontend`. `{id}` stands for the card id. The console's Settings tab (key `8`) does the same. For example:
 
 ```toml
 [stages.spec]
@@ -196,31 +199,53 @@ account = "claude"
 prompt = "Write the spec for card {id}."
 ```
 
-Until then, `pl --profile <slug> dispatch` stops with "set [stages.spec] prompt".
+Suggested prompts for the other two: `"Write the plan for card {id}."` and `"Build card {id} and open a pull request."`
 
-## 7. Troubleshooting
-
-| Problem | Fix |
-| --- | --- |
-| `pl` runs Apple's property-list tool, or "command not found" | `uv tool update-shell`, then a new terminal. Or `export PATH="$(uv tool dir --bin):$PATH"`. |
-| `gh is missing the project scope` | **(you)** `gh auth refresh -s project` (add `GH_CONFIG_DIR=<path>` in front for a separate sign-in folder). |
-| `--config-dir: ~/.codex does not exist` | **(you)** Start the harness once and sign in, which creates the folder. Or point at the right one with `--config-dir codex=PATH`. |
-| An MCP board: `pl list` fails after setup | The MCP tracker needs a `[tracker.tools]` mapping from pl's card actions to the server's tools. Setup cannot guess it. Follow [docs/mcp-trackers.md](docs/mcp-trackers.md). |
-
-## 8. Updating pl
-
-In the clone, pull the new code and reinstall:
+A shortcut for your shell profile, optional. **(you)** add it to `~/.zshrc` or `~/.bashrc`:
 
 ```
+alias pl-work='PL_CONFIG_DIR=~/.pl-work pl'
+```
+
+A first run with an idea: [docs/github.md, section 6](docs/github.md#6-first-run).
+
+**Other choices.** `pl setup --help` lists every flag. The common ones: `--tracker github-issues` keeps cards as plain issues in one repo; `--tracker mcp` uses any MCP board server ([docs/mcp-trackers.md](docs/mcp-trackers.md)); `--harness codex` or `--harness agy` (Antigravity, experimental), with `--config-dir HARNESS=PATH` for a non-default folder; `--gh-config-dir PATH` uses a separate GitHub sign-in ([docs/github.md](docs/github.md#7-several-github-accounts)); `--no-views`, `--sprint`, `--no-labels`, `--no-notify-script` and `--attention-cmd CMD` change what setup creates.
+
+## 8. Update
+
+```
+cd ~/code/pl
 git pull
-uv tool install --force --reinstall .
+uv tool install --force --reinstall . --constraints <(uv export --frozen --no-dev --no-emit-project --no-header)
+pl --version
 ```
 
-Plain `--force` may reuse a cached build of the same version and leave the old code installed, so add `--reinstall`. If you installed once with `uv tool install --editable .`, `git pull` is enough: changes apply without reinstalling.
+## 9. Uninstall
 
-## Not supported yet
+Each line is optional; skip what you want to keep. `rm -rf` cannot be undone, so an assistant asks before each one.
 
-- Setup does not write stage prompts. Add them as in step 6.
-- Setup does not write the MCP `[tracker.tools]` mapping.
-- Codex's TOML MCP config file cannot be used as `--mcp-config`. Use a JSON file with `mcpServers`.
-- Antigravity (`agy`) support is experimental.
+```
+pl manager stop --all               # only if you ever ran pl manager start
+tmux kill-session -t pl-work        # stops the profile's dispatcher and agents
+uv tool uninstall pl-funnel         # removes the pl command
+rm -rf ~/.pl-work                   # the profile: settings, state, logs
+rm -rf ~/.local/state/pl-machine    # only if you ever ran pl manager start
+rm -rf ~/code/pl                    # the clone
+```
+
+Then remove the `alias pl-work=...` line from your shell profile if you added it. On GitHub, the labels, the "pl stage" field, the views and any Project setup created stay until you delete them there.
+
+## 10. Security notes
+
+**What pl sends, and where.** pl itself makes no network requests and has no telemetry. It runs `gh`, which talks to GitHub as you, and `claude`, which talks to Anthropic as you. Activity is logged only on your machine, in `~/.pl-work/state`. Installing downloads from your package manager, from GitHub (the clone) and from PyPI (the pinned dependencies, and Python if it was missing).
+
+**Secrets.** pl stores no token, key or password. `config.toml` holds only names, paths and numbers, and only you can read it. For an MCP board, pl reads the server entry from the harness's own MCP file each time and never copies it into its config. pl never reads `~/.claude`, `~/.config/gh` or any other credential file; it only checks that the Claude folder exists.
+
+**What pl can do on your machine.**
+
+- It starts `claude` in windows of its own tmux session (`pl-work`), in your work folder, as you. The agents can do whatever your Claude Code permission settings allow. pl never adds `--dangerously-skip-permissions`.
+- It types into its own tmux windows only: a short `sh <script>` line that starts an agent, and Ctrl-C to stop one. Every value in those lines is quoted.
+- The agents use your gh sign-in, so they can push branches and open pull requests in repositories you can write to.
+- A memory guard watches each agent's processes. Past 150 processes or 25% of memory, it stops what that agent started (SIGTERM, then SIGKILL 5 seconds later). It never signals the agent's shell, the `claude` process or the dispatcher. `[dispatch] kill_runaway = false` makes it only notify you.
+
+**Card text is input for the agents.** An issue that joins the pipeline, one assigned to you or labelled `pl:start`, becomes part of an agent's prompt. Anyone who can edit such an issue can steer that agent, within your Claude permissions. Use pl on repositories where you trust everyone who can edit issues. The auto-review loop checks out and tests pull requests labelled `pl:auto-review`; only people with triage access to the repository can add a label.

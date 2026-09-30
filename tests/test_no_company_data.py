@@ -30,6 +30,9 @@ BANNED = frozenset({
 })
 # The author's own name may stay on the LICENSE copyright line, and only there.
 ALLOWED = {"LICENSE": ("copyright", {"3106d9d44b21b4eaec16cd39851ab089666de8faa5b656e5b994224fa3dcc2f2"})}
+# The public repo's address may appear anywhere, as exactly this URL (a .git suffix is fine); the name stays banned elsewhere.
+ALLOWED_URLS = frozenset({"704beaf4d238cfbbd5d865b9a41dc439682aa422c753be69c6936ad80cb921f9"})
+URL = re.compile(r"https://github\.com/[a-z0-9-]+/pl(?![a-z0-9_/-])")
 TOKEN = re.compile(r"[a-z0-9_@.\-]+")
 MAX_TERM = 40
 
@@ -48,9 +51,10 @@ def _token_hits(token, banned):
     return out
 
 
-def _text_hits(label, text, banned=BANNED, allow=None):
+def _text_hits(label, text, banned=BANNED, allow=None, allowed_urls=ALLOWED_URLS):
     out, cache = [], {}
     for n, line in enumerate(text.lower().splitlines(), 1):
+        line = URL.sub(lambda m: " " if _sha(m.group(0)) in allowed_urls else m.group(0), line)
         ok = allow[1] if allow and line.startswith(allow[0]) else set()
         for tok in TOKEN.findall(line):
             if tok not in cache:
@@ -92,3 +96,19 @@ def test_matcher_finds_a_term_inside_paths_emails_and_names():
     text = "a ~/.claude-acme2 dir\nmail sam@acme.test\nAcme_apps and Acme\nnot hacme or acmeish-x"
     assert _text_hits("t", text, probe) == ["t:1: 'acme'", "t:2: 'acme'", "t:3: 'acme'", "t:3: 'acme'",
                                             "t:4: 'acme'"]
+
+
+def test_only_the_exact_repo_url_is_allowed():
+    probe, url = frozenset({_sha("acme")}), frozenset({_sha("https://github.com/acme/pl")})
+    ok = "clone https://github.com/acme/pl.git or open https://github.com/acme/pl."
+    assert _text_hits("t", ok, probe, allowed_urls=url) == []
+    bad = ["acme", "acme/pl", "github.com/acme/pl", "http://github.com/acme/pl", "https://github.com/acme/pl-x",
+           "https://github.com/acme/other", "https://github.com/acme/pl/acme", "sam@acme.test", "~/.claude-acme"]
+    assert [b for b in bad if not _text_hits("t", b, probe, allowed_urls=url)] == []
+
+
+def test_the_docs_use_the_allowed_repo_url():
+    assert len(ALLOWED_URLS) == 1
+    for name in ("README.md", "INSTALL.md"):
+        text = (ROOT / name).read_text().lower()
+        assert any(_sha(m) in ALLOWED_URLS for m in URL.findall(text)), name

@@ -104,6 +104,7 @@ def main():
     config.load(pre_a.profile)
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)
+    ap.add_argument("--version", action="version", version=f"pl {__import__('pl').__version__}")
     sub = ap.add_subparsers(dest="cmd")
     p = sub.add_parser("idea"); p.add_argument("text"); p.add_argument("--doc", action="append", default=[])
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])

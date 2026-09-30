@@ -1,6 +1,6 @@
 # pl — working notes
 
-If you were asked to install or set up pl, follow INSTALL.md; the rest of this file is for changing pl's code.
+If you were asked to install or set up pl, follow INSTALL.md and the install rules in AGENTS.md; the rest of this file is for changing pl's code.
 
 pl drives an idea → spec → plan → PR funnel through the AI coding harness CLIs the user already has (Claude Code, Codex, Antigravity). It uses the user's existing subscriptions by running those CLIs; it never asks for or stores a harness API key.
 

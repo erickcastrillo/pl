@@ -1,6 +1,8 @@
 # pl
 
-To install, open this folder in your AI coding assistant and ask it: "Read INSTALL.md and set this up for me." The steps are in [INSTALL.md](INSTALL.md).
+**To install:** open Claude Code in a terminal and say: "Install https://github.com/erickcastrillo/pl on my computer; follow its INSTALL.md and AGENTS.md." Claude asks you a few questions and hands you the sign-ins; it never signs in for you or reads your credentials.
+
+To install by hand, follow [INSTALL.md](INSTALL.md): check the prerequisites, sign in to Claude Code and GitHub, clone, `uv tool install`, then `pl setup`.
 
 pl is a terminal console and dispatcher for an idea-to-PR funnel. A card moves through spec, plan, build and pull request. pl starts a coding agent for each stage, headless, in a tmux window. You approve at gates: the spec (optional), the plan, and the merge.
 
@@ -12,16 +14,9 @@ pl runs the harness CLIs you already installed and signed in to, on your own sub
 
 ## Install
 
-Python 3.11 or newer.
+macOS or Linux, with git, tmux, gh, uv and a harness CLI. [INSTALL.md](INSTALL.md) has the install commands, the sign-ins, the exact `pl setup` flags, how to check it works, how to uninstall, and security notes.
 
-```
-uv tool install /path/to/pl        # or a git URL
-pip install /path/to/pl
-```
-
-Then run `pl setup`. It asks for a profile name, your harnesses, where cards live, your GitHub sign-in and the work folder, then writes and checks `~/.pl-<name>/config.toml`. Assistants and scripts can pass every answer as a flag with `pl setup --yes` (see `pl setup --help`); a missing answer exits 2 naming its flag. It never installs a harness or signs in for you.
-
-Bare `pl` in a terminal opens the console. You also need `tmux`, and `gh` if you use GitHub.
+`pl setup` asks for a profile name, your harnesses, where cards live, your GitHub sign-in and the work folder, then writes and checks `~/.pl-<name>/config.toml`. `pl setup --yes` takes every answer from flags (`pl setup --help`); a missing answer exits 2 naming its flag. It never installs a harness or signs in for you. Bare `pl` in a terminal opens the console.
 
 ## Profiles
 
@@ -173,13 +168,13 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | r | refresh |
 | q | quit |
 
-Other commands: `pl idea`, `pl list`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`. Each has `--help`.
+Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`. Each has `--help`. `pl --version` prints the installed version.
 
 ## Standup
 
 `pl standup` prints a short summary of the last 24 hours, ready to paste in a chat standup: PRs merged, opened and closed without merging; ideas added, specs and plans written and approved, cards sent back and done; cards per column and agents running now; what needs you; and errors, if any. Each line has up to five titles under it, never card text.
 
-`--since` takes `24h`, `90m`, `7d`, a date (`2026-09-29`) or a local time (`2026-09-29T09:00`). `--markdown` prints Markdown for docs. PR numbers cover every PR in the `[code_host]` owner's repos (or its `repos`), with how many merged ones are yours (authored by or assigned to you); they come from three GitHub searches. When GitHub cannot answer, the line says `PRs: unavailable` and why.
+`--since` takes `24h`, `90m`, `7d`, a date (`2026-09-29`) or a local time (`2026-09-29T09:00`). `--markdown` prints Markdown for docs, `--slack` Slack formatting. PR numbers cover every PR in the `[code_host]` owner's repos (or its `repos`), with how many merged ones are yours (authored by or assigned to you); they come from three GitHub searches. When GitHub cannot answer, the line says `PRs: unavailable` and why.
 
 ## License
 

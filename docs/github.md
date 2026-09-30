@@ -20,7 +20,9 @@ Check with `gh auth status`. It lists the scopes your token has.
 
 ## 2. Create a profile
 
-A profile is one folder, `~/.pl-<name>`, with a `config.toml`. This command creates a new GitHub Project and a profile that uses it:
+A profile is one folder, `~/.pl-<name>`, with a `config.toml`. The usual way to make one is `pl setup`, which works with a new or an existing Project and writes everything below except the stage prompts: see [INSTALL.md](../INSTALL.md). The rest of this section is the older `pl profiles new` path.
+
+This command creates a new GitHub Project and a profile that uses it:
 
 ```
 pl profiles new work --github-project create --owner your-org
@@ -34,7 +36,7 @@ pl profiles new work --github-project create --owner your-org
 
 pl never edits the project's built-in Status field. If adding the field fails, nothing is saved and the error names the new project's URL, so you can delete it or add the field by hand.
 
-To use a project you already have, there is no flag. Run `pl profiles new work` and edit the `[tracker]` table by hand.
+To use a project you already have, run `pl setup --project-number N` ([INSTALL.md](../INSTALL.md), step 6), or run `pl profiles new work` and edit the `[tracker]` table by hand.
 
 If `[tracker]` has `type = "github-project"` but no `number`, the console's Settings tab shows a **Create project** button under Connections. It does the same as the flag and saves the number into the profile.
 
@@ -50,7 +52,7 @@ repo = "your-org/your-repo" # where new cards are opened as issues; you must add
 # columns = [...]           # optional: the column names pl checks for (default: pl's eight columns)
 ```
 
-`repo` is not written for you. Without it pl can read and move cards but cannot create one.
+`pl setup` writes `repo`; `pl profiles new` writes it only with `--repo`. Without it pl can read and move cards but cannot create one.
 
 Then add at least one harness account and a prompt per stage. `{id}` is replaced by the card id.
 
@@ -177,8 +179,7 @@ enabled = false            # or give your own prompt = "..."
 ## 6. First run
 
 ```
-pl profiles new work --github-project create --owner your-org
-# edit ~/.pl-work/config.toml: add repo, [accounts.*] and [stages.*] prompts
+# pl setup as in INSTALL.md, then add the [stages.*] prompts to ~/.pl-work/config.toml
 pl --profile work list                 # the board by column; checks gh and the stage field
 pl --profile work                      # open the console
 ```
@@ -234,7 +235,6 @@ This covers `gh` only. SSH keys and host aliases only decide who `git push` and 
 
 ## Not supported yet
 
-- A flag to point `pl profiles new` at an existing project. Edit `[tracker]` by hand.
-- Creating missing stage options on an existing field.
+- A flag to point `pl profiles new` at an existing project. Use `pl setup --project-number N`, or edit `[tracker]` by hand.
 - Draft items as cards.
 - More than 500 items on a project, or 500 open issues in a repo.
