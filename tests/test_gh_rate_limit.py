@@ -394,8 +394,9 @@ def test_console_header_shows_the_resume_time_and_keeps_the_numbers(gh):
             gh.set(mode="ratelimit", reset=reset)
             trackers.reset()
             for _ in range(3):
+                app.error = None   # wait for this refresh to land: overlapping ones all call gh before the back-off is saved
                 app.refresh_data()
-                for _ in range(100):
+                for _ in range(1200):
                     await pilot.pause(0.05)
                     if app.error:
                         break
