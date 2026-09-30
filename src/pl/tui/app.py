@@ -1,12 +1,14 @@
 """PlApp: the pl console. One background refresh feeds every view; views never call the board, gh or tmux."""
 from rich.text import Text
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
+from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Static, TabbedContent, TabPane
 
-from pl import board, dispatch, manager
+from pl import board, dispatch, manager, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.chrome import TABS, header_text
@@ -79,6 +81,30 @@ class DataReady(Message):
         self.data, self.error = data, error
 
 
+class WhatsNewScreen(ModalScreen):
+    """The what's-new entries given; esc closes."""
+    DEFAULT_CSS = """
+    WhatsNewScreen { align: center middle; }
+    WhatsNewScreen > Vertical { width: 100%; max-width: 96; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    #whatsnew-body { height: 1fr; }
+    """
+    BINDINGS = [Binding("escape", "close", "close")]
+
+    def __init__(self, entries):
+        super().__init__()
+        self.entries = entries
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text("What's new in pl", style="bold"))
+            with VerticalScroll(id="whatsnew-body"):
+                yield Static(Text(whatsnew.text(self.entries)))
+            yield Static(Text("esc close · ? or the palette (ctrl+p) opens this again · pl whatsnew prints it", style="dim"))
+
+    def action_close(self):
+        self.dismiss(None)
+
+
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
@@ -87,11 +113,13 @@ class PlApp(App):
         Binding("w", "cycle_window", "window"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
-        Binding("D", "dispatcher", "dispatcher start/stop"), Binding("r", "refresh", "refresh"), Binding("q", "quit", "quit")]
+        Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
+        Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("q", "quit", "quit")]
 
-    def __init__(self, snapshot_provider=None, interval=None, autostart=None):
+    def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
+        self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
         self.dispatcher_note = None
         self.snapshot_provider = snapshot_provider or default_provider
         self.interval = interval or default_interval()
@@ -113,28 +141,44 @@ class PlApp(App):
         self.refresh_data()
         if self.autostart and C.DISPATCH.get("autostart", True) is not False:
             self.dispatcher_job("start")
+        if self.show_whatsnew and C.CONFIG_DIR is not None and (new := whatsnew.unseen()):
+            whatsnew.mark_seen()   # once per upgrade: shown now, not again on the next start
+            self.push_screen(WhatsNewScreen(new))
+
+    def action_whatsnew(self):
+        if not isinstance(self.screen, WhatsNewScreen):
+            self.push_screen(WhatsNewScreen(whatsnew.ENTRIES))
+
+    def get_system_commands(self, screen):
+        yield from super().get_system_commands(screen)
+        yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
+                            self.action_whatsnew)
 
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
         """start: start it when not running. toggle: start it, or ask first and stop it. stop: stop it. Never on the UI thread.
-        On a managed machine (machine.toml exists) and a profile whose autostart is not false, the same keys start and
-        stop pl manager instead; D on a profile the manager gave up on asks it to restart that dispatcher."""
+        With the manager on (the default; machine.toml [manager] enabled = false turns it off) and a profile whose
+        autostart is not false, start on mount starts pl manager; D asks the manager to stop or restart THIS profile's
+        dispatcher only (a stop holds until D again or pl manager restart NAME). pl manager stop stops the manager."""
         try:
-            managed = ((manager.machine_dir() / "machine.toml").exists()
-                       and C.DISPATCH.get("autostart", True) is not False)
-            st = manager.read_status() if managed and what == "toggle" and manager.running() else None
-            if any(p.get("name") == C.PROFILE_NAME and p.get("gave_up") for p in (st or {}).get("profiles") or []):
-                self.call_from_thread(self.show_dispatcher_note, manager.restart(C.PROFILE_NAME))
-                return
-            if what == "toggle" and (manager.running() if managed else dispatch.dispatcher_running()):
-                msg = ("Stop pl manager? It stops restarting dispatchers; running dispatchers and agents keep running."
+            managed = manager.enabled() and C.DISPATCH.get("autostart", True) is not False
+            if managed and what == "start":
+                note = manager.start()
+            elif managed and what == "stop":
+                note = manager.restart(C.PROFILE_NAME, "stop")
+            elif managed and not dispatch.dispatcher_running():
+                note = manager.restart(C.PROFILE_NAME, "restart")
+                if not manager.running():
+                    note = manager.start()
+            elif what == "toggle" and (managed or dispatch.dispatcher_running()):
+                msg = (f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? pl manager stops it and does not restart it '
+                       f"until you press D again; running agents keep running, and so do the manager and other "
+                       f"profiles' dispatchers (pl manager stop stops the manager)."
                        if managed else f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '
                        f"{C.TMUX_SESSION}:dispatch; running agents keep running.")
                 self.call_from_thread(self.push_screen, ConfirmScreen(msg),
                                       lambda yes: yes and self.dispatcher_job("stop"))
                 return
-            if managed:
-                note = manager.stop() if what == "stop" else manager.start()
             else:
                 note = dispatch.stop_dispatcher() if what == "stop" else dispatch.start_dispatcher()
         except Exception as e:  # noqa: BLE001 - a worker that raises kills the app

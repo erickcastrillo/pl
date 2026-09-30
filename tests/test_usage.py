@@ -217,7 +217,7 @@ def test_loops_tab_shows_context_tokens_and_dead(fake_home):
     on = [{"loop": n, "kind": "loop_idle", "worker": {"pane": p, "window": w}} for n, p, w in (("triage", "%1", "@1"), ("quiet", "%2", "@2"))]
     rows = {r["name"]: r for r in loops.loop_rows({"snapshot": {"rows": on}, "usage": usage.summary(usage.scan())})}
     assert (rows["triage"]["context"], rows["triage"]["tokens"]) == ("60%", "120.0k")
-    assert rows["quiet"]["state"] == "dead?" and rows["quiet"]["context"] == "-"
+    assert rows["quiet"]["state"] == "dead?" and rows["quiet"]["context"] == "n/a"   # no turn seen yet
 
 
 # ---- round 1 fixes ----
@@ -238,15 +238,36 @@ def test_a_session_past_200k_is_measured_against_a_1m_window(fake_home):
     assert usage.context_pct(st, S2) == 75                       # never past 200k: still 200k
 
 
-def test_a_loop_without_max_context_is_never_restarted_for_context(fake_home, monkeypatch):
+def test_a_loop_without_max_context_restarts_fresh_over_80_percent(fake_home, monkeypatch):
+    assert usage.MAX_CONTEXT == 80
+    write(transcript(fake_home, LOOP_SID), [turn("m0", inp=10, out=1, sid=LOOP_SID)])
+    killed, reg = _loop_env(monkeypatch, "idle", 150_000)             # 75%: under the default 80
+    del C.SERVICES["triage"]["max_context"]
+    dispatch.ensure_services({}, [], reg, False, None)
+    assert killed == []
+    killed, reg = _loop_env(monkeypatch, "idle", 190_000, mid="m2")   # 95%: over it
+    del C.SERVICES["triage"]["max_context"]
+    dispatch.ensure_services({}, [], reg, False, None)
+    assert killed == ["@1"]
+
+
+def test_max_context_0_turns_context_care_off(fake_home, monkeypatch):
     write(transcript(fake_home, LOOP_SID), [turn("m0", inp=10, out=1, sid=LOOP_SID)])
     killed, reg = _loop_env(monkeypatch, "idle", 190_000)
-    del C.SERVICES["triage"]["max_context"]
+    C.SERVICES["triage"]["max_context"] = 0
     dispatch.ensure_services({}, [], reg, False, None)
     assert killed == []
     rows = {r["name"]: r for r in loops.loop_rows({"snapshot": {"rows": [{"loop": "triage", "kind": "loop_idle", "worker": {}}]},
                                                     "usage": {"loops": {"triage": {"context": 95, "tokens_1h": 1, "dead": False}}}})}
     assert rows["triage"]["context"] == "95%"                    # the column shows either way
+
+
+@pytest.mark.parametrize("v, ok", [(0, True), (80, True), (100, True), (-1, False), (101, False), (True, False)])
+def test_config_accepts_max_context_0_to_100(v, ok):
+    import tomlkit
+    doc = tomlkit.parse('[loops.triage]\nprompt = "/loop 30m /triage"\n')
+    doc["loops"]["triage"]["max_context"] = v
+    assert (not any("max_context" in e for e in C.validate(doc))) is ok
 
 
 def _shared(fake_home):

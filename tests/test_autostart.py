@@ -44,6 +44,9 @@ def profile(tmp_path, monkeypatch):
     (d / "config.toml").write_text("[dispatch]\nmax_runs = 1\n")
     C.load(config_dir=str(d))
     monkeypatch.setattr(dispatch, "LOCK_WAIT", 0.5)
+    lone = manager.machine_dir() / "machine.toml"   # these tests drive one dispatcher per console: manager off
+    lone.parent.mkdir(parents=True)
+    lone.write_text("[manager]\nenabled = false\n")
     yield d
     for k, v in saved.items():
         setattr(C, k, v)
@@ -288,18 +291,38 @@ async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_pat
     monkeypatch.setattr(manager, "start", lambda: got.append("start") or "manager: started (pid 9)")
     monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop") or "manager: stopped")
     monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
     monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher"))
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         assert got == ["start"] and starts(tmp_path) == []
         assert "manager: started (pid 9)" in header(app)
-        await pilot.press("D")                  # D on a managed machine: the manager, with the same confirm
+        await pilot.press("D")                  # D on a managed machine: this profile's dispatcher only
         await settle(pilot)
-        assert isinstance(app.screen, ConfirmScreen) and "pl manager" in app.screen.message
+        assert isinstance(app.screen, ConfirmScreen)
+        assert 'dispatcher of profile "work"' in app.screen.message and "pl manager stop" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
-        assert got == ["start", "stop"] and "manager: stopped" in header(app)
+        assert got == ["start", ("stop", "work")] and "manager: stop work" in header(app)   # never manager.stop
+
+
+async def test_d_on_a_managed_profile_whose_dispatcher_is_stopped_asks_the_manager_to_restart_it(tmp_path, monkeypatch):
+    machine(tmp_path, toml=True)
+    got = []
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "start", lambda: got.append("start"))
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    app = PlApp(snapshot_provider=fake_data, autostart=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("D")
+        await settle(pilot)
+        assert got == [("restart", "work")] and not isinstance(app.screen, ConfirmScreen)
+        assert "manager: restart work" in header(app)
+        assert [b.description for b in app.BINDINGS if b.key == "D"] == ["dispatcher (this profile)"]
 
 
 async def test_d_on_a_profile_the_manager_does_not_manage_drives_its_own_dispatcher(tmp_path, monkeypatch, profile):
@@ -326,7 +349,7 @@ async def test_d_restarts_a_profile_the_manager_gave_up_on(tmp_path, monkeypatch
         {"at": time.time(), "pid": 1, "profiles": [{"name": "work", "gave_up": True}], "hold": None}))
     got = []
     monkeypatch.setattr(manager, "running", lambda: True)
-    monkeypatch.setattr(manager, "restart", lambda name: got.append(name) or f"manager: restarting {name}")
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append(name) or f"manager: restarting {name}")
     monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop"))
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
@@ -335,3 +358,34 @@ async def test_d_restarts_a_profile_the_manager_gave_up_on(tmp_path, monkeypatch
         await settle(pilot)
         assert got == ["work"] and not isinstance(app.screen, ConfirmScreen)
         assert "manager: restarting work" in header(app)
+
+
+# ---------- the manager is on by default ----------
+
+async def test_a_missing_machine_toml_starts_the_manager_never_a_lone_dispatcher(tmp_path, monkeypatch):
+    (manager.machine_dir() / "machine.toml").unlink()   # an existing user upgrading: no machine.toml yet
+    got = []
+    monkeypatch.setattr(manager, "start", lambda: got.append("manager") or "manager: started (pid 9)")
+    monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher"))
+    app = PlApp(snapshot_provider=fake_data, autostart=True)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert got == ["manager"] and starts(tmp_path) == []
+        assert "manager: started (pid 9)" in header(app)
+
+
+async def test_manager_enabled_false_starts_the_lone_dispatcher(tmp_path, monkeypatch):
+    got = []
+    monkeypatch.setattr(manager, "start", lambda: got.append("manager"))
+    monkeypatch.setattr(dispatch, "dispatcher_running", lock_taken_by_fake_tmux(tmp_path))
+    async with PlApp(snapshot_provider=fake_data, autostart=True).run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert got == [] and len(starts(tmp_path)) == 1
+
+
+def test_manager_start_writes_machine_toml_with_the_defaults(tmp_path, monkeypatch):
+    (manager.machine_dir() / "machine.toml").unlink()
+    monkeypatch.setattr(manager.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(manager, "_wait", lambda held: True)
+    manager.start()
+    assert (manager.machine_dir() / "machine.toml").read_text() == manager.MACHINE_TOML

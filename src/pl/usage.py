@@ -34,6 +34,7 @@ BIG_WINDOW = 1_000_000        # a session that went past DEFAULT_WINDOW runs a 1
 LOCK_WAIT = 5                 # seconds to wait for the other scanner, then skip this scan
 META_BYTES = 64 * 1024        # sessions/*.json larger than this are not read
 UNIT = {"m": 60, "h": 3600, "d": 86400}
+MAX_CONTEXT = 80              # a loop's max_context when it sets none; its own max_context = 0 turns context care off
 
 
 def _path():

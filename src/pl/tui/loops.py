@@ -19,6 +19,7 @@ from pl.util import tmux
 TAIL_LINES = 40
 ACTIVE_RE = re.compile(r"active (\d+)([mhd]) ago")
 UNIT = {"m": 60, "h": 3600, "d": 86400}
+HINT = "n/a: no Claude turn seen yet · an idle loop restarts fresh over max_context (80% unless set; 0 = off)"
 
 
 COPIERS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"])
@@ -71,8 +72,8 @@ def loop_rows(data):
         claude = (C.ACCOUNTS.get(svc.get("profile")) or {}).get("harness", "claude") == "claude"
         if state == "on" and u.get("dead"):
             state = "dead?"   # on for 3 fires of its interval, 0 tokens spent
-        ctx = (f"{u['context']}%" if u.get("context") is not None else "-") if claude else "n/a"
-        tok = (human(u["tokens_1h"]) if u else "-") if claude else "n/a"
+        ctx = f"{u['context']}%" if claude and u.get("context") is not None else "n/a"
+        tok = human(u["tokens_1h"]) if claude and u else "n/a"
         out.append({"name": name, "state": state, "prompt": svc["prompt"], "account": svc.get("profile") or "-",
                     "context": ctx, "tokens": tok,
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
@@ -98,7 +99,9 @@ class LoopsView(Widget):
             yield Static(Text("select a loop", style="dim"), id="loops-screen")
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("loop", "state", "context", "tokens 1h", "account", "prompt", "last active", "next pass", "output")
+        t = self.query_one(DataTable)
+        t.add_columns("loop", "state", "context", "tokens 1h", "account", "prompt", "last active", "next pass", "output")
+        t.border_subtitle = HINT
 
     def selected(self):
         t = self.query_one(DataTable)

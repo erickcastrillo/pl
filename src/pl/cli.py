@@ -35,9 +35,9 @@
                           [usage] prices = {model = dollars per million tokens} adds a cost column; [usage]
                           windows = {model = context tokens} sets a context window (200k by default; a session
                           past 200k counts as 1M). A loop keeps its last 20 sessions: older ones show as "other".
-                          [loops.<name>] max_context = 60 restarts that loop fresh when idle above 60% of its
-                          window (off unless set; one loop interval apart, at most 3 an hour; background shells
-                          or agents the session started end with it)
+                          Every Claude loop restarts fresh when idle above 80% of its window ([loops.<name>]
+                          max_context = 60 sets another percent, 0 turns it off; one loop interval apart, at most
+                          3 an hour; background shells or agents the session started end with it)
   pl alerts [--all] [--ack KEY]
                           open alerts (account parked, all accounts out, a stage failed 3 times, a dead loop,
                           GitHub rate limit, low memory, a runaway agent, a PR waiting over 24 h): each notifies
@@ -47,8 +47,10 @@
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
   pl manager start|stop [--all]|status|restart NAME
-                          one manager per machine: it keeps every profile's dispatcher running (those with
-                          [dispatch] autostart not false) and writes a machine status the consoles read
+                          one manager per machine, on by default (every console starts it): it keeps every
+                          profile's dispatcher running (those with [dispatch] autostart not false) and writes a
+                          machine status the consoles read; machine.toml [manager] enabled = false turns it off
+  pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
                           a harness account, a tracker board or a tmux session
   pl setup [--yes ...]    create a profile by answering a few questions (or give every answer as a flag)
@@ -98,6 +100,9 @@ def main():
         return profiles.cmd_new(pre_a.rest[2:], pre_a.profile)
     if pre_a.rest[:1] == ["setup"]:            # likewise: setup creates the profile
         return setup.cmd_setup(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["whatsnew"]:         # the package's own list: no profile needed
+        from pl import whatsnew
+        return whatsnew.cmd_whatsnew(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])

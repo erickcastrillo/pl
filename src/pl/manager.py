@@ -1,5 +1,6 @@
 """pl manager: one process per machine. It keeps one dispatcher running for each managed profile and writes
-status.json, which consoles and dispatchers read. Opt-in: nothing changes until `pl manager start` runs once."""
+status.json, which consoles and dispatchers read. On by default: every console starts it unless machine.toml says
+[manager] enabled = false. A dispatcher already running for a profile is adopted (its lock is seen), never doubled."""
 import argparse
 import fcntl
 import json
@@ -20,9 +21,13 @@ WAIT = 5.0                    # seconds start/stop wait for the manager lock
 LOCK_GRACE = 30               # seconds a dispatcher the manager started has to take its lock (slow under memory pressure)
 _clock = time.time
 _sleep = time.sleep
-MACHINE_TOML = """# pl manager settings for this machine. Delete this file and consoles stop starting the manager.
+MACHINE_TOML = """# pl manager settings for this machine. Deleting this file keeps the defaults below.
+[manager]
+enabled = true               # false: each console starts its own profile's dispatcher instead of the manager
+
 [limits]
-max_live_agents = 8          # spec/design/plan/run agent windows across every profile; more hold new starts
+# max_live_agents = 12       # spec/design/plan/run agent windows across every profile; more hold new starts.
+                             # Unset: every managed profile's max_runs + max_prep added up, at least 8
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
@@ -35,6 +40,31 @@ def machine_dir() -> Path:
 
 def _path(name):
     return machine_dir() / name
+
+
+def enabled() -> bool:
+    """The manager is on unless machine.toml sets [manager] enabled = false; no file, or one that does not load, is on."""
+    m = _machine_toml().get("manager", {})
+    return not isinstance(m, dict) or m.get("enabled", True) is not False
+
+
+def _machine_toml():
+    """machine.toml as a dict; {} when there is none or it does not load."""
+    try:
+        return tomllib.loads(_path("machine.toml").read_text())
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return {}
+
+
+def write_machine_toml() -> bool:
+    """Write machine.toml with the defaults and a comment per key; True when written, False when one is already there."""
+    machine_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        with open(_path("machine.toml"), "x") as f:
+            f.write(MACHINE_TOML)
+    except FileExistsError:
+        return False
+    return True
 
 
 def _run(argv, timeout=None):
@@ -127,7 +157,9 @@ def manages(name):
 
 def managed():
     """Every profile whose [dispatch] autostart is not false, with what the manager needs to start it.
-    A profile whose config does not load is {"name", "error"}: marked in the status, never started."""
+    A profile whose config does not load, has no [tracker] type or fails validation is {"name", "error"}: marked
+    in the status as "config error: <reason>", never started, never notified about."""
+    import tomlkit
     from pl import config as C
     from pl.profiles import list_profiles
     out = []
@@ -137,6 +169,12 @@ def managed():
             t = tomllib.loads((d / "config.toml").read_text())
             if t.get("dispatch", {}).get("autostart", True) is False:
                 continue
+            tr = t.get("tracker")
+            errs = (["no [tracker] type"] if not (isinstance(tr, dict) and tr.get("type"))
+                    else C.validate(tomlkit.parse((d / "config.toml").read_text())))
+            if errs:
+                out.append({"name": name, "error": f"config error: {errs[0]}"})
+                continue
             gh = t.get("code_host", {}).get("gh_config_dir")
             att = t.get("paths", {}).get("attention_cmd")
             g = {**C._defaults(), "CONFIG_DIR": d}
@@ -145,12 +183,14 @@ def managed():
             except Exception:  # noqa: BLE001 - a profile whose loops do not load has none
                 g["SERVICES"] = {}
             pid, since = _holder(d / "state" / "pl-dispatch.lock")
-            out.append({"loops": set(g["SERVICES"]), "name": name, "dir": d, "session": row["tmux_session"], "pid": pid,
+            slots = sum(v for k in ("max_runs", "max_prep")
+                        if isinstance(v := g["DISPATCH"].get(k), int) and not isinstance(v, bool))
+            out.append({"loops": set(g["SERVICES"]), "slots": slots, "name": name, "dir": d, "session": row["tmux_session"], "pid": pid,
                         "running": bool(pid) and _alive(pid, "pl dispatch", since),
                         "gh": d / Path(gh).expanduser() if isinstance(gh, str) and gh else None,
                         "attention": str(Path(att).expanduser()) if isinstance(att, str) and att else None})
-        except Exception:  # noqa: BLE001 - one bad profile never stops the others
-            out.append({"name": name, "error": "config error"})
+        except Exception as e:  # noqa: BLE001 - one bad profile never stops the others
+            out.append({"name": name, "error": f"config error: does not load ({type(e).__name__})"})
     return out
 
 
@@ -158,14 +198,34 @@ def _alerts(profs):
     return sorted({p["attention"] for p in profs if p["attention"] and os.access(p["attention"], os.X_OK)})
 
 
-def _limits():
-    """machine.toml [limits] over the defaults; a file that does not load or validate keeps the defaults."""
+def _limits(profs=()):
+    """machine.toml [limits] over the defaults; [limits] that do not validate keep the defaults (a bad [manager]
+    value never drops them). max_live_agents unset: every managed profile's max_runs + max_prep, at least 8."""
     from pl import config as C
-    try:
-        t = tomllib.loads(_path("machine.toml").read_text())
-    except (OSError, tomllib.TOMLDecodeError):
-        t = {}
-    return {**C.MACHINE_DEFAULTS, **({} if C.validate_machine(t) else t.get("limits", {}))}
+    lim = _machine_toml().get("limits", {})
+    lim = lim if isinstance(lim, dict) and not C.validate_machine({"limits": lim}) else {}
+    auto = max(C.MACHINE_DEFAULTS["max_live_agents"], sum(p.get("slots", 0) for p in profs))
+    return {**C.MACHINE_DEFAULTS, "max_live_agents": auto, **lim}
+
+
+HOLD_NOTIFY_EVERY = 3600   # seconds: a hold that ends and starts again notifies at most once in this time
+
+
+def _machine_check(state):
+    """machine.toml's problems as one "machine.toml: ..." line, or None. A new problem is logged and written to the
+    machine events.jsonl once; the manager then runs with the defaults for what is wrong."""
+    from pl import config as C
+    errs = C.validate_machine(_machine_toml())
+    note = f"machine.toml: {'; '.join(errs)}" if errs else None
+    if note and note != state.get("machine_error"):
+        print(note, flush=True)
+        try:
+            with open(_path("events.jsonl"), "a") as f:
+                f.write(json.dumps({"at": _clock(), "kind": "machine_toml_invalid", "detail": note}) + "\n")
+        except OSError:
+            pass
+    state["machine_error"] = note
+    return note
 
 
 def _caps(state, profs):
@@ -174,7 +234,7 @@ def _caps(state, profs):
     Returns (live agents, max live agents, agent memory %, the hold reason or None)."""
     from pl import memory
     from pl.agents import run_waiting
-    lim, r = _limits(), memory.reading()
+    lim, r = _limits(profs), memory.reading()
     panes = memory._run(["tmux", "list-panes", "-a", "-F", "#{session_name} #{window_id} #{pane_pid} #{window_name}"])
     procs, by_session, trees, live = memory._procs(), {p["session"]: p for p in profs}, [], 0
     for line in (panes or "").splitlines():
@@ -221,7 +281,9 @@ def _caps(state, profs):
     hold = "; ".join(why) or None
     if hold and not state.get("hold"):
         print(f"hold: {hold}", flush=True)
-        _notify("pl manager holds new agents", hold, _alerts(profs))
+        if _clock() - state.get("hold_notified", float("-inf")) >= HOLD_NOTIFY_EVERY:
+            state["hold_notified"] = _clock()
+            _notify("pl manager holds new agents", hold, _alerts(profs))
     state["hold"] = hold
     return live, lim["max_live_agents"], pct, hold
 
@@ -240,6 +302,7 @@ def tick(state):
     from pl.dispatch import start_for
     now, rows, profs = _clock(), [], managed()
     bad, profs = [p for p in profs if "error" in p], [p for p in profs if "error" not in p]
+    machine_error = _machine_check(state)
     live, cap, pct, hold = _caps(state, profs)
     for p in profs:
         fresh = {"up": False, "seen": False, "since": 0, "restarts": [], "next": 0, "gave_up": False, "stopped": False}
@@ -278,7 +341,7 @@ def tick(state):
     rows += [{"name": p["name"], "running": False, "dispatcher_pid": None, "restarts": 0, "gave_up": False,
               "error": p["error"]} for p in bad]
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
-              "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold}
+              "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error}
     _write("status.json", status)
     return status
 
@@ -291,6 +354,7 @@ def restart(name, kind="restart"):
         return None
     d = _path(kind)
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (_path("stop" if kind == "restart" else "restart") / name).unlink(missing_ok=True)   # the last request wins
     (d / name).touch()
     return (f"manager: {'restarting' if kind == 'restart' else 'stopping'} the dispatcher of {name} on the next tick"
             + ("" if running() else " (manager not running)"))
@@ -346,9 +410,7 @@ def start():
     """Start the manager detached (its own session, so tmux restore cannot bring it back). A no-op when it runs."""
     if running():
         return f"manager: running (pid {holder_pid() or '?'})"
-    machine_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not _path("machine.toml").exists():
-        _path("machine.toml").write_text(MACHINE_TOML)
+    write_machine_toml()
     with open(_path("manager.log"), "a") as log:
         subprocess.Popen([sys.executable, "-m", "pl", "manager", "run"], stdin=subprocess.DEVNULL, stdout=log,
                          stderr=log, start_new_session=True)
@@ -387,6 +449,8 @@ def show():
         lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']}")
     if st.get("hold"):
         lines.append(f"hold: {st['hold']}")
+    if st.get("machine_error"):
+        lines.append(st["machine_error"])
     return "\n".join(lines)
 
 

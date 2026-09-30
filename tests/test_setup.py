@@ -921,3 +921,20 @@ def test_script_on_linux_uses_notify_send(tmp_path):
 def test_script_with_no_notifier_rings_the_bell_on_stderr(tmp_path):
     r, argv = _run_script(tmp_path, "Linux", [])
     assert r.returncode == 0 and r.stderr.startswith("\a") and NASTY[0] in r.stderr and NASTY[1] in r.stderr
+
+
+def test_setup_writes_machine_toml_with_the_manager_on(fake_home, monkeypatch, capsys):
+    from pl import manager
+    _pl(monkeypatch, *GITHUB_EXISTING)
+    f = fake_home / ".local" / "state" / "pl-machine" / "machine.toml"
+    assert f.read_text() == manager.MACHINE_TOML and manager.enabled() is True
+    assert "machine.toml" in capsys.readouterr().out
+
+
+def test_setup_says_the_manager_is_off_when_machine_toml_turns_it_off(fake_home, monkeypatch, capsys):
+    f = fake_home / ".local" / "state" / "pl-machine" / "machine.toml"
+    f.parent.mkdir(parents=True)
+    f.write_text("[manager]\nenabled = false\n")
+    _pl(monkeypatch, *GITHUB_EXISTING)
+    out = capsys.readouterr().out
+    assert "kept" in out and "the manager is off" in out and "runs every profile" not in out

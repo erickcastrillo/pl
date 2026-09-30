@@ -143,6 +143,9 @@ class NeedsView(Horizontal):
         if g["merge"]:
             built.append(("group:merge", (Text("▸", style="green"), Text(f"{len(g['merge'])} PRs ready to merge"),
                                           Text("merge-gate passed · press 5", style="dim"), Text(""))))
+        if not al:   # last, so the cursor still lands on the first card: a quiet board still shows alerts exist
+            built.append(("group:alerts", (Text("■", style="dim"), Text("Alerts: none open (pl alerts --all for history)",
+                                                                        style="dim"), Text(""), Text(""))))
         old = self._built
         if [k for k, _ in built] == [k for k, _ in old]:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, old):

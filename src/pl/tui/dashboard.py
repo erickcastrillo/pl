@@ -92,8 +92,8 @@ def health_tokens(data, window=1):
     """(label, value) for the Health panel: tokens in the chosen window, split by account; every configured account
     with none (other harnesses included) shows n/a. A session two accounts share a folder for may show as "a+b"."""
     u = data.get("usage")
-    if not u:
-        return ("spend", "not tracked yet")
+    if not u:   # the first transcript scan has not finished (or failed): the refresh shows it next time
+        return ("tokens", "counting…")
     key = WINDOWS[window][0]
     by = (u.get("by_window") or {}).get(key) or {}
     covered = {x for k in by for x in k.split("+")}

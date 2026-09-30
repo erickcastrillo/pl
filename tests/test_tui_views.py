@@ -147,7 +147,7 @@ async def test_dashboard_renders_tiles_and_panels():
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
                   "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
-                  "spend", "not tracked yet", "exceeded", "legacy", "dispatcher running"):
+                  "tokens", "counting…", "exceeded", "legacy", "dispatcher running"):
             assert s in text, s
 
 

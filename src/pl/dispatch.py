@@ -131,8 +131,8 @@ def start_worker(c, stage, attempts, dry):
 
 
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
-    """Start any service loop that is not running; restart one whose Claude exited or hit a usage limit, or (only
-    when the loop sets max_context) whose session is idle with its context above that percent: see _context_restart.
+    """Start any service loop that is not running; restart one whose Claude exited or hit a usage limit, or whose
+    session is idle with its context above max_context (80 unless the loop sets it; 0 is off): see _context_restart.
     Paused: start nothing, and close each service window once its session is idle (between loop fires).
     hold (the low-memory line): start and restart nothing; running loops are left alone."""
     out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{pane_current_command} #{window_name}"],
@@ -171,7 +171,7 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                 if not dry:
                     mark_exhausted(prof, screen)
                 why = f"{prof} hit its usage limit"
-            elif sid and rec.get("status") == "idle" and svc.get("max_context"):
+            elif sid and rec.get("status") == "idle" and svc.get("max_context", usage.MAX_CONTEXT):
                 if ust is None:
                     try:
                         ust = usage.scan(save=not dry)
@@ -212,7 +212,7 @@ def _context_restart(name, svc, sid, s, ust, dry):
     the loop started and allows at most 3 an hour. A session whose first turn was already over the limit is never
     restarted (a fresh one would start there too): one loop_context_warning event instead. A restart also ends any
     background shell or agent the session started; pl cannot see those."""
-    limit, pct = svc["max_context"], usage.context_pct(ust, sid)
+    limit, pct = svc.get("max_context", usage.MAX_CONTEXT), usage.context_pct(ust, sid)
     if pct is None or pct <= limit:
         return None
     if (usage.context_pct(ust, sid, "first") or 0) > limit:

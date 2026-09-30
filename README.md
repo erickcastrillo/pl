@@ -8,6 +8,24 @@ pl is a terminal console and dispatcher for an idea-to-PR funnel. A card moves t
 
 Agents run through the Claude Code, Codex or Antigravity command-line tools (Antigravity is experimental).
 
+## Features
+
+All of these are on by default. The console lists new ones once after an upgrade; `?` in the console or `pl whatsnew` shows them again.
+
+| Feature | Where to see it | Try |
+| --- | --- | --- |
+| Standup panel with Slack copy | Dashboard: `s`, then `y` | `pl standup --slack` |
+| Token spend per card, account, model and loop | Dashboard Health; Loops tab | `pl usage --by card` |
+| Loop context care: an idle loop over 80% context restarts fresh | Loops tab: context | `pl usage --by loop` |
+| Alerts that open, remind and clear themselves | Needs you: ALERTS | `pl alerts --all` |
+| A "doing now" line for each live agent | Needs you and Pipeline | `pl watch` |
+| Move a live agent to another account in place | on a usage limit; Activity tab | `pl move-agent <card> <account>` |
+| One machine manager for every profile's dispatcher | Dashboard: machine line; `D` | `pl manager status` |
+| Claude's weekly limit detected; the account parks until its reset | header: accounts | `pl accounts` |
+| Memory guard: low memory holds new agents; a runaway agent is stopped | Dashboard: memory line | `pl manager status` |
+| One dispatcher per profile | Activity tab | `pl profiles` |
+| Start a failed agent fresh | Needs you | `pl retry all` |
+
 ## Your subscription
 
 pl runs the harness CLIs you already installed and signed in to, on your own subscription. It never asks for or stores an API key. pl adds no subscription and needs no model API key. If `claude`, `codex` or `agy` does not work in your terminal, pl cannot use it either. pl never reads a harness's credential files.
@@ -109,27 +127,31 @@ Every key can also be edited in the console's Settings tab. Custom harnesses go 
 
 ## One manager per machine
 
-With more than one profile, let one manager run them all. It starts each profile's dispatcher (those with `[dispatch] autostart` not false), restarts one that exits, and caps agents across every profile.
+The manager is on by default: every console starts it when it is not running. It starts each profile's dispatcher (those with `[dispatch] autostart` not false), restarts one that exits, and caps agents across every profile. A dispatcher that already runs for a profile is adopted, never started twice.
 
 ```
-pl manager start          # once; after that every console starts it when it is not running
+pl manager start          # start it by hand; a console does this for you
 pl manager status         # each profile's dispatcher, live agents, any hold
 pl manager stop [--all]   # --all also stops the dispatchers
 pl manager restart NAME   # start a profile's dispatcher again after the manager gave up on it
 pl manager stop NAME      # stop one profile's dispatcher; the manager leaves it alone until restart
 ```
 
-The limits live in `~/.local/state/pl-machine/machine.toml`, which `pl manager start` creates:
+The settings live in `~/.local/state/pl-machine/machine.toml`, which `pl setup` and `pl manager start` create. Without the file the defaults apply:
 
 ```toml
+[manager]
+enabled = true               # false: each console starts its own profile's dispatcher instead of the manager
+
 [limits]
-max_live_agents = 8          # spec/design/plan/run agent windows across every profile; more hold new starts
+# max_live_agents = 12       # spec/design/plan/run agent windows across every profile; more hold new starts.
+                             # Unset: every managed profile's max_runs + max_prep added up, at least 8
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
 ```
 
-A usage limit hit by one profile parks that account folder for every profile that uses it. A hold stops new agents only: crashed agents and loops are still restarted. To go back to one dispatcher per console, run `pl manager stop` first, then delete `machine.toml`.
+A usage limit hit by one profile parks that account folder for every profile that uses it. A hold stops new agents only: crashed agents and loops are still restarted. To go back to one dispatcher per console, run `pl manager stop`, then set `[manager] enabled = false` in `machine.toml`.
 
 ## Guides
 
@@ -165,10 +187,14 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | a / x | approve / send back the selected card |
 | enter | open review on Needs you |
 | e | open in `$EDITOR` (review screen) |
+| D | start or stop this profile's dispatcher (through the manager when it runs it; `pl manager stop` stops the manager) |
 | r | refresh |
+| ? | what's new (also in the ctrl+p palette) |
 | q | quit |
 
-Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`. Each has `--help`. `pl --version` prints the installed version.
+Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
+
+Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
 
 ## Standup
 

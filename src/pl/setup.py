@@ -770,6 +770,12 @@ def cmd_setup(argv: list[str]):
             print(r[1].strip() if r else "uv is not installed")
         if not (r and r[0] == 0):
             a["todo"].append(msg.replace("\n", " "))
+    from pl import manager
+    mt = manager.machine_dir() / "machine.toml"
+    wrote = manager.write_machine_toml()
+    print(f"{'wrote' if wrote else 'kept'} {_tilde(mt)}: " + (
+        "the manager runs every profile's dispatcher ([manager] enabled = false turns it off)" if manager.enabled()
+        else "the manager is off ([manager] enabled = false): each console starts its own profile's dispatcher"))
     s = a["slug"]
     print(f"\nNext:\n  alias pl-{s}='PL_CONFIG_DIR=~/.pl-{s} pl'\n  pl --profile {s} list\n  pl --profile {s}")
     for todo in optional:

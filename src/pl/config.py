@@ -258,8 +258,8 @@ def validate(doc) -> list[str]:
             if table == "loops" and not NAME_RE.match(name):
                 errs.append(f"loop name {name!r} must match {NAME_RE.pattern}")
             mc = v.get("max_context") if table == "loops" else None
-            if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or not 1 <= mc <= 100):
-                errs.append(f"loops.{name}: max_context must be a whole percent from 1 to 100")
+            if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or not 0 <= mc <= 100):
+                errs.append(f"loops.{name}: max_context must be a whole percent from 0 (off) to 100")
             if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or "").strip():
                 errs.append(f"loops.{name}: prompt is required")
             if accounts and v.get("account") and v["account"] not in accounts:
@@ -300,12 +300,16 @@ MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_
 
 
 def validate_machine(t) -> list[str]:
-    """Problems in machine.toml's [limits] (empty = fine), checked with the [dispatch] size rules."""
+    """Problems in machine.toml's [manager] and [limits] (empty = fine), checked with the [dispatch] size rules."""
     from pl.memory import parse_size
-    lim, errs = t.get("limits", {}), []
+    errs = [f"{k} must be a table ([{k}])" for k in ("manager", "limits") if not isinstance(t.get(k, {}), dict)]
+    lim = t.get("limits") if isinstance(t.get("limits"), dict) else {}
+    man = t.get("manager") if isinstance(t.get("manager"), dict) else {}
     v = lim.get("max_live_agents")
     if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
         errs.append("limits.max_live_agents must be a whole number of at least 1")
+    if not isinstance(man.get("enabled", True), bool):
+        errs.append("manager.enabled must be true or false")
     if not isinstance(lim.get("kill_runaway", True), bool):
         errs.append("limits.kill_runaway must be true or false")
     for key in ("max_agents_memory", "min_free_memory"):

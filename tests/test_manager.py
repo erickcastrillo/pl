@@ -11,6 +11,7 @@ from pl import config as C
 from pl import dispatch, manager
 
 REAL_NOTIFY = manager._notify   # the fixture replaces it; the timeout test needs the real one
+TR = '[tracker]\ntype = "mcp"\n'   # a managed profile needs a tracker; one without it is a config error
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +21,7 @@ def machine(tmp_path, monkeypatch):
     monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
     for var in ("PL_CONFIG_DIR", "PL_MANAGED", "GH_CONFIG_DIR"):
         monkeypatch.delenv(var, raising=False)
-    for name, body in (("work", ""), ("home", ""), ("off", "[dispatch]\nautostart = false\n")):
+    for name, body in (("work", TR), ("home", TR), ("off", "[dispatch]\nautostart = false\n")):
         d = tmp_path / f".pl-{name}"
         (d / "state").mkdir(parents=True)
         (d / "config.toml").write_text(body)
@@ -198,7 +199,7 @@ def runs(n, profile="work", start=2000):
 
 
 def test_loop_windows_do_not_count_as_live_agents(machine, monkeypatch):
-    (machine["home"] / ".pl-work" / "config.toml").write_text('[loops.merge]\nprompt = "/loop 5m /m"\n'
+    (machine["home"] / ".pl-work" / "config.toml").write_text(TR + '[loops.merge]\nprompt = "/loop 5m /m"\n'
                                                               '[loops.review]\nprompt = "/loop 5m /r"\n')
     limits(machine, "[limits]\nmax_live_agents = 8\n")
     fake_machine(monkeypatch, runs(6) + "pl-work @m 800 merge\npl-work @r 810 review\npl-home @h 820 run-home-0\n",
@@ -521,8 +522,132 @@ def test_a_profile_whose_config_does_not_load_is_marked_and_skipped(machine):
     (machine["home"] / ".pl-work" / "config.toml").write_text("dispatch = 1\n")   # loads, wrong shape
     (machine["home"] / ".pl-home" / "config.toml").write_text("[not toml\n")
     (machine["home"] / ".pl-good" / "state").mkdir(parents=True)
-    (machine["home"] / ".pl-good" / "config.toml").write_text("")
+    (machine["home"] / ".pl-good" / "config.toml").write_text(TR)
     st = manager.tick({})
     rows = {p["name"]: p for p in st["profiles"]}
-    assert rows["work"]["error"] == rows["home"]["error"] == "config error"
+    assert rows["work"]["error"].startswith("config error") and rows["home"]["error"].startswith("config error")
     assert [c[4] for c in starts(machine["log"])] == ["pl-good"]
+
+
+# ---- on by default ----
+
+def test_a_missing_machine_toml_means_the_manager_is_on(machine):
+    assert not (manager.machine_dir() / "machine.toml").exists()
+    assert manager.enabled() is True
+
+
+@pytest.mark.parametrize("body, on", [("[manager]\nenabled = false\n", False), ("[manager]\nenabled = true\n", True),
+                                      (manager.MACHINE_TOML, True), ("not toml [[", True)])
+def test_only_manager_enabled_false_turns_it_off(machine, body, on):
+    manager.machine_dir().mkdir(parents=True)
+    (manager.machine_dir() / "machine.toml").write_text(body)
+    assert manager.enabled() is on
+
+
+def test_the_default_machine_toml_names_every_key_with_a_comment():
+    import tomllib
+    t = tomllib.loads(manager.MACHINE_TOML)
+    assert t["manager"] == {"enabled": True} and set(t["limits"]) == set(C.MACHINE_DEFAULTS) - {"max_live_agents"}
+    assert "# max_live_agents =" in manager.MACHINE_TOML   # unset: computed from the profiles, shown commented out
+    keys = [x for x in manager.MACHINE_TOML.splitlines() if "=" in x]
+    assert keys and all("#" in x for x in keys)
+
+
+def test_write_machine_toml_writes_the_defaults_once(machine):
+    assert manager.write_machine_toml() is True
+    f = manager.machine_dir() / "machine.toml"
+    assert f.read_text() == manager.MACHINE_TOML
+    f.write_text("[manager]\nenabled = false\n")
+    assert manager.write_machine_toml() is False and "enabled = false" in f.read_text()   # never overwritten
+
+
+def test_a_dispatcher_already_running_by_hand_is_adopted_not_doubled(machine):
+    running_dispatcher(machine, "work", 5151)   # started before the manager, without PL_MANAGED
+    running_dispatcher(machine, "home", 5252)
+    status = manager.tick({})
+    status = manager.tick({})                   # a second tick still starts nothing
+    assert starts(machine["log"]) == []
+    assert {p["name"]: p["dispatcher_pid"] for p in status["profiles"]} == {"work": 5151, "home": 5252}
+    assert "off" not in {p["name"] for p in status["profiles"]}   # autostart = false stays unmanaged
+
+
+# ---- on by default, fix round 1 ----
+
+def test_a_profile_with_no_tracker_or_a_bad_setting_is_a_config_error_never_started(machine, monkeypatch):
+    """The real Mac's leftover ~/.pl-work holds only an [accounts] table: no dispatcher, no back-off, no notices."""
+    (machine["home"] / ".pl-work" / "config.toml").write_text('[accounts.main]\nconfig_dir = "~"\n')
+    (machine["home"] / ".pl-home" / "config.toml").write_text(TR + "[dispatch]\nmax_runs = -1\n")
+    now = [0.0]
+    monkeypatch.setattr(manager, "_clock", lambda: now[0])
+    state = {}
+    for _ in range(200):
+        st = manager.tick(state)
+        now[0] += manager.TICK
+    rows = {p["name"]: p for p in st["profiles"]}
+    assert rows["work"]["error"] == "config error: no [tracker] type"
+    assert rows["home"]["error"].startswith("config error: dispatch.max_runs must be")
+    assert starts(machine["log"]) == [] and machine["notes"] == []
+    assert "work" not in state and "home" not in state   # no restart back-off kept for them
+    f = hold(manager.machine_dir() / "manager.lock")
+    f.write("pid 32 since now")
+    f.flush()
+    machine["alive"].add(32)
+    try:
+        assert "config error: no [tracker] type" in manager.show()
+    finally:
+        f.close()
+
+
+@pytest.mark.parametrize("body", ["manager = false\n", "limits = 5\n", "[manager]\nenabled = \"no\"\n"])
+def test_a_bad_machine_toml_value_is_reported_once_and_treated_as_the_defaults(machine, capsys, body):
+    limits(machine, body + ("" if body.startswith("limits") else "[limits]\nmax_live_agents = 3\n"))
+    assert manager.enabled() is True
+    state = {}
+    st = manager.tick(state)
+    st = manager.tick(state)
+    assert st["machine_error"].startswith("machine.toml: ")
+    assert capsys.readouterr().out.count("machine.toml: ") == 1   # once in the manager log
+    events = (manager.machine_dir() / "events.jsonl").read_text().splitlines()
+    assert len(events) == 1 and json.loads(events[0])["kind"] == "machine_toml_invalid"
+    if not body.startswith("limits"):
+        assert st["max_live_agents"] == 3   # a bad [manager] value keeps the custom [limits]
+
+
+def test_the_default_live_cap_is_every_managed_profiles_runs_plus_prep_at_least_8(machine, monkeypatch):
+    (machine["home"] / ".pl-work" / "config.toml").write_text(TR + "[dispatch]\nmax_runs = 6\nmax_prep = 3\n")
+    st = manager.tick({})
+    assert st["max_live_agents"] == 9 + 5   # work 6 + 3, home the defaults 3 + 2
+    (machine["home"] / ".pl-work" / "config.toml").write_text(TR + "[dispatch]\nmax_runs = 1\nmax_prep = 0\n")
+    assert manager.tick({})["max_live_agents"] == 8   # 1 + 5 is below the minimum
+    limits(machine, "[limits]\nmax_live_agents = 4\n")
+    assert manager.tick({})["max_live_agents"] == 4   # machine.toml fixes it
+    assert "max_live_agents" not in tomllib_loads(manager.MACHINE_TOML)["limits"]
+
+
+def tomllib_loads(text):
+    import tomllib
+    return tomllib.loads(text)
+
+
+def test_the_hold_notifies_when_it_starts_and_at_most_once_an_hour(machine, monkeypatch):
+    limits(machine, "[limits]\nmax_live_agents = 2\n")
+    now = [0.0]
+    monkeypatch.setattr(manager, "_clock", lambda: now[0])
+    state = {}
+    for t, n in ((0, 3), (5, 1), (10, 3), (1000, 1), (3599, 3), (3600, 1), (3601, 3)):
+        now[0] = float(t)
+        fake_machine(monkeypatch, runs(n), "1 0 5000 /sbin/launchd\n")
+        manager.tick(state)
+    assert [t for t, _ in machine["notes"]] == ["pl manager holds new agents"] * 2   # at 0 and at 3601
+
+
+def test_a_restart_request_cancels_a_pending_stop_and_the_other_way_round(machine):
+    manager.restart("work", "stop")      # D while the manager was down
+    manager.restart("work", "restart")   # D again: start it
+    manager.tick({})
+    assert [c[4] for c in starts(machine["log"])] == ["pl-home", "pl-work"]
+    state = {}
+    manager.restart("home", "restart")
+    manager.restart("home", "stop")
+    manager.tick(state)
+    assert state["home"]["stopped"] is True

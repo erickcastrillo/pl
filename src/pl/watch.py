@@ -112,7 +112,7 @@ def watch_snapshot():
                          "text": f"{c['id'][:8]}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
     bad = exhausted_profiles()
     stp = profile_state()
-    prof = "  ".join(f"{p}: " + (f"PARKED until {stp[p]['until'][11:16]} UTC" if p in bad else "ok")
+    prof = "  ".join(f"{p}: " + (f"PARKED until {parked_until(stp[p].get('until'))}" if p in bad else "ok")
                      + f" ({per_prof[p]['agents']} running, {per_prof[p]['queued']} queued)" for p in C.PROFILES)
     disp = subprocess.run(["tmux", "list-panes", "-t", f"{C.TMUX_SESSION}:dispatch", "-F", "#{pane_current_command}"],
                           capture_output=True, text=True).stdout.strip()
@@ -132,6 +132,16 @@ def watch_snapshot():
                 + (f"   |   PRs awaiting merge check: {pc['gate']}" if pc else ""))
     return {"rows": rows, "prof": prof, "parked": bool(bad), "at": datetime.now().strftime("%H:%M:%S"), "summary": summary, "summary2": summary2,
             "needs": needs, "disp": "running" if disp.startswith("python") else f"NOT RUNNING ({disp or 'no window'})"}
+
+
+def parked_until(iso, now=None):
+    """A park's end in UTC: "21:01 UTC" today, "Oct 4 21:01 UTC" on another day, "?" when it does not read."""
+    try:
+        t = datetime.fromisoformat(iso).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return "?"
+    same = t.date() == (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    return t.strftime("%H:%M UTC") if same else f"{t:%b} {t.day} {t:%H:%M} UTC"
 
 
 def detail_for(r, full_card, full_pr):
