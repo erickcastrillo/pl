@@ -41,6 +41,9 @@
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
+  pl manager start|stop [--all]|status
+                          one manager per machine: it keeps every profile's dispatcher running (those with
+                          [dispatch] autostart not false) and writes a machine status the consoles read
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
                           a harness account, a tracker board or a tmux session
   pl setup [--yes ...]    create a profile by answering a few questions (or give every answer as a flag)
@@ -85,6 +88,9 @@ def main():
         return profiles.cmd_new(pre_a.rest[2:], pre_a.profile)
     if pre_a.rest[:1] == ["setup"]:            # likewise: setup creates the profile
         return setup.cmd_setup(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
+        from pl import manager
+        return manager.cmd_manager(pre_a.rest[1:])
     config.load(pre_a.profile)
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)

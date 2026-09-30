@@ -6,7 +6,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Footer, Static, TabbedContent, TabPane
 
-from pl import board, dispatch
+from pl import board, dispatch, manager
 from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.chrome import TABS, header_text
@@ -41,7 +41,8 @@ def default_provider():
     return {"snapshot": watch.watch_snapshot(),
             "metrics_by_window": {key: events.metrics(seconds) for key, _, seconds in WINDOWS},
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
-            "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage()}
+            "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
+            "machine": manager.read_status()}
 
 
 def _usage():
@@ -96,15 +97,21 @@ class PlApp(App):
 
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
-        """start: start it when not running. toggle: start it, or ask first and stop it. stop: stop it. Never on the UI thread."""
+        """start: start it when not running. toggle: start it, or ask first and stop it. stop: stop it. Never on the UI thread.
+        On a managed machine (machine.toml exists) the same keys start and stop pl manager instead."""
         try:
-            if what == "toggle" and dispatch.dispatcher_running():
-                msg = (f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '
+            managed = (manager.machine_dir() / "machine.toml").exists()
+            if what == "toggle" and (manager.running() if managed else dispatch.dispatcher_running()):
+                msg = ("Stop pl manager? It stops restarting dispatchers; running dispatchers and agents keep running."
+                       if managed else f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '
                        f"{C.TMUX_SESSION}:dispatch; running agents keep running.")
                 self.call_from_thread(self.push_screen, ConfirmScreen(msg),
                                       lambda yes: yes and self.dispatcher_job("stop"))
                 return
-            note = dispatch.stop_dispatcher() if what == "stop" else dispatch.start_dispatcher()
+            if managed:
+                note = manager.stop() if what == "stop" else manager.start()
+            else:
+                note = dispatch.stop_dispatcher() if what == "stop" else dispatch.start_dispatcher()
         except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
             note = f"dispatcher: failed to {'stop' if what == 'stop' else 'start'} — {type(e).__name__}: {e}"
         if note:

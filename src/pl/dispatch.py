@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, board, events, harnesses, memory, trackers, usage
+from pl import accounts, board, events, harnesses, manager, memory, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import hold_reason, pane_exists, registry, run_waiting, worker_status
 from pl.board import card, cards, col_name, sections, update
@@ -412,6 +412,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     sweep_untracked(all_cards, reg, dry)
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
+    ms = None if low or dry else manager.read_status()   # a hold older than 15 s is ignored: a dead manager
+    low = low or (f"starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None)
     if low:
         print(low)
     ensure_services(st, all_cards, reg, dry, paused(), low)
@@ -577,21 +579,30 @@ def start_dispatcher():
         return _start_dispatcher()
 
 
+def start_for(config_dir, session, gh_dir=None, managed=False):
+    """Run `pl dispatch` for the profile in config_dir, detached in tmux window `dispatch` of session.
+    None when tmux took it, else the reason. managed: started by pl manager (PL_MANAGED=1)."""
+    env = ["-e", f"PL_CONFIG_DIR={config_dir}", *(["-e", f"GH_CONFIG_DIR={gh_dir}"] if gh_dir else []),
+           *(["-e", "PL_MANAGED=1"] if managed else [])]
+    try:
+        has = subprocess.run(["tmux", "has-session", "-t", f"={session}"], capture_output=True).returncode == 0
+        where = ["new-window", "-d", "-t", f"={session}:"] if has else ["new-session", "-d", "-s", session]
+        r = subprocess.run(["tmux", *where, "-n", "dispatch", *env, "--", sys.executable, "-m", "pl", "dispatch"],
+                           capture_output=True, text=True)
+    except OSError as e:
+        return f"tmux: {e.strerror or e}"
+    if r.returncode:
+        return (r.stderr.strip().splitlines() or [f"tmux exited {r.returncode}"])[-1][:100]
+    return None
+
+
 def _start_dispatcher():
     if C.CONFIG_DIR is None or dispatcher_running():
         return None
     s = C.TMUX_SESSION
-    env = ["-e", f"PL_CONFIG_DIR={C.CONFIG_DIR}", *_gh_env_args()]
-    try:
-        has = subprocess.run(["tmux", "has-session", "-t", f"={s}"], capture_output=True).returncode == 0
-        where = ["new-window", "-d", "-t", f"={s}:"] if has else ["new-session", "-d", "-s", s]
-        r = subprocess.run(["tmux", *where, "-n", "dispatch", *env, "--", sys.executable, "-m", "pl", "dispatch"],
-                           capture_output=True, text=True)
-    except OSError as e:
-        return f"dispatcher: failed to start — tmux: {e.strerror or e}"
-    if r.returncode:
-        why = (r.stderr.strip().splitlines() or [f"tmux exited {r.returncode}"])[-1][:100]
-        return f"dispatcher: failed to start — {why}"
+    err = start_for(C.CONFIG_DIR, s, C.GH_CONFIG_DIR)
+    if err:
+        return f"dispatcher: failed to start — {err}"
     if not _wait_lock(True, LOCK_WAIT):
         return f"dispatcher: failed to start — no lock after {LOCK_WAIT:g} s; see tmux window {s}:dispatch"
     pid = holder_pid()
@@ -659,6 +670,9 @@ def reload_config():
 
 
 def cmd_dispatch(a):
+    if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.running():
+        print(f"this machine is run by pl manager (pid {manager.holder_pid() or '?'}); it starts this profile's dispatcher")
+        return   # a restored tmux window just closes; the manager's own dispatcher keeps running
     lock = None if a.dry_run else dispatch_lock()  # noqa: F841 - kept open to hold the lock
     if lock:
         print(f"dispatcher started for {C.PROFILE_NAME or 'legacy'} (pid {os.getpid()})", flush=True)

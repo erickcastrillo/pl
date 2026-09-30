@@ -8,7 +8,7 @@ import pytest
 import tomlkit
 
 from pl import config as C
-from pl import dispatch
+from pl import dispatch, manager
 from pl.tui.app import PlApp
 from pl.tui.review import ConfirmScreen
 from test_tui_views import fake_data
@@ -236,3 +236,56 @@ async def test_autostart_and_the_key_together_start_one_dispatcher(tmp_path, pro
         app.dispatcher_job("start")
         await settle(pilot)
         assert len(starts(tmp_path)) == 1
+
+
+# ---------- WP4: the machine view and the manager ----------
+
+def machine(tmp_path, age=None, toml=False):
+    d = manager.machine_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    if toml:
+        (d / "machine.toml").write_text(manager.MACHINE_TOML)
+    if age is not None:
+        import time
+        (d / "status.json").write_text(json.dumps({"at": time.time() - age, "pid": 1, "hold": "10 live agents (max 8)",
+                                                   "profiles": [{"name": "work"}, {"name": "home"}], "live_agents": 5,
+                                                   "max_live_agents": 8, "agent_memory_pct": 38}))
+
+
+async def test_the_dashboard_shows_a_fresh_machine_status_and_not_a_stale_one(tmp_path, monkeypatch):
+    from pl import board, events, memory, watch
+    from pl.tui import app as app_mod
+    for mod, name, val in ((board, "share", None), (watch, "pr_activity", {}), (memory, "status", None),
+                           (events, "daily", []), (events, "metrics", {})):
+        monkeypatch.setattr(mod, name, lambda *a, _v=val, **k: _v)
+    monkeypatch.setattr(watch, "watch_snapshot", lambda: fake_data()["snapshot"])
+    for age, shown in ((2, True), (60, False)):
+        machine(tmp_path, age=age)
+        data = app_mod.default_provider()
+        assert "machine" in data and (data["machine"] is not None) is shown
+        app = PlApp(snapshot_provider=lambda: {**fake_data(), "machine": data["machine"]}, autostart=False)
+        async with app.run_test(size=(176, 48)) as pilot:
+            await settle(pilot)
+            bar = str(app.query_one("#window-bar").render())
+            assert ("machine: 2 profiles, 5/8 agents, 38% agent memory" in bar) is shown
+            assert ("10 live agents" in bar) is shown
+
+
+async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_path, monkeypatch):
+    machine(tmp_path, toml=True)
+    got = []
+    monkeypatch.setattr(manager, "start", lambda: got.append("start") or "manager: started (pid 9)")
+    monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop") or "manager: stopped")
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher"))
+    app = PlApp(snapshot_provider=fake_data, autostart=True)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert got == ["start"] and starts(tmp_path) == []
+        assert "manager: started (pid 9)" in header(app)
+        await pilot.press("D")                  # D on a managed machine: the manager, with the same confirm
+        await settle(pilot)
+        assert isinstance(app.screen, ConfirmScreen) and "pl manager" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+        assert got == ["start", "stop"] and "manager: stopped" in header(app)

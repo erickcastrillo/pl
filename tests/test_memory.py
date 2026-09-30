@@ -280,3 +280,28 @@ def test_the_guard_runs_in_every_dispatcher_pass(monkeypatch):
     monkeypatch.setattr(memory, "guard_runaways", lambda st, cs, dry=False: seen.append([c["id"] for c in cs]))
     dispatch.dispatch_once(1, False, pull=False)
     assert seen == [["card0001aaaa"]]
+
+
+# ---------- WP2: the machine hold written by pl manager ----------
+
+def _machine_status(tmp_path, monkeypatch, age):
+    import time
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    (tmp_path / "machine").mkdir()
+    (tmp_path / "machine" / "status.json").write_text(json.dumps(
+        {"at": time.time() - age, "pid": 1, "profiles": [], "hold": "10 live agents across profiles (max 8)"}))
+
+
+def test_a_fresh_machine_hold_starts_nothing(fake_home, monkeypatch, capsys):
+    got = _funnel(monkeypatch)
+    _machine_status(fake_home, monkeypatch, age=2)
+    dispatch.dispatch_once(1, False, pull=False)
+    assert got["starts"] == [] and not any(a[0] == "new-window" for a in got["windows"])
+    assert "10 live agents" in capsys.readouterr().out
+
+
+def test_a_machine_hold_older_than_15_s_is_ignored(fake_home, monkeypatch):
+    got = _funnel(monkeypatch)
+    _machine_status(fake_home, monkeypatch, age=20)
+    dispatch.dispatch_once(1, False, pull=False)
+    assert got["starts"] == ["card0001aaaa"]

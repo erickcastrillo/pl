@@ -12,3 +12,4 @@ def no_real_memory_readers(monkeypatch):
     monkeypatch.setattr(memory, "_meminfo", lambda: None)
     monkeypatch.setattr(memory, "_kill", no_kill)
     memory._CACHE.clear()
+    monkeypatch.delenv("PL_MACHINE_DIR", raising=False)   # pl manager's folder: always under the test's own HOME

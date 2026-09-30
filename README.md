@@ -112,6 +112,28 @@ attention_cmd = "notify-me"     # notifications; unset means none
 
 Every key can also be edited in the console's Settings tab. Custom harnesses go under `[harnesses.<name>]` with `bin`, `interactive` and `headless`.
 
+## One manager per machine
+
+With more than one profile, let one manager run them all. It starts each profile's dispatcher (those with `[dispatch] autostart` not false), restarts one that exits, and caps agents across every profile.
+
+```
+pl manager start          # once; after that every console starts it when it is not running
+pl manager status         # each profile's dispatcher, live agents, any hold
+pl manager stop [--all]   # --all also stops the dispatchers
+```
+
+The limits live in `~/.local/state/pl-machine/machine.toml`, which `pl manager start` creates:
+
+```toml
+[limits]
+max_live_agents = 8          # agent and loop windows across every profile; more hold new starts
+max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
+min_free_memory = "15%"      # less free memory holds new starts
+kill_runaway = true          # false: only notify
+```
+
+A usage limit hit by one profile parks that account folder for every profile that uses it. Delete `machine.toml` to go back to one dispatcher per console.
+
 ## Guides
 
 - [Use pl with GitHub](docs/github.md): Projects or Issues as the tracker, pull requests, a first run.

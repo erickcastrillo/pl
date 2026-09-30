@@ -1,7 +1,9 @@
 """Profile failover: a profile that ran out of usage credits is parked, cards move to the other."""
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from pl import config as C
 from pl import harnesses
@@ -17,9 +19,48 @@ def profile_state():
         return {}
 
 
+def _folder(name):
+    return str(Path(C.PROFILES[name]).expanduser().resolve())
+
+
+def _machine():
+    """The machine-wide parking file of pl manager's folder: {resolved account folder: {until, reason, by_profile}}."""
+    from pl.manager import machine_dir
+    try:
+        d = json.loads((machine_dir() / "accounts.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _update_machine(change):
+    """Read, change and atomically rewrite accounts.json under a flock, so two profiles never lose a write."""
+    import fcntl
+    from pl.manager import machine_dir
+    d = machine_dir()
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(d / "accounts.json.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        data = _machine()
+        change(data)
+        tmp = d / f".accounts.json.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps(data, indent=1))
+        os.replace(tmp, d / "accounts.json")
+
+
+def unpark_machine(names):
+    """Clear the machine entries of these accounts' folders (pl accounts --reset)."""
+    folders = {_folder(n) for n in names if n in C.PROFILES}
+    if folders and _machine():
+        _update_machine(lambda data: [data.pop(f, None) for f in folders])
+
+
 def exhausted_profiles():
+    """This profile's parked accounts, plus each account whose folder another profile parked machine-wide."""
     now = time.time()
-    return {p for p, r in profile_state().items() if parse_iso(r.get("until") or "") > now}
+    own = {p for p, r in profile_state().items() if parse_iso(r.get("until") or "") > now}
+    m = _machine()
+    return own | {n for n in C.PROFILES if parse_iso((m.get(_folder(n)) or {}).get("until") or "") > now}
 
 
 def mark_exhausted(profile, screen):
@@ -40,6 +81,9 @@ def mark_exhausted(profile, screen):
                    "until": datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds")}
     C.ATTN.mkdir(exist_ok=True)
     C.PROFILE_STATE.write_text(json.dumps(st, indent=1))
+    if profile in C.PROFILES:
+        entry = {"until": st[profile]["until"], "reason": st[profile]["reason"], "by_profile": C.PROFILE_NAME}
+        _update_machine(lambda data: data.__setitem__(_folder(profile), entry))
     return st[profile]["until"]
 
 

@@ -219,6 +219,13 @@ class DashboardView(Vertical):
             bar.append(f"   memory: {mem['free'] / 1024 ** 3:.1f} GB free", style="bold red" if mem["low"] else "dim")
             if mem["low"]:
                 bar.append("  LOW MEMORY: new agents held", style="bold red reverse")
+        m = data.get("machine")
+        if m:
+            pct = m.get("agent_memory_pct")
+            bar.append(f"   machine: {len(m.get('profiles') or [])} profiles, {m.get('live_agents', 0)}/"
+                       f"{m.get('max_live_agents', '?')} agents" + (f", {pct}% agent memory" if pct is not None else ""), style="dim")
+            if m.get("hold"):
+                bar.append(f"  HOLD: {m['hold']}", style="bold red")
         self.query_one("#window-bar", Static).update(bar)
         vals = tile_values(data, window)
         m7 = (data.get("metrics_by_window") or {}).get("7d") or {}

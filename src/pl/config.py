@@ -287,3 +287,24 @@ def save(doc, target=None) -> None:
         tmp.unlink(missing_ok=True)
         raise
     harnesses._CACHE.clear()
+
+
+# pl manager's machine.toml [limits]: caps across every profile on the machine
+MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True}
+
+
+def validate_machine(t) -> list[str]:
+    """Problems in machine.toml's [limits] (empty = fine), checked with the [dispatch] size rules."""
+    from pl.memory import parse_size
+    lim, errs = t.get("limits", {}), []
+    v = lim.get("max_live_agents")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
+        errs.append("limits.max_live_agents must be a whole number of at least 1")
+    if not isinstance(lim.get("kill_runaway", True), bool):
+        errs.append("limits.kill_runaway must be true or false")
+    for key in ("max_agents_memory", "min_free_memory"):
+        try:
+            lim.get(key) is None or parse_size(lim[key], 1)
+        except ValueError:
+            errs.append(f"limits.{key} must be a size like \"4GB\" or a share of memory like \"60%\"")
+    return errs

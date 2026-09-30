@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl.accounts import exhausted_profiles, next_profile, profile_state
+from pl.accounts import exhausted_profiles, next_profile, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, registry, worker_status, worker_view
 from pl import events, ideas, trackers
 from pl.board import card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, render, sections, share, update
@@ -321,6 +321,7 @@ def cmd_profiles(a):
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):
             st.pop(p, None)
+        unpark_machine(list(C.PROFILES) if a.reset == "all" else [a.reset])
         C.ATTN.mkdir(exist_ok=True)
         C.PROFILE_STATE.write_text(json.dumps(st, indent=1))
         print(f"un-parked {a.reset}")
