@@ -27,6 +27,9 @@
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
                           --plain prints a refreshing text frame instead; --once prints one frame and exits
+  pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown]
+                          a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
+                          specs, plans, cards done, what is in progress, what needs you, errors
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
@@ -56,6 +59,7 @@ from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, 
                          cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
                          cmd_review)
 from pl.dispatch import cmd_dispatch
+from pl.standup import cmd_standup
 from pl.watch import cmd_watch
 
 
@@ -100,6 +104,8 @@ def main():
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     sub.add_parser("pause"); sub.add_parser("resume")
+    p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
+    p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -111,4 +117,5 @@ def main():
         return
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
-     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent}[a.cmd](a)
+     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
+     "standup": cmd_standup}[a.cmd](a)

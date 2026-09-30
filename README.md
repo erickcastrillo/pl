@@ -98,6 +98,7 @@ autostart = true                # the console starts this dispatcher in tmux; D 
 
 [code_host]                     # PR labels pl reads (set by your review tools)
 owner = "your-org"
+repos = ["api", "web"]          # optional: pl standup counts only these repos' PRs (default: every repo of owner)
 labels = { review = "...", ready = "...", merge_ready = "...", rework = "...", failed = "..." }
 
 [intake]
@@ -141,13 +142,20 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | --- | --- |
 | 1 to 8 | Dashboard, Needs you, Ideas, Pipeline, Pull requests, Loops, Activity, Settings |
 | w | cycle the Dashboard time window |
+| s | standup summary of the last 24 hours on the Dashboard (y copies it) |
 | a / x | approve / send back the selected card |
 | enter | open review on Needs you |
 | e | open in `$EDITOR` (review screen) |
 | r | refresh |
 | q | quit |
 
-Other commands: `pl idea`, `pl list`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`. Each has `--help`.
+Other commands: `pl idea`, `pl list`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`. Each has `--help`.
+
+## Standup
+
+`pl standup` prints a short summary of the last 24 hours, ready to paste in a chat standup: PRs merged, opened and closed without merging; ideas added, specs and plans written and approved, cards sent back and done; cards per column and agents running now; what needs you; and errors, if any. Each line has up to five titles under it, never card text.
+
+`--since` takes `24h`, `90m`, `7d`, a date (`2026-09-29`) or a local time (`2026-09-29T09:00`). `--markdown` prints Markdown for docs. PR numbers cover every PR in the `[code_host]` owner's repos (or its `repos`), with how many merged ones are yours (authored by or assigned to you); they come from three GitHub searches. When GitHub cannot answer, the line says `PRs: unavailable` and why.
 
 ## License
 

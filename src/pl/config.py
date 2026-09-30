@@ -111,7 +111,8 @@ def _apply(g, t):
                          if v.get("enabled", True) is not False}
         g["LOOPS_OFF"] = {n: dict(v) for n, v in t["loops"].items() if v.get("enabled", True) is False}
     ch = t.get("code_host", {})
-    g["CODE_HOST"] = {"owner": ch.get("owner") or None, "labels": dict(ch.get("labels") or {})}
+    repos = [r for r in (ch.get("repos") if isinstance(ch.get("repos"), list) else []) if isinstance(r, str) and r]
+    g["CODE_HOST"] = {"owner": ch.get("owner") or None, "labels": dict(ch.get("labels") or {}), **({"repos": repos} if repos else {})}
     if tr.get("type") == "github-project" and tr.get("repo"):   # both defaults; [intake] enabled / [loops.auto-review] enabled = false turn one off
         if not it.get("type") and it.get("enabled", True) is not False:
             g["ISSUE_INTAKE"] = {"repo": tr["repo"], "start_label": START_LABEL}

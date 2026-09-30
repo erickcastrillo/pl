@@ -1,12 +1,18 @@
 """Dashboard: six tiles for the chosen window, 14-day throughput, where work waits, decide next, health."""
+import shutil
 import statistics
 from datetime import datetime, timedelta, timezone
 
 from rich.text import Text
-from textual.containers import Horizontal, Vertical
+from textual import work
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import DataTable, Digits, Label, Sparkline, Static
 
 from pl import config as C
+from pl import standup
+from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import NeedsView, needs_groups, waiting_total
 from pl.tui.prs import pr_groups
 from pl.util import age, parse_iso
@@ -190,3 +196,54 @@ class DashboardView(Vertical):
         self.app.action_tab(tab)
         if group:
             self.app.query_one(NeedsView).select_group(group)
+
+
+class StandupScreen(ModalScreen):
+    """The pl standup text for the last 24 hours, from the last refresh's snapshot; y copies it, esc closes."""
+    DEFAULT_CSS = """
+    StandupScreen { align: center middle; }
+    StandupScreen > Vertical { width: 90; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    #standup-body { height: 1fr; }
+    """
+    BINDINGS = [Binding("y", "copy", "copy"), Binding("escape", "close", "close")]
+
+    def __init__(self, snapshot):
+        super().__init__()
+        self.snapshot, self.text = snapshot, ""
+
+    def compose(self):
+        with Vertical():
+            with VerticalScroll(id="standup-body"):
+                yield Static(Text("building the standup…", style="dim"), id="standup-text")
+            yield Static(Text("y copy · esc close", style="dim"))
+
+    def on_mount(self):
+        self.build()
+
+    @work(thread=True, group="standup")
+    def build(self):
+        """Off the UI thread: the two PR searches. The board and tmux are not read again."""
+        start = standup.parse_since(None)
+        try:
+            got = standup.text(self.snapshot, start, standup.pr_summary(start))
+        except Exception as e:  # noqa: BLE001 - a bad event line must not end the console
+            got = f"could not build the standup: {type(e).__name__}: {e}"
+        self.app.call_from_thread(self.shown, got)
+
+    def shown(self, got):
+        self.text = got
+        self.query_one("#standup-text", Static).update(Text(got))
+
+    def action_copy(self):
+        if not self.text:
+            self.app.notify("still building", markup=False)
+            return
+        self.app.copy_to_clipboard(self.text)
+        for argv in COPIERS:
+            if shutil.which(argv[0]):
+                _copy_run(argv, self.text)
+                break
+        self.app.notify("copied the standup", markup=False)
+
+    def action_close(self):
+        self.dismiss(None)

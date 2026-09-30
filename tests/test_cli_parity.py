@@ -50,6 +50,7 @@ def _wp2_expected(args, legacy):
                           "{idea,list,review,approve,reject,dispatch,pull,adopt,done,board,card,profiles,accounts,")
         out = out.replace(",adopt,done,board,", ",adopt,done,move,board,")   # WP28 adds pl move
         out = out.replace(",board,card,profiles,", ",board,card,retry,profiles,")   # WP42 adds pl retry
+        out = out.replace(",pause,resume,intent", ",pause,resume,standup,intent")   # WP46 adds pl standup
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
         out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all]\n")
         out = out.replace("usage: pl [-h]\n", "usage: pl [-h] [--profile NAME]\n", 1)

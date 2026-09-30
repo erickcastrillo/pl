@@ -10,7 +10,7 @@ from pl import board, dispatch
 from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.chrome import TABS, header_text
-from pl.tui.dashboard import WINDOWS, DashboardView
+from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
 from pl.tui.needs import NeedsView, needs_groups, waiting_total
@@ -55,7 +55,7 @@ class PlApp(App):
     TITLE = "pl"
     BINDINGS = [Binding(str(i + 1), f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="1-9")
                 for i, (tid, name) in enumerate(TABS)] + [
-        Binding("w", "cycle_window", "window"),
+        Binding("w", "cycle_window", "window"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher start/stop"), Binding("r", "refresh", "refresh"), Binding("q", "quit", "quit")]
@@ -176,6 +176,8 @@ class PlApp(App):
     def check_action(self, action, parameters):
         if action == "cycle_window":
             return self.active_tab == "dashboard"
+        if action == "standup":
+            return self.active_tab == "dashboard" and len(self.screen_stack) == 1
         if action == "review":
             return self.active_tab == "needs" and len(self.screen_stack) == 1
         return True
@@ -184,6 +186,12 @@ class PlApp(App):
         self.window = (self.window + 1) % len(WINDOWS)
         if self.data is not None:
             self.query_one(DashboardView).show(self.data, self.window)
+
+    def action_standup(self):
+        if self.data is None:
+            self.notify("no data yet: wait for the first refresh", markup=False)
+            return
+        self.push_screen(StandupScreen(self.data["snapshot"]))
 
     def action_review(self, what):
         self.query_one(NeedsView).review(what)
