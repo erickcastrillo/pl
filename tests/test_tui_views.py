@@ -737,3 +737,30 @@ async def test_dashboard_header_shows_free_memory_and_a_red_warning_when_low():
         assert "memory: 2.0 GB free" in text and "LOW MEMORY: new agents held" in text
         bar = app.query_one("#window-bar").render()
         assert any("red" in str(s.style) for s in bar.spans if "LOW" in bar.plain[s.start:s.end])
+
+
+async def test_needs_you_shows_alerts_first_and_k_acknowledges(monkeypatch):
+    from pl import alerts
+    from pl.tui import needs as tui_needs
+    acked = []
+    monkeypatch.setattr(alerts, "ack", lambda key: acked.append(key) or True)
+    data = fake_data()
+    data["alerts"] = [{"key": "stage_failed:abcd1234:spec", "severity": "high", "title": "Card abcd1234: the spec agent died 3 times",
+                       "fix": "pl retry abcd1234", "first_seen": NOW.timestamp() - 7200, "last_seen": NOW.timestamp(), "count": 4}]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("2")
+        await pilot.pause()
+        text = screen_text(app)
+        for s in ("ALERTS 1", "high 2h", "pl retry abcd1234", "×4"):
+            assert s in text, s
+        assert text.index("ALERTS 1") < text.index("PLANS TO REVIEW")
+        assert app.query_one(tui_needs.NeedsView)._current()[0] == "alert:stage_failed:abcd1234:spec"
+        await pilot.press("k")
+        await pilot.pause()
+        assert acked == ["stage_failed:abcd1234:spec"] and "acked" in screen_text(app)
+        data["alerts"] = []                       # resolved: the dispatcher's next read leaves it out
+        app.refresh_data()
+        await settle(pilot)
+        assert "ALERTS" not in screen_text(app)

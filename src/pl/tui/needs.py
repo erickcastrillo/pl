@@ -6,7 +6,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Markdown, Static
 
+from pl import alerts
 from pl import config as C
+from pl.util import age
 from pl.tui.chrome import header_text
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, checks_text, confirm_and_approve, load_review, size_text
@@ -53,6 +55,10 @@ def detail(r, now=None):
     """Plain text for the detail pane, from the row's own data (no board call)."""
     if r is None:
         return Text("select a row", style="dim")
+    if "severity" in r:   # an alert
+        return Text("\n".join([r.get("title") or "", "", f"fix      {r.get('fix') or ''}", f"alert    {r['key']}",
+                               f"severity {r['severity']}", f"open     {age(r.get('first_seen'))} · seen {r.get('count', 1)} times",
+                               "acked: no more reminders until it clears" if r.get("acked") else "k acknowledges: no more reminders"]))
     if r.get("pr"):
         pr = r["pr"]
         return Text("\n".join([pr["title"] or "", "", f"{pr['repo']}#{pr['number']}   {PR_WHAT.get(pr['state'], pr['state'])}",
@@ -76,7 +82,8 @@ class NeedsView(Horizontal):
     #needs-side { width: 1fr; height: 1fr; }
     #needs-body { height: 1fr; }
     """
-    BINDINGS = [Binding("tab", "app.focus_next", "list / text"), Binding("o", "answer", "answer questions")]
+    BINDINGS = [Binding("tab", "app.focus_next", "list / text"), Binding("o", "answer", "answer questions"),
+                Binding("k", "ack", "acknowledge alert")]
 
     def __init__(self):
         super().__init__()
@@ -106,6 +113,16 @@ class NeedsView(Horizontal):
         keep_key = self._current()[0]
         self._rows, self._kinds = {}, {}
         built = []
+        al = data.get("alerts") or []
+        if al:
+            built.append(("group:alerts", (Text("■", style="red"), Text(f"ALERTS {len(al)}", style="bold"),
+                                           Text("k acknowledge", style="dim"))))
+        for a in al:
+            rid = f"alert:{a['key']}"
+            self._rows[rid], self._kinds[rid] = a, "alerts"
+            built.append((rid, (Text(f"{a['severity']} {age(a.get('first_seen'))}", style="red" if a["severity"] == "high" else "#e0a040"),
+                                Text(f"{a.get('title') or ''} · {a.get('fix') or ''}"),
+                                Text(f"×{a.get('count', 1)}" + (" acked" if a.get("acked") else ""), style="dim"))))
         for key, title, colour, hint in GROUPS:
             if not g[key]:
                 continue
@@ -237,6 +254,17 @@ class NeedsView(Horizontal):
         rid = next((k for k, g in self._kinds.items() if g == group), None)
         if rid is not None:
             t.move_cursor(row=t.get_row_index(rid))
+
+    def action_ack(self):
+        key, r = self._current()
+        if self._kinds.get(key) != "alerts":
+            self.app.notify("select an alert to acknowledge")
+            return
+        if alerts.ack(r["key"]):
+            r["acked"] = True
+            self.app.notify("acknowledged: no more reminders until it clears")
+        if self.app.data is not None:
+            self.show(self.app.data)
 
     def action_answer(self):
         self.review("answer")

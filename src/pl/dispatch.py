@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, board, events, harnesses, manager, memory, trackers, usage
+from pl import accounts, alerts, board, events, harnesses, manager, memory, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import hold_reason, pane_exists, registry, run_waiting, worker_status
 from pl.board import card, cards, col_name, sections, update
@@ -303,6 +303,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     runs_live = 0   # every live run agent, waiting ones included
     prep_alive = 0
     todo = []
+    failed = set()   # stage_failed alert keys seen this pass
     for c in all_cards:
         m = c.get("metadata") or {}
         if m.get("pipeline_mode") != "auto":
@@ -329,10 +330,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"{c['id'][:8]}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
                   + (f"restarting under {alt} (agent was {int(age // 60)} min old)" if switch
                      else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
-            key = f"profile:{prof}:limited"
-            if time.time() - st["notified"].get(key, 0) > 3600:
-                st["notified"][key] = time.time()
-                notify(f"Profile {prof} hit its usage limit", f"parked until {until[11:16]} UTC; " + (f"young agents move to {alt}" if alt else "no other profile has credits"))
+            if why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
+                                  f"parked until {until[11:16]} UTC; pl accounts --reset {prof} un-parks it"):
+                notify(alerts.headline(why, f"Profile {prof} hit its usage limit"), f"parked until {until[11:16]} UTC; " + (f"young agents move to {alt}" if alt else "no other profile has credits"))
             if switch:
                 if not dry:
                     tmux("kill-window", "-t", w["window"], check=False)
@@ -400,10 +400,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"{c['id'][:8]}  {stage} agent never started in {w.get('window')}: the launch command did not run")
             events.emit("error", c["id"], message=f"agent never started in {w.get('window')}: the launch command did not run")
         if same_stage and status == "dead" and attempts >= MAX_ATTEMPTS:
-            key = f"{c['id']}:{stage}_failed"
-            if key not in st["notified"]:
-                st["notified"][key] = time.time()
-                notify(f"Needs you: {c['title'][:40]}", f"the {stage} agent died {attempts} times; see pl card {c['id'][:8]}")
+            key = f"stage_failed:{c['id']}:{stage}"
+            failed.add(key)
+            if why := alerts.open(key, "high", f"Card {c['id'][:8]}: the {stage} agent died {attempts} times",
+                                  f"pl card {c['id'][:8]} shows why; pl retry {c['id'][:8]} starts it fresh"):
+                notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent died {attempts} times; see pl card {c['id'][:8]}")
                 print(f"{c['id'][:8]}  {stage} agent failed {attempts} times; not retrying")
             continue
         if attempts == 0:
@@ -453,10 +454,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         want = (c.get("metadata") or {}).get("profile")
         prof = healthy_profile(want, all_cards)
         if prof is None:
-            key = "profile:all:limited"
-            if time.time() - st["notified"].get(key, 0) > 3600:
-                st["notified"][key] = time.time()
-                notify("Every Claude profile is out of credits", f"{c['title'][:40]} waits; pl profiles")
+            if why := alerts.open("accounts_all_out", "high", "Every account is out of credits",
+                                  "cards wait for the first reset; pl accounts shows when"):
+                notify(alerts.headline(why, "Every Claude profile is out of credits"), f"{c['title'][:40]} waits; pl profiles")
             print(f"{c['id'][:8]}  {stage} waits: every profile is out of credits (pl profiles)")
             continue
         if prof != want:
@@ -483,8 +483,45 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if key not in st["notified"]:
                 st["notified"][key] = time.time()
                 notify("Pipeline drained", "no agent is working; safe to shut down (pl resume after restart)")
+    if not dry:
+        check_alerts(all_cards, failed)
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
+
+
+PR_WAIT = 86400   # seconds a card may sit in the PR column before its PR raises an alert
+
+
+def check_alerts(all_cards, failed):
+    """End of a pass: resolve the alerts whose condition cleared, escalate the rest, and run the pass-end checks
+    (a dead loop, a PR waiting over PR_WAIT). failed: the stage_failed keys this pass saw."""
+    parked = accounts.exhausted_profiles()
+    alerts.sweep("account_parked:", {f"account_parked:{p}" for p in parked}, notify)
+    out = bool(C.PROFILES) and set(C.PROFILES) <= set(parked)
+    alerts.sweep("accounts_all_out", {"accounts_all_out"} if out else set(), notify)
+    alerts.sweep("stage_failed:", failed, notify)
+    waiting, now = set(), time.time()
+    for c in all_cards:
+        t = parse_iso(c.get("updated_at") or "")
+        if (c.get("metadata") or {}).get("pipeline_mode") == "auto" and col_name(c["list_id"]) == C.STAGE_DONE_AT["run"] \
+                and t and now - t > PR_WAIT:
+            key = f"pr_waiting:{c['id']}"
+            waiting.add(key)
+            if why := alerts.open(key, "warn", f"Card {c['id'][:8]}: its PR waits over 24 h", "review and merge it, or move the card on"):
+                notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {c['id'][:8]}")
+    alerts.sweep("pr_waiting:", waiting, notify)
+    if not C.SERVICES:
+        return
+    try:
+        loops = usage.summary(usage.scan())["loops"]
+    except Exception:  # noqa: BLE001  (a transcript problem never stops the pass)
+        return
+    dead = {f"loop_dead:{n}" for n, u in loops.items() if n in C.SERVICES and (u or {}).get("dead")}
+    for key in sorted(dead):
+        name = key.split(":", 1)[1]
+        if why := alerts.open(key, "warn", f"Loop {name} looks dead: no tokens for 3 fires", f"open the Loops tab and restart {name}"):
+            notify(alerts.headline(why, f"Loop {name} looks dead"), "no tokens spent for 3 of its fires; see the Loops tab")
+    alerts.sweep("loop_dead:", dead, notify)
 
 
 def busy_agents(reg):
@@ -702,8 +739,13 @@ def cmd_dispatch(a):
         seen = None
         try:
             seen = dispatch_once(setting("max_runs"), a.dry_run, setting("max_prep"), not a.no_pull)
+            alerts.resolve("github_rate_limited")
         except SystemExit as e:
             print(f"pass failed: {e}", file=sys.stderr)
+            if isinstance(e, RateLimited) and (why := alerts.open(
+                    "github_rate_limited", "warn", "GitHub rate limit: pl is backing off",
+                    "pl waits out the back-off and tries again by itself; nothing to do")):
+                notify(alerts.headline(why, "GitHub rate limit"), e.note)
             if not (isinstance(e, RateLimited) and e.until == noted):   # one event per rate-limit window
                 events.emit("error", message=str(e))
             noted = e.until if isinstance(e, RateLimited) else None

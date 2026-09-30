@@ -38,6 +38,11 @@
                           [loops.<name>] max_context = 60 restarts that loop fresh when idle above 60% of its
                           window (off unless set; one loop interval apart, at most 3 an hour; background shells
                           or agents the session started end with it)
+  pl alerts [--all] [--ack KEY]
+                          open alerts (account parked, all accounts out, a stage failed 3 times, a dead loop,
+                          GitHub rate limit, low memory, a runaway agent, a PR waiting over 24 h): each notifies
+                          when it opens and again after 1 h and 4 h, and clears itself when its check passes;
+                          --all adds the resolved ones; --ack stops the reminders until it clears
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
@@ -63,7 +68,7 @@ INPUT holds the idea and inlined documents, REVIEW NOTES holds your rejections. 
 import argparse
 import sys
 
-from pl import config, profiles, setup
+from pl import alerts, config, profiles, setup
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -125,6 +130,8 @@ def main():
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
+    p = sub.add_parser("alerts"); p.add_argument("--all", action="store_true", help="include resolved alerts")
+    p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -136,4 +143,4 @@ def main():
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
-     "standup": cmd_standup, "usage": cmd_usage}[a.cmd](a)
+     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts}[a.cmd](a)

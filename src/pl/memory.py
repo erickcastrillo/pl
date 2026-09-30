@@ -8,7 +8,7 @@ import time
 from collections import Counter
 
 from pl import config as C
-from pl import events
+from pl import alerts, events
 from pl.util import notify
 
 PLATFORM = sys.platform
@@ -106,12 +106,15 @@ def check_starts(st):
     s = status()
     if not s or not s["low"]:
         st.pop("memory_low", None)
+        alerts.resolve("memory_low")
         return None
     line = f"starts paused: only {gb(s['free'])} free (minimum {gb(_limit('min_free_memory', s['total']))})"
     if not st.get("memory_low"):
         st["memory_low"] = True
         events.emit("memory_low", message=line)
-        notify("Low memory: pl holds new agents", line)
+    if why := alerts.open("memory_low", "high", "Low memory: pl holds new agents",
+                          "close apps, or lower [dispatch] min_free_memory"):
+        notify(alerts.headline(why, "Low memory: pl holds new agents"), line)
     return line
 
 
@@ -214,6 +217,10 @@ def guard_runaways(st, all_cards, dry=False):
         # the command is the program name only: argv can hold secrets
         events.emit("runaway", c.get("id"), window=name, processes=len(tree), memory=gb(mem),
                     command=os.path.basename(top.split()[0]) if top.split() else "?", stopped=len(victims) if kill else 0)
-        notify(f"Runaway agent: {(c.get('title') or name)[:40]}", msg)
+        who = f"card {c['id'][:8]}" if c.get("id") else f"loop {name}" if name in C.SERVICES else f"window {win}"
+        if why := alerts.open(f"runaway:{win}", "high", f"Runaway agent in {who}",
+                              "pl stopped its child processes" if kill else "stop it by hand (kill_runaway is off)"):
+            notify(alerts.headline(why, f"Runaway agent: {(c.get('title') or name)[:40]}"), msg)
         print(f"runaway: {msg}")
     st["runaway"] = sorted(now)
+    alerts.sweep("runaway:", {f"runaway:{w}" for w in now}, notify)

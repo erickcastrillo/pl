@@ -43,7 +43,7 @@ def default_provider():
             "metrics_by_window": {key: events.metrics(seconds) for key, _, seconds in WINDOWS},
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
             "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
-            "machine": manager.read_status(), "now": _now(snap["rows"])}
+            "machine": manager.read_status(), "now": _now(snap["rows"]), "alerts": _alerts()}
 
 
 def _now(rows):
@@ -53,6 +53,15 @@ def _now(rows):
         return subagents.now_lines(rows)
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _alerts():
+    """Open alerts for Needs you; an unreadable file never fails the refresh."""
+    from pl import alerts
+    try:
+        return alerts.listing()
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _usage():
