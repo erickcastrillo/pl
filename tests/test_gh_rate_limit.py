@@ -1049,6 +1049,7 @@ def test_a_search_limit_pauses_only_the_searches_and_the_board_keeps_working(gh)
 
 def test_a_search_limit_waits_for_the_search_reset_or_a_minute(gh, monkeypatch):
     now = int(time.time())
+    monkeypatch.setattr(github, "_clock", lambda: float(now))   # a frozen clock: the wait cannot grow with CPU load
     gh.set(mode="search-limit", search_remaining=0, search_reset=now + 45)
     assert github.back_off("API rate limit exceeded", resource="search").until == now + 45
     github._limit_file("search").unlink()

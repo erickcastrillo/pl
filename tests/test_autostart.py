@@ -11,6 +11,7 @@ from pl import config as C
 from pl import dispatch, manager
 from pl.tui.app import PlApp
 from pl.tui.review import ConfirmScreen
+from textual.worker import WorkerCancelled
 from test_tui_views import fake_data
 
 FAKE_TMUX = """#!{py}
@@ -62,10 +63,20 @@ def lock_taken_by_fake_tmux(tmp_path):
     return lambda: bool(starts(tmp_path))
 
 
+async def drain(pilot):
+    """Wait for every worker. A refresh that a newer refresh cancelled (exclusive group) is finished, not a failure."""
+    while True:
+        try:
+            await pilot.app.workers.wait_for_complete()
+            return
+        except WorkerCancelled:
+            pass
+
+
 async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
+    await drain(pilot)
     await pilot.pause()
-    await pilot.app.workers.wait_for_complete()
+    await drain(pilot)
     await pilot.pause()
 
 
