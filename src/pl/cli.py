@@ -27,7 +27,7 @@
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
                           --plain prints a refreshing text frame instead; --once prints one frame and exits
-  pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown]
+  pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
@@ -106,6 +106,7 @@ def main():
     sub.add_parser("pause"); sub.add_parser("resume")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
+    p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):

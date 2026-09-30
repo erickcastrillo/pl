@@ -50,7 +50,7 @@ def _scope():
 
 def _pr(p, me):
     return {"repo": (p.get("repository_url") or "").rstrip("/").rsplit("/", 1)[-1] or "?", "number": p.get("number"),
-            "title": p.get("title") or "",
+            "title": p.get("title") or "", "url": p.get("html_url"),
             "yours": me in [(p.get("user") or {}).get("login")] + [a.get("login") for a in p.get("assignees") or []]}
 
 
@@ -87,30 +87,46 @@ def _cut(s):
     return s if len(s) <= TITLE else s[:TITLE - 1].rstrip() + "…"
 
 
-def _bullets(items):
-    return [f"- {_cut(x)}" for x in items[:BULLETS]]
+def _esc(s):
+    """Slack mrkdwn needs only these three escaped."""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def text(snapshot, start, prs, now=None, cards=None, col=None, markdown=False):
+def _bullets(items, slack=False):
+    """items: a title, or (title, url) for a Slack link."""
+    out = []
+    for x in items[:BULLETS]:
+        title, url = x if isinstance(x, tuple) else (x, None)
+        title = _cut(title)
+        out.append(f"• <{url}|{_esc(title)}>" if slack and url else f"• {_esc(title)}" if slack else f"- {title}")
+    return out
+
+
+def text(snapshot, start, prs, now=None, cards=None, col=None, markdown=False, fmt=None):
     """The standup text. prs: pr_summary()'s dict or reason. cards: every board card (titles, and Done when the log
-    has no moves to Done); col(card) gives a card's column name."""
+    has no moves to Done); col(card) gives a card's column name. fmt "slack": Slack mrkdwn (*bold*, • bullets,
+    <url|text> links, & < > escaped) to paste in a message."""
+    slack = fmt == "slack"
+    bullets = lambda items: _bullets(items, slack)   # noqa: E731
     now = now or datetime.now(timezone.utc)
     rows = snapshot.get("rows") or []
     titles = {c["id"]: c.get("title") for c in cards or () if c.get("id")}
     titles.update({r["card"]["id"]: r["card"].get("title") for r in rows if r.get("card")})
     evs = sorted((e for e in events._read() if start < e["_t"] <= now), key=lambda e: e["_t"], reverse=True)
-    head = (lambda s: f"**{s}:**") if markdown else (lambda s: f"{s}:")
+    head = (lambda s: f"*{s}:*") if slack else (lambda s: f"**{s}:**") if markdown else (lambda s: f"{s}:")
     local = start.astimezone().strftime("%Y-%m-%d %H:%M")
-    out = [("### " if markdown else "") + f"Standup for {C.PROFILE_NAME or 'pl'}, since {local}", ""]
+    title = f"Standup for {C.PROFILE_NAME or 'pl'}, since {local}"
+    out = [f"*{_esc(title)}*" if slack else ("### " if markdown else "") + title, ""]
 
     if isinstance(prs, str):
-        out.append(f"{head('PRs')} unavailable ({prs})")
+        out.append(f"{head('PRs')} unavailable ({_esc(prs) if slack else prs})")
     else:
         m = prs["merged"]
         out.append(f"{head('PRs')} {m['total']} merged ({m.get('yours', 0)} yours), {prs['opened']['total']} opened, "
                    f"{prs['closed']['total']} closed without merging")
         every = [p for k in ("merged", "opened", "closed") for p in prs[k]["items"]]
-        out += _bullets([f"{p['repo']}#{p['number']} {p['title']}" for p in sorted(every, key=lambda p: not p.get("yours"))])
+        out += bullets([(f"{p['repo']}#{p['number']} {p['title']}", p.get("url"))
+                        for p in sorted(every, key=lambda p: not p.get("yours"))])
 
     hits = {label: [e.get("card") for e in evs if test(e)] for label, test in PIPELINE}
     counts = {label: len(h) for label, h in hits.items()}
@@ -124,26 +140,26 @@ def text(snapshot, start, prs, now=None, cards=None, col=None, markdown=False):
     for cid in touched:
         if cid and cid not in seen:
             seen.append(cid)
-    out += _bullets([titles.get(cid) or str(cid)[:8] for cid in seen])
+    out += bullets([titles.get(cid) or str(cid)[:8] for cid in seen])
 
     per = Counter(r.get("col") for r in rows if r.get("card"))
     working = [r["card"].get("title") for r in rows if r.get("card") and r.get("kind") == "working"]
     waiting = (snapshot.get("needs") or {}).get("attention", 0)
     out.append(head("In progress now") + " " + ", ".join(f"{c} {per.get(c, 0)}" for c in IN_PROGRESS)
                + f"; {len(working)} agents running, {waiting} waiting on you")
-    out += _bullets(working)
+    out += bullets(working)
 
     from pl.tui.needs import GROUPS, needs_groups
     g = needs_groups(rows)
     need = [r for k, *_ in GROUPS for r in g[k]]
     out.append(f"{head('Needs you')} {len(need)}")
-    out += _bullets([(r.get("pr") or r.get("card") or {}).get("title") for r in need][:3])
+    out += bullets([(r.get("pr") or r.get("card") or {}).get("title") for r in need][:3])
 
     errors = [e for e in evs if e["kind"] == "error"]
     if errors:
         top = Counter(_cut(e.get("message") or "error")[:60].rstrip() for e in errors).most_common(3)
         out.append(f"{head('Problems')} {len(errors)} errors")
-        out += [f"- {n}x {m}" for m, n in top]
+        out += bullets([f"{n}x {m}" for m, n in top])
     return "\n".join(out)
 
 
@@ -158,4 +174,4 @@ def cmd_standup(a):
     start = parse_since(a.since)
     snap = watch.watch_snapshot()
     print(text(snap, start, pr_summary(start), cards=_cards(), col=lambda c: board.col_name(c.get("list_id")),
-               markdown=a.markdown))
+               markdown=a.markdown, fmt="slack" if a.slack else None))

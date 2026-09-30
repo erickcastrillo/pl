@@ -1,6 +1,7 @@
 """Dashboard: six tiles for the chosen window, 14-day throughput, where work waits, decide next, health."""
 import shutil
 import statistics
+import time
 from datetime import datetime, timedelta, timezone
 
 from rich.text import Text
@@ -108,6 +109,59 @@ def health(data):
     return t
 
 
+def copy_text(app, text):
+    app.copy_to_clipboard(text)
+    for argv in COPIERS:
+        if shutil.which(argv[0]):
+            _copy_run(argv, text)
+            break
+
+
+class StandupPanel(VerticalScroll, can_focus=True):
+    """The last 24 hours' standup text, always on the Dashboard; y copies it. Rebuilt off the UI thread when the
+    board snapshot changes; the two-to-three GitHub searches are reused for 5 minutes."""
+    BINDINGS = [Binding("y", "copy", "copy for Slack")]
+    PR_TTL = 300
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.text, self.slack, self._key, self._prs, self._prs_at = "", "", None, None, 0.0
+
+    def compose(self):
+        yield Static(Text("building the standup…", style="dim"), id="standup-panel-text")
+
+    def on_mount(self):
+        self.border_title = "Standup (last 24 h) · y copy · s full"
+
+    def update_for(self, snapshot):
+        key = (snapshot.get("rows"), snapshot.get("needs"))   # not the whole snapshot: its clock changes every refresh
+        if key != self._key:
+            self._key = key
+            self.build(snapshot)
+
+    @work(thread=True, exclusive=True, group="standup-panel")
+    def build(self, snapshot):
+        start = standup.parse_since(None)
+        try:
+            if self._prs is None or time.monotonic() - self._prs_at > self.PR_TTL:
+                self._prs, self._prs_at = standup.pr_summary(start), time.monotonic()
+            got, slack = standup.text(snapshot, start, self._prs), standup.text(snapshot, start, self._prs, fmt="slack")
+        except Exception as e:  # noqa: BLE001 - a bad event line must not end the console
+            got = slack = f"could not build the standup: {type(e).__name__}: {e}"
+        self.app.call_from_thread(self.shown, got, slack)
+
+    def shown(self, got, slack):
+        self.text, self.slack = got, slack
+        self.query_one("#standup-panel-text", Static).update(Text(got))
+
+    def action_copy(self):
+        if not self.text:
+            self.app.notify("still building", markup=False)
+            return
+        copy_text(self.app, self.slack)
+        self.app.notify("copied for Slack", markup=False)
+
+
 class DashboardView(Vertical):
     def compose(self):
         yield Static(Text(""), id="window-bar")
@@ -131,6 +185,7 @@ class DashboardView(Vertical):
             decide.add_columns("what", "then")
             yield decide
             yield Static(Text(""), id="health", classes="panel")
+            yield StandupPanel(id="standup-panel", classes="panel")
 
     def on_mount(self):
         self.query_one("#throughput").border_title = "Throughput · last 14 days"
@@ -186,8 +241,7 @@ class DashboardView(Vertical):
                 table.add_row(Text(f"› {head}", style=f"bold {colour}" if n else "dim"), Text(sub, style="dim"), key=key)
             table.move_cursor(row=keep)
         self.query_one("#health", Static).update(health(data))
-
-
+        self.query_one(StandupPanel).update_for(data["snapshot"])
 
     def on_data_table_row_selected(self, e):
         if e.data_table.id != "decide":
@@ -209,13 +263,13 @@ class StandupScreen(ModalScreen):
 
     def __init__(self, snapshot):
         super().__init__()
-        self.snapshot, self.text = snapshot, ""
+        self.snapshot, self.text, self.slack = snapshot, "", ""
 
     def compose(self):
         with Vertical():
             with VerticalScroll(id="standup-body"):
                 yield Static(Text("building the standup…", style="dim"), id="standup-text")
-            yield Static(Text("y copy · esc close", style="dim"))
+            yield Static(Text("y copy for Slack · esc close", style="dim"))
 
     def on_mount(self):
         self.build()
@@ -225,25 +279,22 @@ class StandupScreen(ModalScreen):
         """Off the UI thread: the two PR searches. The board and tmux are not read again."""
         start = standup.parse_since(None)
         try:
-            got = standup.text(self.snapshot, start, standup.pr_summary(start))
+            prs = standup.pr_summary(start)
+            got, slack = standup.text(self.snapshot, start, prs), standup.text(self.snapshot, start, prs, fmt="slack")
         except Exception as e:  # noqa: BLE001 - a bad event line must not end the console
-            got = f"could not build the standup: {type(e).__name__}: {e}"
-        self.app.call_from_thread(self.shown, got)
+            got = slack = f"could not build the standup: {type(e).__name__}: {e}"
+        self.app.call_from_thread(self.shown, got, slack)
 
-    def shown(self, got):
-        self.text = got
+    def shown(self, got, slack):
+        self.text, self.slack = got, slack
         self.query_one("#standup-text", Static).update(Text(got))
 
     def action_copy(self):
         if not self.text:
             self.app.notify("still building", markup=False)
             return
-        self.app.copy_to_clipboard(self.text)
-        for argv in COPIERS:
-            if shutil.which(argv[0]):
-                _copy_run(argv, self.text)
-                break
-        self.app.notify("copied the standup", markup=False)
+        copy_text(self.app, self.slack)
+        self.app.notify("copied for Slack", markup=False)
 
     def action_close(self):
         self.dismiss(None)

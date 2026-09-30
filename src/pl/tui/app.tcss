@@ -13,6 +13,7 @@ TabPane { padding: 0; }
 .tile Digits { height: 3; }
 DashboardView .row { height: 1fr; }
 #throughput, #waits, #decide, #health { width: 1fr; height: 1fr; }
+#standup-panel { width: 2fr; height: 1fr; }
 #decide { border: round $warning; }
 Sparkline { height: 1; }
 NeedsView { height: 1fr; }
