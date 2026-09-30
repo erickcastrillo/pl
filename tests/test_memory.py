@@ -296,7 +296,7 @@ def test_a_fresh_machine_hold_starts_nothing(fake_home, monkeypatch, capsys):
     got = _funnel(monkeypatch)
     _machine_status(fake_home, monkeypatch, age=2)
     dispatch.dispatch_once(1, False, pull=False)
-    assert got["starts"] == [] and not any(a[0] == "new-window" for a in got["windows"])
+    assert got["starts"] == []
     assert "10 live agents" in capsys.readouterr().out
 
 
@@ -305,3 +305,43 @@ def test_a_machine_hold_older_than_15_s_is_ignored(fake_home, monkeypatch):
     _machine_status(fake_home, monkeypatch, age=20)
     dispatch.dispatch_once(1, False, pull=False)
     assert got["starts"] == ["card0001aaaa"]
+
+
+def _two_cards(monkeypatch, got):
+    """A new Inbox card and one whose spec agent crashed once (a restart, attempt 2)."""
+    new = {"id": "card0001aaaa", "title": "New", "list_id": "L", "updated_at": "2026-09-30",
+           "metadata": {"pipeline_mode": "auto", "profile": "acme"}}
+    crashed = {"id": "card0002bbbb", "title": "Crashed", "list_id": "L", "updated_at": "2026-09-29",
+               "metadata": {"pipeline_mode": "auto", "profile": "acme",
+                            "worker": {"stage": "spec", "attempts": 1, "window": "spec-card0002", "session_id": "s2"}}}
+    monkeypatch.setattr(dispatch, "cards", lambda: [new, crashed])
+    monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("dead", w.get("session_id")) if w else ("none", None))
+    monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: got["starts"].append((c["id"], attempts)))
+
+
+def _status(tmp_path, monkeypatch, **fields):
+    import time
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    (tmp_path / "machine").mkdir(exist_ok=True)
+    (tmp_path / "machine" / "status.json").write_text(json.dumps({"at": time.time() - 2, "pid": 1, "profiles": [], **fields}))
+
+
+def test_a_machine_hold_blocks_new_starts_only_never_restarts_or_loops(fake_home, monkeypatch):
+    got = _funnel(monkeypatch)
+    _two_cards(monkeypatch, got)
+    _status(fake_home, monkeypatch, hold="8 live agents across profiles (max 8)", room=0)
+    dispatch.dispatch_once(2, False, pull=False)
+    assert got["starts"] == [("card0002bbbb", 2)]                          # the crashed spec agent is restarted
+    assert any(a[0] == "new-window" and "merge-check" in a for a in got["windows"])   # the loop is (re)started
+
+
+def test_room_in_the_machine_status_caps_new_starts_per_pass(fake_home, monkeypatch):
+    got = _funnel(monkeypatch)
+    _two_cards(monkeypatch, got)
+    two = [{"id": f"card000{i}new0", "title": "New", "list_id": "L", "updated_at": "2026-09-30",
+            "metadata": {"pipeline_mode": "auto", "profile": "acme"}} for i in (1, 2)]
+    monkeypatch.setattr(dispatch, "cards", lambda: two)   # both cards are new
+    _status(fake_home, monkeypatch, hold=None, room=1)
+    dispatch.dispatch_once(2, False, pull=False)
+    assert len(got["starts"]) == 1

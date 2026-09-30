@@ -412,11 +412,13 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     sweep_untracked(all_cards, reg, dry)
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
-    ms = None if low or dry else manager.read_status()   # a hold older than 15 s is ignored: a dead manager
-    low = low or (f"starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None)
-    if low:
-        print(low)
-    ensure_services(st, all_cards, reg, dry, paused(), low)
+    ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
+    mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
+    room = ms.get("room") if ms and isinstance(ms.get("room"), int) else None   # new agents the machine has room for
+    for line in (low, mhold):
+        if line:
+            print(line)
+    ensure_services(st, all_cards, reg, dry, paused(), low)   # loops are not held by the machine: they are not agents
     # order: runs first (they are the long pole), then plans, designs, specs; oldest first
     rank = {"run": 0, "plan": 1, "design": 2, "spec": 3}
     todo.sort(key=lambda t: (rank[t[1]], t[0].get("updated_at") or ""))
@@ -427,6 +429,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             held += 1
             continue
         if low:   # low memory: no start at all, restarts included
+            continue
+        if attempts <= 1 and (mhold or room is not None and room <= 0):   # machine limit: new starts only
             continue
         if stage == "run":
             if runs_live >= LIVE_RUN_CAP * max_runs:
@@ -462,6 +466,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             c["metadata"] = {**(c.get("metadata") or {}), "profile": prof}
         print(f"{c['id'][:8]}  {col} -> {stage} agent (attempt {attempts}): {c['title'][:50]}")
         start_worker(c, stage, attempts, dry)
+        if attempts <= 1 and room is not None:
+            room -= 1
         prev = ((c.get("metadata") or {}).get("worker") or {})
         if prev and prev.get("stage") != stage and prev.get("window") and not dry:
             fin = list((c.get("metadata") or {}).get("finished_workers") or []) + [prev]
@@ -670,7 +676,7 @@ def reload_config():
 
 
 def cmd_dispatch(a):
-    if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.running():
+    if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.manages(C.PROFILE_NAME):
         print(f"this machine is run by pl manager (pid {manager.holder_pid() or '?'}); it starts this profile's dispatcher")
         return   # a restored tmux window just closes; the manager's own dispatcher keeps running
     lock = None if a.dry_run else dispatch_lock()  # noqa: F841 - kept open to hold the lock

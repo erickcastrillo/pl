@@ -17,11 +17,12 @@ STALE = 3 * TICK              # a status older than this is ignored: a dead mana
 BACKOFF = (10, 30, 120, 300)  # seconds before restarting a dispatcher that exited: 1st, 2nd, 3rd, 4th+ time
 MAX_RESTARTS = 5              # restarts in an hour; the next exit gives the profile up
 WAIT = 5.0                    # seconds start/stop wait for the manager lock
+LOCK_GRACE = 30               # seconds a dispatcher the manager started has to take its lock (slow under memory pressure)
 _clock = time.time
 _sleep = time.sleep
 MACHINE_TOML = """# pl manager settings for this machine. Delete this file and consoles stop starting the manager.
 [limits]
-max_live_agents = 8          # agent and loop windows across every profile; more hold new starts
+max_live_agents = 8          # spec/design/plan/run agent windows across every profile; more hold new starts
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
@@ -36,32 +37,64 @@ def _path(name):
     return machine_dir() / name
 
 
-def _run(argv):
+def _run(argv, timeout=None):
     """The one subprocess seam of this module (tests fake it)."""
-    return subprocess.run(argv, capture_output=True, text=True)
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
 def _notify(title, msg, cmds=()):
+    """A notifier that hangs or fails never stops the manager."""
     for cmd in cmds:
-        _run([cmd, "notify", title, msg])
+        try:
+            _run([cmd, "notify", title, msg], timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"notify failed ({cmd}): {type(e).__name__}", flush=True)
 
 
-def _pid(lock):
+def _holder(lock):
+    """(pid, lock time in epoch seconds or None) from a lock file's "pid N ... since T" line; (None, None) without one."""
+    from pl.util import parse_iso
     try:
-        m = re.match(r"pid (\d+)", lock.read_text())
+        m = re.match(r"pid (\d+)(?:.* since (\S+))?", lock.read_text())
     except OSError:
+        return None, None
+    return (int(m.group(1)), parse_iso(m.group(2) or "") or None) if m else (None, None)
+
+
+def _seconds(etime):
+    """ps etime "[[dd-]hh:]mm:ss" in seconds, or None."""
+    days, _, hms = etime.rpartition("-")
+    parts = hms.split(":")
+    if not (days or "0").isdigit() or not all(x.isdigit() for x in parts) or not 2 <= len(parts) <= 3:
         return None
-    return int(m.group(1)) if m else None
+    return int(days or 0) * 86400 + sum(int(x) * 60 ** i for i, x in enumerate(reversed(parts)))
+
+
+def _alive(pid, what, since=None):
+    """pid runs, its command line holds `what` and, given the lock's time, it started before that lock was written:
+    a reused pid is someone else. Never takes a lock."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except OSError:
+        return False
+    etime, _, cmd = ((getattr(_run(["ps", "-o", "etime=,command=", "-p", str(pid)], timeout=10), "stdout", "") or "")
+                     .strip().partition(" "))
+    up = _seconds(etime)
+    return what in cmd and not (since and up is not None and _clock() - up > since + 5)
 
 
 def holder_pid():
-    return _pid(_path("manager.lock"))
+    return _holder(_path("manager.lock"))[0]
 
 
 def running() -> bool:
-    """The machine lock is held: a manager runs."""
-    from pl.profiles import _is_locked
-    return _is_locked(_path("manager.lock"))
+    """The pid in the machine lock file is a live pl manager. Never takes the lock."""
+    pid, since = _holder(_path("manager.lock"))
+    return bool(pid) and _alive(pid, "pl manager", since)
 
 
 def _write(name, data):
@@ -79,33 +112,45 @@ def read_status(max_age=STALE):
         st = json.loads(_path("status.json").read_text())
     except (OSError, ValueError):
         return None
-    return st if isinstance(st, dict) and _clock() - float(st.get("at") or 0) <= max_age else None
+    at = st.get("at") if isinstance(st, dict) else None
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return None
+    return st if 0 <= _clock() - at <= max_age else None
+
+
+def manages(name):
+    """A running manager lists this profile in its fresh status: it, not a hand-typed `pl dispatch`, runs it."""
+    st = read_status() if running() else None
+    return any(p.get("name") == name and not p.get("gave_up") and not p.get("stopped")
+               for p in (st or {}).get("profiles") or [])
 
 
 def managed():
-    """Every profile whose [dispatch] autostart is not false, with what the manager needs to start it."""
+    """Every profile whose [dispatch] autostart is not false, with what the manager needs to start it.
+    A profile whose config does not load is {"name", "error"}: marked in the status, never started."""
     from pl import config as C
-    from pl.profiles import _is_locked, list_profiles
+    from pl.profiles import list_profiles
     out = []
-    for row in list_profiles():
-        d = Path(row["dir"])
+    for row in list_profiles(check_lock=False):   # a lock probe would make a dispatcher starting then exit
+        name, d = row["name"], Path(row["dir"])
         try:
             t = tomllib.loads((d / "config.toml").read_text())
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-        if t.get("dispatch", {}).get("autostart", True) is False:
-            continue
-        gh = t.get("code_host", {}).get("gh_config_dir")
-        att = t.get("paths", {}).get("attention_cmd")
-        lock = d / "state" / "pl-dispatch.lock"
-        g = {**C._defaults(), "CONFIG_DIR": d}
-        try:
-            C._apply(g, t)
-        except Exception:  # noqa: BLE001 - a profile whose loops do not load has none
-            g["SERVICES"] = {}
-        out.append({"loops": set(g["SERVICES"]), "name": row["name"], "dir": d, "session": row["tmux_session"], "lock": lock,
-                    "running": _is_locked(lock), "gh": d / Path(gh).expanduser() if isinstance(gh, str) and gh else None,
-                    "attention": str(Path(att).expanduser()) if isinstance(att, str) and att else None})
+            if t.get("dispatch", {}).get("autostart", True) is False:
+                continue
+            gh = t.get("code_host", {}).get("gh_config_dir")
+            att = t.get("paths", {}).get("attention_cmd")
+            g = {**C._defaults(), "CONFIG_DIR": d}
+            try:
+                C._apply(g, t)
+            except Exception:  # noqa: BLE001 - a profile whose loops do not load has none
+                g["SERVICES"] = {}
+            pid, since = _holder(d / "state" / "pl-dispatch.lock")
+            out.append({"loops": set(g["SERVICES"]), "name": name, "dir": d, "session": row["tmux_session"], "pid": pid,
+                        "running": bool(pid) and _alive(pid, "pl dispatch", since),
+                        "gh": d / Path(gh).expanduser() if isinstance(gh, str) and gh else None,
+                        "attention": str(Path(att).expanduser()) if isinstance(att, str) and att else None})
+        except Exception:  # noqa: BLE001 - one bad profile never stops the others
+            out.append({"name": name, "error": "config error"})
     return out
 
 
@@ -113,27 +158,25 @@ def _alerts(profs):
     return sorted({p["attention"] for p in profs if p["attention"] and os.access(p["attention"], os.X_OK)})
 
 
-def _limits(state):
+def _limits():
     """machine.toml [limits] over the defaults; a file that does not load or validate keeps the defaults."""
     from pl import config as C
     try:
         t = tomllib.loads(_path("machine.toml").read_text())
-        errs = C.validate_machine(t)
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        t, errs = {}, [] if isinstance(e, FileNotFoundError) else [str(e)]
-    if errs != state.get("limit_errs", []):
-        print("warning: machine.toml not used, keeping the default limits: " + "; ".join(errs), flush=True)
-    state["limit_errs"] = errs
-    return {**C.MACHINE_DEFAULTS, **({} if errs else t.get("limits", {}))}
+    except (OSError, tomllib.TOMLDecodeError):
+        t = {}
+    return {**C.MACHINE_DEFAULTS, **({} if C.validate_machine(t) else t.get("limits", {}))}
 
 
 def _caps(state, profs):
-    """Count agent windows and their memory across every managed profile's tmux session; stop the largest tree
-    past max_agents_memory (one per tick). Returns (live agents, agent memory %, the hold reason or None)."""
+    """Count agent windows and their memory across every managed profile's tmux session; stop the largest runaway
+    tree past max_agents_memory (one per tick). Loops count toward memory, never toward max_live_agents.
+    Returns (live agents, max live agents, agent memory %, the hold reason or None)."""
     from pl import memory
-    lim, r = _limits(state), memory.reading()
+    from pl.agents import run_waiting
+    lim, r = _limits(), memory.reading()
     panes = memory._run(["tmux", "list-panes", "-a", "-F", "#{session_name} #{window_id} #{pane_pid} #{window_name}"])
-    procs, by_session, trees = memory._procs(), {p["session"]: p for p in profs}, []
+    procs, by_session, trees, live = memory._procs(), {p["session"]: p for p in profs}, [], 0
     for line in (panes or "").splitlines():
         s = line.split(" ", 3)
         p = by_session.get(s[0])
@@ -141,10 +184,14 @@ def _caps(state, profs):
             continue
         tree = memory._below(procs, [int(s[2])])
         trees.append((sum(procs[x][1] for x in tree), p["name"], s[3], int(s[2]), tree))
-    live, used, why = len(trees), sum(t[0] for t in trees), []
+        # a run agent waiting at a GATE or idle holds no start, as in the dispatcher; it still counts toward memory
+        if s[3].startswith(memory.AGENT_PREFIXES) and not (s[3].startswith("run-") and run_waiting({"pane": s[1]}, {})):
+            live += 1
+    used, why = sum(t[0] for t in trees), []
     if live >= lim["max_live_agents"]:
         why.append(f"{live} live agents across profiles (max {lim['max_live_agents']})")
-    pct, over = None, set()
+    pct, before = None, set(state.get("runaway") or ())
+    over = set()
     if r:
         free, total = r
         cap, pct = memory.parse_size(lim["max_agents_memory"], total), round(100 * used / total)
@@ -152,19 +199,24 @@ def _caps(state, profs):
             why.append(f"only {memory.gb(free)} free (minimum {memory.gb(memory.parse_size(lim['min_free_memory'], total))})")
         if used > 0.8 * cap:
             why.append(f"agents use {memory.gb(used)}, over 80% of the {memory.gb(cap)} cap")
-        if used > cap and trees:
-            mem, name, win, pane_pid, tree = max(trees, key=lambda t: t[0])
-            over.add(f"{name}:{win}")
+        if used > cap:
+            over = before   # the episode lasts while agents stay over the cap
+            dispatchers = {os.getpid(), *(p["pid"] for p in profs if p["pid"])}
+            mem, name, win, pane_pid, tree = max(trees, key=lambda t: t[0])   # the cause; never another tree
             harness = [x for x in tree if procs[x][0] == pane_pid]
-            skip = {os.getpid(), *(_pid(p["lock"]) for p in profs)}   # the pane shell, harness, dispatchers: never
-            victims = {x: procs[x][2] for x in memory._below(procs, harness) if x not in skip}
-            kill = lim["kill_runaway"] is not False and bool(victims)
+            victims = {x: procs[x][2] for x in memory._below(procs, harness)}
+            below = sum(procs[x][1] for x in victims)
+            # a tree holding a dispatcher or a manager is never signalled; the harness alone has nothing to stop
+            safe = dispatchers & set(tree) or any("pl dispatch" in procs[x][2] or "pl manager" in procs[x][2] for x in tree)
+            kill = lim["kill_runaway"] is not False and below > 0 and not safe
             if kill:
                 memory._stop(harness, victims)
-            if kill or f"{name}:{win}" not in state.get("runaway", set()):
-                _notify(f"Runaway agent: {name} {win}", f"profile {name} window {win}: {memory.gb(mem)}; all agents "
-                        f"{memory.gb(used)}, machine cap {memory.gb(cap)}" + (f"; stopped {len(victims)} child processes"
-                                                                              if kill else ""), _alerts(profs))
+            if f"{name}:{win}" not in before:   # one notification per window per episode
+                _notify(f"Runaway agent: {name} {win}", f"profile {name} window {win}: {memory.gb(mem)}, "
+                        f"{memory.gb(below)} of it below the harness; all agents {memory.gb(used)}, machine cap "
+                        f"{memory.gb(cap)}" + (f"; stopped {len(victims)} child processes" if kill else
+                                               "; nothing stopped"), _alerts(profs))
+            over = before | {f"{name}:{win}"}
     state["runaway"] = over
     hold = "; ".join(why) or None
     if hold and not state.get("hold"):
@@ -174,37 +226,74 @@ def _caps(state, profs):
     return live, lim["max_live_agents"], pct, hold
 
 
+def _asked(kind, name):
+    """`pl manager restart|stop NAME` (or the console's D key) left a request file: take it."""
+    f = _path(kind) / name
+    if not f.exists():
+        return False
+    f.unlink(missing_ok=True)
+    return True
+
+
 def tick(state):
     """One pass: start each managed dispatcher that does not run (with backoff after an exit), write status.json."""
     from pl.dispatch import start_for
     now, rows, profs = _clock(), [], managed()
+    bad, profs = [p for p in profs if "error" in p], [p for p in profs if "error" not in p]
     live, cap, pct, hold = _caps(state, profs)
     for p in profs:
-        r = state.setdefault(p["name"], {"up": False, "restarts": [], "next": 0, "gave_up": False})
+        fresh = {"up": False, "seen": False, "since": 0, "restarts": [], "next": 0, "gave_up": False, "stopped": False}
+        r = state.setdefault(p["name"], fresh)
+        if _asked("restart", p["name"]):
+            r.update(fresh)
+        if _asked("stop", p["name"]):
+            r["stopped"] = r["stopping"] = True
         r["restarts"] = [t for t in r["restarts"] if now - t < 3600]
-        if p["running"]:
-            r["up"] = True
-        elif r["up"]:   # it ran (or was started) and is gone: an exit
+        if r.get("stopped"):   # stopped by you: Ctrl-C until it exits, then leave the profile alone
+            r["stopping"] = r.get("stopping") and p["running"]
+            if r["stopping"]:
+                _run(["tmux", "send-keys", "-t", f"={p['session']}:dispatch", "C-c"], timeout=10)
+            r["up"] = False
+        elif p["running"]:
+            r["up"] = r["seen"] = True
+        elif r["up"] and not r["seen"] and now - r["since"] < LOCK_GRACE:
+            pass   # started, has not taken its lock yet: not an exit
+        elif r["up"]:   # it ran (or was started and never took its lock) and is gone: an exit
             r["up"] = False
             if len(r["restarts"]) >= MAX_RESTARTS:
                 r["gave_up"] = True
                 print(f"{p['name']}: dispatcher exited {len(r['restarts']) + 1} times in an hour; not restarting", flush=True)
                 _notify("pl manager gave up", f"the dispatcher of profile {p['name']} keeps exiting; pl manager stopped "
-                        "restarting it (see its tmux window dispatch)", _alerts([p]))
+                        f"restarting it (see its tmux window dispatch; pl manager restart {p['name']})", _alerts([p]))
             else:
                 r["next"] = now + BACKOFF[min(len(r["restarts"]), len(BACKOFF) - 1)]
-        if not p["running"] and not r["gave_up"] and now >= r["next"]:
+        if not p["running"] and not r["up"] and not r["gave_up"] and not r.get("stopped") and now >= r["next"]:
             err = start_for(p["dir"], p["session"], p["gh"], managed=True)
             print(f"{p['name']}: " + (f"dispatcher failed to start — {err}" if err else "dispatcher started"), flush=True)
             if r["next"]:
                 r["restarts"].append(now)
-            r["up"], r["next"] = True, 0
-        rows.append({"name": p["name"], "running": p["running"], "dispatcher_pid": _pid(p["lock"]) if p["running"] else None,
-                     "restarts": len(r["restarts"]), "gave_up": r["gave_up"]})
+            r["up"], r["seen"], r["since"], r["next"] = True, False, now, 0
+        rows.append({"name": p["name"], "running": p["running"], "dispatcher_pid": p["pid"] if p["running"] else None,
+                     "restarts": len(r["restarts"]), "gave_up": r["gave_up"], "stopped": bool(r.get("stopped"))})
+    rows += [{"name": p["name"], "running": False, "dispatcher_pid": None, "restarts": 0, "gave_up": False,
+              "error": p["error"]} for p in bad]
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
-              "agent_memory_pct": pct, "hold": hold}
+              "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold}
     _write("status.json", status)
     return status
+
+
+def restart(name, kind="restart"):
+    """Ask the manager to start a profile's dispatcher again on the next tick (clearing a give-up or a stop), or,
+    kind "stop", to stop it and not restart it until `pl manager restart NAME`."""
+    from pl import config as C
+    if not C.NAME_RE.match(name or ""):
+        return None
+    d = _path(kind)
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (d / name).touch()
+    return (f"manager: {'restarting' if kind == 'restart' else 'stopping'} the dispatcher of {name} on the next tick"
+            + ("" if running() else " (manager not running)"))
 
 
 def machine_lock():
@@ -219,7 +308,8 @@ def machine_lock():
         return None
     f.seek(0)
     f.truncate()
-    f.write(f"pid {os.getpid()} since {time.strftime('%Y-%m-%dT%H:%M:%S')}")
+    from pl.util import now_iso
+    f.write(f"pid {os.getpid()} since {now_iso()}")
     f.flush()
     return f
 
@@ -234,7 +324,10 @@ def _run_loop():
     state = {}
     try:
         while True:
-            tick(state)
+            try:
+                tick(state)
+            except Exception as e:  # noqa: BLE001 - one bad tick never stops the manager
+                print(f"tick failed: {type(e).__name__}: {e}", flush=True)
             _sleep(TICK)
     finally:
         _path("status.json").unlink(missing_ok=True)
@@ -267,7 +360,7 @@ def start():
 def stop(all_=False):
     """SIGTERM the manager and wait for its lock to free. all_: also stop each managed dispatcher."""
     note, pid = "manager: not running", holder_pid()
-    if running() and pid:
+    if running():   # the lock's pid is a live pl manager: a reused pid is never signalled
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -276,7 +369,7 @@ def stop(all_=False):
     if all_:
         from pl import config as C
         from pl import dispatch
-        for p in managed():
+        for p in (p for p in managed() if "error" not in p):
             C.load(config_dir=str(p["dir"]))
             note += f"\n{p['name']}: {dispatch.stop_dispatcher()}"
     return note
@@ -289,7 +382,8 @@ def show():
     lines = [f"manager: running (pid {st['pid']}), status {int(_clock() - st['at'])} s old",
              f"{'profile':<16}{'dispatcher':<12}{'pid':<8}restarts"]
     for p in st["profiles"]:
-        state = "gave up" if p["gave_up"] else "running" if p["running"] else "stopped"
+        state = (p.get("error") or "gave up" if p.get("error") or p["gave_up"] else "stopped by you" if p.get("stopped")
+                 else "running" if p["running"] else "stopped")
         lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']}")
     if st.get("hold"):
         lines.append(f"hold: {st['hold']}")
@@ -299,10 +393,19 @@ def show():
 def cmd_manager(argv):
     ap = argparse.ArgumentParser(prog="pl manager", description="one manager per machine: it runs the dispatcher of "
                                  "every profile whose [dispatch] autostart is not false")
-    ap.add_argument("action", choices=["start", "stop", "status", "run"])
+    ap.add_argument("action", choices=["start", "stop", "status", "run", "restart"])
+    ap.add_argument("profile", nargs="?", help="restart: start this profile's dispatcher again; stop: stop only "
+                    "this profile's dispatcher, not restarted until restart")
     ap.add_argument("--all", action="store_true", help="stop: also stop every managed dispatcher")
     a = ap.parse_args(argv)
     if a.action == "run":
         return _run_loop()
+    if a.action == "restart" or a.action == "stop" and a.profile:
+        note = restart(a.profile, a.action)
+        if note is None:
+            print(f"pl manager {a.action}: give a profile name", file=sys.stderr)
+            return 2
+        print(note)
+        return 0
     print({"start": start, "status": show}.get(a.action, lambda: stop(a.all))())
     return 0

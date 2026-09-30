@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl.accounts import exhausted_profiles, next_profile, profile_state, unpark_machine
+from pl.accounts import exhausted_profiles, machine_entry, next_profile, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, registry, worker_status, worker_view
 from pl import events, ideas, trackers
 from pl.board import card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, render, sections, share, update
@@ -327,7 +327,7 @@ def cmd_profiles(a):
         print(f"un-parked {a.reset}")
     bad = exhausted_profiles()
     for p in C.PROFILES:
-        r = st.get(p) or {}
+        r = st.get(p) or machine_entry(p)   # parked by another profile that shares the folder
         state = f"PARKED until {r.get('until', '')[11:16]} UTC ({r.get('reason', '')}, seen {r.get('exhausted_at', '')[:16]})" if p in bad else "ok"
         print(f"  {p:<6} {state:<70} {C.PROFILES[p]}")
 

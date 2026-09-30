@@ -289,3 +289,38 @@ async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_pat
         await pilot.press("y")
         await settle(pilot)
         assert got == ["start", "stop"] and "manager: stopped" in header(app)
+
+
+async def test_d_on_a_profile_the_manager_does_not_manage_drives_its_own_dispatcher(tmp_path, monkeypatch, profile):
+    (profile / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    C.load(config_dir=str(profile))
+    machine(tmp_path, toml=True)
+    got = []
+    monkeypatch.setattr(manager, "start", lambda: got.append("manager") or "manager: started")
+    monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher") or "dispatcher: started")
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    app = PlApp(snapshot_provider=fake_data, autostart=True)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert got == []                        # autostart = false: nothing on mount
+        await pilot.press("D")
+        await settle(pilot)
+        assert got == ["dispatcher"]
+
+
+async def test_d_restarts_a_profile_the_manager_gave_up_on(tmp_path, monkeypatch):
+    import time
+    machine(tmp_path, toml=True)
+    (manager.machine_dir() / "status.json").write_text(json.dumps(
+        {"at": time.time(), "pid": 1, "profiles": [{"name": "work", "gave_up": True}], "hold": None}))
+    got = []
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "restart", lambda name: got.append(name) or f"manager: restarting {name}")
+    monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop"))
+    app = PlApp(snapshot_provider=fake_data, autostart=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("D")
+        await settle(pilot)
+        assert got == ["work"] and not isinstance(app.screen, ConfirmScreen)
+        assert "manager: restarting work" in header(app)

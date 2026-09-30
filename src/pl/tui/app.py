@@ -98,9 +98,15 @@ class PlApp(App):
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
         """start: start it when not running. toggle: start it, or ask first and stop it. stop: stop it. Never on the UI thread.
-        On a managed machine (machine.toml exists) the same keys start and stop pl manager instead."""
+        On a managed machine (machine.toml exists) and a profile whose autostart is not false, the same keys start and
+        stop pl manager instead; D on a profile the manager gave up on asks it to restart that dispatcher."""
         try:
-            managed = (manager.machine_dir() / "machine.toml").exists()
+            managed = ((manager.machine_dir() / "machine.toml").exists()
+                       and C.DISPATCH.get("autostart", True) is not False)
+            st = manager.read_status() if managed and what == "toggle" and manager.running() else None
+            if any(p.get("name") == C.PROFILE_NAME and p.get("gave_up") for p in (st or {}).get("profiles") or []):
+                self.call_from_thread(self.show_dispatcher_note, manager.restart(C.PROFILE_NAME))
+                return
             if what == "toggle" and (manager.running() if managed else dispatch.dispatcher_running()):
                 msg = ("Stop pl manager? It stops restarting dispatchers; running dispatchers and agents keep running."
                        if managed else f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '

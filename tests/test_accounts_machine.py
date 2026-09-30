@@ -68,3 +68,36 @@ def test_an_unreadable_machine_file_behaves_as_today(two_profiles):
     assert accounts.exhausted_profiles() == set()
     accounts.mark_exhausted("solo", LIMIT)
     assert accounts.exhausted_profiles() == {"solo"}
+
+
+def test_a_reset_from_the_other_profile_clears_the_account_everywhere(two_profiles):
+    as_profile("a")
+    accounts.mark_exhausted("main", LIMIT)
+    as_profile("b")
+    commands.cmd_profiles(argparse.Namespace(reset="work"))   # same folder as a's main
+    assert accounts.exhausted_profiles() == set()
+    as_profile("a")
+    assert accounts.exhausted_profiles() == set()
+
+
+def test_pl_accounts_shows_until_and_reason_from_the_machine_entry(two_profiles, capsys):
+    as_profile("a")
+    until = accounts.mark_exhausted("main", LIMIT)
+    as_profile("b")
+    capsys.readouterr()
+    commands.cmd_profiles(argparse.Namespace(reset=None))
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.strip().startswith("work"))
+    assert f"PARKED until {until[11:16]} UTC (" in line and "(," not in line
+
+
+def test_reset_rewrites_another_profiles_file_by_rename_under_its_lock(two_profiles, monkeypatch):
+    import os
+    as_profile("b")
+    accounts.mark_exhausted("work", LIMIT)   # b's own file parks work (the folder of a's main)
+    as_profile("a")
+    real, replaced = os.replace, []
+    monkeypatch.setattr(accounts.os, "replace", lambda s, d: replaced.append(str(d)) or real(s, d))
+    commands.cmd_profiles(argparse.Namespace(reset="main"))
+    f = two_profiles / ".pl-b" / "state" / "pl-profiles.json"
+    assert str(f) in replaced and "work" not in json.loads(f.read_text())
+    assert (f.parent / "pl-profiles.json.lock").exists()

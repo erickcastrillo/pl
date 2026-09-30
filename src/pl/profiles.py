@@ -33,8 +33,8 @@ def _is_locked(lock: Path) -> bool:
     return False
 
 
-def _row(name, d, lock, session, tracker, accounts):
-    running = _is_locked(lock)
+def _row(name, d, lock, session, tracker, accounts, check_lock=True):
+    running = check_lock and _is_locked(lock)
     try:
         holder = lock.read_text().strip() if running else ""
     except OSError:
@@ -44,8 +44,8 @@ def _row(name, d, lock, session, tracker, accounts):
             "accounts": {n: str(Path(a.get("config_dir", f"~/.claude-{n}")).expanduser()) for n, a in accounts.items()}}
 
 
-def list_profiles() -> list[dict]:
-    """Every ~/.pl-* folder with a config.toml."""
+def list_profiles(check_lock=True) -> list[dict]:
+    """Every ~/.pl-* folder with a config.toml. check_lock=False: never touch the dispatch locks (running is False)."""
     home = Path.home()
     base = C._defaults()
     rows = []
@@ -59,7 +59,7 @@ def list_profiles() -> list[dict]:
             t = {}
         session = t.get("tmux_session") if isinstance(t.get("tmux_session"), str) else f"pl-{name}"
         rows.append(_row(name, d, d / "state" / "pl-dispatch.lock", session, {**base["TRACKER"], **t.get("tracker", {})},
-                         t.get("accounts", base["ACCOUNTS"])))
+                         t.get("accounts", base["ACCOUNTS"]), check_lock))
     return rows
 
 

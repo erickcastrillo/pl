@@ -120,19 +120,21 @@ With more than one profile, let one manager run them all. It starts each profile
 pl manager start          # once; after that every console starts it when it is not running
 pl manager status         # each profile's dispatcher, live agents, any hold
 pl manager stop [--all]   # --all also stops the dispatchers
+pl manager restart NAME   # start a profile's dispatcher again after the manager gave up on it
+pl manager stop NAME      # stop one profile's dispatcher; the manager leaves it alone until restart
 ```
 
 The limits live in `~/.local/state/pl-machine/machine.toml`, which `pl manager start` creates:
 
 ```toml
 [limits]
-max_live_agents = 8          # agent and loop windows across every profile; more hold new starts
+max_live_agents = 8          # spec/design/plan/run agent windows across every profile; more hold new starts
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
 ```
 
-A usage limit hit by one profile parks that account folder for every profile that uses it. Delete `machine.toml` to go back to one dispatcher per console.
+A usage limit hit by one profile parks that account folder for every profile that uses it. A hold stops new agents only: crashed agents and loops are still restarted. To go back to one dispatcher per console, run `pl manager stop` first, then delete `machine.toml`.
 
 ## Guides
 

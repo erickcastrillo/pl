@@ -23,36 +23,56 @@ def _folder(name):
     return str(Path(C.PROFILES[name]).expanduser().resolve())
 
 
-def _machine():
-    """The machine-wide parking file of pl manager's folder: {resolved account folder: {until, reason, by_profile}}."""
-    from pl.manager import machine_dir
+def _load(f):
     try:
-        d = json.loads((machine_dir() / "accounts.json").read_text())
+        d = json.loads(f.read_text())
     except (OSError, ValueError):
         return {}
     return d if isinstance(d, dict) else {}
 
 
-def _update_machine(change):
-    """Read, change and atomically rewrite accounts.json under a flock, so two profiles never lose a write."""
-    import fcntl
+def _machine():
+    """The machine-wide parking file of pl manager's folder: {resolved account folder: {until, reason, by_profile}}."""
     from pl.manager import machine_dir
-    d = machine_dir()
-    d.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with open(d / "accounts.json.lock", "a") as lock:
+    return _load(machine_dir() / "accounts.json")
+
+
+def _update(f, change):
+    """Read, change and atomically rewrite the JSON file f under a flock on f.lock, so two profiles never lose a write."""
+    import fcntl
+    f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(f.parent / f"{f.name}.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        data = _machine()
+        data = _load(f)
         change(data)
-        tmp = d / f".accounts.json.{os.getpid()}.tmp"
+        tmp = f.parent / f".{f.name}.{os.getpid()}.tmp"
         tmp.write_text(json.dumps(data, indent=1))
-        os.replace(tmp, d / "accounts.json")
+        os.replace(tmp, f)
+
+
+def _update_machine(change):
+    from pl.manager import machine_dir
+    _update(machine_dir() / "accounts.json", change)
+
+
+def machine_entry(name):
+    """The machine-wide parking entry of this account's folder ({until, reason, by_profile}), or {}."""
+    return (_machine().get(_folder(name)) or {}) if name in C.PROFILES else {}
 
 
 def unpark_machine(names):
-    """Clear the machine entries of these accounts' folders (pl accounts --reset)."""
+    """pl accounts --reset: clear these accounts' folders machine-wide and in every profile's own file."""
+    from pl.profiles import list_profiles
     folders = {_folder(n) for n in names if n in C.PROFILES}
-    if folders and _machine():
+    if not folders:
+        return
+    if _machine():
         _update_machine(lambda data: [data.pop(f, None) for f in folders])
+    for row in list_profiles():
+        same = [n for n, d in row["accounts"].items() if str(Path(d).resolve()) in folders]
+        f = Path(row["dir"]) / "state" / "pl-profiles.json"
+        if any(n in _load(f) for n in same):
+            _update(f, lambda st: [st.pop(n, None) for n in same])
 
 
 def exhausted_profiles():
@@ -75,16 +95,14 @@ def mark_exhausted(profile, screen):
         until = t.timestamp() + 60
     C.ATTN.mkdir(exist_ok=True)
     (C.ATTN / f"pl-limit-{profile}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt").write_text(screen)  # the screen that tripped it, for diagnosis
-    st = profile_state()
     hit = C.LIMIT_RE.search(screen) or m
-    st[profile] = {"exhausted_at": now_iso(), "reason": hit.group(0) if hit else "usage limit",
-                   "until": datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds")}
-    C.ATTN.mkdir(exist_ok=True)
-    C.PROFILE_STATE.write_text(json.dumps(st, indent=1))
+    rec = {"exhausted_at": now_iso(), "reason": hit.group(0) if hit else "usage limit",
+           "until": datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds")}
+    _update(C.PROFILE_STATE, lambda st: st.__setitem__(profile, rec))
     if profile in C.PROFILES:
-        entry = {"until": st[profile]["until"], "reason": st[profile]["reason"], "by_profile": C.PROFILE_NAME}
+        entry = {"until": rec["until"], "reason": rec["reason"], "by_profile": C.PROFILE_NAME}
         _update_machine(lambda data: data.__setitem__(_folder(profile), entry))
-    return st[profile]["until"]
+    return rec["until"]
 
 
 def healthy_profile(preferred, all_cards):

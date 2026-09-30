@@ -4,9 +4,9 @@ Each profile runs one dispatcher. A second `pl dispatch` for the same profile, f
 
 ## One manager per machine
 
-`pl manager start` runs one detached manager for the whole machine. It starts the dispatcher of every profile whose `[dispatch] autostart` is not false, restarts one that exits (after 10 s, 30 s, 2 min, then 5 min) and gives up on a profile after 5 restarts in an hour. `pl manager status` shows each profile; `pl manager stop` stops the manager and leaves the dispatchers running, `pl manager stop --all` stops them too. Machine state lives in `~/.local/state/pl-machine/` (or `$PL_MACHINE_DIR`).
+`pl manager start` runs one detached manager for the whole machine. It starts the dispatcher of every profile whose `[dispatch] autostart` is not false, restarts one that exits (after 10 s, 30 s, 2 min, then 5 min) and gives up on a profile after 5 restarts in an hour; `pl manager restart <profile>` (or D in that profile's console) starts it again. `pl manager status` shows each profile; `pl manager stop` stops the manager and leaves the dispatchers running, `pl manager stop --all` stops them too. `pl manager stop <profile>` stops that one dispatcher, and the manager leaves it stopped (a hand-typed `pl dispatch` then runs) until `pl manager restart <profile>`. A profile whose `config.toml` does not load shows `config error` in the status and is skipped. The room for new agents in the status is shared: several dispatchers reading it in the same tick can together start a few agents past `max_live_agents`; the memory cap stays the hard line. Machine state lives in `~/.local/state/pl-machine/` (or `$PL_MACHINE_DIR`).
 
-While a manager runs, a `pl dispatch` it did not start, for example one a tmux restore re-created, prints `this machine is run by pl manager (pid N)` and exits. The manager is not a tmux window, so a restore never brings it back: after a reboot nothing runs until you open a console or run `pl manager start`.
+While a manager runs, a `pl dispatch` it did not start for a profile it manages, for example one a tmux restore re-created, prints `this machine is run by pl manager (pid N)` and exits. The manager is not a tmux window, so a restore never brings it back: after a reboot nothing runs until you open a console or run `pl manager start`.
 
 ## Keep pl out of tmux session restore (without the manager)
 
