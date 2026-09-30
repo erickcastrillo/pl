@@ -65,6 +65,9 @@
                           which Claude profile is parked for running out of usage credits (the dispatcher
                           detects the limit on an agent's screen, parks that profile, and restarts the card
                           under the other one); --reset un-parks a profile by hand
+  pl assistant log "text" | idea save ... | idea file <idea-id>
+                          the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
+                          marks it ready (you file it in the console with ctrl+f, after a confirm)
 
 Settings come from a profile: pl --profile NAME, or PL_CONFIG_DIR. Boards are reached through the tracker
 set in its config.toml ([tracker], [intake]). Card contract: sections open with a line `# PIPELINE: <NAME>`.
@@ -72,9 +75,10 @@ INPUT holds the idea and inlined documents, REVIEW NOTES holds your rejections. 
 = "auto" marks funnel cards, metadata.profile picks the harness account, metadata.worker tracks the agent.
 """
 import argparse
+import os
 import sys
 
-from pl import alerts, config, profiles, setup
+from pl import alerts, assistant, config, events, profiles, setup
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -88,6 +92,8 @@ from pl.watch import cmd_watch
 
 
 PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFIG_DIR)"
+# commands that change the pipeline; the event is a record for the Activity feed, not a guard
+ASSISTANT_ACTIONS = ("approve", "reject", "done", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -145,6 +151,12 @@ def main():
     p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears")
     p = sub.add_parser("move-agent"); p.add_argument("card"); p.add_argument("account", choices=list(C.PROFILES))
     p.add_argument("--yes", action="store_true", help="do not ask first")
+    p = sub.add_parser("assistant"); pa = p.add_subparsers(dest="assistant_cmd")
+    q = pa.add_parser("log"); q.add_argument("text", help="one line: what changed, which file or plugin")
+    q = pa.add_parser("idea"); qi = q.add_subparsers(dest="idea_cmd", required=True)
+    r = qi.add_parser("save"); r.add_argument("--id", help="update this draft (else a new one)"); r.add_argument("--title")
+    r.add_argument("--brief", required=True, help="JSON: problem, who, outcome, in_scope, out_of_scope, repos, open_questions")
+    r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -153,7 +165,10 @@ def main():
             return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False))
         ap.print_help()
         return
+    if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
+        events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent}[a.cmd](a)
+     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
+     "assistant": assistant.cmd_assistant}[a.cmd](a)

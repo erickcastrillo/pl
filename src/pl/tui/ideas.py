@@ -273,7 +273,11 @@ class IdeasView(Widget):
         def fn():
             new, err = ideas.turn(base, answer)
             if err is None:
-                ideas.save(new)
+                try:
+                    ideas.save(new)
+                except SystemExit:           # saved elsewhere meanwhile (the Assistant): show the newer draft
+                    self.app.call_from_thread(self.reload, new["id"])
+                    raise
             self.app.call_from_thread(self._turn_done, new, err)
         self._bg(fn, "idea-turn")
 
@@ -310,7 +314,7 @@ class IdeasView(Widget):
         gone = fields.get("status") == "discarded"
 
         def fn():
-            ideas.save(new)
+            ideas.save({**ideas.load(new["id"]), **fields})   # reload first: the Assistant may have saved it since
             self.app.call_from_thread(self.reload, None if gone else new["id"])
         self.current = None if gone else new
         self._bg(fn, "idea-save")

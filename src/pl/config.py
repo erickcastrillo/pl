@@ -64,6 +64,7 @@ def _defaults():
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, **MEMORY_DEFAULTS}  # autostart: the console starts the dispatcher
     GATES = {"spec": False}
+    ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -134,6 +135,7 @@ def _apply(g, t):
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
     g["USAGE"] = dict(t.get("usage", {}))
+    g["ASSISTANT"] = dict(t.get("assistant", {}))
 
 
 def load(profile: str | None = None, config_dir: str | None = None) -> None:
@@ -257,6 +259,8 @@ def validate(doc) -> list[str]:
         for name, v in doc.get(table, {}).items():
             if table == "loops" and not NAME_RE.match(name):
                 errs.append(f"loop name {name!r} must match {NAME_RE.pattern}")
+            if table == "loops" and name == "assistant":
+                errs.append("loop name 'assistant' is taken: it is the Assistant tab's tmux window")
             mc = v.get("max_context") if table == "loops" else None
             if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or not 0 <= mc <= 100):
                 errs.append(f"loops.{name}: max_context must be a whole percent from 0 (off) to 100")

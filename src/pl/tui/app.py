@@ -11,7 +11,8 @@ from textual.widgets import Footer, Static, TabbedContent, TabPane
 from pl import board, dispatch, manager, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
-from pl.tui.chrome import TABS, header_text
+from pl.tui.assistant import AssistantView
+from pl.tui.chrome import TABS, header_text, tabs
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
@@ -25,7 +26,7 @@ from pl.tui.subagents import SubagentsView
 LATER = {}
 VIEWS = {"dashboard": DashboardView, "needs": NeedsView, "ideas": IdeasView, "pipeline": PipelineView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
-         "subagents": SubagentsView}
+         "subagents": SubagentsView, "assistant": AssistantView}
 
 
 REFRESH, GITHUB_REFRESH = 15, 60   # seconds between board refreshes; GitHub's GraphQL budget needs the slower one
@@ -108,7 +109,7 @@ class WhatsNewScreen(ModalScreen):
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
-    BINDINGS = [Binding(str(i + 1), f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="1-9")
+    BINDINGS = [Binding(str((i + 1) % 10), f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="0-9")
                 for i, (tid, name) in enumerate(TABS)] + [
         Binding("w", "cycle_window", "window"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
@@ -128,8 +129,8 @@ class PlApp(App):
     def compose(self) -> ComposeResult:
         yield Static(header_text(None), id="header")
         with TabbedContent(id="tabs"):
-            for i, (tid, name) in enumerate(TABS):
-                with TabPane(f"{i + 1} {name}", id=tid):
+            for i, (tid, name) in enumerate(tabs()):
+                with TabPane(f"{(i + 1) % 10} {name}", id=tid):
                     if tid in VIEWS:
                         yield VIEWS[tid]()
                     else:
@@ -257,8 +258,12 @@ class PlApp(App):
             self.query_one(SubagentsView).tick()
         if self.active_tab == "prs":
             self.query_one(PrsView).selected()
+        if self.active_tab == "assistant":
+            self.query_one(AssistantView).opened()
 
     def check_action(self, action, parameters):
+        if action == "tab":
+            return any(t[0] == parameters[0] for t in tabs())
         if action == "cycle_window":
             return self.active_tab == "dashboard"
         if action == "standup":

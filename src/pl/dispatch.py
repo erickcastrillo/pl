@@ -524,6 +524,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 notify("Pipeline drained", "no agent is working; safe to shut down (pl resume after restart)")
     if not dry:
         check_alerts(all_cards, failed)
+        alerts.flush_offers()      # at most one line per pass into an idle Assistant
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
 

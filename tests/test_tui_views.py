@@ -807,3 +807,233 @@ async def test_needs_you_shows_alerts_first_and_k_acknowledges(monkeypatch):
         app.refresh_data()
         await settle(pilot)
         assert "ALERTS" not in screen_text(app)
+
+
+# ---------- the Assistant tab ----------
+
+class FakeAssistant:
+    """Stands in for pl.assistant in the tab: records calls, raises when told to."""
+
+    def __init__(self, monkeypatch):
+        from pl import assistant
+        self.ensured, self.sent, self.screens, self.resets, self.modes, self.fail = 0, [], 0, 0, [], None
+        self.state = {"window": "@7", "pane": "%7", "mode": "chat"}
+        self.dead, self.ready, self.warn = False, None, None
+        monkeypatch.setattr(assistant, "warning", lambda: self.warn)
+        monkeypatch.setattr(assistant, "pane", lambda st=None: None if self.dead else "%7")
+        monkeypatch.setattr(assistant, "ready_idea", lambda: self.ready)
+        monkeypatch.setattr(C, "CONFIG_DIR", C.STATE_DIR.parent / ".pl-t")   # the tab needs a loaded profile
+        monkeypatch.setattr(assistant, "ensure", self.ensure)
+        monkeypatch.setattr(assistant, "send", self.sent.append)
+        monkeypatch.setattr(assistant, "screen", self.screen)
+        monkeypatch.setattr(assistant, "reset", self.reset)
+        monkeypatch.setattr(assistant, "load", lambda: dict(self.state))
+        monkeypatch.setattr(assistant, "set_mode", self.set_mode)
+
+    def ensure(self):
+        self.ensured += 1
+        self.dead = False
+        if self.fail:
+            raise self.fail
+        return "assistant running in pl-t:assistant (acme)"
+
+    def screen(self, n):
+        self.screens += 1
+        return ["> what is stuck?", "card 4a000001 waits for your review"]
+
+    def reset(self):
+        self.resets += 1
+
+    def set_mode(self, mode):
+        self.modes.append(mode)
+        self.state["mode"] = mode
+
+
+async def _open_assistant(pilot):
+    await settle(pilot)
+    await pilot.press("0")
+    await settle(pilot)
+
+
+async def test_the_assistant_tab_is_on_by_default_and_0_opens_it(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert app.active_tab == "assistant" and fa.ensured == 1
+        assert "0 Assistant" in screen_text(app)
+        assert "waits for your review" in str(app.query_one("#assistant-screen").render())
+
+
+async def test_the_assistant_tab_is_absent_when_disabled(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    monkeypatch.setattr(C, "ASSISTANT", {"enabled": False})
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert app.active_tab != "assistant" and fa.ensured == 0
+        assert "Assistant" not in screen_text(app)
+
+
+async def test_opening_the_tab_twice_starts_the_assistant_once(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        app.action_tab("dashboard")
+        await settle(pilot)
+        app.action_tab("assistant")
+        await settle(pilot)
+        assert fa.ensured == 1
+
+
+async def test_typing_in_the_box_sends_it_and_digits_do_not_switch_tabs(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert app.focused is app.query_one("#assistant-input")
+        for ch in "retry abc":
+            await pilot.press("space" if ch == " " else ch)
+        await pilot.press("enter")
+        await settle(pilot)
+        await pilot.press("2")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert fa.sent == ["retry abc", "2"] and app.active_tab == "assistant"
+        assert app.query_one("#assistant-input").value == ""
+
+
+async def test_the_screen_is_not_polled_while_another_tab_is_active(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = app.query_one("#assistant-view")
+        view.tick()
+        await settle(pilot)
+        assert fa.screens == 0                  # never opened
+        await _open_assistant(pilot)
+        app.action_tab("dashboard")
+        await settle(pilot)
+        before = fa.screens
+        for _ in range(3):
+            view.tick()
+        await settle(pilot)
+        assert fa.screens == before
+        app.action_tab("assistant")
+        await settle(pilot)
+        view.tick()
+        await settle(pilot)
+        assert fa.screens > before
+
+
+async def test_ensure_failing_shows_a_notice_and_the_console_runs_on(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.fail = SystemExit("pl: no harness account is free for the assistant (pl accounts)")
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert any("no harness account is free" in str(n.message) for n in app._notifications)
+        await pilot.press("ctrl+t")      # still alive: keys work
+        app.action_tab("dashboard")
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+
+
+async def test_ctrl_r_asks_then_starts_a_new_conversation(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert type(app.screen).__name__ == "ConfirmScreen" and "new assistant conversation" in app.screen.message
+        app.screen.dismiss(True)
+        await settle(pilot)
+        assert fa.resets == 1 and fa.ensured == 2
+
+
+async def test_an_empty_submit_sends_nothing(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await pilot.press("space")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert fa.sent == []
+
+
+async def test_a_dead_assistant_is_started_again_while_the_tab_is_open(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert fa.ensured == 1
+        fa.dead = True                  # /exit, or tmux lost the window
+        app.query_one("#assistant-view").tick()
+        await settle(pilot)
+        assert fa.ensured == 2
+
+
+async def test_a_ready_idea_is_filed_only_after_the_confirm(monkeypatch):
+    from pl import ideas
+    fa = FakeAssistant(monkeypatch)
+    fa.ready = {"id": "abcdefabcdef", "title": "Faster page", "status": "interviewing", "ready_to_file": True,
+                "version": 2, "brief": {"problem": "Pages load slowly", "open_questions": []}}
+    filed = []
+    monkeypatch.setattr(ideas, "load", lambda i: dict(fa.ready))
+    monkeypatch.setattr(ideas, "is_clear", lambda i: True)
+    monkeypatch.setattr(ideas, "approve", lambda i: filed.append(i["id"]) or {**i, "status": "approved", "card_id": "c0000001"})
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view = app.query_one("#assistant-view")
+        view.tick()
+        await settle(pilot)
+        assert "Idea ready: Faster page" in str(app.query_one("#assistant-status").render())
+        await pilot.press("ctrl+f")
+        await pilot.pause()
+        assert type(app.screen).__name__ == "ConfirmScreen" and "Faster page" in app.screen.message
+        assert "Pages load slowly" in app.screen.message
+        app.screen.dismiss(False)
+        await settle(pilot)
+        assert filed == []
+        await pilot.press("ctrl+f")
+        await pilot.pause()
+        app.screen.dismiss(True)
+        await settle(pilot)
+        assert filed == ["abcdefabcdef"]
+
+
+async def test_ctrl_f_refuses_a_draft_changed_since_the_dialog_showed_it(monkeypatch):
+    from pl import ideas
+    fa = FakeAssistant(monkeypatch)
+    fa.ready = {"id": "abcdefabcdef", "title": "Faster page", "status": "interviewing", "ready_to_file": True,
+                "version": 2, "brief": {"problem": "Pages load slowly"}}
+    disk, filed = dict(fa.ready), []
+    monkeypatch.setattr(ideas, "load", lambda i: dict(disk))
+    monkeypatch.setattr(ideas, "is_clear", lambda i: True)
+    monkeypatch.setattr(ideas, "approve", lambda i: filed.append(i["id"]) or {**i, "status": "approved", "card_id": "c0000001"})
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        app.query_one("#assistant-view").tick()
+        await settle(pilot)
+        for change in ({"version": 3}, {"version": 2, "ready_to_file": False}):
+            disk.update(change)                      # saved again (or unmarked) after the snapshot was taken
+            await pilot.press("ctrl+f")
+            await pilot.pause()
+            app.screen.dismiss(True)
+            await settle(pilot)
+        assert filed == []
+        assert sum("changed" in str(n.message) for n in app._notifications) == 2
+
+
+async def test_an_allow_rule_warning_shows_in_the_tab(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.warn = "warning: allow rules Bash(gh pr *) would skip the prompt"
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert "Bash(gh pr *)" in str(app.query_one("#assistant-warning").render())

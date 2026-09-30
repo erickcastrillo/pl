@@ -300,3 +300,126 @@ def test_a_spec_agent_stuck_on_a_weekly_limit_moves_to_the_other_account(monkeyp
     assert ("tmux", "kill-window", "-t", "@7") in calls
     meta = next(k["metadata"] for op, *rest in calls if op == "update" for cid, k in [rest] if "profile" in k["metadata"])
     assert meta["worker"] is None and meta["profile"] == "acme2"
+
+
+# ---------- proactive offers to the Assistant (on by default) ----------
+
+ASID = "11111111-2222-3333-4444-555555555555"
+PROMPT = "────\n> \n────\n"
+MENU = "Run this command?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\n"
+
+
+class FakeTmux:
+    def __init__(self, panes=("%3",), cmd="claude"):
+        self.calls, self.panes, self.cmd, self.screen = [], set(panes), cmd, PROMPT
+        self.session = C.TMUX_SESSION
+
+    def __call__(self, argv, *a, **kw):
+        import subprocess
+        argv = [str(x) for x in argv]
+        self.calls.append(argv)
+        if argv[:2] == ["tmux", "display-message"]:
+            target = argv[argv.index("-t") + 1]
+            if target not in self.panes:
+                return subprocess.CompletedProcess(argv, 1, "", "no pane")
+            out = {"#{pane_current_command}": self.cmd,
+                   "#{session_name} #{window_id} #{window_name}": f"{self.session} @3 assistant"}.get(argv[-1], target)
+            return subprocess.CompletedProcess(argv, 0, out + "\n", "")
+        if argv[:2] == ["tmux", "capture-pane"]:
+            return subprocess.CompletedProcess(argv, 0, self.screen, "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def lines(self):
+        return [c[-1] for c in self.calls if c[:2] == ["tmux", "send-keys"] and "-l" in c]
+
+
+@pytest.fixture
+def helper(monkeypatch):
+    import subprocess
+
+    from pl import agents
+    t = FakeTmux()
+    monkeypatch.setattr(subprocess, "run", t)
+    reg = {ASID: {"sessionId": ASID, "status": "idle"}}
+    monkeypatch.setattr(agents, "registry", lambda: reg)
+    (C.STATE_DIR / "assistant.json").write_text(json.dumps({"session_id": ASID, "account": "acme", "harness": "claude",
+                                                            "window": "@3", "pane": "%3", "started_at": "x"}))
+    t.reg = reg
+    return t
+
+
+TITLE = "Card abcd1234: the spec agent died 3 times"
+
+
+def test_alerts_of_one_pass_reach_an_idle_assistant_as_one_line(helper, clock):
+    assert alerts.open("stage_failed:abcd1234:spec", "high", TITLE, "pl retry") == "open"
+    assert alerts.open("loop_dead:rev$(x)", "warn", "Loop rev looks dead", "restart") == "open"
+    assert helper.lines() == []                      # queued: the dispatcher flushes once per pass
+    alerts.flush_offers()
+    assert helper.lines() == ["[pl alert] two alerts open: " + TITLE + " (stage_failed:abcd1234:spec); "
+                              "Loop rev looks dead (loop_dead:revx). Want me to look?"]
+    assert alerts.open("stage_failed:abcd1234:spec", "high", TITLE, "pl retry") is None   # a second sighting
+    alerts.open("k3", "warn", "Card abcd1234: z", "fix")
+    alerts.flush_offers()
+    assert len(helper.lines()) == 1                  # under 60 s since the last offer
+    clock["now"] += 61
+    alerts.flush_offers()
+    assert helper.lines()[1] == "[pl alert] Card abcd1234: z (k3). Want me to look?"
+    clock["now"] += 3601
+    alerts.sweep("stage_failed:", {"stage_failed:abcd1234:spec"}, lambda t, f: None)       # an escalation
+    alerts.flush_offers()
+    assert len(helper.lines()) == 3 and "Still open after 1 h" in helper.lines()[2]
+
+
+def test_a_menu_or_unsent_text_holds_the_offer_for_the_next_idle_pass(helper, clock):
+    alerts.open("k1", "high", "Card abcd1234: x", "fix")
+    for screen in (MENU, "────\n> half a sentence\n────\n"):
+        helper.screen = screen
+        alerts.flush_offers()
+        assert helper.lines() == []
+    alerts.open("k2", "high", "Card abcd1234: y", "fix")
+    helper.screen = PROMPT
+    alerts.flush_offers()
+    assert helper.lines() == ["[pl alert] two alerts open: Card abcd1234: x (k1); Card abcd1234: y (k2). Want me to look?"]
+
+
+def test_proactive_off_makes_no_tmux_call(helper, clock):
+    C.ASSISTANT = {"proactive": False}
+    assert alerts.open("k1", "high", "Card abcd1234: x", "fix") == "open"
+    alerts.flush_offers()
+    assert helper.calls == []
+
+
+def test_a_busy_assistant_or_a_missing_pane_gets_nothing(helper, clock):
+    helper.reg[ASID]["status"] = "busy"
+    assert alerts.open("k1", "high", "Card abcd1234: x", "fix") == "open"
+    alerts.flush_offers()
+    helper.reg[ASID]["status"] = "idle"
+    helper.session = "other"                         # the saved pane now lives in another session
+    alerts.flush_offers()
+    assert helper.lines() == []
+
+
+def test_an_offer_that_raises_never_fails_the_alert(helper, clock, monkeypatch):
+    from pl import assistant
+
+    def boom(*a):
+        raise RuntimeError("tmux gone")
+    monkeypatch.setattr(assistant, "offer", boom)
+    monkeypatch.setattr(assistant, "flush_offers", boom)
+    assert alerts.open("k1", "high", "Card abcd1234: x", "fix") == "open"
+    alerts.flush_offers()
+
+
+def test_a_flush_never_writes_back_a_stale_pane_id(helper, clock, monkeypatch):
+    from pl import assistant
+    alerts.open("k1", "high", "Card abcd1234: x", "fix")
+    real = assistant._type
+
+    def type_then_restart(p, text, enter=True):    # another console restarts the assistant meanwhile
+        real(p, text, enter)
+        assistant._save({**assistant.load(), "pane": "%9", "window": "@9"})
+    monkeypatch.setattr(assistant, "_type", type_then_restart)
+    alerts.flush_offers()
+    st = assistant.load()
+    assert len(helper.lines()) == 1 and st["pane"] == "%9" and st["window"] == "@9" and not st.get("pending")

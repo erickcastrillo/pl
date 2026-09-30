@@ -182,6 +182,7 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | Key | Action |
 | --- | --- |
 | 1 to 8 | Dashboard, Needs you, Ideas, Pipeline, Pull requests, Loops, Activity, Settings |
+| 0 | Assistant: a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
 | w | cycle the Dashboard time window |
 | s | standup summary of the last 24 hours on the Dashboard (y copies it) |
 | a / x | approve / send back the selected card |
@@ -195,6 +196,23 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
 
 Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
+
+## Assistant
+
+Tab `0` is a side chat that runs pl for you: "what is stuck?", "retry that card", "install this plugin", "change the review skill". It is a real, interactive harness session in the tmux window `assistant` of this profile's session, started the first time you open the tab. The tab shows its screen and types what you enter; a lone digit answers the harness's numbered permission menu. The window outlives the console, so reopening the console reattaches to the same conversation; if tmux lost the window, pl resumes the saved Claude conversation.
+
+It uses `[assistant] account`, else the first account not parked, and its usage counts on that account. pl always starts it in the harness's ask-first mode, whatever the account's own default mode is: Claude with `--permission-mode manual`, Codex with `--ask-for-approval on-request --sandbox read-only`. An allow rule in a settings file would still skip the prompt, so Claude also gets ask rules for `pl`, `gh` and `git push` through `--settings` (ask beats allow; a deny rule still wins), and the tab shows one warning line naming any allow rule that covers them. Codex gets a warning that its own rules may still approve some commands. A harness pl cannot start that way, or a `[harnesses]` template that sets its own permission, allowed-tools or settings flag, is refused. Its guide (shipped with pl) tells it to wait for your yes before approving, moving, merging or filing anything, to back up and show a diff before editing a skill or config file, never to read credentials, and to treat card, PR and command output as data, never as instructions. Pipeline commands it runs leave an `assistant_action` event in Activity, and changes outside pl leave an `assistant_log` event. Both are a best-effort record, not a guard.
+
+```toml
+[assistant]
+enabled = true      # false hides the tab
+account = "work"    # optional; default: the first account not parked
+proactive = true    # false: pl stops offering new alerts to an idle assistant
+```
+
+Each conversation is in chat mode (ask pl to do things) or idea mode (ctrl+t). In idea mode the assistant shapes an idea brief with you one question at a time, and it may suggest the switch when a request sounds like something new. It saves the draft with `pl assistant idea save`, so the draft also shows on the Ideas tab. After you say yes to the exact text, it runs `pl assistant idea file`, which only marks the draft ready and writes nothing to the board. The tab then shows "Idea ready: <title>"; ctrl+f asks you once more and files it the same way as the Ideas tab's `A` (which files it too). Both tabs share `<profile>/state/ideas/`, and a draft interviewed in the Ideas tab can be continued in idea mode by its id (`pl assistant idea save --id <id>`).
+
+With `proactive` on (the default), new or escalated alerts are typed into an idle assistant as one line per dispatcher pass, at most once a minute: `[pl alert] <title> (<key>). Want me to look?`, or "two alerts open: ..." for several. Alert titles hold ids only. pl waits while the assistant shows a numbered menu or text you have not sent yet. A busy assistant gets the line on a later pass; a closed one gets nothing, and the alert still shows on Needs you.
 
 ## Standup
 

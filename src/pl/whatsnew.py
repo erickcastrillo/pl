@@ -32,6 +32,8 @@ ENTRIES = [
        "pl profiles"),
     _e("2026-09-30.11", "pl retry starts a card's failed agent fresh", "Needs you: cards whose agent died",
        "pl retry <id|all>"),
+    _e("2026-09-30.12", "The Assistant: a pl-aware Claude session you chat with", "tab 0 Assistant",
+       "open it and ask \"what is stuck?\""),
 ]
 
 

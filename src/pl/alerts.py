@@ -68,6 +68,24 @@ def _step(a, now):
     return None if a.get("acked") else STEP[level]
 
 
+def _offer(key, why, title):
+    """Queue an alert that opened or escalated for the Assistant. It never fails the alert."""
+    try:
+        from pl import assistant   # imported here: the alerts module stays light
+        assistant.offer(key, headline(why, title))
+    except (SystemExit, Exception):  # noqa: BLE001 - a tmux refusal raises SystemExit
+        pass
+
+
+def flush_offers():
+    """End of a dispatcher pass: type the queued alerts into an idle Assistant as one line. Never raises."""
+    try:
+        from pl import assistant
+        assistant.flush_offers(_clock())
+    except (SystemExit, Exception):  # noqa: BLE001
+        pass
+
+
 def open(key, severity, title, fix):
     """Open the alert, or count one more sighting. Returns what to notify: "open", "1 h", "4 h", or None."""
     now = _clock()
@@ -76,9 +94,13 @@ def open(key, severity, title, fix):
         if not _live(a):
             d[key] = {"severity": severity, "title": title, "fix": fix, "first_seen": now, "last_seen": now,
                       "count": 1, "level": 0}
-            return "open"
-        a.update(severity=severity, title=title, fix=fix, last_seen=now, count=int(a.get("count") or 0) + 1)
-        return _step(a, now)
+            why = "open"
+        else:
+            a.update(severity=severity, title=title, fix=fix, last_seen=now, count=int(a.get("count") or 0) + 1)
+            why = _step(a, now)
+    if why:
+        _offer(key, why, title)
+    return why
 
 
 def resolve(key):
@@ -112,9 +134,10 @@ def sweep(prefix, active, send):
             if key not in active:
                 a.update(resolved_at=now, duration=now - a["first_seen"])
             elif why := _step(a, now):
-                out.append((why, a["title"], a["fix"]))
-    for why, title, fix in out:
+                out.append((key, why, a["title"], a["fix"]))
+    for key, why, title, fix in out:
         send(headline(why, title), fix)
+        _offer(key, why, title)
 
 
 def headline(why, title):

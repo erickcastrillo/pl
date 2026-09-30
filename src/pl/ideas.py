@@ -73,29 +73,58 @@ def _path(idea_id):
     return _dir() / f"{idea_id}.json"
 
 
+CLOSED = ("approved", "discarded")
+
+
 def save(idea):
-    """Atomic write: a 0600 temp file in the ideas folder, then rename over the old one."""
+    """Atomic write: a 0600 temp file in the ideas folder, then rename over the old one. Refused when the file on disk
+    is newer (its version is higher: another console or the assistant saved it since), or when it would set an
+    approved or discarded idea back to interviewing. Each save bumps idea["version"]. The check and the write hold the
+    profile's ideas save lock (approve's per-idea lock is a different file, so approve can save while it holds that)."""
     p = _path(idea["id"])
+    lock = os.open(C.STATE_DIR / "ideas.save.lock", os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _save_locked(p, idea)
+    finally:
+        os.close(lock)
+
+
+def _save_locked(p, idea):
+    try:
+        disk = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        disk = None
+    disk = disk if isinstance(disk, dict) else {}
+    have, mine = int(disk.get("version") or 0), int(idea.get("version") or 0)
+    if have > mine:
+        raise SystemExit(f"pl: idea {idea['id']} has a newer draft on disk; reload it and try again")
+    if disk.get("status") in CLOSED and idea.get("status") == "interviewing":
+        raise SystemExit(f"pl: idea {idea['id']} is {disk['status']}; it does not go back to interviewing")
     tmp = p.with_name(f".{p.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(idea, f, ensure_ascii=False, indent=1)
+            json.dump({**idea, "version": mine + 1}, f, ensure_ascii=False, indent=1)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, p)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    idea["version"] = mine + 1
     return idea
 
 
 def load(idea_id):
     p = _path(idea_id)
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        d = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise SystemExit(f"pl: cannot read idea {idea_id}: {e}")
+    if not isinstance(d, dict):
+        raise SystemExit(f"pl: cannot read idea {idea_id}: not an object")
+    return d
 
 
 def list_ideas(include_discarded=False):

@@ -651,3 +651,10 @@ def test_a_restart_request_cancels_a_pending_stop_and_the_other_way_round(machin
     manager.restart("home", "stop")
     manager.tick(state)
     assert state["home"]["stopped"] is True
+
+
+def test_the_assistant_window_counts_toward_memory_but_is_never_stopped(machine, monkeypatch):
+    limits(machine, '[limits]\nmax_agents_memory = "40%"\nmin_free_memory = "1%"\nmax_live_agents = 1\n')
+    kills = fake_machine(monkeypatch, "pl-work @1 100 assistant\n", _tree(14_000_000))   # ~13 GB, past the 12.8 GB cap
+    st = manager.tick({})
+    assert st["hold"] and "over 80%" in st["hold"] and kills == [] and st["live_agents"] == 0

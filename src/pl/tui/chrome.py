@@ -5,7 +5,12 @@ from pl import config as C
 
 TABS = [("dashboard", "Dashboard"), ("needs", "Needs you"), ("ideas", "Ideas"), ("pipeline", "Pipeline"),
         ("prs", "Pull requests"), ("loops", "Loops"), ("activity", "Activity"), ("settings", "Settings"),
-        ("subagents", "Background")]
+        ("subagents", "Background"), ("assistant", "Assistant")]   # tab keys 1-9, then 0
+
+
+def tabs():
+    """The tabs this console shows: all of them, less the Assistant when [assistant] enabled = false."""
+    return [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]
 
 
 def header_text(data, error=None, note=None):

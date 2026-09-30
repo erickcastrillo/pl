@@ -236,10 +236,13 @@ def _caps(state, profs):
     from pl.agents import run_waiting
     lim, r = _limits(profs), memory.reading()
     panes = memory._run(["tmux", "list-panes", "-a", "-F", "#{session_name} #{window_id} #{pane_pid} #{window_name}"])
-    procs, by_session, trees, live = memory._procs(), {p["session"]: p for p in profs}, [], 0
+    procs, by_session, trees, live, extra = memory._procs(), {p["session"]: p for p in profs}, [], 0, 0
     for line in (panes or "").splitlines():
         s = line.split(" ", 3)
         p = by_session.get(s[0])
+        if len(s) == 4 and s[2].isdigit() and p and s[3] == "assistant":   # counts toward memory; never stopped
+            extra += sum(procs[x][1] for x in memory._below(procs, [int(s[2])]))
+            continue
         if len(s) < 4 or not s[2].isdigit() or not p or not (s[3].startswith(memory.AGENT_PREFIXES) or s[3] in p["loops"]):
             continue
         tree = memory._below(procs, [int(s[2])])
@@ -247,7 +250,7 @@ def _caps(state, profs):
         # a run agent waiting at a GATE or idle holds no start, as in the dispatcher; it still counts toward memory
         if s[3].startswith(memory.AGENT_PREFIXES) and not (s[3].startswith("run-") and run_waiting({"pane": s[1]}, {})):
             live += 1
-    used, why = sum(t[0] for t in trees), []
+    used, why = sum(t[0] for t in trees) + extra, []
     if live >= lim["max_live_agents"]:
         why.append(f"{live} live agents across profiles (max {lim['max_live_agents']})")
     pct, before = None, set(state.get("runaway") or ())
@@ -259,7 +262,7 @@ def _caps(state, profs):
             why.append(f"only {memory.gb(free)} free (minimum {memory.gb(memory.parse_size(lim['min_free_memory'], total))})")
         if used > 0.8 * cap:
             why.append(f"agents use {memory.gb(used)}, over 80% of the {memory.gb(cap)} cap")
-        if used > cap:
+        if used > cap and trees:
             over = before   # the episode lasts while agents stay over the cap
             dispatchers = {os.getpid(), *(p["pid"] for p in profs if p["pid"])}
             mem, name, win, pane_pid, tree = max(trees, key=lambda t: t[0])   # the cause; never another tree
