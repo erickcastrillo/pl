@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, harnesses, manager, memory, trackers, usage
+from pl import accounts, alerts, board, events, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import hold_reason, pane_exists, registry, run_waiting, worker_status
 from pl.board import card, cards, col_name, sections, update
@@ -318,34 +318,66 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         status, sid = ("none", None) if not w else worker_status(w, reg)
         if w and status == "alive" and sid and sid != w.get("session_id") and not dry:
-            update(c["id"], metadata={"worker": {**w, "session_id": sid}})
-        screen = screen_hit_limit(w.get("pane"), wh) if (w and status in ("alive", "starting")) else None
+            w = {**w, "session_id": sid}
+            update(c["id"], metadata={"worker": w})
+            m = c["metadata"] = {**m, "worker": w}
+        busy = held = False
+        if w:
+            busy = move_agent.locked(c["id"])   # pl move-agent is stopping and relaunching it right now
+        live = w and status in ("alive", "starting")   # after a resume the screen replays the old banner: the transcript counts
+        screen = (move_agent.limit_screen(c, w, wh) if w.get("resume") else screen_hit_limit(w.get("pane"), wh)) if live and not busy else None
+        if screen and not dry:   # the whole limit handling runs under the card's move lock: a hand move waits, or wins
+            held = move_agent.lock(c["id"])
+            busy = not held
+        if busy:
+            if w.get("stage") == "run":         # it still holds its slot
+                runs_live += 1
+                runs_alive += 1
+            else:
+                prep_alive += 1
+            continue
         if screen:
-            prof = w.get("profile") or m.get("profile")
-            until = mark_exhausted(prof, screen) if not dry else "(dry run)"
-            prep = w.get("stage") in ("spec", "design", "plan")   # a prep agent always moves; a run agent only while young
-            alt = healthy_profile(None, all_cards, harness=wh.name) if prep else healthy_profile(None, all_cards)
-            age = time.time() - parse_iso(w.get("started_at") or "")
-            auto_resumes = "continuing automatically" in screen
-            switch = bool(alt) and alt != prof and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
-            print(f"{c['id'][:8]}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
-                  + (f"restarting under {alt} (agent was {int(age // 60)} min old)" if switch
-                     else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
-            if why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
-                                  f"parked until {until[11:16]} UTC; pl accounts --reset {prof} un-parks it"):
-                notify(alerts.headline(why, f"Profile {prof} hit its usage limit"), f"parked until {until[11:16]} UTC; " + (f"young agents move to {alt}" if alt else "no other profile has credits"))
-            if switch:
-                if not dry:
-                    tmux("kill-window", "-t", w["window"], check=False)
-                    meta = {"worker": None, "profile": alt, "profile_switches": (m.get("profile_switches") or [])
-                            + [{"at": now_iso(), "from": prof, "to": alt, "stage": w.get("stage"), "reason": "usage limit"}]}
-                    update(c["id"], metadata=meta)
-                    m = {**m, **meta}
-                    c["metadata"] = m
-                w, status = {}, "none"
-            elif not dry and w.get("limit_hit") != (lim := {"account": prof, "until": until}):   # stays put: pl list shows the limit
-                w = {**w, "limit_hit": lim}
-                update(c["id"], metadata={"worker": w})
+            try:
+                prof = w.get("profile") or m.get("profile")
+                until = mark_exhausted(prof, screen) if not dry else "(dry run)"
+                prep = w.get("stage") in ("spec", "design", "plan")   # a prep agent always moves; a run agent only while young
+                alt = healthy_profile(None, all_cards, harness=wh.name) if prep else healthy_profile(None, all_cards)
+                age = time.time() - parse_iso(w.get("started_at") or "")
+                auto_resumes = "continuing automatically" in screen
+                moved, why, changed, to = False, None, False, None   # changed: the move left a new worker on the card
+                if not prep:   # a run agent of any age first tries to keep its session on another Claude account
+                    to = healthy_profile(None, all_cards, harness="claude")
+                    if to and to != prof:
+                        moved, why, changed = move_agent.move(c, to, "usage limit", dry, held=True)
+                switch = not changed and bool(alt) and alt != prof and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
+                print(f"{c['id'][:8]}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
+                      + (f"moved under {to}, same session" if moved else f"not moved: {why}" if changed
+                         else f"{f'not moved ({why}); ' if why else ''}restarting under {alt} (agent was {int(age // 60)} min old)" if switch
+                         else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
+                if why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
+                                      f"parked until {until[11:16]} UTC; pl accounts --reset {prof} un-parks it"):
+                    notify(alerts.headline(why, f"Profile {prof} hit its usage limit"), f"parked until {until[11:16]} UTC; "
+                           + (f"moved and resumed its agent under {to}" if moved
+                              else f"young agents move to {alt}" if alt else "no other profile has credits"))
+                if changed and not dry:
+                    m = c["metadata"]
+                    w = m.get("worker") or {}
+                    status = "starting" if w else "none"   # no worker: its relaunch failed, the next steps start it fresh
+                elif switch:
+                    if not dry:
+                        tmux("kill-window", "-t", w["window"], check=False)
+                        meta = {"worker": None, "profile": alt, "profile_switches": (m.get("profile_switches") or [])
+                                + [{"at": now_iso(), "from": prof, "to": alt, "stage": w.get("stage"), "reason": "usage limit"}]}
+                        update(c["id"], metadata=meta)
+                        m = {**m, **meta}
+                        c["metadata"] = m
+                    w, status = {}, "none"
+                elif not dry and w.get("limit_hit") != (lim := {"account": prof, "until": until}):   # stays put: pl list shows the limit
+                    w = {**w, "limit_hit": lim}
+                    update(c["id"], metadata={"worker": w})
+            finally:
+                if held:
+                    move_agent.unlock(c["id"])
         elif w.get("limit_hit") and status == "alive" and not dry:   # the agent is past its limit screen
             w = {k: v for k, v in w.items() if k != "limit_hit"}
             update(c["id"], metadata={"worker": w})

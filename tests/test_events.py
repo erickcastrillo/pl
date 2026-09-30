@@ -74,6 +74,7 @@ def _pass(monkeypatch, col_of):
     monkeypatch.setattr(dispatch, "mirror_to_product", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "ensure_services", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "")
+    monkeypatch.setattr(dispatch, "sweep_untracked", lambda *a, **k: None)   # no real tmux
     dispatch.dispatch_once(1, False, pull=False)
 
 

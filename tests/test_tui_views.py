@@ -721,6 +721,40 @@ async def test_t_on_a_failed_card_asks_then_retries_it_off_the_ui_thread(monkeyp
     assert [g[0] for g in got] == ["dead0001aaaa"] and got[0][1] is not threading.main_thread()
 
 
+async def test_m_on_a_live_agent_asks_then_moves_it_off_the_ui_thread(monkeypatch):
+    from pl import move_agent
+    got = []
+    monkeypatch.setattr(move_agent, "move_card", lambda cid, target: got.append((cid, target, threading.current_thread())) or "moved")
+    data = fake_data()
+    live = _card("live0001aaaa", "A card with a live agent", "Inbox", kind="working")
+    live["worker"] = {"window": "@3", "pane": "%3", "profile": "acme", "session_id": "s"}
+    data["snapshot"]["rows"].append(live)
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("4")
+        await pilot.pause()
+        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "spec0001aaaa").focus()
+        await pilot.pause()
+        await pilot.press("m")          # no agent window: nothing to move, no dialog
+        await settle(pilot)
+        assert got == [] and len(app.screen_stack) == 1
+        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "live0001aaaa").focus()
+        await pilot.pause()
+        await pilot.press("m")
+        await pilot.pause()
+        assert len(app.screen_stack) == 2   # the confirm line
+        await pilot.press("n")
+        await settle(pilot)
+        assert got == []
+        await pilot.press("m")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(pilot)
+    assert [(g[0], g[1]) for g in got] == [("live0001aaaa", None)] and got[0][2] is not threading.main_thread()
+    assert not hasattr(move_agent, "other_account")   # the target is picked off the UI thread, by move_card
+
+
 async def test_dashboard_header_shows_free_memory_and_a_red_warning_when_low():
     data = fake_data()
     data["memory"] = {"free": 12 * 1024 ** 3, "total": 32 * 1024 ** 3, "low": False}

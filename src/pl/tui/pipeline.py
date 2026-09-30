@@ -8,7 +8,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label, Markdown, Static
 
 from pl import config as C
-from pl import trackers
+from pl import move_agent, trackers
 from pl.agents import jump_to_window
 from pl.board import card, sections
 from pl.commands import retry
@@ -146,7 +146,8 @@ class CardScreen(Screen):
 
 class PipelineView(Vertical):
     BINDINGS = [Binding("enter", "view_card", "open card"), Binding("w", "jump", "agent window"),
-                Binding("c", "open_card", "card in browser"), Binding("t", "retry", "try again")]
+                Binding("c", "open_card", "card in browser"), Binding("t", "retry", "try again"),
+                Binding("m", "move_agent", "move to account")]
 
     def compose(self):
         yield Label("Feature Pipeline", id="pipeline-title")
@@ -208,6 +209,30 @@ class PipelineView(Vertical):
                 self.app.run_worker(run, thread=True, group="keys")
         self.app.push_screen(ConfirmScreen(f"Start {c['id'][:8]}  {str(c.get('title') or '')[:50]} fresh? "
                                            "This clears its failed agent and attempt count."), answered)
+
+    def action_move_agent(self):
+        """m on a card with a live Claude agent: confirm, then move it to another healthy account off the UI thread."""
+        r = self._row()
+        w = (r or {}).get("worker") or {}
+        if r is None or not w.get("window"):
+            self.app.notify("m moves a card's live agent to another account", markup=False)
+            return
+        c = r["card"]
+
+        def run():
+            try:
+                msg = move_agent.move_card(c["id"], None)   # it picks another healthy Claude account
+            except (SystemExit, Exception) as e:  # noqa: BLE001 - a failed move must not kill the console
+                msg = f"not moved: {e}"
+            self.app.call_from_thread(self.app.notify, msg, markup=False)
+            self.app.call_from_thread(self.app.refresh_data)
+
+        def answered(yes):
+            if yes:
+                self.app.run_worker(run, thread=True, group="keys")
+        self.app.push_screen(ConfirmScreen(f"Move the agent of {c['id'][:8]}  {str(c.get('title') or '')[:50]} from "
+                                           f"{w.get('profile')} to another Claude account with credits? pl stops it with Ctrl-C in its window and "
+                                           "resumes the same session there."), answered)
 
     def action_open_card(self):
         r = self._row()

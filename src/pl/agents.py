@@ -63,10 +63,15 @@ def hold_reason(c):
     return next((v for k, v in HOLD.items() if k in tags), None)
 
 
+def _on_pane(rec, w):
+    """True when a registry entry runs in this worker's own pane: its exact <session>:<window>.<pane>."""
+    return bool(w.get("pane")) and rec.get("tmux") == f"{C.TMUX_SESSION}:{w.get('window')}.{w['pane']}"
+
+
 def run_waiting(w, reg):
     """'waiting (<why>)' when a live run agent is not working: its session is not busy and its screen shows a
     /run-plan GATE line or its pane has been idle WAIT_IDLE seconds. Such an agent does not hold a run slot."""
-    rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if w.get("pane") and (r.get("tmux") or "").endswith(w["pane"])), {})
+    rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if _on_pane(r, w)), {})
     if rec.get("status") == "busy" or not pane_exists(w.get("pane")):
         return None
     gates = GATE_RE.findall(harnesses._run(["tmux", "capture-pane", "-p", "-t", w["pane"], "-S", "-60"]).stdout or "")
@@ -133,9 +138,10 @@ def worker_status(w, reg):
         return "alive", sid
     if pane_exists(pane):
         for s, rec in reg.items():
-            if (rec.get("tmux") or "").endswith(pane):
+            if _on_pane(rec, w):
                 return "alive", s
-        if time.time() - parse_iso(w.get("started_at") or "") < 180:
+        since = max(parse_iso(w.get("started_at") or ""), parse_iso(w.get("moved_at") or ""))   # a move relaunches it
+        if time.time() - since < 180:
             return "starting", sid
     return "dead", sid
 

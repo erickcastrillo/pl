@@ -26,6 +26,7 @@ class Harness:
     session_registry: bool = False
     experimental: bool = False
     note: str = ""
+    resume: list = field(default_factory=list)   # relaunch a session by id in place (pl move-agent); empty = cannot
 
 
 SHELLS = ("zsh", "bash", "sh", "fish")
@@ -43,7 +44,7 @@ BUILTINS = {
         [r"You're out of usage credits", r"Usage limit reached ·", r"You've hit your (?:usage )?limit",
          r"Claude usage limit reached", r"You[’']ve hit your (?:[\w-]+ )?limit",
          r"(?:usage|session|weekly|5-hour|hourly|daily) limit reached", r"Stop and wait for limit to reset"],
-        session_registry=True),
+        session_registry=True, resume=["claude", "--resume", "{session_id}", "--name", "{label}", "{prompt}"]),
     "codex": Harness(
         "codex", "codex", "CODEX_HOME", ["codex", "{prompt}"], ["codex", "exec", "{prompt}"],
         [r"You've hit your usage limit\.", r"You've reached your (?:usage|workspace credit) limit",
@@ -74,7 +75,7 @@ def _overrides():
             ev = ov.get("env_var")
             if ev is not None and not (isinstance(ev, str) and ENV_RE.fullmatch(ev)):
                 raise SystemExit(f"pl: [harnesses.{name}] env_var {ev!r} is not a variable name ({p})")
-            for k in ("interactive", "headless", "limit_patterns"):
+            for k in ("interactive", "headless", "resume", "limit_patterns"):
                 if k in ov and not (isinstance(ov[k], list) and all(isinstance(x, str) for x in ov[k])):
                     raise SystemExit(f"pl: [harnesses.{name}] {k} must be a list of strings ({p})")
         _CACHE[p] = table
@@ -132,11 +133,11 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label):
+def launch_script(h, account, prompt, session_id, label, resume=False):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
-    the harness and the window's shell comes back when it exits."""
-    argv = _argv(h.interactive, {"prompt": prompt, "session_id": session_id, "label": label})
+    the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given)."""
+    argv = _argv(h.resume if resume else h.interactive, {"prompt": prompt, "session_id": session_id, "label": label})
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
     if h.env_var and d:

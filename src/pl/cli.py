@@ -55,6 +55,10 @@
   pl profiles new NAME [--from-current | --from-legacy]
                           create ~/.pl-NAME/config.toml (spec gate on) and print a shell alias for it;
                           --from-legacy copies the old one-file pl script's settings
+  pl move-agent <card> <account> [--yes]
+                          move a card's live Claude agent to another account in place: Ctrl-C in its window,
+                          copy its transcript, resume the same session there (asks first unless --yes). The
+                          dispatcher does this by itself when an agent hits its usage limit
   pl accounts [--reset NAME|all]
                           which Claude profile is parked for running out of usage credits (the dispatcher
                           detects the limit on an agent's screen, parks that profile, and restarts the card
@@ -75,6 +79,7 @@ from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, 
                          cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
                          cmd_review)
 from pl.dispatch import cmd_dispatch
+from pl.move_agent import cmd_move_agent
 from pl.standup import cmd_standup
 from pl.usage import cmd_usage
 from pl.watch import cmd_watch
@@ -132,6 +137,8 @@ def main():
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p = sub.add_parser("alerts"); p.add_argument("--all", action="store_true", help="include resolved alerts")
     p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears")
+    p = sub.add_parser("move-agent"); p.add_argument("card"); p.add_argument("account", choices=list(C.PROFILES))
+    p.add_argument("--yes", action="store_true", help="do not ask first")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -143,4 +150,4 @@ def main():
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts}[a.cmd](a)
+     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent}[a.cmd](a)
