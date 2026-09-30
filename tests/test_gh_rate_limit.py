@@ -317,6 +317,14 @@ def test_the_doubling_is_shared_across_processes_and_resets_on_success(gh, monke
     assert 60 <= hit() <= 75
 
 
+def test_a_call_that_failed_while_another_saved_the_back_off_asks_gh_nothing(gh):
+    gh.set(mode="ratelimit")
+    until = github.back_off("API rate limit exceeded").until   # a console worker hits the limit first
+    gh.clear()
+    assert github.back_off("API rate limit exceeded").until == until   # its racer failed before that was saved
+    assert gh.calls() == []
+
+
 def test_a_short_back_off_never_shortens_a_longer_one(gh):
     reset = int(time.time()) + 1800
     github._limit_file().write_text(json.dumps({"until": reset}))   # another process saw a 30-minute reset
@@ -391,6 +399,8 @@ def test_console_header_shows_the_resume_time_and_keeps_the_numbers(gh):
                     break
             first = app.data
             assert first is not None
+            await pilot.pause()
+            await app.workers.wait_for_complete()   # the first render's standup and review workers call gh too
             gh.set(mode="ratelimit", reset=reset)
             trackers.reset()
             for _ in range(3):

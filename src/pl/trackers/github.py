@@ -10,6 +10,7 @@ import random
 import re
 import subprocess
 import sys
+import threading
 import time
 
 from pl import config as C
@@ -27,6 +28,7 @@ TOKEN_RE = re.compile(r"\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+")
 BACKOFF = 15 * 60            # the longest wait when GitHub does not say when the limit resets
 FIRST_WAIT = 60              # the first such wait; it doubles per hit in a row
 LONGEST = 3600               # no back-off, saved or told, runs further ahead than this
+_BACKING_OFF = threading.Lock()   # console workers hit the limit together: only the first asks gh when it resets
 
 
 class RateLimited(SystemExit):
@@ -166,6 +168,13 @@ def back_off(err, budget=None, told=None, resource="graphql"):
     low = (err or "").lower()
     if "rate limit" not in low and "abuse" not in low:
         return None
+    with _BACKING_OFF:
+        if hit := limited(resource):   # another thread's call failed first and saved the back-off
+            return RateLimited(hit.until, err, hit.resource)
+        return _back_off(err, budget, told, resource)
+
+
+def _back_off(err, budget, told, resource):
     now = _clock()
     mem = _mem(resource)
     _, saved, hits = _shared(resource)
