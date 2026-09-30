@@ -5,6 +5,7 @@ import re
 import shlex
 import subprocess
 import time
+from datetime import datetime
 
 from pl import config as C
 from pl import harnesses
@@ -90,6 +91,13 @@ def worker_view(c, reg):
         return "manual: yours to do"
     if not w:
         return "waiting"
+    if (hit := w.get("limit_hit")) and isinstance(hit, dict):   # set by the dispatcher while the agent sits on a limit screen
+        try:
+            t = datetime.fromisoformat(str(hit.get("until"))).astimezone()
+            when = f"{t:%b} {t.day} {t:%H:%M}"
+        except ValueError:
+            when = "?"
+        return f"limit hit — {hit.get('account')}, resets {when}"
     sid = w.get("session_id")
     rec = reg.get(sid)
     h = _harness(w)

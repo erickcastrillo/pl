@@ -323,10 +323,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if screen:
             prof = w.get("profile") or m.get("profile")
             until = mark_exhausted(prof, screen) if not dry else "(dry run)"
-            alt = healthy_profile(None, all_cards)
+            prep = w.get("stage") in ("spec", "design", "plan")   # a prep agent always moves; a run agent only while young
+            alt = healthy_profile(None, all_cards, harness=wh.name) if prep else healthy_profile(None, all_cards)
             age = time.time() - parse_iso(w.get("started_at") or "")
             auto_resumes = "continuing automatically" in screen
-            switch = bool(alt) and alt != prof and (age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
+            switch = bool(alt) and alt != prof and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
             print(f"{c['id'][:8]}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
                   + (f"restarting under {alt} (agent was {int(age // 60)} min old)" if switch
                      else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
@@ -342,6 +343,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     m = {**m, **meta}
                     c["metadata"] = m
                 w, status = {}, "none"
+            elif not dry and w.get("limit_hit") != (lim := {"account": prof, "until": until}):   # stays put: pl list shows the limit
+                w = {**w, "limit_hit": lim}
+                update(c["id"], metadata={"worker": w})
+        elif w.get("limit_hit") and status == "alive" and not dry:   # the agent is past its limit screen
+            w = {k: v for k, v in w.items() if k != "limit_hit"}
+            update(c["id"], metadata={"worker": w})
         # a worker for an earlier stage that finished its job: clean its window once it has gone idle
         if w and w.get("stage") != stage and stage_complete(c, col, w["stage"]) and status == "alive":
             rec = reg.get(sid) or {}

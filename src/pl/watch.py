@@ -108,7 +108,7 @@ def watch_snapshot():
                     per_prof[profile]["queued"] += 1
             pc = (m.get("product_card") or "")[:8]
             rows.append({"kind": kind, "card": c, "worker": w, "win": win, "col": col, "profile": profile, "failed": failed,
-                         "approved": approved_label(c, col, reg) or (view if view.startswith("run agent waiting") else None),
+                         "approved": approved_label(c, col, reg) or (view if view.startswith(("run agent waiting", "limit hit")) else None),
                          "text": f"{c['id'][:8]}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
     bad = exhausted_profiles()
     stp = profile_state()

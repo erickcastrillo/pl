@@ -1,6 +1,7 @@
 """Shared account parking: an account folder parked by one profile is parked for every profile that uses it."""
 import argparse
 import json
+from datetime import datetime
 
 import pytest
 
@@ -101,3 +102,44 @@ def test_reset_rewrites_another_profiles_file_by_rename_under_its_lock(two_profi
     f = two_profiles / ".pl-b" / "state" / "pl-profiles.json"
     assert str(f) in replaced and "work" not in json.loads(f.read_text())
     assert (f.parent / "pl-profiles.json.lock").exists()
+
+
+# ---------- weekly limit: reset dates and the diagnostic copy ----------
+
+WEEKLY = """You've hit your weekly limit, resets Oct 4 at 9pm
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Oct 4 at 9pm
+     3. Ask your admin for more usage
+   Enter to confirm · Esc to cancel"""
+
+
+@pytest.mark.parametrize("text, want", [
+    (WEEKLY, datetime(2026, 10, 4, 21, 0)),
+    ("resets October 4 at 21:30", datetime(2026, 10, 4, 21, 30)),
+    ("resets 4 Oct, 9:15pm", datetime(2026, 10, 4, 21, 15)),
+    ("resets Sep 2 at 9am", datetime(2027, 9, 2, 9, 0)),          # already past this year: next year
+])
+def test_a_reset_with_a_date_parks_until_that_date(text, want):
+    assert accounts.reset_at(text, datetime(2026, 9, 30, 10, 0)) == want
+
+
+@pytest.mark.parametrize("now, want", [(datetime(2026, 9, 30, 10, 0), datetime(2026, 9, 30, 21, 0)),
+                                       (datetime(2026, 9, 30, 22, 0), datetime(2026, 10, 1, 21, 0))])
+def test_a_reset_without_a_date_is_the_next_time_of_day(now, want):
+    assert accounts.reset_at("You've hit your limit · resets 9pm (America/Los_Angeles)", now) == want
+    assert accounts.reset_at("nothing about a reset", now) is None
+
+
+def test_mark_exhausted_parks_until_the_date_on_the_screen(two_profiles):
+    as_profile("a")
+    until = datetime.fromisoformat(accounts.mark_exhausted("main", WEEKLY)).astimezone()
+    assert (until - accounts.reset_at(WEEKLY, datetime.now()).astimezone()).total_seconds() == 60
+
+
+def test_the_diagnostic_screen_copy_stays_in_the_profiles_state_folder(two_profiles):
+    as_profile("a")
+    accounts.mark_exhausted("main", WEEKLY)
+    copies = list((two_profiles / ".pl-a" / "state" / "limits").glob("pl-limit-main-*.txt"))
+    assert len(copies) == 1 and copies[0].read_text() == WEEKLY
+    assert not (two_profiles / ".claude-attention").exists()
+    assert not list((two_profiles / ".pl-a" / "state").glob("pl-limit-*"))   # no longer loose in state/

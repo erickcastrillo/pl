@@ -3,6 +3,7 @@ import shlex
 import subprocess
 import time
 import types
+from datetime import datetime
 
 import pytest
 
@@ -527,3 +528,31 @@ def test_live_run_agents_are_capped_at_twice_max_runs(fake_home, monkeypatch, ca
     new = [_auto(f"n{i:07d}", "Approved") for i in range(6)]
     assert len(_pass(monkeypatch, idle + new, "waiting (nothing-runnable)", max_runs=3)) == want
     assert f"live, cap {2 * 3})" in capsys.readouterr().out
+
+
+# ---------- weekly limit screen ----------
+
+WEEKLY = """You've hit your weekly limit, resets Oct 4 at 9pm
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Oct 4 at 9pm
+     3. Ask your admin for more usage
+   Enter to confirm · Esc to cancel"""
+
+
+@pytest.mark.parametrize("screen", [WEEKLY, "You've hit your session limit", "You’ve hit your 5-hour limit",
+                                    "You've hit your usage limit", "5-hour limit reached ∙ resets 3pm",
+                                    "❯ 1. Stop and wait for limit to reset", "You've hit your limit"])
+def test_the_claude_limit_screens_are_detected(fake_home, monkeypatch, screen):
+    monkeypatch.setattr(accounts, "pane_exists", lambda p: True)
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: types.SimpleNamespace(returncode=0, stdout=screen))
+    assert accounts.screen_hit_limit("%1", harnesses.get("claude")) == screen
+    assert C.LIMIT_RE.search(screen)
+
+
+def test_a_card_stuck_on_a_limit_says_so_in_pl_list(fake_home, monkeypatch):
+    monkeypatch.setattr(agents, "col_name", lambda lid: "Inbox")
+    w = {"stage": "spec", "session_id": "s", "pane": "%1", "profile": "acme",
+         "limit_hit": {"account": "acme", "until": "2026-10-05T04:01:00+00:00"}}
+    c = {"id": "card0001", "list_id": "L", "metadata": {"pipeline_mode": "auto", "worker": w}}
+    t = datetime.fromisoformat("2026-10-05T04:01:00+00:00").astimezone()
+    assert agents.worker_view(c, {"s": {"status": "waiting"}}) == f"limit hit — acme, resets {t:%b} {t.day} {t:%H:%M}"

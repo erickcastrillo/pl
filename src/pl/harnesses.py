@@ -41,7 +41,8 @@ BUILTINS = {
         "claude", "claude", "CLAUDE_CONFIG_DIR",
         ["claude", "--session-id", "{session_id}", "--name", "{label}", "{prompt}"], ["claude", "-p", "{prompt}"],
         [r"You're out of usage credits", r"Usage limit reached ·", r"You've hit your (?:usage )?limit",
-         r"Claude usage limit reached"],
+         r"Claude usage limit reached", r"You[’']ve hit your (?:[\w-]+ )?limit",
+         r"(?:usage|session|weekly|5-hour|hourly|daily) limit reached", r"Stop and wait for limit to reset"],
         session_registry=True),
     "codex": Harness(
         "codex", "codex", "CODEX_HOME", ["codex", "{prompt}"], ["codex", "exec", "{prompt}"],

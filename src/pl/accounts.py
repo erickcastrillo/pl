@@ -83,18 +83,43 @@ def exhausted_profiles():
     return own | {n for n in C.PROFILES if parse_iso((m.get(_folder(n)) or {}).get("until") or "") > now}
 
 
+def reset_at(screen, now):
+    """The local datetime the screen says the limit resets: the next time that date and time come round, or None."""
+    m = C.RESET_RE.search(screen)
+    if not m:
+        return None
+    g = m.groupdict()
+    if g["h24"] is not None:
+        hour, minute = int(g["h24"]), int(g["m24"])
+    else:
+        hour, minute = int(g["h"]) % 12 + (12 if g["ap"].lower() == "pm" else 0), int(g["m"] or 0)
+    mon, day = g["mon"] or g["mon2"], g["day"] or g["day2"]
+    try:
+        if mon is None:   # no date: the next time this clock time comes round
+            t = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            return t if t > now else t + timedelta(days=1)
+        month = MONTHS.index(mon[:3].lower()) + 1
+        t = now.replace(month=month, day=int(day), hour=hour, minute=minute, second=0, microsecond=0)
+        return t if t > now else t.replace(year=now.year + 1)
+    except ValueError:   # 25:00, Feb 30: no usable time
+        return None
+
+
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+
+
 def mark_exhausted(profile, screen):
     """Park a profile until the reset time printed on the agent's screen, or LIMIT_COOLDOWN from now."""
     until = time.time() + C.LIMIT_COOLDOWN
     m = C.RESET_RE.search(screen)
-    if m:
-        hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0)
-        t = datetime.now().replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
-        if t.timestamp() < time.time():
-            t += timedelta(days=1)
+    if t := reset_at(screen, datetime.now()):
         until = t.timestamp() + 60
-    C.ATTN.mkdir(exist_ok=True)
-    (C.ATTN / f"pl-limit-{profile}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt").write_text(screen)  # the screen that tripped it, for diagnosis
+    d = C.STATE_DIR / "limits"   # the screen that tripped it, for diagnosis; only ever in this profile's own state folder
+    if not d.resolve().is_relative_to((Path.home() / ".claude-attention").resolve()):
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        f = d / f"pl-limit-{profile}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+        os.close(os.open(f, os.O_WRONLY | os.O_CREAT, 0o600))
+        f.write_text(screen)
     hit = C.LIMIT_RE.search(screen) or m
     rec = {"exhausted_at": now_iso(), "reason": hit.group(0) if hit else "usage limit",
            "until": datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds")}
@@ -105,9 +130,12 @@ def mark_exhausted(profile, screen):
     return rec["until"]
 
 
-def healthy_profile(preferred, all_cards):
-    """The card's own profile if it is not parked, else the least-loaded profile that is not parked, else None."""
+def healthy_profile(preferred, all_cards, harness=None):
+    """The card's own profile if it is not parked, else the least-loaded profile that is not parked, else None.
+    With harness, only accounts that run that harness count."""
     bad = exhausted_profiles()
+    if harness:
+        bad = bad | {p for p in C.PROFILES if harnesses.account_harness(p).name != harness}
     if preferred in C.PROFILES and preferred not in bad:
         return preferred
     ok = [p for p in C.PROFILES if p not in bad]

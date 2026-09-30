@@ -35,8 +35,14 @@ def _defaults():
     PROMPTS = {"spec": "", "design": "", "plan": "", "run": ""}   # [stages.<stage>] prompt
     STAGE_DONE_AT = {"spec": "Spec ready", "plan": "Plan for review", "run": "PR open"}  # design: DESIGN section
 
-    LIMIT_RE = re.compile(r"You're out of usage credits|Usage limit reached ·|You've hit your (?:usage )?limit|Claude usage limit reached", re.I)
-    RESET_RE = re.compile(r"(?:reset(?:s)?|continuing automatically|resum\w+)\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)", re.I)
+    LIMIT_RE = re.compile(r"You're out of usage credits|Usage limit reached ·|You[’']ve hit your (?:[\w-]+ )?limit|Claude usage limit reached"
+                          r"|(?:usage|session|weekly|5-hour|hourly|daily) limit reached|Stop and wait for limit to reset", re.I)
+    # the reset time on a limit screen: an optional date ("Oct 4", "October 4", "4 Oct"), then 9pm, 9:30pm or 21:30 (local time)
+    _MON = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+    RESET_RE = re.compile(r"(?:resets?|continu\w+ automatically|resum\w+)\s*(?:(?:at|on)\s+)?"
+                          rf"(?:(?:(?P<mon>{_MON})\s+(?P<day>\d{{1,2}})|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MON}))\s*,?\s*(?:at\s+)?)?"
+                          r"(?:(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>[ap]m)\b|(?P<h24>\d{1,2}):(?P<m24>\d{2}))", re.I)
+    del _MON
     LIMIT_COOLDOWN = int(os.environ.get("PL_LIMIT_COOLDOWN", "3600"))  # seconds, when the screen names no reset time
     LIMIT_RESTART_WINDOW = int(os.environ.get("PL_LIMIT_RESTART_WINDOW", "600"))  # an agent younger than this is restarted on the other account; older ones auto-resume
 

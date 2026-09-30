@@ -133,7 +133,7 @@ def _pass(monkeypatch, cs, status="none", screen=None, parked=(), healthy="acme"
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: screen)
     monkeypatch.setattr(dispatch, "mark_exhausted", lambda prof, s: "2026-09-30T18:00:00+00:00")
     monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set(parked))
-    monkeypatch.setattr(dispatch, "healthy_profile", lambda want, all_cards: healthy)
+    monkeypatch.setattr(dispatch, "healthy_profile", lambda want, all_cards, harness=None: healthy)
     monkeypatch.setattr(dispatch, "start_worker", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "")
@@ -264,3 +264,39 @@ def test_no_card_text_is_stored(monkeypatch):
     assert "stage_failed:card0001aaaa:spec" in text and "pr_waiting:card0002bbbb" in text and "accounts_all_out" in text
     assert "TOPSECRET" not in text and "topsecret" not in text
     assert all(set(a) <= alerts.FIELDS for a in json.loads(text).values())
+
+
+WEEKLY = """You've hit your weekly limit, resets Oct 4 at 9pm
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Oct 4 at 9pm
+     3. Ask your admin for more usage
+   Enter to confirm · Esc to cancel"""
+
+
+def test_a_spec_agent_stuck_on_a_weekly_limit_moves_to_the_other_account(monkeypatch):
+    from pl import harnesses
+    old = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 3 * 3600))   # past the restart window
+    w = {"stage": "spec", "session_id": "s", "pane": "%1", "window": "@7", "profile": "acme", "started_at": old}
+    c = _card("card0001aaaa", "Inbox", worker=dict(w))
+    parked, asked, calls = [], [], []
+    monkeypatch.setattr(dispatch, "registry", lambda: {})
+    monkeypatch.setattr(dispatch, "cards", lambda: [c])
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w.get("session_id")))
+    monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: WEEKLY if harnesses.limit_hit(h, WEEKLY) else None)
+    monkeypatch.setattr(dispatch, "mark_exhausted", lambda prof, s: parked.append(prof) or "2026-10-05T04:01:00+00:00")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    monkeypatch.setattr(dispatch, "healthy_profile", lambda want, all_cards, harness=None: asked.append(harness) or "acme2")
+    monkeypatch.setattr(dispatch, "start_worker", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **k: calls.append(("update", cid, k)))
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: calls.append(("tmux", *a)) or "")
+    for name in ("sweep_untracked", "mirror_to_product", "ensure_services", "notify"):
+        monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+    monkeypatch.setattr(usage, "scan", lambda save=True: {})
+    monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
+    dispatch.dispatch_once(1, False, pull=False)
+    assert parked == ["acme"] and _open("account_parked:acme")
+    assert asked[0] == "claude"                                   # a healthy account of the same harness
+    assert ("tmux", "kill-window", "-t", "@7") in calls
+    meta = next(k["metadata"] for op, *rest in calls if op == "update" for cid, k in [rest] if "profile" in k["metadata"])
+    assert meta["worker"] is None and meta["profile"] == "acme2"
