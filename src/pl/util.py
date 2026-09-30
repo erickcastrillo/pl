@@ -1,11 +1,16 @@
 """Small helpers shared by every module."""
 import json
+import os
 import re
 import subprocess
 import time
 from datetime import datetime, timezone
 
 from pl import config as C
+
+TOKEN_RE = re.compile(r"(?i:bearer\s+)[A-Za-z0-9._~+/=-]{8,}|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|"
+                      r"xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})")
+PEM_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
 
 
 def now_iso():
@@ -56,3 +61,14 @@ def tmux(*args, check=True):
     if check and r.returncode:
         raise SystemExit(f"pl: tmux {' '.join(args)}: {r.stderr.strip()}")
     return r.stdout.strip() if r.returncode == 0 else None
+
+
+def mask(text):
+    """pl's secret masking (every resolved ${VAR} value), plus common token shapes a transcript may hold."""
+    from pl.trackers import mcp   # imported here: trackers import this module
+    text = mcp._mask(str(text), sorted(mcp._secrets, key=len, reverse=True))
+    return TOKEN_RE.sub("***", PEM_RE.sub("***", text))
+
+
+def _nofollow(p, flags):
+    return os.open(p, flags | os.O_NOFOLLOW)

@@ -58,6 +58,7 @@ def _defaults():
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, **MEMORY_DEFAULTS}  # autostart: the console starts the dispatcher
     GATES = {"spec": False}
+    USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
     return out
@@ -107,7 +108,8 @@ def _apply(g, t):
     g["STAGES"] = dict(t.get("stages", {}))
     g["PROMPTS"] = {**g["PROMPTS"], **{s: v["prompt"] for s, v in g["STAGES"].items() if "prompt" in v}}
     if "loops" in t:
-        g["SERVICES"] = {n: {"prompt": v["prompt"], "profile": v.get("account")} for n, v in t["loops"].items()
+        g["SERVICES"] = {n: {"prompt": v["prompt"], "profile": v.get("account"),
+                             **({"max_context": v["max_context"]} if "max_context" in v else {})} for n, v in t["loops"].items()
                          if v.get("enabled", True) is not False}
         g["LOOPS_OFF"] = {n: dict(v) for n, v in t["loops"].items() if v.get("enabled", True) is False}
     ch = t.get("code_host", {})
@@ -125,6 +127,7 @@ def _apply(g, t):
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
+    g["USAGE"] = dict(t.get("usage", {}))
 
 
 def load(profile: str | None = None, config_dir: str | None = None) -> None:
@@ -228,6 +231,10 @@ def validate(doc) -> list[str]:
             errs.append(f"account {name}: config_dir {a.get('config_dir', f'~/.claude-{name}')} does not exist")
         if (a.get("harness") or "claude") not in known:
             errs.append(f"account {name}: unknown harness {a.get('harness')!r}; known: {', '.join(known)}")
+    for key in ("prices", "windows"):
+        for model, n in (doc.get("usage", {}).get(key) or {}).items():
+            if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
+                errs.append(f"usage.{key}.{model} must be a number above 0")
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
@@ -244,6 +251,9 @@ def validate(doc) -> list[str]:
         for name, v in doc.get(table, {}).items():
             if table == "loops" and not NAME_RE.match(name):
                 errs.append(f"loop name {name!r} must match {NAME_RE.pattern}")
+            mc = v.get("max_context") if table == "loops" else None
+            if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or not 1 <= mc <= 100):
+                errs.append(f"loops.{name}: max_context must be a whole percent from 1 to 100")
             if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or "").strip():
                 errs.append(f"loops.{name}: prompt is required")
             if accounts and v.get("account") and v["account"] not in accounts:

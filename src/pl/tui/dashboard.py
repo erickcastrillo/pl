@@ -16,6 +16,7 @@ from pl import standup
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import NeedsView, needs_groups, waiting_total
 from pl.tui.prs import pr_groups
+from pl.usage import human
 from pl.util import age, parse_iso
 
 WINDOWS = [("1h", "last hour", 3600), ("24h", "last 24 hours", 86400), ("7d", "last 7 days", 604800)]
@@ -87,7 +88,21 @@ def decide_next(rows):
             ("manual", len(g["manual"]), f"{len(g['manual'])} manual tasks", "no agent runs these", "#5f9fff")]
 
 
-def health(data):
+def health_tokens(data, window=1):
+    """(label, value) for the Health panel: tokens in the chosen window, split by account; every configured account
+    with none (other harnesses included) shows n/a. A session two accounts share a folder for may show as "a+b"."""
+    u = data.get("usage")
+    if not u:
+        return ("spend", "not tracked yet")
+    key = WINDOWS[window][0]
+    by = (u.get("by_window") or {}).get(key) or {}
+    covered = {x for k in by for x in k.split("+")}
+    parts = [f"{a} {human(n)}" for a, n in sorted(by.items(), key=lambda kv: -kv[1])]
+    parts += [f"{a} n/a" for a in u.get("accounts") or [] if a not in covered]
+    return (f"tokens {key}", human(sum(by.values())) + (f" ({' · '.join(parts)})" if parts else ""))
+
+
+def health(data, window=1):
     rows = data["snapshot"]["rows"]
     loops = [r for r in rows if r.get("loop")]
     # errors_last is the most recent error of all time, the same in every window
@@ -101,7 +116,7 @@ def health(data):
              ("harness accounts", data["snapshot"]["prof"]),
              ("last dispatcher error", f"{err.get('message', err.get('kind'))} · {(err.get('ts') or '')[11:16]}" if err else "none"),
              ("PR review cycle", cycle),
-             ("spend", "not tracked yet")]
+             health_tokens(data, window)]
     t = Text()
     for k, v in lines:
         t.append(f"{k:<24}", style="dim")
@@ -240,7 +255,7 @@ class DashboardView(Vertical):
             for key, n, head, sub, colour in items:
                 table.add_row(Text(f"› {head}", style=f"bold {colour}" if n else "dim"), Text(sub, style="dim"), key=key)
             table.move_cursor(row=keep)
-        self.query_one("#health", Static).update(health(data))
+        self.query_one("#health", Static).update(health(data, window))
         self.query_one(StandupPanel).update_for(data["snapshot"])
 
     def on_data_table_row_selected(self, e):

@@ -41,7 +41,16 @@ def default_provider():
     return {"snapshot": watch.watch_snapshot(),
             "metrics_by_window": {key: events.metrics(seconds) for key, _, seconds in WINDOWS},
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
-            "pr_activity": watch.pr_activity(), "memory": memory.status()}
+            "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage()}
+
+
+def _usage():
+    """Token counts for the Dashboard and Loops tab; a transcript problem never fails the refresh."""
+    from pl import usage
+    try:
+        return usage.summary(usage.scan())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class DataReady(Message):

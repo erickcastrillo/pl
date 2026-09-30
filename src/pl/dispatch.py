@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, board, events, harnesses, memory, trackers
+from pl import accounts, board, events, harnesses, memory, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import hold_reason, pane_exists, registry, run_waiting, worker_status
 from pl.board import card, cards, col_name, sections, update
@@ -125,13 +125,14 @@ def start_worker(c, stage, attempts, dry):
                                          "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
                                          "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
                                          "launch": str(script)}})
-    events.emit("started", c["id"], stage=stage, harness=h.name)
+    events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
     print(f"  started {name} under {profile} in {C.TMUX_SESSION}:{win} ({prompt})")
 
 
 
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
-    """Start any service loop that is not running; restart one whose Claude exited or hit a usage limit.
+    """Start any service loop that is not running; restart one whose Claude exited or hit a usage limit, or (only
+    when the loop sets max_context) whose session is idle with its context above that percent: see _context_restart.
     Paused: start nothing, and close each service window once its session is idle (between loop fires).
     hold (the low-memory line): start and restart nothing; running loops are left alone."""
     out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{pane_current_command} #{window_name}"],
@@ -141,10 +142,13 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         parts = line.split(" ", 3)
         if len(parts) == 4:
             live[parts[3]] = {"window": parts[0], "pane": parts[1], "cmd": parts[2]}
-    svc_state = st.setdefault("services", {})
+    svc_state, ust = st.setdefault("services", {}), None
     for name, svc in C.SERVICES.items():
         w = live.get(name)
         rec = next((r for r in reg.values() if w and (r.get("tmux") or "").endswith(w["pane"])), None) if w else None
+        sid = (rec or {}).get("sessionId")
+        if sid and sid not in (seen := svc_state.setdefault(name, {}).setdefault("sessions", [])):
+            seen[:] = (seen + [sid])[-20:]   # the loop registry: which sessions were this loop's, for pl usage
         if pause:
             if w and (not rec or rec.get("status") == "idle"):
                 print(f"paused: closing idle {name} loop")
@@ -167,8 +171,17 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                 if not dry:
                     mark_exhausted(prof, screen)
                 why = f"{prof} hit its usage limit"
+            elif sid and rec.get("status") == "idle" and svc.get("max_context"):
+                if ust is None:
+                    try:
+                        ust = usage.scan(save=not dry)
+                    except Exception:  # noqa: BLE001  (a transcript problem never stops the pass)
+                        ust = {}
+                why = _context_restart(name, svc, sid, svc_state.setdefault(name, {}), ust, dry)
+                if not why:
+                    continue   # running
             else:
-                continue   # running
+                continue   # running (a busy session is never restarted)
             print(f"restarting {name} loop: {why}")
             if not dry:
                 tmux("kill-window", "-t", w["window"], check=False)
@@ -189,7 +202,33 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
         pane = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
         _launch(pane, name, harnesses.launch_script(harnesses.account_harness(use), use, svc["prompt"], None, name))
-        svc_state[name] = {"profile": use, "started_at": now_iso()}
+        old = svc_state.get(name, {})
+        svc_state[name] = {"profile": use, "started_at": now_iso(), "sessions": old.get("sessions", []),
+                           **({"context_restarts": old["context_restarts"]} if old.get("context_restarts") else {})}
+
+
+def _context_restart(name, svc, sid, s, ust, dry):
+    """Why an idle loop session over its max_context should restart fresh, or None. Waits one loop interval after
+    the loop started and allows at most 3 an hour. A session whose first turn was already over the limit is never
+    restarted (a fresh one would start there too): one loop_context_warning event instead. A restart also ends any
+    background shell or agent the session started; pl cannot see those."""
+    limit, pct = svc["max_context"], usage.context_pct(ust, sid)
+    if pct is None or pct <= limit:
+        return None
+    if (usage.context_pct(ust, sid, "first") or 0) > limit:
+        if s.get("warned") != sid and not dry:
+            s["warned"] = sid
+            events.emit("loop_context_warning", None, loop=name, context=pct, limit=limit)
+        return None
+    now = time.time()
+    started = parse_iso(s.get("started_at") or "")
+    recent = [t for t in s.get("context_restarts") or [] if isinstance(t, (int, float)) and now - t < 3600]
+    if (started and now - started < (usage.loop_every(svc["prompt"]) or C.DISPATCH["interval"])) or len(recent) >= 3:
+        return None
+    if not dry:
+        s["context_restarts"] = recent + [now]
+        events.emit("loop_restart", None, loop=name, reason="context", context=pct, limit=limit)
+    return f"its context is {pct}%, over max_context {limit}%"
 
 
 def sweep_untracked(all_cards, reg, dry):

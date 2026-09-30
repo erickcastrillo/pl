@@ -30,6 +30,14 @@
   pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors
+  pl usage [--since 24h|7d|YYYY-MM-DD] [--by card|account|model|loop]
+                          tokens spent (input, output, cache read, cache write), read from Claude transcripts;
+                          [usage] prices = {model = dollars per million tokens} adds a cost column; [usage]
+                          windows = {model = context tokens} sets a context window (200k by default; a session
+                          past 200k counts as 1M). A loop keeps its last 20 sessions: older ones show as "other".
+                          [loops.<name>] max_context = 60 restarts that loop fresh when idle above 60% of its
+                          window (off unless set; one loop interval apart, at most 3 an hour; background shells
+                          or agents the session started end with it)
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
@@ -60,6 +68,7 @@ from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, 
                          cmd_review)
 from pl.dispatch import cmd_dispatch
 from pl.standup import cmd_standup
+from pl.usage import cmd_usage
 from pl.watch import cmd_watch
 
 
@@ -108,6 +117,8 @@ def main():
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
+    p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
+    p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -119,4 +130,4 @@ def main():
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
-     "standup": cmd_standup}[a.cmd](a)
+     "standup": cmd_standup, "usage": cmd_usage}[a.cmd](a)

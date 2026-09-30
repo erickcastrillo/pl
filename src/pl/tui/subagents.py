@@ -4,7 +4,6 @@ Claude Code writes each sub-agent to <account config_dir>/projects/<project>/<se
 with agent-<id>.meta.json beside it (agentType, description). Only those files are read, and only their tail."""
 import json
 import os
-import re
 import stat
 import shutil
 import time
@@ -20,6 +19,7 @@ from pl import config as C
 from pl import harnesses
 from pl.trackers import mcp
 from pl.tui.loops import COPIERS, _copy_run
+from pl.util import PEM_RE, TOKEN_RE, _nofollow, mask  # noqa: F401  (shared with pl.usage, which must not load Textual)
 
 RECENT = 6 * 3600          # transcripts modified longer ago are hidden
 IDLE = 120                 # seconds without a write before an agent counts as stopped
@@ -27,22 +27,9 @@ TAIL_BYTES = 256 * 1024    # never read more than this from one transcript
 TAIL_ENTRIES = 60
 REFRESH = 3
 META_BYTES = 64 * 1024
-TOKEN_RE = re.compile(r"(?i:bearer\s+)[A-Za-z0-9._~+/=-]{8,}|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|"
-                      r"xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})")
-PEM_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
 BIG = "last entry larger than 256 KB"
 _cache = {}   # path -> ((size, mtime_ns), entries)
 _meta_cache = {}   # meta path -> ((size, mtime_ns, ino), meta)
-
-
-def mask(text):
-    """pl's secret masking (every resolved ${VAR} value), plus common token shapes a transcript may hold."""
-    text = mcp._mask(str(text), sorted(mcp._secrets, key=len, reverse=True))
-    return TOKEN_RE.sub("***", PEM_RE.sub("***", text))
-
-
-def _nofollow(p, flags):
-    return os.open(p, flags | os.O_NOFOLLOW)
 
 
 def read_tail(path, cap=TAIL_BYTES, ident=None):

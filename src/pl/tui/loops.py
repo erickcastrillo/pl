@@ -13,6 +13,7 @@ from textual.widgets import DataTable, Static
 from pl import agents
 from pl import config as C
 from pl.tui.review import ConfirmScreen
+from pl.usage import human
 from pl.util import tmux
 
 TAIL_LINES = 40
@@ -66,7 +67,14 @@ def loop_rows(data):
                       f"{sum(p['state'] == 'gate' for p in prs)} awaiting the check")
         else:
             output = "not reported"
+        u = ((data or {}).get("usage") or {}).get("loops", {}).get(name) or {}
+        claude = (C.ACCOUNTS.get(svc.get("profile")) or {}).get("harness", "claude") == "claude"
+        if state == "on" and u.get("dead"):
+            state = "dead?"   # on for 3 fires of its interval, 0 tokens spent
+        ctx = (f"{u['context']}%" if u.get("context") is not None else "-") if claude else "n/a"
+        tok = (human(u["tokens_1h"]) if u else "-") if claude else "n/a"
         out.append({"name": name, "state": state, "prompt": svc["prompt"], "account": svc.get("profile") or "-",
+                    "context": ctx, "tokens": tok,
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
                     "pane": w.get("pane"), "window": w.get("window")})
     return out
@@ -75,7 +83,7 @@ def loop_rows(data):
 class LoopsView(Widget):
     DEFAULT_CSS = """
     LoopsView { height: 1fr; }
-    #loops-table { width: 110; height: 1fr; border: round $panel-lighten-2; }
+    #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
     #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
     BINDINGS = [Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
@@ -90,7 +98,7 @@ class LoopsView(Widget):
             yield Static(Text("select a loop", style="dim"), id="loops-screen")
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("loop", "state", "account", "prompt", "last active", "next pass", "output")
+        self.query_one(DataTable).add_columns("loop", "state", "context", "tokens 1h", "account", "prompt", "last active", "next pass", "output")
 
     def selected(self):
         t = self.query_one(DataTable)
@@ -104,7 +112,7 @@ class LoopsView(Widget):
             self.loops = loops
             t.clear()
             for x in self.loops:
-                t.add_row(*(Text(str(x[k])) for k in ("name", "state", "account", "prompt", "last", "next", "output")))
+                t.add_row(*(Text(str(x[k])) for k in ("name", "state", "context", "tokens", "account", "prompt", "last", "next", "output")))
             if self.loops:
                 t.move_cursor(row=min(max(keep, 0), len(self.loops) - 1))
         self.load_tail()
