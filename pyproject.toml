@@ -1,0 +1,34 @@
+[project]
+name = "pl-funnel"
+version = "0.1.0"
+description = "The feature funnel: idea -> spec -> plan -> your yes -> PR -> review -> merge-ready, driven through the AI coding harness CLIs you already use."
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.10,<2",
+    "textual>=8.2.8",
+    "tomlkit>=0.15.1",
+]
+
+[project.scripts]
+pl = "pl.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pl"]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["e2e: end-to-end tests against real tmux and harness CLIs (skipped unless PL_E2E=1)"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+# The legacy script moves verbatim in WP1: it uses `l` as a loop name and `;` in argparse setup.
+ignore = ["E702", "E741"]

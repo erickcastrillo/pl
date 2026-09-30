@@ -1,0 +1,29 @@
+Screen { background: $background; }
+#header { height: 1; background: $panel; }
+#tabs { height: 1fr; }
+TabPane { padding: 0; }
+.panel { border: round $panel-lighten-2; border-title-color: $text; padding: 0 1; }
+#window-bar { height: 1; margin: 0 1; }
+#tiles { height: 7; }
+.tile { width: 1fr; border: round $panel-lighten-2; padding: 0 1; }
+.tile-ready { border: round $success; }
+.tile-waiting { border: round $warning; }
+.tile-title { text-style: bold; color: $text-muted; }
+.tile-sub, .dim { color: $text-muted; }
+.tile Digits { height: 3; }
+DashboardView .row { height: 1fr; }
+#throughput, #waits, #decide, #health { width: 1fr; height: 1fr; }
+#decide { border: round $warning; }
+Sparkline { height: 1; }
+NeedsView { height: 1fr; }
+#needs-table { width: 84; height: 1fr; border: round $warning; }
+#needs-detail { width: 1fr; height: 1fr; }
+PrsView { height: 1fr; padding: 0 1; }
+PipelineView { height: 1fr; }
+#pipeline-title { height: 1; margin: 0 1; }
+#pipeline-scroll { height: 1fr; width: 100%; }
+.pcol { width: 25; min-width: 25; height: 1fr; border: round $panel-lighten-2; }
+.pcol VerticalScroll { height: 1fr; }
+.card { height: auto; border: round $panel-lighten-1; padding: 0 1; }
+.card:focus { border: round $warning; background: $boost; }
+.empty { padding: 1 2; }
