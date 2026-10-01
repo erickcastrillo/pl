@@ -79,11 +79,12 @@ def _offer(key, why, title):
 
 def flush_offers():
     """End of a dispatcher pass: type the queued alerts into an idle Assistant as one line. Never raises."""
-    try:
-        from pl import assistant
-        assistant.flush_offers(_clock())
-    except (SystemExit, Exception):  # noqa: BLE001
-        pass
+    from pl import assistant
+    for step in (assistant.restart_if_updated, lambda: assistant.flush_offers(_clock())):   # restart: on a new build
+        try:
+            step()
+        except (SystemExit, Exception):  # noqa: BLE001
+            pass
 
 
 def open(key, severity, title, fix):

@@ -47,6 +47,9 @@ ENTRIES = [
     _e("2026-10-01.01", "pl restarts itself after an update; D offers restart or stop",
        "the manager and dispatchers pick up a new install within a minute (the first time: open a new console, or "
        "pl manager stop then pl manager start, once); D: r restart, s stop", "pl manager status"),
+    _e("2026-10-01.02", "The Assistant tab is a chat; its questions show as a card a number key answers",
+       "tab 0 Assistant: turns, short tool lines, the status line; it restarts on a pl update when idle and unwatched",
+       "open it and ask \"what is stuck?\""),
 ]
 
 

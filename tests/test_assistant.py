@@ -30,6 +30,7 @@ def fake_home(tmp_path, monkeypatch):
     C.load("t")
     monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
     monkeypatch.setattr(agents, "registry", lambda: {})
+    assistant._INSTALLED.clear()
     yield tmp_path
     for k, v in saved.items():
         setattr(C, k, v)
@@ -41,6 +42,7 @@ class Tmux:
 
     def __init__(self, panes=None, screen="", cmd="claude"):
         self.calls, self.panes, self.screen, self.cmd, self.n = [], dict(panes or {}), screen, cmd, 9
+        self.activity, self.clients = "0", "0"      # the window's last activity (epoch seconds), clients attached
 
     def __call__(self, argv, *a, **kw):
         argv = [str(x) for x in argv]
@@ -63,6 +65,10 @@ class Tmux:
                 out = self.cmd
             elif argv[-1] == "#{session_name} #{window_id} #{window_name}":
                 out = " ".join(self.panes[target])
+            elif argv[-1] == "#{window_activity}":
+                out = self.activity
+            elif argv[-1] == "#{window_active_clients}":
+                out = self.clients
             else:
                 out = target
         elif verb == "capture-pane":
@@ -252,7 +258,7 @@ def test_the_state_file_is_private_and_holds_only_its_keys(tmux):
     assistant.ensure()
     p = C.STATE_DIR / "assistant.json"
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert set(json.loads(p.read_text())) <= {"session_id", "account", "harness", "window", "pane", "started_at", "mode"}
+    assert set(json.loads(p.read_text())) <= {"session_id", "account", "harness", "window", "pane", "started_at", "mode", "build"}
 
 
 # ---------- CLI: assistant_action and pl assistant log ----------
@@ -574,3 +580,171 @@ def test_the_assistant_never_loads_the_skills_library_plugin(tmux, fake_home):
     (lib / "SKILL.md").write_text("---\nname: alpha\ndescription: x\n---\n")
     assistant.ensure()
     assert "--plugin-dir" not in _script(tmux)
+
+
+# ---------- restart on a pl update ----------
+
+def _updated(monkeypatch, tmux, status="idle", build="old"):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "new")
+    monkeypatch.setattr(agents, "registry", lambda: {SID: {"sessionId": SID, "status": status}})
+    tmux.panes["%3"] = ("pl-t", "@3", "assistant")
+    _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3", started_at="x",
+                mode="idea", build=build)
+
+
+def test_a_new_build_restarts_an_idle_assistant_with_resume(tmux, monkeypatch):
+    _updated(monkeypatch, tmux)
+    assert assistant.restart_if_updated() is True
+    assert tmux.verb("kill-window")[0][-1] == "@3" and len(tmux.verb("new-window")) == 1
+    script = _script(tmux)
+    assert f"--resume {SID}" in script and " --permission-mode manual " in script
+    st = assistant.load()
+    assert st["build"] == "new" and st["session_id"] == SID and st["mode"] == "idea" and st["updated_at"]
+    tmux.calls.clear()
+    assert assistant.restart_if_updated() is False and tmux.verb("new-window") == []   # once per build
+
+
+@pytest.mark.parametrize("status, lines", [("busy", ""), ("idle", "Do you want to proceed?\n❯ 1. Yes\n  2. No")])
+def test_no_restart_mid_turn_or_at_a_prompt(tmux, monkeypatch, status, lines):
+    _updated(monkeypatch, tmux, status=status)
+    tmux.screen = lines                                   # read again inside the lock, never passed in
+    assert assistant.restart_if_updated() is False
+    assert tmux.verb("kill-window") == [] and tmux.verb("new-window") == []
+
+
+def test_a_console_on_an_older_build_than_installed_restarts_nothing(tmux, monkeypatch):
+    from pl import update
+    _updated(monkeypatch, tmux)
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "newer" if fresh else "new")
+    assert assistant.restart_if_updated() is False and tmux.verb("kill-window") == []
+
+
+def test_a_started_assistant_remembers_its_build(tmux, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "b1")
+    assistant.ensure()
+    assert assistant.load()["build"] == "b1"
+
+
+def test_menu_reads_a_numbered_menu_off_the_screen():
+    m = assistant.menu(["│ Bash command                     │", "│   pl approve 4a000001          │",
+                        "│ Do you want to proceed?        │", "│ ❯ 1. Yes                       │", "│   2. No                        │"])
+    assert m["options"] == [("1", "Yes"), ("2", "No")]
+    assert "pl approve 4a000001" in m["title"] and "Do you want to proceed?" in m["title"]
+    assert assistant.menu(["1. just a list item in a reply"]) is None
+
+
+def test_a_restart_never_starts_a_fresh_conversation(tmux, monkeypatch):
+    _updated(monkeypatch, tmux)
+    monkeypatch.setattr(assistant, "_idle", lambda st: True)                  # only the account and resume checks refuse
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})      # account() would now pick acme2
+    assert assistant.restart_if_updated() is False
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "codex"}           # codex: no resume template
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
+    _save_state(session_id=SID, account="acme", harness="codex", window="@3", pane="%3", started_at="x", build="old")
+    assert assistant.restart_if_updated() is False
+    assert tmux.verb("kill-window") == [] and tmux.verb("new-window") == []
+
+
+def test_no_restart_when_the_pane_is_not_the_assistants(tmux, monkeypatch):
+    _updated(monkeypatch, tmux)
+    tmux.panes["%3"] = ("pl-t", "@3", "other")
+    assert assistant.restart_if_updated() is False and tmux.verb("kill-window") == []
+
+
+def test_no_restart_while_someone_watches_or_the_chat_moved_lately(tmux, monkeypatch, fake_home):
+    import time
+    _updated(monkeypatch, tmux)
+    tmux.clients = "1"                                    # the person has the window open
+    assert assistant.restart_if_updated() is False
+    tmux.clients, tmux.activity = "0", str(int(time.time()) - 10)   # the screen moved 10 s ago
+    assert assistant.restart_if_updated() is False
+    tmux.activity = "0"
+    t = fake_home / ".claude-acme" / "projects" / "-w" / f"{SID}.jsonl"
+    t.parent.mkdir(parents=True)
+    t.write_text("{}\n")                                 # the transcript was written just now
+    assert assistant.restart_if_updated() is False
+    tmux.activity = "x"                                   # tmux gave no time: never restart
+    old = time.time() - 600
+    __import__("os").utime(t, (old, old))
+    assert assistant.restart_if_updated() is False
+    assert tmux.verb("kill-window") == []
+    tmux.activity = "0"
+    assert assistant.restart_if_updated() is True        # quiet 300 s, nobody attached
+
+
+def test_the_saved_build_is_compared_before_locking_and_the_installed_one_is_cached(tmux, monkeypatch):
+    from pl import update
+    calls = []
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: calls.append(fresh) or "new")
+    monkeypatch.setattr(assistant, "LOCK_WAIT", 0.1)
+    _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3", build="new")
+    held = _hold(C.STATE_DIR / "assistant.lock")
+    try:
+        assert assistant.restart_if_updated() is False   # the same build: no lock wait, no installed-build read
+        assert calls.count(True) == 0
+        _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3", build="old")
+        assert assistant.restart_if_updated() is False   # the lock is busy: give up, the next pass tries again
+        assert assistant.restart_if_updated() is False
+    finally:
+        held.close()
+    assert calls.count(True) == 1                         # the installed build is read once per ~10 s
+    assert tmux.verb("kill-window") == []
+
+
+def test_answer_types_the_digit_only_while_the_same_question_shows(tmux):
+    tmux.panes["%3"] = ("pl-t", "@3", "assistant")
+    _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3")
+    tmux.screen = "Do you want to proceed?\n❯ 1. Yes\n  2. No"
+    opts = assistant.menu(assistant.screen(15))["options"]
+    assert assistant.answer("2", opts) is True
+    assert tmux.typed()[-1] == ["tmux", "send-keys", "-t", "%3", "-l", "--", "2"]
+    tmux.calls.clear()
+    tmux.screen = "Which board?\n❯ 1. Product\n  2. Engineering"     # a new question took its place
+    assert assistant.answer("2", opts) is False and tmux.typed() == []
+    tmux.screen = "all done"
+    assert assistant.answer("2", opts) is False and tmux.typed() == []
+
+
+def test_a_reply_ending_in_a_numbered_list_is_not_a_menu():
+    box = ["1. Run pl list", "2. Approve the plan", "╭──────────────────╮", "│ >                │", "╰──────────────────╯"]
+    assert assistant.menu(box) is None
+    assert assistant.menu(["1. Run pl list", "2. Approve the plan"]) is None              # no selection marker
+    assert assistant.menu(["Which?", "❯ 1. Product", "  2. Engineering", "│ >     │"]) is None   # input box below
+
+
+def test_send_waits_for_the_lock_only_so_long(tmux, monkeypatch):
+    tmux.panes["%3"] = ("pl-t", "@3", "assistant")
+    _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3")
+    monkeypatch.setattr(assistant, "LOCK_WAIT", 0.2)
+    held = _hold(C.STATE_DIR / "assistant.lock")
+    try:
+        with pytest.raises(SystemExit, match="busy"):
+            assistant.send("hello")
+    finally:
+        held.close()
+    assert tmux.typed() == []
+
+
+def test_a_tmux_call_that_hangs_times_out_and_is_not_a_dead_assistant(monkeypatch):
+    seen = []
+
+    def hang(argv, *a, **kw):
+        seen.append(kw.get("timeout"))
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout") or 0)
+    monkeypatch.setattr(subprocess, "run", hang)
+    _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3")
+    with pytest.raises(SystemExit, match="timed out"):
+        assistant.pane()
+    with pytest.raises(SystemExit, match="timed out"):
+        assistant.ensure()                                # never a second window because tmux was slow
+    assert seen and all(t and t <= 5 for t in seen)
+
+
+def test_saves_keep_fields_this_build_does_not_know(tmux):
+    _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3", future="kept")
+    tmux.panes["%3"] = ("pl-t", "@3", "assistant")
+    assistant.set_mode("idea")
+    d = json.loads((C.STATE_DIR / "assistant.json").read_text())
+    assert d["future"] == "kept" and d["mode"] == "idea"

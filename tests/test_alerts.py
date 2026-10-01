@@ -337,13 +337,14 @@ class FakeTmux:
 def helper(monkeypatch):
     import subprocess
 
-    from pl import agents
+    from pl import agents, update
     t = FakeTmux()
     monkeypatch.setattr(subprocess, "run", t)
     reg = {ASID: {"sessionId": ASID, "status": "idle"}}
     monkeypatch.setattr(agents, "registry", lambda: reg)
     (C.STATE_DIR / "assistant.json").write_text(json.dumps({"session_id": ASID, "account": "acme", "harness": "claude",
-                                                            "window": "@3", "pane": "%3", "started_at": "x"}))
+                                                            "window": "@3", "pane": "%3", "started_at": "x",
+                                                            "build": update.build_id()}))   # on this build: no restart
     t.reg = reg
     return t
 

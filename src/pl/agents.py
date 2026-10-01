@@ -84,7 +84,7 @@ def run_waiting(w, reg):
 
 PERMISSION_IDLE = 120   # an agent at a permission prompt this long, with no change on screen, is stuck there
 BOX_RE = re.compile(r"[│┃|╭╮╰╯─━]+")
-OPTION_RE = re.compile(r"^\s*(?:[❯›>]\s*)?[1-9][.)]\s")
+OPTION_RE = re.compile(r"^\s*(?:[❯›>]\s*)?([1-9])[.)]\s+(.*?)\s*$")   # a numbered option; groups: digit, label
 
 
 def permission_wait(h, pane):

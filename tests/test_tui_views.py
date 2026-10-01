@@ -816,10 +816,13 @@ class FakeAssistant:
     """Stands in for pl.assistant in the tab: records calls, raises when told to."""
 
     def __init__(self, monkeypatch):
-        from pl import assistant
+        from pl import agents, assistant
         self.ensured, self.sent, self.screens, self.resets, self.modes, self.fail = 0, [], 0, 0, [], None
         self.state = {"window": "@7", "pane": "%7", "mode": "chat"}
-        self.dead, self.ready, self.warn = False, None, None
+        self.dead, self.ready, self.warn, self.reg, self.lines = False, None, None, {}, None
+        monkeypatch.setattr(agents, "registry", lambda: self.reg)
+        monkeypatch.setattr(assistant, "restart_if_updated", lambda: False)
+        monkeypatch.setattr(assistant, "_type", lambda p, t, enter=True: self.sent.append(t))   # answer() types here
         monkeypatch.setattr(assistant, "warning", lambda: self.warn)
         monkeypatch.setattr(assistant, "pane", lambda st=None: None if self.dead else "%7")
         monkeypatch.setattr(assistant, "ready_idea", lambda: self.ready)
@@ -840,7 +843,7 @@ class FakeAssistant:
 
     def screen(self, n):
         self.screens += 1
-        return ["> what is stuck?", "card 4a000001 waits for your review"]
+        return self.lines if self.lines is not None else ["> what is stuck?", "card 4a000001 waits for your review"]
 
     def reset(self):
         self.resets += 1
@@ -1075,3 +1078,226 @@ async def test_esc_leaves_the_assistant_box_and_then_a_digit_switches_tab(monkey
         await pilot.press("alt+1")
         await settle(pilot)
         assert app.active_tab == "dashboard"
+
+
+# ---------- the Assistant tab as a chat ----------
+
+ASID = "11111111-2222-3333-4444-555555555555"
+MENU = ["Bash command", "  pl approve 4a000001", "Do you want to proceed?",
+        "❯ 1. Yes", "  2. Yes, and don't ask again for pl approve commands", "  3. No, and tell Claude what to do differently"]
+
+
+def _chat(fa, entries):
+    """A fake Claude transcript for the assistant's session under the account's projects folder."""
+    fa.state.update(session_id=ASID, account="acme", harness="claude")
+    C.CONFIG_DIR.mkdir(exist_ok=True)
+    (C.CONFIG_DIR / "config.toml").touch()            # the profile the tab reads [harnesses] from
+    d = C.PROFILES["acme"] / "projects" / "-work"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{ASID}.jsonl"
+    p.write_text("".join(json.dumps(e) + "\n" for e in entries))
+    return p
+
+
+def _user(text, ts="2026-10-01T10:00:00.000Z"):
+    return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": text}}
+
+
+def _said(*blocks, ts="2026-10-01T10:00:01.000Z", **kw):
+    return {"type": "assistant", "timestamp": ts, "message": {"role": "assistant", "content": list(blocks)}, **kw}
+
+
+def _chat_text(app):
+    return str(app.query_one("#assistant-screen").render())
+
+
+async def test_the_chat_shows_you_and_assistant_turns_and_compact_tool_lines(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("You are the pl assistant for profile t. Read /x/assistant.md and follow it, then say ready."),
+               _said({"type": "text", "text": "Ready."}),
+               _user("what is stuck?"),
+               _said({"type": "tool_use", "name": "Read", "input": {"file_path": "/x/pl/assistant.md"}},
+                     {"type": "tool_use", "name": "Bash", "input": {"command": "pl list"}}),
+               {"type": "user", "message": {"role": "user", "content": [
+                   {"type": "tool_result", "content": "4a000001  Plan for review  LONG RESULT BODY"}]}},
+               _said({"type": "text", "text": "Card 4a000001 waits for your review; key ghp_" + "a" * 30})])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        text = _chat_text(app)
+        assert "you\nwhat is stuck?" in text and "assistant\nReady." in text
+        assert "↳ Read assistant.md\n" in text and "↳ Bash: pl list\n" in text
+        assert "LONG RESULT BODY" not in text                         # results stay collapsed
+        assert "ghp_" not in text and "***" in text                   # masked
+        assert "You are the pl assistant" not in text                 # the boot prompt is hidden
+        assert "waits for your review" in text
+
+
+async def test_errors_show_in_red(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("go"), _said({"type": "text", "text": "API Error: overloaded"}, isApiErrorMessage=True)])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        t = app.query_one("#assistant-screen").content
+        span = next(s for s in t.spans if "overloaded" in t.plain[s.start:s.end])
+        assert "red" in str(span.style)
+
+
+async def test_an_unchanged_transcript_is_not_redrawn(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    p = _chat(fa, [_user("hi"), _said({"type": "text", "text": "hello"})])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view = app.query_one("#assistant-view")
+        before = view.redraws
+        for _ in range(3):
+            view.tick()
+            await settle(pilot)
+        assert view.redraws == before
+        with p.open("a") as f:
+            f.write(json.dumps(_said({"type": "text", "text": "more"})) + "\n")
+        view.tick()
+        await settle(pilot)
+        assert view.redraws == before + 1 and "more" in _chat_text(app)
+
+
+async def test_a_permission_menu_is_a_card_and_a_digit_sends_just_that_digit(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("approve it"), _said({"type": "tool_use", "name": "Bash", "input": {"command": "pl approve 4a000001"}})])
+    fa.lines = MENU
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        card = app.query_one("#assistant-menu")
+        assert card.display
+        body = str(card.render())
+        assert "pl approve 4a000001" in body and "1 Yes" in body and "2 Yes, and don't ask again" in body and "3 No" in body
+        assert "waiting for you" in str(app.query_one("#assistant-status").render())
+        await pilot.press("2")
+        await settle(pilot)
+        assert fa.sent == ["2"]                                      # one digit, no Enter, nothing auto-answered
+        assert app.query_one("#assistant-input").value == ""
+
+
+async def test_a_question_menu_gets_the_same_card(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.lines = ["Which board?", "❯ 1. Product", "  2. Engineering", "  3. Type something."]
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        body = str(app.query_one("#assistant-menu").render())
+        assert "Which board?" in body and "1 Product" in body and "2 Engineering" in body
+        assert fa.sent == []
+
+
+async def test_the_status_line_says_thinking_waiting_or_ready(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("hi")])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view, status = app.query_one("#assistant-view"), lambda: str(app.query_one("#assistant-status").render())
+        fa.reg[ASID] = {"sessionId": ASID, "status": "busy"}
+        view.tick()
+        await settle(pilot)
+        assert "thinking…" in status()
+        fa.reg[ASID] = {"sessionId": ASID, "status": "idle"}
+        view.tick()
+        await settle(pilot)
+        assert "ready" in status() and "thinking" not in status()
+        fa.lines = MENU
+        view.tick()
+        await settle(pilot)
+        assert "waiting for you" in status()
+
+
+async def test_without_a_registry_a_changing_screen_counts_as_thinking(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view, status = app.query_one("#assistant-view"), lambda: str(app.query_one("#assistant-status").render())
+        fa.lines = ["✻ Pondering… (esc to interrupt)"]
+        view.tick()
+        await settle(pilot)
+        assert "thinking…" in status()
+        view._moved -= 10                                            # still for a while
+        view.tick()
+        await settle(pilot)
+        assert "ready" in status()
+
+
+async def test_an_update_restart_is_told_in_the_chat(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("hi", ts="2026-10-01T10:00:00.000Z"), _said({"type": "text", "text": "hello"}, ts="2026-10-01T10:00:01.000Z"),
+               _user("again", ts="2026-10-01T11:00:00.000Z")])
+    fa.state["updated_at"] = "2026-10-01T10:30:00+00:00"
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        text = _chat_text(app)
+        assert text.index("hello") < text.index("pl updated — assistant restarted with the new settings") < text.index("again")
+
+
+async def test_a_digit_is_not_sent_when_the_question_changed_under_the_card(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.lines = MENU
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert app.query_one("#assistant-menu").display
+        fa.lines = ["Which board?", "❯ 1. Product", "  2. Engineering"]      # a new question, not drawn yet
+        await pilot.press("2")
+        await settle(pilot)
+        assert fa.sent == []
+        assert any("the question changed; look again" in str(n.message) for n in app._notifications)
+        assert "Engineering" in str(app.query_one("#assistant-menu").render())   # the card was redrawn
+
+
+async def test_a_digit_typed_after_text_goes_into_the_box(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.lines = MENU
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await pilot.press("a", "2")
+        await settle(pilot)
+        assert app.query_one("#assistant-input").value == "a2" and fa.sent == []
+
+
+async def test_a_secret_inside_a_tool_input_renders_masked(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("fetch it"), _said({"type": "tool_use", "name": "WebFetch",
+                                         "input": {"url": "https://x.test/?k=ghp_" + "b" * 30}})])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        text = _chat_text(app)
+        assert "↳ WebFetch" in text and "ghp_" not in text and "b" * 30 not in text
+
+
+async def test_a_slow_read_says_still_reading_and_lets_a_new_read_start(monkeypatch):
+    from pl import assistant
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view, gate, calls = app.query_one("#assistant-view"), threading.Event(), []
+
+        def slow(n):
+            calls.append(n)
+            gate.wait(5)
+            return fa.screen(n)
+        monkeypatch.setattr(assistant, "screen", slow)
+        try:
+            view.tick()
+            await pilot.pause(0.2)
+            view._read_started -= 10                         # this read has run for 10 s
+            view._poll()
+            await pilot.pause(0.2)
+            assert "still reading" in str(app.query_one("#assistant-status").render()) and len(calls) == 2
+        finally:
+            gate.set()
+        await settle(pilot)

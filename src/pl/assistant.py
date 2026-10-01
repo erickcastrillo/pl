@@ -14,13 +14,14 @@ import time
 import uuid
 from pathlib import Path
 
-from pl import accounts, agents, events, harnesses, ideas
+from pl import accounts, agents, events, harnesses, ideas, update
 from pl import config as C
 from pl.util import mask, now_iso
 
 WINDOW = "assistant"
 GUIDE = Path(__file__).with_name("assistant.md")
-KEYS = ("session_id", "account", "harness", "window", "pane", "started_at", "mode", "pending", "last_offer_at")
+KEYS = ("session_id", "account", "harness", "window", "pane", "started_at", "mode", "pending", "last_offer_at", "build",
+        "updated_at")
 DIGIT_RE = re.compile(r"[1-9]")
 PANE_RE, WINDOW_RE = re.compile(r"%\d+"), re.compile(r"@\d+")
 LOG_CHARS = 200
@@ -56,14 +57,24 @@ PERMISSION_FLAG_RE = harnesses.PERMISSION_FLAG_RE
 RISKY = ("pl", "pl approve x", "gh", "gh pr merge 1", "git push", "git push origin main")   # what the ask rules cover
 OFFER_GAP = 60            # seconds between two alert offers
 KEY_RE = re.compile(r"[^A-Za-z0-9:_-]")
-MENU_RE = re.compile(r"^\s*(?:[❯›>]\s*)?[1-9][.)]\s+\S")
+OPTION_RE = agents.OPTION_RE
+MARKED_RE = re.compile(r"^\s*[❯›]\s*[1-9][.)]\s")       # the harness's selection marker on the chosen option
 INPUT_RE = re.compile(r"^\s*[│┃|]?\s*[>❯›]\s?(.*?)\s*[│┃|]?\s*$")
 WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
 
 
+TMUX_TIMEOUT = 5        # seconds a tmux call may take
+LOCK_WAIT = 5           # seconds the console waits for the assistant lock
+QUIET = 300             # seconds the conversation must be still before an update restart
+BUILD_TTL = 10          # seconds the installed build is cached
+
+
 def _run(argv):
-    """The one subprocess seam of this module; tests fake it."""
-    return subprocess.run(argv, capture_output=True, text=True)
+    """The one subprocess seam of this module; tests fake it. A tmux call that hangs is stopped: SystemExit."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=TMUX_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"pl: tmux {argv[1] if len(argv) > 1 else ''} timed out after {TMUX_TIMEOUT} s") from None
 
 
 def _tmux(*args):
@@ -88,22 +99,41 @@ def load():
 
 
 def _save(st):
+    """Write the KEYS of st. Fields a newer pl wrote that this build does not know are kept. An older pl drops the
+    fields it does not know (build among them), so while one still runs the assistant may restart once more."""
     C.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        old = json.loads(_path().read_text())
+    except (OSError, ValueError):
+        old = {}
+    keep = {k: v for k, v in old.items() if k not in KEYS} if isinstance(old, dict) else {}
     tmp = _path().with_name(f".assistant.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({k: v for k, v in st.items() if k in KEYS}, f)
+        json.dump(keep | {k: v for k, v in st.items() if k in KEYS}, f)
     os.replace(tmp, _path())
 
 
+BUSY = "pl: the assistant is busy in another console or the dispatcher; try again"
+
+
 @contextlib.contextmanager
-def _locked():
+def _locked(wait=None):
     """The profile's assistant lock (a file lock in its state folder): two consoles, or a console and the dispatcher,
-    never start two windows or write back a stale state. Not reentrant: never nest it."""
+    never start two windows or write back a stale state. Not reentrant: never nest it. wait: give up after that many
+    seconds with SystemExit(BUSY); None waits as long as it takes."""
     C.STATE_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(C.STATE_DIR / "assistant.lock", os.O_WRONLY | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        end = None if wait is None else time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | (0 if end is None else fcntl.LOCK_NB))
+                break
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    raise SystemExit(BUSY) from None
+                time.sleep(0.05)
         yield
     finally:
         os.close(fd)
@@ -116,7 +146,7 @@ def pane(st=None):
     p, w = st.get("pane"), st.get("window")
     if not (isinstance(p, str) and PANE_RE.fullmatch(p) and isinstance(w, str) and WINDOW_RE.fullmatch(w)):
         return None
-    r = _run(["tmux", "display-message", "-p", "-t", p, "#{session_name} #{window_id} #{window_name}"])
+    r = _run(["tmux", "display-message", "-p", "-t", p, "#{session_name} #{window_id} #{window_name}"])   # a hang raises
     return p if r.returncode == 0 and (r.stdout or "").strip() == f"{C.TMUX_SESSION} {w} {WINDOW}" else None
 
 
@@ -169,7 +199,7 @@ def ask_first(h, acct=None):
 
 def ensure():
     """Show the running assistant, or start one: resume the saved conversation when the harness can. A status line."""
-    with _locked():
+    with _locked(LOCK_WAIT):
         return _ensure()
 
 
@@ -200,7 +230,7 @@ def _ensure():
     dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
                                                            resume=resume, plugin=False))
     _save({"session_id": sid, "account": acct, "harness": h.name, "window": win, "pane": pane_,
-           "started_at": now_iso(), "mode": st.get("mode") if resume else "chat"})
+           "started_at": now_iso(), "mode": st.get("mode") if resume else "chat", "build": update.build_id()})
     events.emit("assistant_started", None, account=acct, harness=h.name, resumed=resume)
     return f"assistant {'resumed' if resume else 'started'} in {C.TMUX_SESSION}:{WINDOW} ({acct})"
 
@@ -257,20 +287,42 @@ NOT_RUNNING = "pl: the assistant is not running: open the Assistant tab to start
 
 def send(text):
     """Type one message into the assistant. A single digit 1-9 goes without Enter: it answers a numbered menu.
-    Blank text sends nothing: a bare Enter could accept a menu's default."""
+    Blank text sends nothing: a bare Enter could accept a menu's default. Under the lock, as a restart is."""
     t = harnesses._typeable(text)
     if not t.strip():
         return
-    p = pane()
-    if not p:
-        raise SystemExit(NOT_RUNNING)
-    _type(p, t, enter=not DIGIT_RE.fullmatch(t))
+    with _locked(LOCK_WAIT):
+        p = pane()
+        if not p:
+            raise SystemExit(NOT_RUNNING)
+        _type(p, t, enter=not DIGIT_RE.fullmatch(t))
+
+
+def answer(digit, options):
+    """Type one digit into the menu the person saw: only when the screen, read again under the lock, still shows a
+    menu with those options. True when typed, False when the question changed."""
+    with _locked(LOCK_WAIT):
+        p = pane()
+        if not p:
+            raise SystemExit(NOT_RUNNING)
+        m = menu(screen(15))
+        if not (DIGIT_RE.fullmatch(str(digit)) and m and m["options"] == [tuple(o) for o in options]
+                and digit in (d for d, _ in m["options"])):
+            return False
+        _type(p, digit, enter=False)
+    return True
+
+
+def _tail(p, n):
+    """The last n non-empty lines of pane p (tmux call with a timeout)."""
+    out = _run(["tmux", "capture-pane", "-p", "-t", p, "-S", "-60"]).stdout or ""
+    return [x.rstrip() for x in out.splitlines() if x.strip()][-n:]
 
 
 def screen(n):
     """The last n lines of the assistant's screen, masked; [] when it is not running."""
     p = pane()
-    return [mask(line) for line in agents.pane_tail(p, n)] if p else []
+    return [mask(line) for line in _tail(p, n)] if p else []
 
 
 def reset():
@@ -282,14 +334,19 @@ def reset():
     events.emit("assistant_reset", None)
 
 
-def _idle(st):
-    """True when the saved session is a live harness the session registry marks idle (no registry: never idle)."""
+def _status(st):
+    """The session registry's status of the saved session ("idle", "busy", ...), None when it does not know it."""
     try:
         h = harnesses.get(st.get("harness") or "claude")
     except SystemExit:
-        return False
+        return None
     rec = agents.registry().get(st.get("session_id")) if h.session_registry else None
-    return bool(rec) and rec.get("status") == "idle"
+    return rec.get("status") if rec else None
+
+
+def _idle(st):
+    """True when the saved session is a live harness the session registry marks idle (no registry: never idle)."""
+    return _status(st) == "idle"
 
 
 def _proactive():
@@ -320,10 +377,116 @@ def _clear_offers(sent, **extra):
 
 def _held(lines):
     """True when typing now could answer a numbered menu or join text the person has not sent."""
-    if sum(1 for x in lines if MENU_RE.match(x)) >= 2:
+    if sum(1 for x in lines if OPTION_RE.match(x)) >= 2:
         return True
     typed = [m.group(1) for x in lines if (m := INPUT_RE.match(x))]
     return bool(typed and typed[-1])
+
+
+def menu(lines):
+    """The numbered menu at the bottom of the screen (a permission prompt or a question), else None:
+    {"title": the few lines above it, "options": [(digit, label)]}. Read only: pl never answers it. A menu has the
+    harness's selection marker (❯ or ›) on one option and no input box below it: a reply that ends in a numbered list
+    above the empty input box is not one."""
+    lines = [agents.BOX_RE.sub(" ", x).strip() for x in lines]
+    lines = [x for x in lines if x][-20:]
+    at = [i for i, x in enumerate(lines) if OPTION_RE.match(x)]
+    run = at[-1:]
+    for i in reversed(at[:-1]):        # the last run of options; a description line may sit under each one
+        if run[0] - i > 3:
+            break
+        run.insert(0, i)
+    if len(run) < 2 or not any(MARKED_RE.match(lines[i]) for i in run):
+        return None
+    if any(INPUT_RE.match(x) and not OPTION_RE.match(x) for x in lines[run[-1] + 1:]):
+        return None
+    opts = [OPTION_RE.match(lines[i]).groups() for i in run]
+    title = [x for x in lines[max(0, run[0] - 4):run[0]] if not OPTION_RE.match(x)]
+    return {"title": [mask(x)[:120] for x in title], "options": [(d, mask(t)[:80]) for d, t in opts]}
+
+
+def busy(st=None):
+    """True or False when the session registry knows the session (busy or not), None when it does not."""
+    s = _status(load() if st is None else st)
+    return None if s is None else s == "busy"
+
+
+UPDATED = "pl updated — assistant restarted with the new settings"
+
+
+_INSTALLED = {}
+
+
+def _installed():
+    """The installed build, read at most once per BUILD_TTL seconds (it walks the package's files)."""
+    now = time.monotonic()
+    if not _INSTALLED or now - _INSTALLED["at"] >= BUILD_TTL:
+        _INSTALLED.update(id=update.build_id(fresh=True), at=now)
+    return _INSTALLED["id"]
+
+
+def _resumable(st):
+    """True when a start now would resume the saved conversation: same account, same harness, a resume template."""
+    acct = account()
+    if acct is None or acct != st.get("account"):
+        return False
+    try:
+        h = ask_first(harnesses.account_harness(acct), acct)
+    except SystemExit:
+        return False
+    return bool(h.resume) and h.name == st.get("harness")
+
+
+def _quiet(st, p):
+    """True when nobody has the window open and neither its screen nor its transcript moved for QUIET seconds.
+    A tmux answer that is not a number counts as not quiet. (claude --resume keeps the session id, so the transcript
+    is the same file after a restart.)"""
+    clients = (_run(["tmux", "display-message", "-p", "-t", p, "#{window_active_clients}"]).stdout or "").strip()
+    act = (_run(["tmux", "display-message", "-p", "-t", p, "#{window_activity}"]).stdout or "").strip()
+    if clients != "0" or not act.isdigit():
+        return False
+    last = int(act)
+    acct, sid = st.get("account"), st.get("session_id")
+    from pl.usage import SID_RE
+    if acct in C.PROFILES and isinstance(sid, str) and SID_RE.fullmatch(sid):
+        with contextlib.suppress(OSError):
+            for t in (Path(C.PROFILES[acct]).expanduser() / "projects").glob(f"*/{sid}.jsonl"):
+                last = max(last, t.stat().st_mtime)
+    return time.time() - last >= QUIET
+
+
+def _restart(build):
+    """restart_if_updated under the lock: every check reads the state and the screen again."""
+    st = load()
+    if st.get("build") == build or not st.get("session_id"):
+        return False
+    p = pane(st)
+    if not (p and _idle(st) and _resumable(st) and _quiet(st, p)) or _held(_tail(p, 15)):
+        return False
+    _run(["tmux", "kill-window", "-t", st["window"]])
+    _ensure()
+    _save({**load(), "updated_at": now_iso()})
+    return True
+
+
+def restart_if_updated():
+    """After a pl update: restart an idle assistant on the installed build, resuming its conversation so it gets the
+    new launch flags. Never mid-turn, at a prompt, with unsent text, while someone has its window open, within QUIET
+    seconds of activity, or when the start would not resume. Only a process on the installed build does it. True if
+    done."""
+    build = update.build_id()
+    if not build or load().get("build") == build or build != _installed():
+        return False
+    try:
+        with _locked(LOCK_WAIT):
+            if not _restart(build):
+                return False
+    except SystemExit as e:
+        if str(e) != BUSY:
+            raise
+        return False              # another console is at it; the next pass tries again
+    events.emit("assistant_restarted", None, build=build)
+    return True
 
 
 def flush_offers(now=None):
@@ -339,7 +502,7 @@ def flush_offers(now=None):
     if not p:
         _clear_offers(st["pending"])      # nobody to tell; the alerts still show on Needs you
         return False
-    if not _idle(st) or _held(agents.pane_tail(p, 15)):
+    if not _idle(st) or _held(_tail(p, 15)):
         return False
     pending = [x for x in st["pending"] if isinstance(x, list) and len(x) == 2]
     items = [f"{t} ({k})" for k, t in pending]
