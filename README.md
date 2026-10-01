@@ -181,8 +181,8 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 
 | Key | Action |
 | --- | --- |
-| 1 to 8 | Dashboard, Needs you, Ideas, Pipeline, Pull requests, Loops, Activity, Settings |
-| 0 | Assistant: a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
+| 0 | Assistant (the leftmost tab): a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
+| 1 to 9 | Dashboard, Needs you, Ideas, Pipeline, Pull requests, Loops, Activity, Settings, Background |
 | w | cycle the Dashboard time window |
 | s | standup summary of the last 24 hours on the Dashboard (y copies it) |
 | a / x | approve / send back the selected card |

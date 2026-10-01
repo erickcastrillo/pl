@@ -3,9 +3,11 @@ from rich.text import Text
 
 from pl import config as C
 
-TABS = [("dashboard", "Dashboard"), ("needs", "Needs you"), ("ideas", "Ideas"), ("pipeline", "Pipeline"),
+TABS = [("assistant", "Assistant"), ("dashboard", "Dashboard"), ("needs", "Needs you"), ("ideas", "Ideas"), ("pipeline", "Pipeline"),
         ("prs", "Pull requests"), ("loops", "Loops"), ("activity", "Activity"), ("settings", "Settings"),
-        ("subagents", "Background"), ("assistant", "Assistant")]   # tab keys 1-9, then 0
+        ("subagents", "Background")]   # tab key = position in this list: 0 Assistant, 1 Dashboard, ... 9 Background
+
+TAB_KEYS = {tid: str(i) for i, (tid, _) in enumerate(TABS)}
 
 
 def tabs():

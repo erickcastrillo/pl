@@ -10,7 +10,8 @@ from pl import config as C
 from pl.tui.review import ConfirmScreen
 
 KEYS = ("enter send (a lone digit answers a numbered menu) · ctrl+t chat/idea mode · "
-        "ctrl+o open its window (arrows, Esc) · ctrl+r start over · ctrl+f file a ready idea")
+        "ctrl+o open its window (arrows, Esc) · ctrl+r start over · ctrl+f file a ready idea · "
+        "esc then 1-9 · switch tab")
 HINT = {"chat": "chat mode: ask pl to do things (it asks before acting)",
         "idea": "idea mode: drafting an idea brief with you; it files the card only after your yes"}
 
@@ -24,7 +25,8 @@ class AssistantView(Widget):
     #assistant-input { border: round $warning; }
     """
     BINDINGS = [Binding("ctrl+t", "mode", "chat/idea"), Binding("ctrl+o", "open_window", "open window"),
-                Binding("ctrl+r", "restart", "start over"), Binding("ctrl+f", "file_idea", "file idea")]
+                Binding("ctrl+r", "restart", "start over"), Binding("ctrl+f", "file_idea", "file idea"),
+                Binding("escape", "leave_box", "leave box", show=False)]
 
     def __init__(self):
         super().__init__(id="assistant-view")
@@ -122,6 +124,9 @@ class AssistantView(Widget):
         if not text.strip():     # a bare Enter could accept a menu's default
             return
         self._bg(lambda: assistant.send(text), "assistant-send", lambda _: self.tick())
+
+    def action_leave_box(self):
+        self.app.set_focus(None)   # plain digits then switch tabs again
 
     def action_mode(self):
         new = "idea" if self.mode == "chat" else "chat"

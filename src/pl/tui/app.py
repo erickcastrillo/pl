@@ -12,7 +12,7 @@ from pl import board, dispatch, manager, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.assistant import AssistantView
-from pl.tui.chrome import TABS, header_text, tabs
+from pl.tui.chrome import TABS, TAB_KEYS, header_text, tabs
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
@@ -109,8 +109,10 @@ class WhatsNewScreen(ModalScreen):
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
-    BINDINGS = [Binding(str((i + 1) % 10), f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="0-9")
+    BINDINGS = [Binding(str(i), f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="0-9")
                 for i, (tid, name) in enumerate(TABS)] + [
+        Binding(f"{mod}+{i}", f"tab('{tid}')", name, show=False)   # work even while the Assistant box has focus
+        for mod in ("ctrl", "alt") for i, (tid, name) in enumerate(TABS)] + [
         Binding("w", "cycle_window", "window"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
@@ -128,9 +130,9 @@ class PlApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(header_text(None), id="header")
-        with TabbedContent(id="tabs"):
-            for i, (tid, name) in enumerate(tabs()):
-                with TabPane(f"{(i + 1) % 10} {name}", id=tid):
+        with TabbedContent(id="tabs", initial="dashboard"):
+            for tid, name in tabs():
+                with TabPane(f"{TAB_KEYS[tid]} {name}", id=tid):
                     if tid in VIEWS:
                         yield VIEWS[tid]()
                     else:

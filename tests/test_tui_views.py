@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from rich.console import Console
+from textual.widgets import TabbedContent
 
 from pl import cli, trackers, watch
 from pl import config as C
@@ -1037,3 +1038,40 @@ async def test_an_allow_rule_warning_shows_in_the_tab(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
         assert "Bash(gh pr *)" in str(app.query_one("#assistant-warning").render())
+
+
+async def test_the_tab_strip_starts_with_0_assistant_then_1_dashboard(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        labels = [str(t.label) for t in app.query_one(TabbedContent).query("Tab")]
+        assert labels[0] == "0 Assistant" and labels[1] == "1 Dashboard"
+        assert app.active_tab == "dashboard"
+        await pilot.press("2")
+        await settle(pilot)
+        await pilot.press("1")
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+        await pilot.press("0")
+        await settle(pilot)
+        assert app.active_tab == "assistant"
+
+
+async def test_esc_leaves_the_assistant_box_and_then_a_digit_switches_tab(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await pilot.press("h", "i")
+        await settle(pilot)
+        assert app.active_tab == "assistant"
+        assert "esc then 1-9" in str(app.query_one("#assistant-keys").render())
+        await pilot.press("escape", "1")
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+        await pilot.press("0")
+        await settle(pilot)
+        await pilot.press("alt+1")
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
