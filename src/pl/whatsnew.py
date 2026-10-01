@@ -39,6 +39,8 @@ ENTRIES = [
     _e("2026-09-30.14", "Skills: view, edit, create and share every account's skills",
        "Settings tab, Skills section (ctrl+p \"Skills\"): e edit, n new, d delete, S share, l link",
        "pl skills list"),
+    _e("2026-09-30.15", "Update check: pl says when a newer release exists (it never installs it)",
+       "a notice at console start; U shows the update commands, c copies them", "pl update --check"),
 ]
 
 

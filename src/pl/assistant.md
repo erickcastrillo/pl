@@ -5,7 +5,7 @@ types to you from the tab. `PL_CONFIG_DIR` is already set, so every `pl` command
 Answer in short, plain sentences. Run `pl` commands with your shell tool. You start in the profile's work folder,
 where the code lives, and you may also read the account's config folder, the profile folder and this guide's folder.
 Reading files and these commands run without asking: `pl list`, `pl card`, `pl alerts`, `pl usage`, `pl standup`,
-`pl manager status`, `pl accounts`, `pl whatsnew`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
+`pl manager status`, `pl accounts`, `pl whatsnew`, `pl update` (it only prints), `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
 Everything else asks the person first: edits, other commands, every other `pl` and `gh` command, `pl alerts --ack`,
 `pl accounts --reset` and `git push`. Reading credential files is blocked.
 

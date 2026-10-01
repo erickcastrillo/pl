@@ -24,6 +24,7 @@ def no_real_memory_readers(monkeypatch):
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
 
 
 PY = re.compile(r"python[\d.]*$")

@@ -97,8 +97,8 @@ pl --version
 command -v pl
 ```
 
-- `uv tool list` shows `pl-funnel v0.1.0` and `- pl`.
-- `pl --version` prints `pl 0.1.0`.
+- `uv tool list` shows `pl-funnel v0.2.0` and `- pl`.
+- `pl --version` prints `pl 0.2.0`.
 - `command -v pl` prints a path inside the folder `uv tool dir --bin` names, usually `~/.local/bin/pl`. On macOS, `/usr/bin/pl` is Apple's property-list tool, not this pl.
 
 An assistant's shell may not keep the `export` line between commands, so an assistant puts it before every `pl` command in this guide.
@@ -213,6 +213,8 @@ A first run with an idea: [docs/github.md, section 6](docs/github.md#6-first-run
 
 ## 8. Update
 
+Once a day, the console and the dispatcher check for a newer release. When there is one, the console shows "pl vA.B.C is available (you have vX.Y.Z)" and `U` shows these commands; `pl update` prints them and `pl update --check` checks now. pl never runs them for you.
+
 ```
 cd ~/code/pl
 git pull
@@ -237,7 +239,7 @@ Then remove the `alias pl-work=...` line from your shell profile if you added it
 
 ## 10. Security notes
 
-**What pl sends, and where.** pl itself makes no network requests and has no telemetry. It runs `gh`, which talks to GitHub as you, and `claude`, which talks to Anthropic as you. Activity is logged only on your machine, in `~/.pl-work/state`. Installing downloads from your package manager, from GitHub (the clone) and from PyPI (the pinned dependencies, and Python if it was missing).
+**What pl sends, and where.** pl has no telemetry. Its only network request of its own is the update check: at most once a day it runs `git ls-remote --tags --refs https://github.com/erickcastrillo/pl` to read the release tags. It sends nothing about you, needs no sign-in, and gives up after 3 seconds. It remembers the time and the newest tag in `~/.local/state/pl/update.json`. To turn it off, set `PL_NO_UPDATE_CHECK=1` or add `[updates] check = false` to the profile's `config.toml`. It runs `gh`, which talks to GitHub as you, and `claude`, which talks to Anthropic as you. Activity is logged only on your machine, in `~/.pl-work/state`. Installing downloads from your package manager, from GitHub (the clone) and from PyPI (the pinned dependencies, and Python if it was missing).
 
 **Secrets.** pl stores no token, key or password. `config.toml` holds only names, paths and numbers, and only you can read it. For an MCP board, pl reads the server entry from the harness's own MCP file each time and never copies it into its config. pl never reads `~/.claude`, `~/.config/gh` or any other credential file; it only checks that the Claude folder exists.
 

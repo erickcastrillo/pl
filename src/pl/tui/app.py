@@ -8,12 +8,12 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static, TabbedContent, TabPane
 
-from pl import board, dispatch, manager, whatsnew
+from pl import board, dispatch, manager, update, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.assistant import AssistantView
 from pl.tui.chrome import TABS, TAB_KEYS, header_text, tabs
-from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen
+from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
 from pl.tui.needs import NeedsView, needs_groups, waiting_total
@@ -107,6 +107,32 @@ class WhatsNewScreen(ModalScreen):
         self.dismiss(None)
 
 
+class UpdateScreen(ModalScreen):
+    """How to update pl: the commands from INSTALL.md. c copies them; pl never runs them."""
+    DEFAULT_CSS = """
+    UpdateScreen { align: center middle; }
+    UpdateScreen > Vertical { width: 100%; max-width: 120; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("c", "copy", "copy"), Binding("escape", "close", "close")]
+
+    def __init__(self, note):
+        super().__init__()
+        self.note = note
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(self.note or f"pl v{update.__version__}", style="bold"))
+            yield Static(Text(update.HOW + update.COMMANDS))
+            yield Static(Text("c copy the commands · esc close · pl update prints them", style="dim"))
+
+    def action_copy(self):
+        copy_text(self.app, update.COMMANDS)
+        self.app.notify("copied the update commands", markup=False)
+
+    def action_close(self):
+        self.dismiss(None)
+
+
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
@@ -118,13 +144,15 @@ class PlApp(App):
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
-        Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("q", "quit", "quit")]
+        Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
+        Binding("q", "quit", "quit")]
 
-    def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None):
+    def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
         self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
-        self.dispatcher_note = None
+        self.check_updates = snapshot_provider is None if updates is None else updates   # real console: daily tag check
+        self.dispatcher_note = self.update_note = None
         self.snapshot_provider = snapshot_provider or default_provider
         self.interval = interval or default_interval()
         self.data, self.error, self.window = None, None, 1   # window: index into WINDOWS, 24 hours first
@@ -148,6 +176,25 @@ class PlApp(App):
         if self.show_whatsnew and C.CONFIG_DIR is not None and (new := whatsnew.unseen()):
             whatsnew.mark_seen()   # once per upgrade: shown now, not again on the next start
             self.push_screen(WhatsNewScreen(new))
+        if self.check_updates and update.enabled():
+            self.update_job()
+
+    @work(thread=True, group="update")
+    def update_job(self):
+        """Off the UI thread: the daily tag check (3 s at most). Any error is ignored."""
+        try:
+            if note := update.notice(update.check()):
+                self.call_from_thread(self.show_update, note)
+        except Exception:  # noqa: BLE001 - a worker that raises kills the app
+            pass
+
+    def show_update(self, note):
+        self.update_note = note
+        self.notify(note, timeout=30, markup=False)
+
+    def action_update(self):
+        if not isinstance(self.screen, UpdateScreen):
+            self.push_screen(UpdateScreen(self.update_note))
 
     def action_whatsnew(self):
         if not isinstance(self.screen, WhatsNewScreen):

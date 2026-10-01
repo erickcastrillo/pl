@@ -121,7 +121,12 @@ repo_tags = ["api", "web"]      # card tags that name a repo
 [paths]
 work_dir = "~/code"
 attention_cmd = "notify-me"     # notifications; unset means none
+
+[updates]
+check = true                    # once a day, read pl's release tags on GitHub; false (or PL_NO_UPDATE_CHECK=1) turns it off
 ```
+
+**Updates.** Once a day the console and the dispatcher read pl's release tags from https://github.com/erickcastrillo/pl with `git ls-remote`. Nothing is sent and no sign-in is used. When a newer release exists, the console says so and `U` shows the update commands; `pl update` prints them. pl never installs an update by itself.
 
 Every key can also be edited in the console's Settings tab. Custom harnesses go under `[harnesses.<name>]` with `bin`, `interactive` and `headless`.
 

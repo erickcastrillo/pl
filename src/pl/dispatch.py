@@ -774,6 +774,8 @@ def cmd_dispatch(a):
     if lock:
         print(f"dispatcher started for {C.PROFILE_NAME or 'legacy'} (pid {os.getpid()})", flush=True)
         events.emit("dispatcher_started", pid=os.getpid())
+        from pl import update
+        update.start_background(lambda n: print(n, flush=True), update.CLI_HINT)
     from pl import profiles
     for w in profiles.shared_warnings(profiles.list_profiles(), profiles.current_row()):
         print(f"warning: {w}")

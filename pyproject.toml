@@ -1,6 +1,6 @@
 [project]
 name = "pl-funnel"
-version = "0.1.0"
+version = "0.2.0"
 description = "The feature funnel: idea -> spec -> plan -> your yes -> PR -> review -> merge-ready, driven through the AI coding harness CLIs you already use."
 license = "MIT"
 requires-python = ">=3.11"

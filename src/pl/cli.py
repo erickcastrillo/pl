@@ -50,6 +50,9 @@
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
+  pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
+                          release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
+                          [updates] check = false turns it off)
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl skills list | share NAME [--account A] | link NAME ACCOUNT
                           every account's skills, agents and commands; share moves a skill into the shared
@@ -101,6 +104,13 @@ ASSISTANT_ACTIONS = ("approve", "reject", "done", "move", "retry", "pause", "res
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
+class VersionAction(argparse.Action):
+    def __call__(self, *_):
+        from pl import update
+        print(update.version_text())
+        raise SystemExit(0)
+
+
 def main():
     # First pass: only a --profile given before the subcommand picks the pl profile.
     pre = argparse.ArgumentParser(prog="pl", add_help=False)
@@ -119,7 +129,7 @@ def main():
     config.load(pre_a.profile)
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)
-    ap.add_argument("--version", action="version", version=f"pl {__import__('pl').__version__}")
+    ap.add_argument("--version", action=VersionAction, nargs=0, help="show program's version number and exit")
     sub = ap.add_subparsers(dest="cmd")
     p = sub.add_parser("idea"); p.add_argument("text"); p.add_argument("--doc", action="append", default=[])
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
@@ -164,8 +174,9 @@ def main():
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account")
+    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     a = ap.parse_args()
-    if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
+    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
     if not a.cmd:
         if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
@@ -178,4 +189,5 @@ def main():
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
-     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills}[a.cmd](a)
+     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
+     "update": lambda a: __import__("pl.update").update.cmd_update(a)}[a.cmd](a)
