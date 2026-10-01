@@ -16,10 +16,16 @@
                           become funnel ideas (the dispatcher does this every pass); --list shows every
                           candidate; a card id pulls that one card whatever its column
   pl adopt <id>           flag an existing Feature Pipeline card for the funnel
-  pl move <id> "<column>" move a pipeline card (a GitHub issue number works too) to a column
+  pl move <id> "<column>" [--pr URL]
+                          move a pipeline card (a GitHub issue number works too) to a column; --pr records the
+                          pull request in the card's pr_urls
   pl done <id> [--note]   move a pipeline card or a Product card to Done (your call); --note appends the evidence
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete] show a card's sections and metadata, or delete it
+  pl section <id> NAME [--from FILE [--force]]
+                          print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
+                          file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
+                          or SPEC needs --force
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
@@ -54,13 +60,15 @@
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
-  pl skills list | share NAME [--account A] | link NAME ACCOUNT
+  pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
-                          library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills")
+                          library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
+                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
                           a harness account, a tracker board or a tmux session
-  pl setup [--yes ...]    create a profile by answering a few questions (or give every answer as a flag)
+  pl setup [--yes ...]    create a profile by answering a few questions (or give every answer as a flag); its
+                          stages run pl's built-in skills. --use-builtin-stages switches an existing profile to them
   pl profiles new NAME [--from-current | --from-legacy]
                           create ~/.pl-NAME/config.toml (spec gate on) and print a shell alias for it;
                           --from-legacy copies the old one-file pl script's settings
@@ -88,7 +96,7 @@ import sys
 from pl import alerts, assistant, config, events, profiles, setup, skills
 
 from pl import config as C
-from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, cmd_idea, cmd_intent, cmd_list, cmd_move,
+from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_idea, cmd_intent, cmd_list, cmd_move,
                          cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
                          cmd_review)
 from pl.dispatch import cmd_dispatch
@@ -119,7 +127,7 @@ def main():
     if pre_a.rest[:2] == ["profiles", "new"]:  # the new profile's folder does not exist yet, so nothing may load it
         return profiles.cmd_new(pre_a.rest[2:], pre_a.profile)
     if pre_a.rest[:1] == ["setup"]:            # likewise: setup creates the profile
-        return setup.cmd_setup(pre_a.rest[1:])
+        return setup.cmd_setup(pre_a.rest[1:], pre_a.profile)
     if pre_a.rest[:1] == ["whatsnew"]:         # the package's own list: no profile needed
         from pl import whatsnew
         return whatsnew.cmd_whatsnew(pre_a.rest[1:])
@@ -144,9 +152,12 @@ def main():
     p = sub.add_parser("pull"); p.add_argument("id", nargs="?"); p.add_argument("--list", action="store_true"); p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("adopt"); p.add_argument("id"); p.add_argument("--account", choices=list(C.PROFILES))
     p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'")
-    p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column")
+    p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("board"); p.add_argument("action")
     p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
+    p = sub.add_parser("section"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
+    p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
+    p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
@@ -174,6 +185,7 @@ def main():
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account")
+    q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -186,7 +198,7 @@ def main():
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
-     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
+     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,

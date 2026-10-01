@@ -443,6 +443,7 @@ def build_doc(a):
     v = C._defaults()
     v.update(WORK_DIR=Path(a["work_dir"]).expanduser(), ATTENTION=Path(a["attention"]).expanduser() if a["attention"] else None,
              ACCOUNTS=a["accounts"], STAGES={s: {"account": a["default_account"]} for s in STAGES},
+             PROMPTS=dict(C.BUILTIN_PROMPTS),   # a new profile runs pl's built-in stage skills
              CODE_HOST={"owner": a["owner"], "labels": a["labels"] or {}})
     intake = {**v["INTAKE"], "columns": list(v["INTAKE"]["columns"])}
     doc = {"name": a["name"], **profiles._doc(v, {k: x for k, x in a["tracker"].items() if k != "_create"}, intake)}
@@ -683,13 +684,66 @@ def _parser():
     ap.add_argument("--no-labels", action="store_true", help="write no PR labels (pl then does not track PRs)")
     ap.add_argument("--create-labels", action=argparse.BooleanOptionalAction, default=None,
                     help="create the PR labels the repo lacks (default: yes with --yes; asked otherwise)")
+    ap.add_argument("--use-builtin-stages", action="store_true",
+                    help="switch an existing profile (--slug, --profile or $PL_CONFIG_DIR) to pl's built-in stage "
+                         "skills: /pl-spec, /pl-design, /pl-plan, /pl-run; config.toml is backed up first")
     return ap
 
 
-def cmd_setup(argv: list[str]):
+def _install_builtins():
+    from pl import skills
+    try:
+        for line in skills.install_builtins():
+            print(line)
+    except SystemExit as e:   # a bad [skills] library: say so, the profile is still fine
+        print(e)
+
+
+def use_builtin_stages(flags, profile=None):
+    """Point an existing profile's [stages.*] prompts at the built-in skills, after a backup. Prints each change."""
+    if flags.slug or profile:
+        if not SLUG_RE.fullmatch(flags.slug or profile):
+            raise SystemExit(f"pl setup: --slug {flags.slug or profile!r}: use lower-case letters, digits and '-' (at most 32)")
+        d = Path.home() / f".pl-{flags.slug or profile}"
+    elif os.environ.get("PL_CONFIG_DIR"):
+        d = Path(os.environ["PL_CONFIG_DIR"]).expanduser()
+    else:
+        _fail("--slug", "name the profile to switch")
+    target = d / "config.toml"
+    if not target.is_file():
+        raise SystemExit(f"pl setup: no profile in {_tilde(d)} (no config.toml)")
+    old = target.read_bytes()
+    doc = tomlkit.parse(old.decode())
+    stages = doc.setdefault("stages", tomlkit.table())
+    changes = [(s, (stages.get(s) or {}).get("prompt"), p) for s, p in C.BUILTIN_PROMPTS.items()
+               if (stages.get(s) or {}).get("prompt") != p]
+    _install_builtins()
+    if not changes:
+        print(f"{_tilde(target)}: the stages already use the built-in stage skills")
+        return
+    print(f"{_tilde(target)}: stage prompts")
+    for s, was, now in changes:
+        print(f"  {s}: {was or '(none)'} -> {now}")
+    if flags.interactive and _input("Write these changes? [Y/n]: ").strip().lower() in ("n", "no"):
+        raise SystemExit("pl setup: nothing written")
+    for s, _, now in changes:
+        if s not in stages:
+            stages[s] = tomlkit.table()
+        stages[s]["prompt"] = now
+    from pl import skills
+    bak = skills._stamp(d / "config.toml.bak")   # a second backup in the same second gets its own name
+    with os.fdopen(os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+        f.write(old)
+    C.save(doc, target)   # validated; temp file 0600, fsync, os.replace
+    print(f"updated {_tilde(target)} (backup: {bak.name})")
+
+
+def cmd_setup(argv: list[str], profile=None):
     """`pl setup [flags]`. Runs before any profile loads: the profile does not exist yet."""
     flags = _parser().parse_args(argv)
     flags.interactive = not flags.yes and sys.stdin.isatty()
+    if flags.use_builtin_stages:
+        return use_builtin_stages(flags, profile)
     if not 1 <= flags.sprint_weeks <= 26:
         _fail("--sprint-weeks", "a sprint is 1 to 26 weeks")
     a = {"todo": []}
@@ -741,6 +795,7 @@ def cmd_setup(argv: list[str]):
             profiles._write_config(d, doc)
         print(f"created {_tilde(d)}/config.toml")
         write_notify_script(a, d, flags.force)
+    _install_builtins()
     errs = C.validate(doc)
     if errs:
         print("pl setup: the profile was written but does not pass its checks; edit "

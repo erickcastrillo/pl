@@ -618,13 +618,18 @@ class GitHubProject(_GitHub):
                      if it and str((it.get("project") or {}).get("number")) == self.number
                      and ((it["project"].get("owner") or {}).get("login") or "").lower() == self.owner.lower()), None)
 
-    def move(self, ref, column):
-        """Set a card's stage from its issue number or card id: one issue lookup and one item-edit, no board listing."""
+    def ref_id(self, ref):
+        """The card id for an issue number or card id, from the text alone."""
         ref = str(ref).strip()
         cid = ref if "#" in ref.strip("#") else f"{self.repo}#{ref.lstrip('#')}"
         repo, num = _split(cid)
         if not (re.fullmatch(r"[\w.-]+/[\w.-]+", repo or "") and num.isdigit()):
             raise SystemExit(f"pl: not an issue number or card id: {ref!r}")
+        return cid
+
+    def move(self, ref, column):
+        """Set a card's stage from its issue number or card id: one issue lookup and one item-edit, no board listing."""
+        cid = self.ref_id(ref)
         it = self._mine(self._issues([cid])[cid])
         if it is None:
             raise SystemExit(f"pl: {cid} is not on project {self.owner}/{self.number}")

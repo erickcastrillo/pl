@@ -170,6 +170,8 @@ def new_profile(name: str, from_current: bool = False, github_owner: str | None 
     With github_owner, first create a GitHub Project with a "pl stage" field and make it the tracker."""
     d = _target(name)
     v = _values(from_current)
+    if not from_current:
+        v["PROMPTS"] = dict(C.BUILTIN_PROMPTS)   # a new profile runs pl's built-in stage skills
     tracker = dict(v["TRACKER"])
     if github_owner is not None:
         from pl.trackers.github import GitHubProject

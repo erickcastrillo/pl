@@ -252,12 +252,17 @@ def test_other_trackers_get_neither_default(fake_home):
 
 
 def test_builtin_review_prompt_keeps_every_outcome_visible_to_pl(fake_home):
-    """pl lists only PRs with `ready`; `rework` means problems found; `failed` waits for a person to add `review` back."""
+    """pl lists only PRs with `ready`; `rework` means problems found; `failed` waits for a person to add `review` back.
+    The rules live in the built-in pl-review skill; the prompt hands it the repo and this profile's labels."""
+    from pl import skills
     _write(fake_home, "gh", GH_PROFILE)
     C.load("gh")
     p = C.SERVICES["auto-review"]["prompt"]
-    assert ("Review passes: remove the label pl:auto-review and add pl:ready-for-review." in p)
-    assert ("Review finds problems: post them as one PR comment in plain words, remove pl:auto-review, "
-            "and add both pl:ready-for-review and pl:needs-rework." in p)
-    assert ("Review cannot run: comment why, remove pl:auto-review and add pl:review-failed; "
-            "a person decides, then adds pl:auto-review back." in p)
+    assert p == ("/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready-for-review "
+                 "rework=pl:needs-rework failed=pl:review-failed")
+    rules = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    assert "| Review passes | remove `<review>`, add `<ready>` |" in rules
+    assert ("| Review finds problems | post them as one PR comment in plain words, remove `<review>`, "
+            "add both `<ready>` and `<rework>` |") in rules
+    assert ("| Review cannot run | comment why, remove `<review>`, add `<failed>`; "
+            "a person decides, then adds `<review>` back |") in rules

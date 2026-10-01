@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime
@@ -305,13 +306,29 @@ def cmd_done(a):
 
 
 
+PR_URL_RE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
+
+
 def cmd_move(a):
-    """Move a pipeline card to a column. On a GitHub Project this reads the one issue, never the whole board."""
+    """Move a pipeline card to a column. On a GitHub Project this reads the one issue, never the whole board.
+    --pr URL first records the pull request in metadata.pr_urls (once), from a fresh read, then moves."""
+    pr = getattr(a, "pr", None)
+    if pr is not None and not PR_URL_RE.fullmatch(pr):
+        raise SystemExit(f"pl move: --pr {pr!r} is not a GitHub pull request URL (https://github.com/OWNER/REPO/pull/N)")
+    cid = None
+    if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
+        fresh_next()     # it writes what it read: never from a copy that may be minutes old
+        t = trackers.get("tracker")
+        cid = t.ref_id(a.id) if hasattr(t, "move") else find_card(a.id)["id"]
+        urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
+        if pr not in urls:
+            update(cid, metadata={"pr_urls": urls + [pr]})
+        print(f"recorded {pr}")
     t = trackers.get("tracker")
     if hasattr(t, "move"):
         cid = t.move(a.id, a.column)
     else:
-        cid = find_card(a.id)["id"]
+        cid = cid or find_card(a.id)["id"]
         t.update(cid, column=a.column)
     print(f"moved {cid} to {a.column}")
 
@@ -342,6 +359,77 @@ def cmd_card(a):
     print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
     for k, v in sections(c.get("description")).items():
         print(f"-- section {k or '(preamble)'}: {len(v)} chars, first line: {v.strip().splitlines()[0][:80] if v.strip() else ''}")
+
+
+WRITABLE = ("SPEC", "DESIGN", "PLAN")   # the sections stage agents write; INPUT and REVIEW NOTES are yours
+SECTION_MAX = 256 * 1024                # bytes a --from file may hold
+APPROVED_COLUMNS = ("Approved", "In progress", "PR open", "Done")   # the PLAN is a person's decision from here on
+AGENT_DIRS = ("skills", "agents", "commands")   # the only parts of a harness folder --from may read
+
+
+def _section_source(src):
+    """The text of a --from file: never a credential file (by name, through a link, or as a hard link), nothing in a
+    harness account folder outside skills/, agents/ and commands/, nothing over SECTION_MAX."""
+    from pl import harnesses
+    if src == "-":
+        raw = sys.stdin.buffer.read(SECTION_MAX + 1)
+    else:
+        p = Path(src).expanduser()
+        try:
+            r = p.resolve(strict=True)
+            st = os.stat(r)
+        except (OSError, RuntimeError) as e:
+            raise SystemExit(f"pl section: cannot read {src}: {e}") from None
+        if harnesses.SECRET_RE.fullmatch(p.name) or harnesses.SECRET_RE.fullmatch(r.name) \
+                or not stat.S_ISREG(st.st_mode) or harnesses.is_secret_file(None, st):
+            raise SystemExit(f"pl section: refused: {src} is a credential file or not a plain file")
+        for root in harnesses._roots():
+            if r.is_relative_to(root) and r.relative_to(root).parts[0] not in AGENT_DIRS:
+                raise SystemExit(f"pl section: refused: {src} is inside a harness account folder")
+        if st.st_size > SECTION_MAX:
+            raise SystemExit(f"pl section: {src} is over 256 KB")
+        fd = os.open(r, os.O_RDONLY | os.O_NOFOLLOW)   # a link swapped in after the checks is not followed
+        with os.fdopen(fd, "rb") as f:
+            raw = f.read(SECTION_MAX + 1)
+    if len(raw) > SECTION_MAX:
+        raise SystemExit("pl section: the text is over 256 KB")
+    if b"\0" in raw:
+        raise SystemExit("pl section: the text has a NUL byte; nothing was written")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SystemExit("pl section: the text is not UTF-8") from None
+
+
+def cmd_section(a):
+    """pl section <id> NAME: print one section in full. --from FILE (- for stdin): replace it with the file's text.
+    An approved PLAN or SPEC is refused unless --force (a person's yes)."""
+    name = " ".join(a.name.split()).upper()
+    if a.from_ is None:
+        text = sections(find_card(a.id).get("description")).get(name)
+        if text is None:
+            print(f"pl: card {a.id[:8]} has no {name} section", file=sys.stderr)
+        else:
+            print(text.rstrip("\n"))
+        return
+    if name not in WRITABLE:
+        raise SystemExit(f"pl section: only SPEC, DESIGN or PLAN can be written, not {name}")
+    text = _section_source(a.from_)
+    if not text.strip():
+        raise SystemExit("pl section: the text is empty; nothing was written")
+    if re.search(r"^# PIPELINE:", text, re.M):
+        raise SystemExit("pl section: the text has a line starting with '# PIPELINE:', which would split the card")
+    fresh_next()   # it rebuilds the whole body from what it read: never from a copy that may be minutes old
+    c = find_card(a.id)
+    if not getattr(a, "force", False):
+        if name == "PLAN" and (col := col_name(c.get("list_id"))) in APPROVED_COLUMNS:
+            raise SystemExit(f"pl section: the plan was approved (card is in '{col}'); a person can override with --force")
+        if name == "SPEC" and (c.get("metadata") or {}).get("spec_approved_at"):
+            raise SystemExit("pl section: the spec was approved; a person can override with --force")
+    parts = sections(c.get("description"))
+    parts[name] = text.strip("\n")
+    update(c["id"], description=check_size(render(parts)))
+    print(f"wrote {name} ({len(text.strip())} chars) to card {c['id'][:8]}")
 
 
 def cmd_board(a):

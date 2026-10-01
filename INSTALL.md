@@ -191,15 +191,7 @@ Press `q` to quit. Opening the console also starts the dispatcher in the tmux se
 enabled = false
 ```
 
-**Give each stage a prompt.** Setup does not write them, and agents do not start until they exist (`pl dispatch` stops with `set [stages.spec] prompt`). In `~/.pl-work/config.toml`, add one `prompt` line under each of `[stages.spec]`, `[stages.plan]` and `[stages.run]`, which setup already wrote. `[stages.design]` is used only for cards tagged `frontend`. `{id}` stands for the card id. The console's Settings tab (key `8`) does the same. For example:
-
-```toml
-[stages.spec]
-account = "claude"
-prompt = "Write the spec for card {id}."
-```
-
-Suggested prompts for the other two: `"Write the plan for card {id}."` and `"Build card {id} and open a pull request."`
+**Stage prompts.** Setup writes them: each stage runs one of pl's built-in skills (`/pl-spec {id}`, `/pl-design {id}`, `/pl-plan {id}`, `/pl-run {id}`; `{id}` stands for the card id), and setup copies those skills into the skills library. `[stages.design]` is used only for cards tagged `frontend`. To use your own prompt or skill instead, change the `prompt` line in `~/.pl-work/config.toml` or in the console's Settings tab (key `8`). A profile made before the built-in skills keeps its prompts; `pl setup --use-builtin-stages --slug work` switches it after a backup. See "Built-in stages" in the README.
 
 A shortcut for your shell profile, optional. **(you)** add it to `~/.zshrc` or `~/.bashrc`:
 

@@ -204,7 +204,25 @@ The Settings tab has a **Skills, agents and commands** section (ctrl+p "Skills" 
 
 `S` moves a skill into the library (`~/.local/share/pl/skills`, or `[skills] library`, an absolute path that is not HOME or an account folder) and leaves a link in its place. Every Claude session pl starts, except the Assistant, loads the library as a plugin (`--plugin-dir <profile>/state/plugin`), so it runs as `/pl:<name>`; a stage prompt `/<name>` is rewritten to that when neither the account nor the work folder (`.claude/skills/`) has a skill of its own by that name. Other harnesses get the skill inlined: a prompt `/<name> args` becomes "Follow the instructions in <file>". `l` links a library skill into one Claude or Codex account for use outside pl. Same from the shell: `pl skills list`, `pl skills share NAME`, `pl skills link NAME ACCOUNT`.
 
-Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
+### Built-in stages
+
+pl ships five skills, one per stage, so a new profile has a working pipeline with no prompts to write:
+
+| Skill | Stage prompt | What it does |
+| --- | --- | --- |
+| `pl-spec` | `/pl-spec {id}` | turns the card's INPUT into a spec with numbered Given/When/Then acceptance criteria, out of scope and open questions; writes SPEC and moves the card to Spec ready |
+| `pl-design` | `/pl-design {id}` | for cards tagged `frontend`: screens, the five states, layout and words; writes DESIGN |
+| `pl-plan` | `/pl-plan {id}` | work packages (what, where, the change, tests first, acceptance criteria) and a minimum-change budget; writes PLAN and moves the card to Plan for review |
+| `pl-run` | `/pl-run {id}` | builds the approved plan in a git worktree, one package at a time, tests first; opens a pull request with the `review` label and moves the card to PR open |
+| `pl-review` | the built-in auto-review loop | reviews pull requests with the `review` label, then labels them ready, rework or failed; never merges |
+
+They use only `pl` and `git` (and `gh` for pull requests), so they run on every harness: Claude gets them as `/pl:<name>` through the library plugin, Codex and Antigravity get them inlined. Stage agents write their result with `pl section <id> SPEC --from <file>` (also DESIGN and PLAN), read a section in full with `pl section <id> INPUT`, and move the card with `pl move`.
+
+`pl setup` copies them into the library, and so does each console start when one is missing or pl ships a newer version. **Edit them** in the Skills section (`e` on a `library` row) or in `~/.local/share/pl/skills/<name>/SKILL.md`. pl never overwrites a copy you edited: when a newer version ships, the console says "built-in X has an update; your edited copy was kept". **Reset one** to the shipped version with `pl skills reset NAME` (it asks first and keeps your copy as `SKILL.md.bak-<time>`).
+
+**Use your own skills instead:** set the stage's `prompt` (for example `/my-spec {id}`) in `config.toml` or the Settings tab, and `[loops.auto-review] prompt` for reviews. An account skill with the same name as a built-in wins over the library copy. A profile made before the built-in skills keeps its prompts; `pl setup --use-builtin-stages --slug NAME` switches it, after a backup of `config.toml`, and prints each prompt it changes.
+
+Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl section`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
 
 Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
 

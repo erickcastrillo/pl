@@ -173,6 +173,8 @@ class PlApp(App):
         self.refresh_data()
         if self.autostart and C.DISPATCH.get("autostart", True) is not False:
             self.dispatcher_job("start")
+        if self.autostart and C.CONFIG_DIR is not None:   # real console: copy in missing or newer built-in skills
+            self.install_builtins()
         if self.show_whatsnew and C.CONFIG_DIR is not None and (new := whatsnew.unseen()):
             whatsnew.mark_seen()   # once per upgrade: shown now, not again on the next start
             self.push_screen(WhatsNewScreen(new))
@@ -195,6 +197,15 @@ class PlApp(App):
     def action_update(self):
         if not isinstance(self.screen, UpdateScreen):
             self.push_screen(UpdateScreen(self.update_note))
+
+    def install_builtins(self):
+        from pl import skills
+        try:
+            for line in skills.install_builtins():
+                if "kept" in line:   # only an update it did not apply needs you; the rest is routine
+                    self.notify(line + " (pl skills reset to take it)", timeout=10)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a bad library folder or config must not stop the console
+            self.notify(f"built-in skills not installed: {e}", timeout=10, markup=False)
 
     def action_whatsnew(self):
         if not isinstance(self.screen, WhatsNewScreen):

@@ -41,6 +41,9 @@ ENTRIES = [
        "pl skills list"),
     _e("2026-09-30.15", "Update check: pl says when a newer release exists (it never installs it)",
        "a notice at console start; U shows the update commands, c copies them", "pl update --check"),
+    _e("2026-09-30.16", "Built-in stage skills: pl-spec, pl-design, pl-plan, pl-run and pl-review",
+       "new profiles use them; edit them in Settings, Skills (library); pl skills reset NAME puts one back",
+       "pl setup --use-builtin-stages"),
 ]
 
 

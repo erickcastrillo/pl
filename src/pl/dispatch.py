@@ -66,8 +66,10 @@ def stage_complete(c, col, stage):
 
 
 def _gh_env_args():
-    """tmux new-window -e so an agent's own gh calls use the profile's gh sign-in folder; nothing when unset."""
-    return ["-e", f"GH_CONFIG_DIR={C.GH_CONFIG_DIR}"] if C.GH_CONFIG_DIR else []
+    """tmux new-window -e so an agent's own pl calls act on this profile and its gh calls use the profile's gh
+    sign-in folder (when set)."""
+    return (["-e", f"PL_CONFIG_DIR={Path(C.CONFIG_DIR).expanduser().absolute()}"] if C.CONFIG_DIR else []) + \
+        (["-e", f"GH_CONFIG_DIR={C.GH_CONFIG_DIR}"] if C.GH_CONFIG_DIR else [])
 
 
 MAX_ATTEMPTS = 3   # a stage whose agent died this many times waits for a person (pl retry)
@@ -108,6 +110,9 @@ def start_worker(c, stage, attempts, dry):
     if not C.PROMPTS.get(stage):
         raise SystemExit(f"pl: set [stages.{stage}] prompt in {C.path() or 'config.toml'}")
     prompt = C.PROMPTS[stage].format(id=c["id"])
+    review = (C.CODE_HOST.get("labels") or {}).get("review")
+    if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"] and review:
+        prompt += f" review={shlex.quote(review)}"   # pl-run labels its pull request with it
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return
@@ -128,6 +133,18 @@ def start_worker(c, stage, attempts, dry):
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
     print(f"  started {name} under {profile} in {C.TMUX_SESSION}:{win} ({prompt})")
 
+
+
+def loop_prompt(svc):
+    """A loop's prompt; the built-in review loop uses its inline fallback while pl-review is not in the library."""
+    if svc.get("fallback"):
+        from pl import skills
+        try:
+            if not (skills.library() / "pl-review" / "SKILL.md").is_file():
+                return svc["fallback"]
+        except SystemExit:
+            return svc["fallback"]
+    return svc["prompt"]
 
 
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
@@ -192,7 +209,8 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         if use is None:
             print(f"{name} loop waits: every profile is out of credits")
             continue
-        print(f"starting {name} loop under {use}: {svc['prompt']}")
+        prompt = loop_prompt(svc)
+        print(f"starting {name} loop under {use}: {prompt}")
         if dry:
             continue
         if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
@@ -201,7 +219,7 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                    "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
         tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
         pane = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
-        _launch(pane, name, harnesses.launch_script(harnesses.unattended(harnesses.account_harness(use)), use, svc["prompt"],
+        _launch(pane, name, harnesses.launch_script(harnesses.unattended(harnesses.account_harness(use)), use, prompt,
                                                     None, name))
         old = svc_state.get(name, {})
         svc_state[name] = {"profile": use, "started_at": now_iso(), "sessions": old.get("sessions", []),
@@ -776,6 +794,12 @@ def cmd_dispatch(a):
         events.emit("dispatcher_started", pid=os.getpid())
         from pl import update
         update.start_background(lambda n: print(n, flush=True), update.CLI_HINT)
+        try:   # the built-in skills, for a dispatcher the manager started with no console open
+            from pl import skills
+            for line in skills.install_builtins():
+                print(line)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a bad library folder or config never stops the dispatcher
+            print(f"built-in skills not installed: {e}", file=sys.stderr)
     from pl import profiles
     for w in profiles.shared_warnings(profiles.list_profiles(), profiles.current_row()):
         print(f"warning: {w}")

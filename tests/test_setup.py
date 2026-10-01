@@ -938,3 +938,62 @@ def test_setup_says_the_manager_is_off_when_machine_toml_turns_it_off(fake_home,
     _pl(monkeypatch, *GITHUB_EXISTING)
     out = capsys.readouterr().out
     assert "kept" in out and "the manager is off" in out and "runs every profile" not in out
+
+
+# ---------- built-in stage skills ----------
+
+BUILTIN = {"spec": "/pl-spec {id}", "design": "/pl-design {id}", "plan": "/pl-plan {id}", "run": "/pl-run {id}"}
+
+
+def test_a_new_profile_uses_the_builtin_stage_skills_and_setup_installs_them(fake_home, monkeypatch, capsys):
+    _pl(monkeypatch, *BASE, "--tracker", "github-issues", "--repo", "acme/app")
+    t = _cfg(fake_home, "work-acme")
+    assert {s: v["prompt"] for s, v in t["stages"].items()} == BUILTIN
+    assert {s: v["account"] for s, v in t["stages"].items()} == {s: "claude" for s in BUILTIN}
+    lib = fake_home / ".local" / "share" / "pl" / "skills"
+    assert sorted(p.name for p in lib.iterdir() if not p.name.startswith(".")) == \
+        ["pl-design", "pl-plan", "pl-review", "pl-run", "pl-spec"]
+    assert "installed built-in pl-spec" in capsys.readouterr().out
+
+
+def _custom_prompts(fake_home):
+    import tomlkit
+    p = fake_home / ".pl-work-acme" / "config.toml"
+    doc = tomlkit.parse(p.read_text())
+    for s in ("spec", "plan", "run"):
+        doc["stages"][s]["prompt"] = f"/my-{s} {{id}}"
+    del doc["stages"]["design"]["prompt"]
+    p.write_text(tomlkit.dumps(doc))
+    return p.read_bytes()
+
+
+def test_an_existing_profile_keeps_its_prompts_until_use_builtin_stages(fake_home, monkeypatch, capsys):
+    _pl(monkeypatch, *BASE, "--tracker", "github-issues", "--repo", "acme/app")
+    _custom_prompts(fake_home)
+    _pl(monkeypatch, "--yes", "--slug", "work-acme")                       # a re-run never touches prompts
+    old = (fake_home / ".pl-work-acme" / "config.toml").read_bytes()
+    assert _cfg(fake_home, "work-acme")["stages"]["spec"]["prompt"] == "/my-spec {id}"
+    capsys.readouterr()
+    _pl(monkeypatch, "--use-builtin-stages", "--slug", "work-acme", "--yes")
+    out = capsys.readouterr().out
+    t = _cfg(fake_home, "work-acme")
+    assert {s: v["prompt"] for s, v in t["stages"].items()} == BUILTIN
+    assert t["stages"]["spec"]["account"] == "claude" and C.validate(t) == []
+    baks = sorted((fake_home / ".pl-work-acme").glob("config.toml.bak-*"))
+    assert baks[-1].read_bytes() == old and stat.S_IMODE(baks[-1].stat().st_mode) == 0o600
+    assert "spec: /my-spec {id} -> /pl-spec {id}" in out and "design: (none) -> /pl-design {id}" in out
+    assert f"backup: {baks[-1].name}" in out
+    capsys.readouterr()
+    _pl(monkeypatch, "--use-builtin-stages", "--slug", "work-acme", "--yes")   # already switched: nothing to write
+    assert "already use the built-in stage skills" in capsys.readouterr().out
+    assert len(list((fake_home / ".pl-work-acme").glob("config.toml.bak-*"))) == len(baks)
+
+
+def test_use_builtin_stages_needs_an_existing_profile(fake_home, monkeypatch):
+    with pytest.raises(SystemExit, match="no profile"):
+        _pl(monkeypatch, "--use-builtin-stages", "--slug", "nope", "--yes")
+
+
+def test_use_builtin_stages_checks_the_slug(fake_home, monkeypatch):
+    with pytest.raises(SystemExit, match="lower-case"):
+        _pl(monkeypatch, "--use-builtin-stages", "--slug", "../evil", "--yes")

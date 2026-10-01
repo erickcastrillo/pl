@@ -20,7 +20,7 @@ Check with `gh auth status`. It lists the scopes your token has.
 
 ## 2. Create a profile
 
-A profile is one folder, `~/.pl-<name>`, with a `config.toml`. The usual way to make one is `pl setup`, which works with a new or an existing Project and writes everything below except the stage prompts: see [INSTALL.md](../INSTALL.md). The rest of this section is the older `pl profiles new` path.
+A profile is one folder, `~/.pl-<name>`, with a `config.toml`. The usual way to make one is `pl setup`, which works with a new or an existing Project and writes everything below, with stage prompts that run pl's built-in skills: see [INSTALL.md](../INSTALL.md). The rest of this section is the older `pl profiles new` path.
 
 This command creates a new GitHub Project and a profile that uses it:
 
@@ -54,7 +54,7 @@ repo = "your-org/your-repo" # where new cards are opened as issues; you must add
 
 `pl setup` writes `repo`; `pl profiles new` writes it only with `--repo`. Without it pl can read and move cards but cannot create one.
 
-Then add at least one harness account and a prompt per stage. `{id}` is replaced by the card id.
+Then add at least one harness account. `pl profiles new` writes stage prompts that run pl's built-in skills (see "Built-in stages" in the README); to use your own, give each stage a prompt. `{id}` is replaced by the card id.
 
 ```toml
 [accounts.main]
@@ -179,7 +179,7 @@ enabled = false            # or give your own prompt = "..."
 ## 6. First run
 
 ```
-# pl setup as in INSTALL.md, then add the [stages.*] prompts to ~/.pl-work/config.toml
+# pl setup as in INSTALL.md (it writes the [stages.*] prompts)
 pl --profile work list                 # the board by column; checks gh and the stage field
 pl --profile work                      # open the console
 ```

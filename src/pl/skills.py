@@ -2,13 +2,16 @@
 (~/.local/share/pl/skills, or [skills] library). Only .md files under skills/, agents/ and commands/ are read; a link is
 followed only when its target stays in the account folder or the library; credential files are never opened; a
 plugin's files are never changed; nothing is overwritten; delete moves to <root>/.pl-trash."""
+import contextlib
 import difflib
+import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -25,6 +28,11 @@ TEMPLATE = ("---\nname: {name}\ndescription: Say in one sentence when to use thi
             "## When to use\n\n- \n\n## Steps\n\n1. \n")
 
 
+BUILTIN_DIR = Path(__file__).parent / "skills_builtin"   # pl's own stage skills, copied into the library
+BUILTIN_STATE = ".pl-builtin.json"                       # in the library: {name: {version, sha256, told}}
+BUILTIN_LOCK = ".pl-builtin.lock"                        # in the library: held while built-ins are installed
+LOCK_WAIT = 5                                            # seconds an install waits for another one
+VERSION_RE = re.compile(r"^pl-builtin-version:\s*(\d+)\s*$", re.M)
 EDIT_LIMIT = 1 << 20     # the in-app editor opens files up to 1 MiB that decode as UTF-8
 INLINE_MAX_AGE = 86400   # inlined prompt files older than a day are removed at the next launch
 
@@ -389,14 +397,15 @@ def _clean_inlined(d):
 
 
 def library_prompt(h, account, prompt, plugin=None):
-    """A prompt starting with /<name> of a library skill the account (and the work folder) lacks: Claude gets
+    """A prompt starting with /<name> (or, on Claude, /loop <every> /<name>) of a library skill the account (and the
+    work folder) lacks: Claude gets
     /pl:<name> (the plugin's name for it), but only when plugin (this launch's --plugin-dir) is set; any other harness
     gets "Follow the instructions in <file>", the file holding SKILL.md and the prompt's arguments. Anything else, or
     any error, returns the prompt unchanged."""
-    m = re.match(r"\s*/([a-z0-9][a-z0-9-]*)(?=\s|$)", prompt or "")
-    if not m:
+    m = re.match(r"(\s*/loop\s+(?:[^/\s]\S*\s+)?)?\s*/([a-z0-9][a-z0-9-]*)(?=\s|$)", prompt or "")
+    if not m or (m.group(1) and h.name != "claude"):
         return prompt
-    name, rest = m.group(1), prompt[m.end():]
+    loop, name, rest = m.group(1) or "", m.group(2), prompt[m.end():]
     try:
         f = library() / name / "SKILL.md"
         if not f.is_file():
@@ -407,7 +416,7 @@ def library_prompt(h, account, prompt, plugin=None):
         if h.name == "claude":
             wd = Path(C.WORK_DIR) / ".claude" / "skills" / name if C.WORK_DIR else None
             own = os.path.lexists(root / "commands" / f"{name}.md") if root else False
-            return prompt if own or not plugin or (wd and os.path.lexists(wd)) else f"/pl:{name}{rest}"
+            return prompt if own or not plugin or (wd and os.path.lexists(wd)) else f"{loop}/pl:{name}{rest}"
         text = _read(_safe(library(), f))
         d = C.STATE_DIR / "launch"
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -422,8 +431,180 @@ def library_prompt(h, account, prompt, plugin=None):
         return prompt
 
 
+# ---------- built-in stage skills: shipped in the package, copied into the library, never over your edits ----------
+
+def builtin_names():
+    return sorted(d.name for d in BUILTIN_DIR.iterdir() if (d / "SKILL.md").is_file())
+
+
+def _builtin(name):
+    """(bytes, version) of a shipped skill."""
+    raw = (BUILTIN_DIR / name / "SKILL.md").read_bytes()
+    m = VERSION_RE.search(raw.decode("utf-8"))
+    return raw, int(m.group(1)) if m else 0
+
+
+def _sha256(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _state():
+    """The library's record of what pl wrote; anything that is not a {name: {...}} entry counts as no record."""
+    try:
+        v = json.loads((library() / BUILTIN_STATE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: x for k, x in v.items() if isinstance(x, dict)} if isinstance(v, dict) else {}
+
+
+def _ver(v):
+    """A recorded version as an int; anything else is 0."""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _save_state(st):
+    p = library() / BUILTIN_STATE
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(st, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, p)
+
+
+def _write_builtin(dest, raw):
+    """Write raw to dest (a SKILL.md in the library), never through a link."""
+    if dest.parent.is_symlink():
+        raise OSError(f"{dest.parent} is a link")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")   # a reader never sees half a file
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        os.replace(tmp, dest)   # replaces a link itself, never writes through it
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+@contextlib.contextmanager
+def _install_lock(lib):
+    """Yields True while this process holds the library's install lock; False when another install held it for
+    LOCK_WAIT seconds."""
+    fd = os.open(lib / BUILTIN_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        end = time.monotonic() + LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    yield False
+                    return
+                time.sleep(0.1)
+        yield True
+    finally:
+        os.close(fd)   # closing releases the lock
+
+
+def install_builtins():
+    """Copy each built-in skill into the library when it is missing, or when the library copy is pl's own older
+    version. A copy that differs from what pl wrote last (you edited it, or a skill of yours has that name) is kept;
+    a newer shipped version is then reported once. Returns one line per change or kept update."""
+    out, lib = [], library()
+    try:
+        lib.mkdir(parents=True, exist_ok=True)
+        with _install_lock(lib) as held:
+            return _install(lib) if held else out   # another install is running: it does the work
+    except OSError:
+        return out
+
+
+def _install(lib):
+    out, st = [], _state()
+    before = json.dumps(st, sort_keys=True)
+    for name in builtin_names():
+        raw, ver = _builtin(name)
+        dest, rec = lib / name / "SKILL.md", st.get(name) or {}
+        try:
+            if (lib / name).is_symlink():
+                continue                                    # a link is the user's own arrangement: never written through
+            if not dest.exists():
+                _write_builtin(dest, raw)
+                st[name] = {"version": ver, "sha256": _sha256(raw)}
+                out.append(f"installed built-in {name}")
+                continue
+            have = _sha256(_read_bytes(_safe(lib, dest)))
+            if have == _sha256(raw):
+                st[name] = {"version": ver, "sha256": have}
+            elif have == rec.get("sha256"):                 # pl's own copy, unedited
+                if ver > _ver(rec.get("version")):
+                    _write_builtin(dest, raw)
+                    st[name] = {"version": ver, "sha256": _sha256(raw)}
+                    out.append(f"updated built-in {name} to version {ver}")
+            elif _ver(rec.get("told")) < ver:           # edited: keep it, say so once per new version
+                st[name] = {**rec, "told": ver}
+                out.append(f"built-in {name} has an update; your edited copy was kept")
+        except (OSError, SystemExit):
+            continue
+    try:
+        if json.dumps(st, sort_keys=True) != before:   # nothing new: the state file is left alone
+            _save_state(st)
+    except OSError:
+        pass
+    return out
+
+
+def reset_builtin(name):
+    """Put the shipped version of a built-in back, backing up the library copy first. Returns the backup or None."""
+    if name not in builtin_names():
+        raise SystemExit(f"pl: {name!r} is not a built-in skill ({', '.join(builtin_names())})")
+    raw, ver = _builtin(name)
+    dest = library() / name / "SKILL.md"
+    if (library() / name).is_symlink():
+        raise SystemExit(f"pl: refused: {library() / name} is a link")
+    bak = None
+    if dest.exists():
+        old = _read_bytes(_safe(library(), dest))
+        if old != raw:
+            bak = _stamp(dest.with_name(dest.name + ".bak"))
+            with os.fdopen(os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as f:
+                f.write(old)
+    _write_builtin(dest, raw)
+    st = _state()
+    st[name] = {"version": ver, "sha256": _sha256(raw)}
+    _save_state(st)
+    return bak
+
+
+def _cmd_reset(a):
+    if a.name not in builtin_names():
+        raise SystemExit(f"pl: {a.name!r} is not a built-in skill ({', '.join(builtin_names())})")
+    dest = library() / a.name / "SKILL.md"
+    if not a.yes:
+        if not sys.stdin.isatty():
+            raise SystemExit("pl skills reset: no terminal to confirm on; add --yes")
+        try:
+            ok = input(f"Replace {dest} with the shipped version of {a.name}? A backup is kept. [y/N]: ")
+        except EOFError:
+            ok = ""
+        if ok.strip().lower() not in ("y", "yes"):
+            print("nothing changed")
+            return 0
+    bak = reset_builtin(a.name)
+    print(f"restored built-in {a.name} in {dest}" + (f" (your copy is {bak.name})" if bak else ""))
+    return 0
+
+
 def cmd_skills(a):
-    """pl skills list | share NAME [--account A] | link NAME ACCOUNT."""
+    """pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]."""
+    if a.skills_cmd == "reset":
+        return _cmd_reset(a)
     if a.skills_cmd == "share":
         print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":

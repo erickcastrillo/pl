@@ -1,6 +1,7 @@
 """Settings. Other modules read them through the config module alias at call time, never by copying names."""
 import os
 import re
+import shlex
 import socket
 from pathlib import Path
 import tomllib
@@ -80,8 +81,13 @@ globals().update(_defaults())
 START_LABEL = "pl:start"   # an open issue with this label joins the funnel (the default issue intake)
 
 
-def _review_prompt(repo, lab, account):
-    """The built-in auto-review loop's prompt for a github-project profile. Claude repeats it with /loop."""
+# pl's built-in stage skills (src/pl/skills_builtin): new profiles' stage prompts. pl setup --use-builtin-stages
+# switches an existing profile to them.
+BUILTIN_PROMPTS = {"spec": "/pl-spec {id}", "design": "/pl-design {id}", "plan": "/pl-plan {id}", "run": "/pl-run {id}"}
+
+
+def _review_text(repo, lab, account):
+    """The inline review prompt, used while the pl-review skill is not in the library yet."""
     rework, failed = lab.get("rework") or "pl:needs-rework", lab.get("failed") or "pl:review-failed"
     rv, ok = lab["review"], lab["ready"]
     text = (f"Review pull requests on {repo}. List them with: gh pr list --repo {repo} --state open --search "
@@ -91,6 +97,15 @@ def _review_prompt(repo, lab, account):
             f"Review finds problems: post them as one PR comment in plain words, remove {rv}, and add both {ok} and {rework}. "
             f"Review cannot run: comment why, remove {rv} and add {failed}; a person decides, then adds {rv} back. "
             "Never merge, never push to the base branch, never create or edit labels.")
+    return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
+
+
+def _review_prompt(repo, lab, account):
+    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo and the
+    labels. Claude repeats it with /loop."""
+    rework, failed = lab.get("rework") or "pl:needs-rework", lab.get("failed") or "pl:review-failed"
+    q = shlex.quote   # a label with spaces stays one value
+    text = f"/pl-review repo={q(repo)} review={q(lab['review'])} ready={q(lab['ready'])} rework={q(rework)} failed={q(failed)}"
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
@@ -132,6 +147,7 @@ def _apply(g, t):
         if "auto-review" not in t.get("loops", {}) and g["ACCOUNTS"] and lab.get("review") and lab.get("ready"):
             first, acct = next(iter(g["ACCOUNTS"].items()))
             g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct), "profile": first,
+                                                             "fallback": _review_text(tr["repo"], lab, acct),
                                                              "builtin": True}}
     if isinstance(ch.get("gh_config_dir"), str) and ch["gh_config_dir"]:
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
