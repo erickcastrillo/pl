@@ -26,10 +26,31 @@ PANE_RE, WINDOW_RE = re.compile(r"%\d+"), re.compile(r"@\d+")
 LOG_CHARS = 200
 # The harness's "ask the person" mode, forced whatever the account's own default is (strings of claude 2.1.286 and
 # codex 0.150.1 --help). A harness missing here, or a template that already sets a permission flag, is refused.
-# An allow rule in a settings file beats --permission-mode manual, so claude also gets ask rules through --settings
-# (an inline JSON string, per its --help): ask beats allow, and a deny rule still wins over both.
-ASK_RULES = ["Bash(pl *)", "Bash(pl:*)", "Bash(gh *)", "Bash(gh:*)", "Bash(git push *)", "Bash(git push:*)"]
-ASK_FIRST = {"claude": ["--permission-mode", "manual", "--settings", json.dumps({"permissions": {"ask": ASK_RULES}})],
+# claude also gets permission rules through --settings (an inline JSON string, per its --help). Claude Code checks deny,
+# then ask, then allow, so an ask rule beats every allow rule, the account's own included; a deny rule beats both.
+# Reads and the read-only commands below run without a prompt; any other pl command, gh or git push asks.
+READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
+READ_ONLY = ["Bash(pl list*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)",
+             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(git status*)",
+             "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
+PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "move", "board", "retry",
+             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup")   # move also covers move-agent
+GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
+          "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",
+          "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable",
+          "workflow")                                                            # every gh command but pr (gh 2.x)
+GH_PR_WRITES = ("checkout", "close", "comment", "create", "edit", "lock", "merge", "ready", "reopen", "revert",
+                "review", "unlock", "update-branch")
+# --ac, --r, --d: argparse also takes a unique prefix of a long flag (--ack, --reset, --delete)
+ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), "Bash(pl alerts *--ac*)",
+             "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
+             "Bash(pl manager *run*)", "Bash(pl manager -*)", "Bash(gh -*)", *(f"Bash(gh {c}*)" for c in GH_TOP), "Bash(gh pr -*)",
+             *(f"Bash(gh pr {c}*)" for c in GH_PR_WRITES), "Bash(git push*)", "Bash(git push:*)", "Bash(git -*)",
+             "Bash(git diff *--output*)", "Bash(git log *--output*)", "Bash(git difftool*)"]
+DENY_RULES = [*(f"Read(**/{f})" for f in (".credentials*", "auth.json", ".env*", "*.pem", "id_rsa*", "id_ed25519*",
+                                         ".netrc", "hosts.yml")), "Bash(security *)"]
+CLAUDE_RULES = {"permissions": {"allow": READ_TOOLS + READ_ONLY, "ask": ASK_RULES, "deny": DENY_RULES}}
+ASK_FIRST = {"claude": ["--permission-mode", "manual", "--settings", json.dumps(CLAUDE_RULES)],
              "codex": ["--ask-for-approval", "on-request", "--sandbox", "read-only"]}
 PERMISSION_FLAG_RE = re.compile(r"dangerously|bypass|yolo|full-auto|approve-for-me|permission|approval|sandbox|dontask"
                                 r"|acceptedits|allowed-?tools|settings|^-[as]$", re.I)
@@ -118,9 +139,25 @@ def first_prompt():
 
 # ---------- start, resume, reattach ----------
 
-def ask_first(h):
-    """The harness with its "ask the person" flags after the program name, or SystemExit when pl cannot force that."""
+def work_dir():
+    """Where the assistant starts: the profile's work_dir (where the code lives), else the profile folder."""
+    return C.WORK_DIR if C.WORK_DIR and Path(C.WORK_DIR).is_dir() else C.CONFIG_DIR
+
+
+def add_dirs(acct):
+    """The folders claude may read besides its start folder: the account's config folder (skills, plugins, settings),
+    the profile folder and the folder of pl's guide. Never HOME, or a folder that holds HOME."""
+    home = Path.home()
+    dirs = [harnesses.config_dir(acct), C.CONFIG_DIR, GUIDE.parent]
+    return list(dict.fromkeys(str(d) for d in dirs if d and not harnesses.inside(d, home)))
+
+
+def ask_first(h, acct=None):
+    """The harness with its "ask the person" flags after the program name, or SystemExit when pl cannot force that.
+    claude's --add-dir takes several values, so it goes first and the next flag ends its list."""
     flags = ASK_FIRST.get(h.name)
+    dirs = add_dirs(acct) if h.name == "claude" and flags else []
+    flags = ["--add-dir", *dirs, *flags] if dirs else flags
     if not flags:
         raise SystemExit(f"pl: harness {h.name} cannot be started in a mode that asks you before each action, "
                          "so the assistant does not start on it (pick a claude or codex account: [assistant] account)")
@@ -150,13 +187,13 @@ def _ensure():
     h = harnesses.account_harness(acct)
     if not h.interactive:
         raise SystemExit(f"pl: harness {h.name} has no interactive template for the assistant")
-    h = ask_first(h)
+    h = ask_first(h, acct)
     resume = bool(h.resume and st.get("session_id") and st.get("account") == acct and st.get("harness") == h.name)
     sid = st["session_id"] if resume else str(uuid.uuid4())
     if _run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"]).returncode:
         _tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
     from pl import dispatch   # the launch helpers; imported here so the console's import stays light
-    win = _tmux("new-window", "-d", "-t", f"={C.TMUX_SESSION}:", "-n", WINDOW, "-c", str(C.WORK_DIR),
+    win = _tmux("new-window", "-d", "-t", f"={C.TMUX_SESSION}:", "-n", WINDOW, "-c", str(work_dir()),
                 "-e", "DISABLE_AUTO_UPDATE=true", "-e", f"PL_CONFIG_DIR={C.CONFIG_DIR}", "-e", "PL_ASSISTANT=1",
                 *dispatch._gh_env_args(), "-P", "-F", "#{window_id}")
     _tmux("set-option", "-w", "-t", win, "automatic-rename", "off")

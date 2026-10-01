@@ -113,7 +113,7 @@ def test_a_first_ensure_starts_the_assistant_window_with_the_guide(tmux):
     assert f"PL_CONFIG_DIR={C.CONFIG_DIR}" in argv and "PL_ASSISTANT=1" in argv
     script = _script(tmux)
     assert "--session-id" in script and str(GUIDE) in script and "dangerously" not in script
-    assert "exec claude --permission-mode manual " in script     # ask the person, whatever the account's default mode
+    assert "exec claude --add-dir " in script and " --permission-mode manual " in script    # ask the person, whatever the account's default mode
     assert "CLAUDE_CONFIG_DIR=" in script and ".claude-acme" in script
     st = json.loads((C.STATE_DIR / "assistant.json").read_text())
     assert st["account"] == "acme" and st["window"] == "@10" and st["pane"] == "%10" and st["session_id"]
@@ -383,14 +383,104 @@ def _exec_argv(t):
     return shlex.split(next(x for x in _script(t).splitlines() if x.startswith("exec "))[5:])
 
 
+def _perms(t):
+    argv = _exec_argv(t)
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert set(settings) == {"permissions"}
+    return settings["permissions"]
+
+
+def _hits(rules, cmd):
+    """The Bash rules that match cmd, with Claude Code's `*` wildcard (any text, spaces included)."""
+    return [r for r in rules if r.startswith("Bash(") and re.fullmatch(
+        re.escape(r[5:-1]).replace(r"\*", ".*"), cmd)]
+
+
 def test_claude_gets_ask_rules_that_beat_the_accounts_allow_rules(tmux):
     assistant.ensure()
-    argv = _exec_argv(tmux)
-    settings = json.loads(argv[argv.index("--settings") + 1])
-    assert set(settings) == {"permissions"} and set(settings["permissions"]) == {"ask"}
-    assert {"Bash(pl *)", "Bash(pl:*)", "Bash(gh *)", "Bash(gh:*)", "Bash(git push *)",
-            "Bash(git push:*)"} <= set(settings["permissions"]["ask"])
-    assert argv[:3] == ["claude", "--permission-mode", "manual"]
+    p = _perms(tmux)
+    assert set(p) == {"allow", "ask", "deny"}
+    for cmd in ("pl approve x", "pl --profile other approve x", "pl move-agent c a", "pl retry all", "pl idea hi",
+                "pl assistant idea file 1", "pl manager stop", "pl manager --all stop", "pl manager restart t",
+                "pl card x --delete", "gh pr merge 1", "gh api /user", "gh issue close 1", "gh pr create",
+                "git push", "git push origin main", "git -C x push", "git diff --output=x", "git log --output x"):
+        assert _hits(p["ask"], cmd), cmd
+    assert _exec_argv(tmux)[0] == "claude" and "--permission-mode" in _exec_argv(tmux)
+    assert _exec_argv(tmux)[_exec_argv(tmux).index("--permission-mode") + 1] == "manual"
+
+
+def test_reads_and_read_only_commands_run_without_asking(tmux):
+    assistant.ensure()
+    p = _perms(tmux)
+    assert {"Read", "Glob", "Grep", "LS", "NotebookRead"} <= set(p["allow"])
+    for cmd in ("pl list --all", "pl card abc", "pl alerts --all", "pl usage --by card", "pl standup --since 24h",
+                "pl manager status", "pl accounts", "pl whatsnew", "git status", "git log -5", "git diff main",
+                "gh pr view 12", "gh pr list --state open"):
+        assert _hits(p["allow"], cmd) and not _hits(p["ask"], cmd) and not _hits(p["deny"], cmd), cmd
+
+
+def test_writes_behind_a_read_only_command_still_ask(tmux):
+    assistant.ensure()
+    p = _perms(tmux)
+    for cmd in ("pl alerts --ack k1", "pl alerts --ack=k1", "pl accounts --reset all", "pl accounts --res acme"):
+        assert _hits(p["ask"], cmd), cmd
+    assert "Bash(pl alerts *--ac*)" in p["ask"] and "Bash(pl accounts *--r*)" in p["ask"]
+    assert not [r for r in p["allow"] if "--ack" in r or "--reset" in r]
+
+
+def test_credentials_are_denied(tmux):
+    assistant.ensure()
+    deny = _perms(tmux)["deny"]
+    for rule in ("Read(**/.credentials*)", "Read(**/auth.json)", "Read(**/.env*)", "Read(**/*.pem)",
+                 "Read(**/id_rsa*)", "Read(**/.netrc)", "Read(**/hosts.yml)", "Bash(security *)"):
+        assert rule in deny, rule
+    assert _hits(deny, "security find-generic-password -s x")
+
+
+def test_every_pl_command_is_read_only_or_asks(tmux):
+    src = Path(cli.__file__).read_text()
+    names = set(re.findall(r'sub\.add_parser\("([\w-]+)"', src)) | {"setup", "whatsnew", "manager", "profiles"}
+    assistant.ensure()
+    p = _perms(tmux)
+    free = [n for n in names if not any(_hits(p[k], c) for k in ("ask", "allow") for c in (f"pl {n}", f"pl {n} x", f"pl {n} -x"))]
+    assert names and free == []
+
+
+def _add_dirs(argv):
+    i = argv.index("--add-dir")
+    out = []
+    for a in argv[i + 1:]:
+        if a.startswith("-"):
+            break
+        out.append(a)
+    return out
+
+
+def test_the_assistant_starts_where_the_code_lives_and_reads_its_own_folders(tmux, fake_home):
+    code = fake_home / "code"
+    code.mkdir()
+    C.WORK_DIR = code
+    assistant.ensure()
+    nw = tmux.verb("new-window")[0]
+    assert nw[nw.index("-c") + 1] == str(code)
+    dirs = _add_dirs(_exec_argv(tmux))
+    assert dirs == [str(C.PROFILES["acme"]), str(C.CONFIG_DIR), str(GUIDE.parent)]
+    assert str(fake_home) not in dirs and "/" not in dirs
+
+
+def test_a_missing_work_dir_starts_in_the_profile_folder(tmux, fake_home):
+    C.WORK_DIR = fake_home / "gone"
+    assistant.ensure()
+    nw = tmux.verb("new-window")[0]
+    assert nw[nw.index("-c") + 1] == str(C.CONFIG_DIR)
+
+
+def test_no_add_dir_points_at_home_or_above_it(tmux, fake_home, monkeypatch):
+    monkeypatch.setitem(C.PROFILES, "acme", fake_home)
+    assistant.ensure()
+    dirs = _add_dirs(_exec_argv(tmux))
+    assert dirs and str(fake_home) not in dirs and "/" not in dirs
+    assert all(not fake_home.is_relative_to(Path(d)) for d in dirs)
 
 
 def test_a_template_with_its_own_tool_or_settings_flags_is_refused(tmux, monkeypatch):
