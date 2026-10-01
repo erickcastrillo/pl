@@ -159,15 +159,15 @@ class TargetScreen(ModalScreen):
     """
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, what, accounts):
+    def __init__(self, what, accounts, verb="Copy"):
         super().__init__()
-        self.what, self.accounts = what, accounts
+        self.what, self.accounts, self.verb = what, accounts, verb
 
     def compose(self):
         with Vertical():
-            yield Static(Text(f"Copy {self.what} to which account?"))
+            yield Static(Text(f"{self.verb} {self.what} to which account?"))
             yield OptionList(*[Option(a, id=a) for a in self.accounts], id="ext-target")
-            yield Static(Text("enter copy · esc cancel", style="dim"))
+            yield Static(Text(f"enter {self.verb.lower()} · esc cancel", style="dim"))
 
     def on_mount(self):
         ol = self.query_one(OptionList)

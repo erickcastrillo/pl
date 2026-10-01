@@ -34,7 +34,7 @@ READ_ONLY = ["Bash(pl list*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl u
              "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(git status*)",
              "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "move", "board", "retry",
-             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup")   # move also covers move-agent
+             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
           "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",
           "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable",
@@ -198,7 +198,7 @@ def _ensure():
     _tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
     pane_ = _tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
     dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
-                                                           resume=resume))
+                                                           resume=resume, plugin=False))
     _save({"session_id": sid, "account": acct, "harness": h.name, "window": win, "pane": pane_,
            "started_at": now_iso(), "mode": st.get("mode") if resume else "chat"})
     events.emit("assistant_started", None, account=acct, harness=h.name, resumed=resume)

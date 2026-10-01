@@ -180,11 +180,16 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
-    the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given)."""
-    argv = _argv(h.resume if resume else h.interactive, {"prompt": prompt, "session_id": session_id, "label": label})
+    the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
+    plugin: false keeps pl's skills library plugin out of this launch."""
+    from pl import skills
+    pdir = skills.launch_plugin(h, plugin)
+    prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
+    argv = skills.with_plugin(_argv(h.resume if resume else h.interactive,
+                                    {"prompt": prompt, "session_id": session_id, "label": label}), pdir)
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
     if h.env_var and d:
@@ -201,7 +206,9 @@ def headless_argv(h, account, prompt):
         env[h.env_var] = str(d)
     if C.GH_CONFIG_DIR:
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
-    return _argv(h.headless, {"prompt": prompt}), env
+    from pl import skills
+    pdir = skills.launch_plugin(h)
+    return skills.with_plugin(_argv(h.headless, {"prompt": skills.library_prompt(h, account, prompt, pdir)}), pdir), env
 
 
 def available(h):

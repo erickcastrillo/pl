@@ -51,6 +51,10 @@
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
+  pl skills list | share NAME [--account A] | link NAME ACCOUNT
+                          every account's skills, agents and commands; share moves a skill into the shared
+                          library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
+                          library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills")
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
                           a harness account, a tracker board or a tmux session
   pl setup [--yes ...]    create a profile by answering a few questions (or give every answer as a flag)
@@ -78,7 +82,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, profiles, setup
+from pl import alerts, assistant, config, events, profiles, setup, skills
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_done, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -157,6 +161,9 @@ def main():
     r = qi.add_parser("save"); r.add_argument("--id", help="update this draft (else a new one)"); r.add_argument("--title")
     r.add_argument("--brief", required=True, help="JSON: problem, who, outcome, in_scope, out_of_scope, repos, open_questions")
     r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
+    p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
+    pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
+    q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd != "profiles" and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -171,4 +178,4 @@ def main():
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "move": cmd_move, "retry": cmd_retry,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
-     "assistant": assistant.cmd_assistant}[a.cmd](a)
+     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills}[a.cmd](a)

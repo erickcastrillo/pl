@@ -66,6 +66,7 @@ def _defaults():
     GATES = {"spec": False}
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
+    SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -138,6 +139,7 @@ def _apply(g, t):
     g["USAGE"] = dict(t.get("usage", {}))
     g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))
+    g["SKILLS"] = dict(t.get("skills", {}))
 
 
 def load(profile: str | None = None, config_dir: str | None = None) -> None:

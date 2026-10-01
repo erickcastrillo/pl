@@ -566,3 +566,11 @@ def test_bare_pl_assistant_prints_how_to_use_it(monkeypatch, capsys):
     _cli(monkeypatch, "assistant")
     out = capsys.readouterr().out
     assert SID not in out and "log" in out
+
+
+def test_the_assistant_never_loads_the_skills_library_plugin(tmux, fake_home):
+    lib = fake_home / ".local/share/pl/skills/alpha"
+    lib.mkdir(parents=True)
+    (lib / "SKILL.md").write_text("---\nname: alpha\ndescription: x\n---\n")
+    assistant.ensure()
+    assert "--plugin-dir" not in _script(tmux)

@@ -12,6 +12,7 @@ from pl import harnesses, trackers
 from pl.trackers import github
 from pl.tui.extensions import ExtensionsView, missing_skill
 from pl.tui.review import ConfirmScreen
+from pl.tui.skills import SkillsView
 
 SUBSCRIPTION_LINE = ("pl runs the harness CLIs you already have installed and signed in, on your own subscription. "
                      "It never asks for or stores an API key.")
@@ -149,6 +150,8 @@ class SettingsView(Widget):
                     warn = Static("", classes="stage-warning", id=f"warn-{stage}")
                     warn.display = False
                     yield warn
+            with self._panel("Skills, agents and commands (every account; ctrl+p Skills jumps here)"):
+                yield SkillsView()
             with self._panel("Extensions"):
                 yield ExtensionsView(SUBSCRIPTION_LINE)
             with self._panel("Loops"):

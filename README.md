@@ -193,7 +193,13 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | ? | what's new (also in the ctrl+p palette) |
 | q | quit |
 
-Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
+### Skills
+
+The Settings tab has a **Skills, agents and commands** section (ctrl+p "Skills" jumps there). It lists every `.md` under `skills/`, `agents/` and `commands/` of every account, plus `~/.claude/skills` and the shared library, with a read-only preview. `e` edits in the console (ctrl+s shows the diff and keeps `<file>.bak-<time>`; files over 1 MiB or not UTF-8 open only with `E`), `E` uses `$EDITOR`, `n` writes a new one from a template, `d` moves it to `<account folder>/.pl-trash/`. Plugin files are read-only, and a link leading out of the account folder is not followed.
+
+`S` moves a skill into the library (`~/.local/share/pl/skills`, or `[skills] library`, an absolute path that is not HOME or an account folder) and leaves a link in its place. Every Claude session pl starts, except the Assistant, loads the library as a plugin (`--plugin-dir <profile>/state/plugin`), so it runs as `/pl:<name>`; a stage prompt `/<name>` is rewritten to that when neither the account nor the work folder (`.claude/skills/`) has a skill of its own by that name. Other harnesses get the skill inlined: a prompt `/<name> args` becomes "Follow the instructions in <file>". `l` links a library skill into one Claude or Codex account for use outside pl. Same from the shell: `pl skills list`, `pl skills share NAME`, `pl skills link NAME ACCOUNT`.
+
+Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
 
 Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
 

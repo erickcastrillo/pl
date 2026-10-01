@@ -36,6 +36,9 @@ ENTRIES = [
        "open it and ask \"what is stuck?\""),
     _e("2026-09-30.13", "Pipeline agents and loops run in auto mode",
        "an agent stuck at a permission prompt opens an alert; README: Permissions", "pl alerts"),
+    _e("2026-09-30.14", "Skills: view, edit, create and share every account's skills",
+       "Settings tab, Skills section (ctrl+p \"Skills\"): e edit, n new, d delete, S share, l link",
+       "pl skills list"),
 ]
 
 

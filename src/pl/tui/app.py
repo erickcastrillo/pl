@@ -21,6 +21,7 @@ from pl.tui.pipeline import PipelineView
 from pl.tui.prs import PrsView
 from pl.tui.review import ConfirmScreen
 from pl.tui.settings import SettingsView
+from pl.tui.skills import SkillsView
 from pl.tui.subagents import SubagentsView
 
 LATER = {}
@@ -156,6 +157,13 @@ class PlApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
                             self.action_whatsnew)
+        yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
+                            self.action_skills)
+
+    def action_skills(self):
+        """Settings tab, the Skills section, its list focused."""
+        self.action_tab("settings")
+        self.query_one(SkillsView).focus_table()
 
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
