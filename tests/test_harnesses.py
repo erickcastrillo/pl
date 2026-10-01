@@ -699,3 +699,35 @@ def test_a_normal_screen_opens_no_alert_and_changes_no_card(fake_home, monkeypat
     monkeypatch.setattr(dispatch, "update", lambda cid, **f: updates.append(f))
     _pass(monkeypatch, [_auto("ffff0006", "In progress", worker=dict(RUN_W))], None)
     assert updates == [] and alerts.get("permission_wait:ffff0006") is None
+
+
+def test_a_ctrl_c_during_the_record_write_starts_no_agent(fake_home, fake_tmux, monkeypatch):
+    def update(cid, **f):
+        raise KeyboardInterrupt   # Ctrl-C while the board write runs
+    monkeypatch.setattr(dispatch, "update", update)
+    c = {"id": "abc", "title": "Fix Thing", "metadata": {"profile": "acme"}}
+    with pytest.raises(KeyboardInterrupt):
+        dispatch.start_worker(c, "spec", 1, False)
+    assert typed == [] and not list((C.STATE_DIR / "launch").glob("*"))   # no launch line typed, no script written
+
+
+def test_the_worker_record_is_written_before_the_agent_starts_so_a_ctrl_c_never_doubles_it(fake_home, fake_tmux,
+                                                                                            monkeypatch):
+    _, updates = fake_tmux
+    real, at_keys = dispatch.tmux, []
+
+    def tmux(*args, check=True):
+        if args[:1] == ("send-keys",):
+            at_keys.append(len(updates))
+            if args[-1] == "Enter":
+                raise KeyboardInterrupt   # Ctrl-C right after the launch line was typed
+        return real(*args, check=check)
+    monkeypatch.setattr(dispatch, "tmux", tmux)
+    c = {"id": "abc", "title": "Fix Thing", "metadata": {"profile": "acme"}}
+    with pytest.raises(KeyboardInterrupt):
+        dispatch.start_worker(c, "spec", 1, False)
+    assert at_keys == [1, 1] and len(updates) == 1   # one board write, before any key
+    w = updates[0][1]["metadata"]["worker"]
+    assert (w["window"], w["pane"], w["stage"]) == ("@7", "%9", "spec") and dispatch._own_launch(w)
+    monkeypatch.setattr(agents, "pane_exists", lambda pane: pane == "%9")
+    assert agents.worker_status(w, {})[0] == "starting"   # the next pass counts it: no second agent

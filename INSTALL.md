@@ -205,7 +205,9 @@ A first run with an idea: [docs/github.md, section 6](docs/github.md#6-first-run
 
 ## 8. Update
 
-Once a day, the console and the dispatcher check for a newer release. When there is one, the console shows "pl vA.B.C is available (you have vX.Y.Z)" and `U` shows these commands; `pl update` prints them and `pl update --check` checks now. pl never runs them for you.
+Once a day, the console and the dispatcher check for a newer release. When there is one, the console shows "pl vA.B.C is available (you have vX.Y.Z)" and `U` shows these commands; `pl update` prints them and `pl update --check` checks now. pl never runs them for you. After the install, pl restarts its own background processes (the manager and the dispatchers) on the new version; running agents and loops keep running. The first time, from a pl older than this feature, open a new console once (or run `pl manager stop`, then `pl manager start`); after that it is automatic.
+
+A reinstall that switches the Python version pl's tool install uses is not picked up by itself: open a new console once (or run `pl manager stop`, then `pl manager start`).
 
 ```
 cd ~/code/pl

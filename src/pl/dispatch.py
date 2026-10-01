@@ -82,10 +82,11 @@ def launch_path(name):
     return C.STATE_DIR / "launch" / (re.sub(r"[^A-Za-z0-9._-]", "_", name) + f"-{secrets.token_hex(6)}.sh")
 
 
-def _launch(pane, name, script):
-    """Write the command to a private script and type only `sh <path>`: macOS drops typed input past 1,024 bytes
-    while the new shell starts, so a long command typed whole lost its end and its Enter. Returns the script path."""
-    p = launch_path(name)
+def _launch(pane, name, script, p=None):
+    """Write the command to a private script (at p, or a new launch_path) and type only `sh <path>`: macOS drops
+    typed input past 1,024 bytes while the new shell starts, so a long command typed whole lost its end and its
+    Enter. Returns the script path."""
+    p = p or launch_path(name)
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     p.parent.chmod(0o700)
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
@@ -121,15 +122,17 @@ def start_worker(c, stage, attempts, dry):
     win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(C.WORK_DIR),
                "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
     tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
-    pane = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
     sid = str(uuid.uuid4())
-    script = _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label))
-    if C.ATTENTION:
-        subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
+    pane, script = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0], launch_path(name)
+    # the record first, then the agent: a Ctrl-C after it leaves a record the next pass counts ("starting", then
+    # "never started"), never a second agent; a Ctrl-C during it leaves no agent
     update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
                                          "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
                                          "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
                                          "launch": str(script)}})
+    _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label), script)
+    if C.ATTENTION:
+        subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
     print(f"  started {name} under {profile} in {C.TMUX_SESSION}:{win} ({prompt})")
 
@@ -661,7 +664,8 @@ def dispatch_lock():
         sys.exit(0)   # nothing is wrong: the one that runs keeps running (a restored tmux window just closes)
     f.seek(0)
     f.truncate()
-    f.write(f"pid {os.getpid()} on {C.HOST} since {now_iso()}")
+    from pl import update
+    f.write(f"pid {os.getpid()} on {C.HOST} since {now_iso()} build {update.build_id()}")
     f.flush()
     return f
 
@@ -741,11 +745,15 @@ def stop_dispatcher(tries=5):
 _WARNED_TMUX = set()
 IDLE_MAX = 300   # seconds: the longest wait between passes while the board and the agents stay the same
 NAP = 5          # seconds: the wait is slept in slices this long, so a change wakes the dispatcher early
+RESTART_REQUEST = "pl-restart-request"   # in the state folder: pl manager asks this dispatcher to restart itself
 
 
 def _marks():
-    """pl's writes and the idea files: either changing is a change the dispatcher wakes for."""
-    return board.last_write(), sorted(p.name for p in (C.STATE_DIR / "ideas").glob("*"))
+    """pl's writes, the idea files, a restart request and the installed pl build: any changing is a change the
+    dispatcher wakes for (a new install is picked up at the end of the pass that follows)."""
+    from pl import update
+    return (board.last_write(), sorted(p.name for p in (C.STATE_DIR / "ideas").glob("*")),
+            (C.STATE_DIR / RESTART_REQUEST).exists(), update.build_id(fresh=True))
 
 
 def _nap(wait, between=None):
@@ -835,4 +843,27 @@ def cmd_dispatch(a):
             seen = (seen, *_marks())
         wait = max(base, min(2 * wait, IDLE_MAX)) if seen is not None and seen == last else base
         last = seen
+        if lock:
+            lock = _restart_if_new(lock)
         _nap(wait, lambda: _fast_guard(a.dry_run))
+
+
+def _restart_if_new(lock):
+    """End of a pass: a new pl build that imports (or a restart request from pl manager) execs this same command;
+    the pid stays, the new process takes the lock again and agents and loops keep running. A failed exec takes the
+    lock again and keeps running this code. Returns the lock held."""
+    from pl import update
+    req = C.STATE_DIR / RESTART_REQUEST
+    managed = os.environ.get("PL_MANAGED") == "1"   # the manager notifies; a dispatcher on its own does
+    b = update.restart_build(req.exists(), lambda m: (print(m, flush=True), managed or notify("pl update not used", m)))
+    if not b:
+        return lock
+    req.unlink(missing_ok=True)
+    print(f"dispatcher: restarting on pl build {b}", flush=True)
+    lock.close()
+    try:
+        os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+    except OSError as e:
+        update._BAD.add(b)
+        print(f"dispatcher: restart failed ({e}); keeping this version", flush=True)
+    return dispatch_lock()

@@ -183,10 +183,14 @@ def managed():
             except Exception:  # noqa: BLE001 - a profile whose loops do not load has none
                 g["SERVICES"] = {}
             pid, since = _holder(d / "state" / "pl-dispatch.lock")
+            try:   # the pl build the dispatcher started with; None from one older than build ids
+                built = re.search(r" build (\S+)", (d / "state" / "pl-dispatch.lock").read_text())
+            except OSError:
+                built = None
             slots = sum(v for k in ("max_runs", "max_prep")
                         if isinstance(v := g["DISPATCH"].get(k), int) and not isinstance(v, bool))
             out.append({"loops": set(g["SERVICES"]), "slots": slots, "name": name, "dir": d, "session": row["tmux_session"], "pid": pid,
-                        "running": bool(pid) and _alive(pid, "pl dispatch", since),
+                        "build": built and built.group(1), "running": bool(pid) and _alive(pid, "pl dispatch", since),
                         "gh": d / Path(gh).expanduser() if isinstance(gh, str) and gh else None,
                         "attention": str(Path(att).expanduser()) if isinstance(att, str) and att else None})
         except Exception as e:  # noqa: BLE001 - one bad profile never stops the others
@@ -300,18 +304,64 @@ def _asked(kind, name):
     return True
 
 
+def _fresh():
+    return {"up": False, "seen": False, "since": 0, "restarts": [], "next": 0, "gave_up": False, "stopped": False}
+
+
+def stop_pending(name):
+    """A stop request the manager has not taken yet."""
+    return (_path("stop") / name).exists()
+
+
+KICKS = 6   # Ctrl-C tries for a dispatcher from before build ids (it cannot restart itself), per installed build
+IDLE_WINDOW = 10   # seconds after a dispatcher wrote its state file (the end of a pass) that it counts as napping
+
+
+def _napping(p):
+    """The dispatcher wrote its state file within IDLE_WINDOW seconds: a pass just ended, so it naps."""
+    try:
+        return 0 <= _clock() - (p["dir"] / "state" / "pl-dispatch.json").stat().st_mtime <= IDLE_WINDOW
+    except OSError:
+        return False
+
+
+def _kick(p, r, installed):
+    """The one-time step for a running dispatcher from before build ids: Ctrl-C, only right after a pass (never
+    mid-pass), at most KICKS times per dispatcher per installed build, then leave it running and say so."""
+    key = f"{p['pid']} {installed}"
+    k = r.get("kick")
+    if not k or k["for"] != key:
+        k = r["kick"] = {"for": key, "tries": 0}
+        print(f"{p['name']}: dispatcher runs a pl build from before build ids; Ctrl-C to restart it", flush=True)
+    if k["tries"] >= KICKS or not _napping(p):
+        return
+    k["tries"] += 1
+    _run(["tmux", "send-keys", "-t", f"={p['session']}:dispatch", "C-c"], timeout=10)
+    if k["tries"] == KICKS:
+        print(f"{p['name']}: dispatcher did not exit after {KICKS} Ctrl-C; leaving it running "
+              f"(Ctrl-C in tmux window {p['session']}:dispatch)", flush=True)
+
+
 def tick(state):
-    """One pass: start each managed dispatcher that does not run (with backoff after an exit), write status.json."""
-    from pl.dispatch import start_for
+    """One pass: start each managed dispatcher that does not run (with backoff after an exit), write status.json.
+    A dispatcher on an older build than the one installed now restarts itself at the end of its pass (or on a
+    restart request file); its exit on the way is expected, never counted. One from before build ids gets the
+    one-time Ctrl-C step instead."""
+    from pl import update
+    from pl.dispatch import RESTART_REQUEST, start_for
     now, rows, profs = _clock(), [], managed()
+    build, installed = update.build_id(), update.build_id(fresh=True)
     bad, profs = [p for p in profs if "error" in p], [p for p in profs if "error" not in p]
     machine_error = _machine_check(state)
     live, cap, pct, hold = _caps(state, profs)
     for p in profs:
-        fresh = {"up": False, "seen": False, "since": 0, "restarts": [], "next": 0, "gave_up": False, "stopped": False}
-        r = state.setdefault(p["name"], fresh)
+        r = state.setdefault(p["name"], _fresh())
         if _asked("restart", p["name"]):
-            r.update(fresh)
+            r.update(_fresh())
+            if p["running"] and p["build"]:   # it restarts itself at the end of its pass
+                (p["dir"] / "state" / RESTART_REQUEST).touch()
+            elif p["running"]:
+                r.pop("kick", None)   # one more Ctrl-C round
         if _asked("stop", p["name"]):
             r["stopped"] = r["stopping"] = True
         r["restarts"] = [t for t in r["restarts"] if now - t < 3600]
@@ -322,8 +372,13 @@ def tick(state):
             r["up"] = False
         elif p["running"]:
             r["up"] = r["seen"] = True
+            r["ran"] = p["build"] or ""   # the build it runs; "" from before build ids
+            if not p["build"] and installed:
+                _kick(p, r, installed)
         elif r["up"] and not r["seen"] and now - r["since"] < LOCK_GRACE:
             pass   # started, has not taken its lock yet: not an exit
+        elif r["up"] and installed and r.get("ran", installed) != installed:
+            r["up"] = False   # it ran an older build and went away to restart: started below at once, not an exit
         elif r["up"]:   # it ran (or was started and never took its lock) and is gone: an exit
             r["up"] = False
             if len(r["restarts"]) >= MAX_RESTARTS:
@@ -339,12 +394,15 @@ def tick(state):
             if r["next"]:
                 r["restarts"].append(now)
             r["up"], r["seen"], r["since"], r["next"] = True, False, now, 0
+            r.pop("ran", None)   # the new one's exits count until it is seen running
         rows.append({"name": p["name"], "running": p["running"], "dispatcher_pid": p["pid"] if p["running"] else None,
-                     "restarts": len(r["restarts"]), "gave_up": r["gave_up"], "stopped": bool(r.get("stopped"))})
+                     "restarts": len(r["restarts"]), "gave_up": r["gave_up"], "stopped": bool(r.get("stopped")),
+                     "stopping": bool(r.get("stopping"))})
     rows += [{"name": p["name"], "running": False, "dispatcher_pid": None, "restarts": 0, "gave_up": False,
               "error": p["error"]} for p in bad]
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
-              "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error}
+              "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error,
+              "build": build, "pkg": str(update.PKG)}
     _write("status.json", status)
     return status
 
@@ -361,6 +419,76 @@ def restart(name, kind="restart"):
     (d / name).touch()
     return (f"manager: {'restarting' if kind == 'restart' else 'stopping'} the dispatcher of {name} on the next tick"
             + ("" if running() else " (manager not running)"))
+
+
+def _same_install(st):
+    """The manager behind status st runs the pl this console runs: the same package folder (a manager from before
+    build ids records none: the same Python, from its command line)."""
+    from pl import update
+    if st.get("pkg"):
+        return st["pkg"] == str(update.PKG)
+    try:
+        cmd = (_run(["ps", "-o", "command=", "-p", str(st.get("pid"))], timeout=10).stdout or "").split()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return cmd[:1] == [sys.executable]
+
+
+def restart_if_old():
+    """Console start: a running manager of this same install on an older pl build is asked to restart (a request
+    file; no wait). One from before build ids cannot read the request: it is stopped and started again, its status
+    written back in between so a stop or give-up survives. The notice, or None when nothing was done."""
+    from pl import update
+    st = read_status() if running() else None
+    if not st or st.get("build") == update.build_id(fresh=True) or not _same_install(st):
+        return None
+    if st.get("build"):
+        machine_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
+        _path("restart-manager").touch()
+    else:
+        if holder_pid() != st.get("pid"):
+            return None
+        if stop() != "manager: stopped":
+            return "pl updated, but the old manager did not stop: run pl manager stop, then pl manager start"
+        _write("status.json", {**st, "at": _clock()})   # the new manager starts from it
+        start()
+    return f"pl updated to v{update.__version__} — background processes restarted"
+
+
+def _restart_if_new(lock):
+    """A new pl build that imports (or a console asked, and the installed build is present and settled): release the
+    lock and exec this same command again; the new process takes the lock. Dispatchers restart themselves.
+    A failed exec takes the lock again. Returns the lock held (None: another manager took it)."""
+    from pl import update
+    asked = _path("restart-manager").exists()
+
+    def warn(m):
+        print(m, flush=True)
+        _notify("pl update not used", m, _alerts([p for p in managed() if "error" not in p]))
+    b = update.restart_build(asked, warn)
+    if not b:
+        return lock
+    _path("restart-manager").unlink(missing_ok=True)
+    print("manager: new pl build installed; restarting", flush=True)
+    if st := read_status(max_age=float("inf")):   # fresh again: a slow import check never ages out stops and give-ups
+        _write("status.json", {**st, "at": _clock()})
+    lock.close()
+    try:
+        os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+    except OSError as e:
+        update._BAD.add(b)
+        print(f"manager: restart failed ({e}); keeping this version", flush=True)
+    return machine_lock()
+
+
+def _resumed():
+    """The state a manager that restarted itself starts from: who was stopped by you or given up, from status.json."""
+    state = {}
+    for p in (read_status() or {}).get("profiles") or []:
+        if p.get("name") and (p.get("stopped") or p.get("gave_up")):
+            state[p["name"]] = {**_fresh(), "gave_up": bool(p.get("gave_up")), "stopped": bool(p.get("stopped")),
+                                "stopping": bool(p.get("stopping"))}
+    return state
 
 
 def machine_lock():
@@ -387,10 +515,15 @@ def _run_loop():
         print(f"a manager is already running on this machine (pid {holder_pid() or '?'})")
         return 0
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # dispatchers live in tmux and keep running
-    print(f"pl manager started (pid {os.getpid()})", flush=True)
-    state = {}
+    from pl import update
+    print(f"pl manager started (pid {os.getpid()}, build {update.build_id()})", flush=True)
+    state = _resumed()
     try:
         while True:
+            lock = _restart_if_new(lock)
+            if lock is None:
+                print("manager: another manager took the lock; exiting", flush=True)
+                return 0
             try:
                 tick(state)
             except Exception as e:  # noqa: BLE001 - one bad tick never stops the manager

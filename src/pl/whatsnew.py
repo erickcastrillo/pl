@@ -44,6 +44,9 @@ ENTRIES = [
     _e("2026-09-30.16", "Built-in stage skills: pl-spec, pl-design, pl-plan, pl-run and pl-review",
        "new profiles use them; edit them in Settings, Skills (library); pl skills reset NAME puts one back",
        "pl setup --use-builtin-stages"),
+    _e("2026-10-01.01", "pl restarts itself after an update; D offers restart or stop",
+       "the manager and dispatchers pick up a new install within a minute (the first time: open a new console, or "
+       "pl manager stop then pl manager start, once); D: r restart, s stop", "pl manager status"),
 ]
 
 

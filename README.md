@@ -126,7 +126,7 @@ attention_cmd = "notify-me"     # notifications; unset means none
 check = true                    # once a day, read pl's release tags on GitHub; false (or PL_NO_UPDATE_CHECK=1) turns it off
 ```
 
-**Updates.** Once a day the console and the dispatcher read pl's release tags from https://github.com/erickcastrillo/pl with `git ls-remote`. Nothing is sent and no sign-in is used. When a newer release exists, the console says so and `U` shows the update commands; `pl update` prints them. pl never installs an update by itself.
+**Updates.** Once a day the console and the dispatcher read pl's release tags from https://github.com/erickcastrillo/pl with `git ls-remote`. Nothing is sent and no sign-in is used. When a newer release exists, the console says so and `U` shows the update commands; `pl update` prints them. pl never installs an update by itself. After you install one, pl restarts itself: within seconds the manager starts again on the new version, and each dispatcher does the same at the end of its pass (running agents and loops keep running; a dispatcher you stopped stays stopped). A new install that does not import is reported once and the old version keeps running. The first time, from a pl older than this feature, open a new console once (or run `pl manager stop`, then `pl manager start`); after that nothing to press.
 
 Every key can also be edited in the console's Settings tab. Custom harnesses go under `[harnesses.<name>]` with `bin`, `interactive` and `headless`.
 
@@ -138,7 +138,7 @@ The manager is on by default: every console starts it when it is not running. It
 pl manager start          # start it by hand; a console does this for you
 pl manager status         # each profile's dispatcher, live agents, any hold
 pl manager stop [--all]   # --all also stops the dispatchers
-pl manager restart NAME   # start a profile's dispatcher again after the manager gave up on it
+pl manager restart NAME   # start a profile's dispatcher again (after a give-up or a stop), or restart a running one
 pl manager stop NAME      # stop one profile's dispatcher; the manager leaves it alone until restart
 ```
 

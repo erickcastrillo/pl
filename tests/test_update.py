@@ -194,3 +194,85 @@ async def test_test_consoles_do_not_check(git):
     async with PlApp(snapshot_provider=Provider()).run_test(size=(176, 48)) as pilot:
         await settle(pilot)
     assert git.calls() == []
+
+
+def test_build_id_changes_when_an_installed_file_changes_but_not_for_compiled_caches(tmp_path, monkeypatch):
+    pkg = tmp_path / "pkg"
+    (pkg / "__pycache__").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("x = 1\n")
+    monkeypatch.setattr(update, "PKG", pkg)
+    a = update.build_id(fresh=True)
+    assert a.startswith(f"{INSTALLED}-") and update.build_id(fresh=True) == a
+    (pkg / "__pycache__" / "x.pyc").write_text("cache")
+    assert update.build_id(fresh=True) == a
+    (pkg / "__init__.py").write_text("x = 22\n")   # a reinstall of the same version
+    assert update.build_id(fresh=True) != a
+
+
+def test_build_id_is_cached_per_process(monkeypatch):
+    monkeypatch.setattr(update, "_BUILD", {})
+    first = update.build_id()
+    monkeypatch.setattr(update, "build_id_of", lambda root: "changed")
+    assert update.build_id() == first and update.build_id(fresh=True) != first
+
+
+def test_new_build_waits_for_an_install_to_settle(tmp_path, monkeypatch):
+    reads = iter(["b1", "b2"])
+    monkeypatch.setattr(update, "_BUILD", {"id": "b0"})
+    monkeypatch.setattr(update, "build_id_of", lambda root: next(reads))
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    assert update.new_build() is None   # still changing: an install in progress
+    monkeypatch.setattr(update, "build_id_of", lambda root: "b3")
+    assert update.new_build() == "b3"
+    monkeypatch.setattr(update, "build_id_of", lambda root: "b0")
+    assert update.new_build() is None
+
+
+def test_pl_update_says_pl_restarts_itself(capsys):
+    update.cmd_update(type("A", (), {"check": False})())
+    out = capsys.readouterr().out
+    assert "restarts itself" in out and "press D" not in out
+
+
+def test_importable_runs_the_new_install_and_needs_ok(monkeypatch):
+    import subprocess
+    import sys
+    calls = []
+    for out, ok in (("ok\n", True), ("", False)):
+        monkeypatch.setattr(update, "_run", lambda argv, timeout=None, out=out: calls.append((argv, timeout)) or out)
+        assert update.importable() is ok
+    assert calls[0] == ([sys.executable, "-c", "import pl.cli, pl.manager, pl.dispatch; print('ok')"], 60)
+
+    def hang(argv, timeout=None):
+        raise subprocess.TimeoutExpired(argv, timeout)
+    monkeypatch.setattr(update, "_run", hang)
+    assert update.importable() is False
+
+
+def test_restart_build_checks_a_build_once_and_never_retries_a_bad_one(monkeypatch):
+    monkeypatch.setattr(update, "_BUILD", {"id": "b0"})
+    monkeypatch.setattr(update, "_BAD", set())
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    monkeypatch.setattr(update, "build_id_of", lambda root: "b1")
+    checks, warned = [], []
+    monkeypatch.setattr(update, "importable", lambda: checks.append(1) and False)
+    assert update.restart_build(warn=warned.append) is None
+    assert update.restart_build(warn=warned.append) is None
+    assert checks == [1] and len(warned) == 1 and "b1" in warned[0]
+    monkeypatch.setattr(update, "build_id_of", lambda root: "b2")
+    monkeypatch.setattr(update, "importable", lambda: True)
+    assert update.restart_build(warn=warned.append) == "b2"
+
+
+def test_an_asked_restart_needs_a_present_settled_build_even_when_it_is_the_same(monkeypatch):
+    monkeypatch.setattr(update, "_BUILD", {"id": "b0"})
+    monkeypatch.setattr(update, "_BAD", set())
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    monkeypatch.setattr(update, "importable", lambda: True)
+    monkeypatch.setattr(update, "build_id_of", lambda root: "b0")
+    assert update.restart_build() is None and update.restart_build(asked=True) == "b0"
+    monkeypatch.setattr(update, "build_id_of", lambda root: None)   # an install in progress
+    assert update.restart_build(asked=True) is None
+    reads = iter(["b0", "b1"])
+    monkeypatch.setattr(update, "build_id_of", lambda root: next(reads))
+    assert update.restart_build(asked=True) is None

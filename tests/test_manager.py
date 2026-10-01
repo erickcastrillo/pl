@@ -64,7 +64,9 @@ def test_a_second_run_exits_0_and_starts_nothing(machine, capsys):
 
 
 def running_dispatcher(machine, name, pid):
-    (machine["home"] / f".pl-{name}" / "state" / "pl-dispatch.lock").write_text(f"pid {pid} on h since now")
+    from pl import update
+    (machine["home"] / f".pl-{name}" / "state" / "pl-dispatch.lock").write_text(
+        f"pid {pid} on h since now build {update.build_id()}")
     machine["alive"].add(pid)
 
 
@@ -119,7 +121,7 @@ def test_a_dispatcher_that_dies_six_times_in_an_hour_is_given_up(machine, monkey
     assert at == [0, 40, 100, 250, 580, 910]
     status = json.loads((manager.machine_dir() / "status.json").read_text())
     assert status["profiles"] == [{"name": "work", "running": False, "dispatcher_pid": None, "restarts": 5,
-                                   "gave_up": True, "stopped": False}]
+                                   "gave_up": True, "stopped": False, "stopping": False}]
     assert len(machine["notes"]) == 1 and "work" in machine["notes"][0][1]
 
 
@@ -658,3 +660,410 @@ def test_the_assistant_window_counts_toward_memory_but_is_never_stopped(machine,
     kills = fake_machine(monkeypatch, "pl-work @1 100 assistant\n", _tree(14_000_000))   # ~13 GB, past the 12.8 GB cap
     st = manager.tick({})
     assert st["hold"] and "over 80%" in st["hold"] and kills == [] and st["live_agents"] == 0
+
+
+# ---------- a new pl build restarts the background processes ----------
+
+def old_dispatcher(machine, name, pid, build="0.1.0-old", napping=True):
+    """A running dispatcher on build (None: from before build ids); napping: its pass just ended."""
+    state = machine["home"] / f".pl-{name}" / "state"
+    (state / "pl-dispatch.lock").write_text(f"pid {pid} on h since now" + (f" build {build}" if build else ""))
+    if napping:
+        (state / "pl-dispatch.json").write_text("{}")
+    machine["alive"].add(pid)
+
+
+def ctrl_c(log, session):
+    return [c for c in log if c == ["tmux", "send-keys", "-t", f"={session}:dispatch", "C-c"]]
+
+
+def test_a_new_installed_build_makes_the_manager_exec_itself_again(machine, monkeypatch, capsys):
+    import os
+    import sys
+    from pl import update
+    builds = iter(["0.2.0-new", "0.2.0-new"])
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: next(builds) if fresh else "0.2.0-old")
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    monkeypatch.setattr(update, "importable", lambda: True)
+    execs = []
+    monkeypatch.setattr(os, "execv", lambda path, argv: execs.append((path, argv)))
+    lock = manager.machine_lock()
+    manager._restart_if_new(lock)
+    assert execs == [(sys.executable, [sys.executable, *sys.orig_argv[1:]])]
+    assert lock.closed   # the new process takes the lock again
+    assert "manager: new pl build installed; restarting" in capsys.readouterr().out
+    execs.clear()
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-old")
+    manager._restart_if_new(manager.machine_lock())
+    assert execs == []
+
+
+def test_a_new_build_that_does_not_import_keeps_the_manager_on_the_old_one(machine, monkeypatch, capsys):
+    import os
+    from pl import update
+    monkeypatch.setattr(update, "_BAD", set())
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-broken" if fresh else "0.2.0-old")
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    checks = []
+    monkeypatch.setattr(update, "importable", lambda: checks.append(1) and False)
+    monkeypatch.setattr(os, "execv", lambda *a: (_ for _ in ()).throw(AssertionError("exec")))
+    lock = manager.machine_lock()
+    assert manager._restart_if_new(lock) is lock and not lock.closed
+    assert manager._restart_if_new(lock) is lock and not lock.closed
+    assert checks == [1] and len(machine["notes"]) == 1   # checked, logged and notified once for this build
+    assert "does not import" in capsys.readouterr().out
+
+
+def test_a_failed_exec_takes_the_machine_lock_again(machine, monkeypatch):
+    import os
+    from pl import update
+    monkeypatch.setattr(update, "_BAD", set())
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new" if fresh else "0.2.0-old")
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    monkeypatch.setattr(update, "importable", lambda: True)
+    monkeypatch.setattr(os, "execv", lambda *a: (_ for _ in ()).throw(OSError("no such file")))
+    lock = manager.machine_lock()
+    again = manager._restart_if_new(lock)
+    assert lock.closed and again and not again.closed and manager.machine_lock() is None   # held again
+    assert manager._restart_if_new(again) is again   # never tried again for that build
+
+def test_a_console_request_makes_the_manager_exec_itself_again(machine, monkeypatch):
+    import os
+    from pl import update
+    builds = ["0.2.0-same"]
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: builds[0] if fresh else "0.2.0-same")
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    monkeypatch.setattr(update, "importable", lambda: True)
+    execs = []
+    monkeypatch.setattr(os, "execv", lambda path, argv: execs.append(argv))
+    lock = manager.machine_lock()
+    manager._path("restart-manager").touch()
+    builds[0] = None   # an install in progress: no package yet
+    manager._restart_if_new(lock)
+    assert execs == [] and manager._path("restart-manager").exists()
+    builds[0] = "0.2.0-same"
+    manager._restart_if_new(lock)
+    assert len(execs) == 1 and not manager._path("restart-manager").exists()
+
+def test_a_dispatcher_on_an_old_build_restarts_itself_the_manager_only_waits(machine, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    now = [0.0]
+    monkeypatch.setattr(manager, "_clock", lambda: now[0])
+    old_dispatcher(machine, "work", 5555)
+    old_dispatcher(machine, "home", 6666, build="0.2.0-new")
+    state = {}
+    for _ in range(3):
+        manager.tick(state)
+        now[0] += manager.TICK
+    assert not ctrl_c(machine["log"], "pl-work") and not ctrl_c(machine["log"], "pl-home")
+    assert starts(machine["log"]) == []
+    machine["alive"].discard(5555)        # it went away while restarting on the new build
+    st = manager.tick(state)
+    assert [c[4] for c in starts(machine["log"])] == ["pl-work"]   # started again at once, no backoff
+    assert {p["name"]: p["restarts"] for p in st["profiles"]} == {"home": 0, "work": 0}
+    assert state["work"]["restarts"] == [] and not state["work"]["gave_up"] and st["build"] == "0.2.0-new"
+    machine["alive"].discard(6666)        # one on the installed build that exits is an exit
+    now[0] += manager.TICK
+    manager.tick(state)
+    assert state["home"]["next"] > now[0]
+
+
+def test_old_means_older_than_the_build_installed_now_not_the_managers_own(machine, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.3.0-installed" if fresh else "0.2.0-manager")
+    old_dispatcher(machine, "work", 5555, build="0.3.0-installed")   # newer than this manager: never touched
+    old_dispatcher(machine, "home", 6666, build="0.3.0-installed")
+    state = {}
+    manager.tick(state)
+    machine["alive"].discard(5555)
+    manager.tick(state)
+    assert state["work"]["next"] > 0   # its exit is an exit (backoff), not a restart for a build
+    assert not ctrl_c(machine["log"], "pl-work") and not ctrl_c(machine["log"], "pl-home")
+
+
+def test_a_dispatcher_from_before_builds_gets_ctrl_c_at_most_6_times_per_installed_build(machine, monkeypatch, capsys):
+    from pl import update
+    installed = ["0.2.0-new"]
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: installed[0])
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    old_dispatcher(machine, "work", 5555, build=None)
+    state = {}
+    for _ in range(9):
+        manager.tick(state)
+    assert len(ctrl_c(machine["log"], "pl-work")) == 6 and starts(machine["log"]) == []
+    out = capsys.readouterr().out
+    assert "from before build ids" in out and "did not exit after 6 Ctrl-C" in out
+    installed[0] = "0.2.1-newer"   # a newer install: one more round
+    for _ in range(9):
+        manager.tick(state)
+    assert len(ctrl_c(machine["log"], "pl-work")) == 12
+    machine["alive"].discard(5555)   # it exited on a Ctrl-C: started at once, not an exit
+    manager.tick(state)
+    assert len(starts(machine["log"])) == 1 and state["work"]["restarts"] == []
+
+
+def test_a_profile_stopped_by_you_stays_stopped_across_a_build_restart(machine, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    state = {}
+    manager.restart("work", "stop")
+    manager.tick(state)                 # the old manager's last status: work stopped by you
+    state = manager._resumed()          # the re-exec'd manager reads it back
+    old_dispatcher(machine, "work", 5555)
+    machine["alive"].discard(5555)
+    for _ in range(5):
+        st = manager.tick(state)
+    assert starts(machine["log"]) == [] and st["profiles"][0]["stopped"] is True
+
+
+def test_a_restart_request_asks_a_running_dispatcher_to_restart_itself(machine, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    old_dispatcher(machine, "work", 5555, build="0.2.0-new")
+    req = machine["home"] / ".pl-work" / "state" / "pl-restart-request"
+    state = {}
+    manager.tick(state)
+    assert not req.exists()
+    manager.restart("work", "restart")   # D, then r
+    manager.tick(state)
+    assert req.exists() and not ctrl_c(machine["log"], "pl-work") and starts(machine["log"]) == []
+
+
+def test_a_restart_request_for_a_dispatcher_from_before_builds_is_one_ctrl_c_round(machine, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    old_dispatcher(machine, "work", 5555, build=None)
+    state = {}
+    for _ in range(7):
+        manager.tick(state)
+    manager.restart("work", "restart")
+    manager.tick(state)
+    assert len(ctrl_c(machine["log"], "pl-work")) == 7
+    machine["alive"].discard(5555)
+    manager.tick(state)
+    assert len(starts(machine["log"])) == 1 and state["work"]["restarts"] == []
+
+
+def test_a_resumed_manager_keeps_stopping_as_it_was(machine, monkeypatch):
+    import time
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    old_dispatcher(machine, "work", 5555, build="0.2.0-new")   # a dispatcher you started by hand after the stop
+    for stopping, hits in ((False, 0), (True, 1)):
+        machine["log"].clear()
+        manager._write("status.json", {"at": time.time(), "pid": 1, "profiles": [
+            {"name": "work", "running": True, "stopped": True, "stopping": stopping, "gave_up": False}]})
+        st = manager.tick(manager._resumed())
+        assert len(ctrl_c(machine["log"], "pl-work")) == hits
+        assert st["profiles"][0]["stopping"] is stopping
+
+
+def test_the_restart_request_wakes_a_napping_dispatcher(machine):
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    before = dispatch._marks()
+    (C.STATE_DIR / "pl-restart-request").touch()
+    assert dispatch._marks() != before
+
+
+def test_a_new_install_wakes_a_napping_dispatcher(machine, monkeypatch):
+    from pl import update
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    installed = ["0.2.0-old"]
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: installed[0] if fresh else "0.2.0-old")
+    before = dispatch._marks()
+    assert dispatch._marks() == before
+    installed[0] = "0.2.0-new"
+    assert dispatch._marks() != before
+
+
+def run_dispatcher(monkeypatch, build=lambda asked=False, warn=None: "0.2.0-new", execv=None, on_nap=lambda: None):
+    """cmd_dispatch for one pass and the exec (or nap) after it; returns (passes, execs, restart_build calls)."""
+    import os
+    from pl import update
+    passes, execs, calls = [], [], []
+    monkeypatch.setattr(dispatch, "dispatch_once", lambda *a, **k: passes.append(1))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(update, "restart_build", lambda asked=False, warn=None: calls.append(asked) or build(asked, warn))
+
+    class Stop(Exception):
+        pass
+
+    def exec_(path, argv):
+        execs.append(argv)
+        if execv:
+            execv()
+        raise Stop
+
+    monkeypatch.setattr(os, "execv", exec_)
+    monkeypatch.setattr(dispatch, "_nap", lambda *a, **k: on_nap() or (_ for _ in ()).throw(Stop))
+    args = argparse.Namespace(once=False, dry_run=False, no_pull=True, max_runs=None, max_prep=None, interval=None)
+    with pytest.raises(Stop):
+        dispatch.cmd_dispatch(args)
+    return passes, execs, calls
+
+
+def test_an_unmanaged_dispatcher_execs_itself_at_the_end_of_a_pass(machine, monkeypatch):
+    import sys
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    passes, execs, calls = run_dispatcher(monkeypatch)
+    assert passes == [1] and execs == [[sys.executable, *sys.orig_argv[1:]]] and calls == [False]
+    assert "build " in C.LOCK_FILE.read_text()
+
+def test_a_managed_dispatcher_restarts_itself_too(machine, monkeypatch):
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    monkeypatch.setenv("PL_MANAGED", "1")
+    passes, execs, _ = run_dispatcher(monkeypatch)
+    assert passes == [1] and len(execs) == 1
+
+
+def test_a_restart_request_makes_the_dispatcher_exec_at_the_end_of_its_pass(machine, monkeypatch):
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    req = C.STATE_DIR / "pl-restart-request"
+    req.touch()
+    passes, execs, calls = run_dispatcher(monkeypatch, build=lambda asked, warn: "0.2.0-same" if asked else None)
+    assert passes == [1] and len(execs) == 1 and calls == [True] and not req.exists()
+
+
+def test_no_build_to_restart_into_keeps_the_dispatcher_napping(machine, monkeypatch):
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    passes, execs, _ = run_dispatcher(monkeypatch, build=lambda asked, warn: None)
+    assert passes == [1] and execs == []
+
+
+def test_a_failed_dispatcher_exec_takes_its_lock_again_and_naps(machine, monkeypatch):
+    from pl import update
+    from pl.profiles import _is_locked
+    C.load(config_dir=str(machine["home"] / ".pl-off"))
+    monkeypatch.setattr(update, "_BAD", set())
+    held = []
+
+    def fail():
+        held.append(_is_locked(C.LOCK_FILE))
+        raise OSError("no such file")
+    passes, execs, calls = run_dispatcher(monkeypatch, execv=fail, on_nap=lambda: held.append(_is_locked(C.LOCK_FILE)))
+    assert len(execs) == 1 and held == [False, True]   # released for the exec, held again for the nap
+    assert update._BAD == {"0.2.0-new"}   # the bad build is remembered: never tried again by this process
+
+def test_the_console_asks_an_older_manager_to_restart_without_waiting(machine, monkeypatch):
+    import time
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "stop", lambda all_=False: (_ for _ in ()).throw(AssertionError("waited")))
+    for build, asked in (("0.2.0-new", False), ("0.1.0-old", True)):
+        manager._write("status.json", {"at": time.time(), "pid": 1, "profiles": [], "build": build, "pkg": str(update.PKG)})
+        note = manager.restart_if_old()
+        assert manager._path("restart-manager").exists() is asked
+        assert (note == f"pl updated to v{update.__version__} — background processes restarted") is asked
+
+
+def test_a_console_from_another_install_never_restarts_the_manager(machine, monkeypatch):
+    import time
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-worktree")
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "stop", lambda all_=False: (_ for _ in ()).throw(AssertionError("stopped")))
+    manager._write("status.json", {"at": time.time(), "pid": 1, "profiles": [], "build": "0.1.0-old", "pkg": "/elsewhere/pl"})
+    assert manager.restart_if_old() is None and not manager._path("restart-manager").exists()
+    st = manager.tick({})
+    assert st["pkg"] == str(update.PKG)
+
+def old_manager(machine, monkeypatch, stopped="manager: stopped", python=None, pid=1):
+    """A manager from before build ids (pid 1, no build or pkg in its status); returns what stop/start saw."""
+    import sys
+    import time
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "holder_pid", lambda: pid)
+    monkeypatch.setattr(manager, "_run", lambda argv, timeout=None: subprocess.CompletedProcess(
+        argv, 0, f"{python or sys.executable} -m pl manager run\n" if argv[:1] == ["ps"] else "", ""))
+    got = []
+
+    def stop(all_=False):
+        got.append("stop")
+        manager._path("status.json").unlink(missing_ok=True)   # the old manager removes its status as it exits
+        return stopped
+    monkeypatch.setattr(manager, "stop", stop)
+    monkeypatch.setattr(manager, "start", lambda: got.append(("start", manager.read_status())))
+    rows = [{"name": "work", "running": False, "stopped": True, "gave_up": False}]
+    manager._write("status.json", {"at": time.time(), "pid": 1, "profiles": rows})
+    return got, rows
+
+
+def test_a_manager_from_before_builds_were_recorded_is_stopped_and_started(machine, monkeypatch):
+    got, rows = old_manager(machine, monkeypatch)
+    assert manager.restart_if_old() and [g if g == "stop" else g[0] for g in got] == ["stop", "start"]
+    assert got[1][1]["profiles"] == rows   # its status is back before the new manager starts: stops survive
+
+
+def test_an_old_manager_that_does_not_stop_is_not_reported_restarted(machine, monkeypatch):
+    got, _ = old_manager(machine, monkeypatch, stopped="manager: still running (pid 1)")
+    note = manager.restart_if_old()
+    assert got == ["stop"] and "restarted" not in (note or "")
+
+
+def test_an_old_manager_is_left_alone_when_the_lock_names_another_pid_or_another_install(machine, monkeypatch):
+    got, _ = old_manager(machine, monkeypatch, pid=2)
+    assert manager.restart_if_old() is None and got == []
+    got, _ = old_manager(machine, monkeypatch, python="/other/venv/bin/python")
+    assert manager.restart_if_old() is None and got == []
+
+def test_a_slow_import_check_never_loses_a_stop_across_the_exec(machine, monkeypatch):
+    import os
+    from pl import update
+    now = [1000.0]
+    monkeypatch.setattr(manager, "_clock", lambda: now[0])
+    monkeypatch.setattr(update, "_BAD", set())
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new" if fresh else "0.2.0-old")
+    monkeypatch.setattr(update, "_sleep", lambda s: None)
+    monkeypatch.setattr(update, "importable", lambda: now.__setitem__(0, now[0] + 60) or True)   # a 60 s check
+    manager._write("status.json", {"at": now[0], "pid": 1, "profiles": [
+        {"name": "work", "running": False, "stopped": True, "gave_up": False},
+        {"name": "home", "running": False, "stopped": False, "gave_up": True}]})
+    seen = []
+    monkeypatch.setattr(os, "execv", lambda *a: seen.append(manager._resumed()))
+    manager._restart_if_new(manager.machine_lock())
+    assert seen and seen[0]["work"]["stopped"] is True and seen[0]["home"]["gave_up"] is True
+
+
+def test_a_dispatcher_started_after_an_old_build_that_dies_before_its_lock_is_an_exit(machine, monkeypatch):
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    now = [0.0]
+    monkeypatch.setattr(manager, "_clock", lambda: now[0])
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    old_dispatcher(machine, "work", 5555)   # ran on the old build
+    state = {}
+    manager.tick(state)
+    machine["alive"].discard(5555)          # went away to restart: started again at once
+    manager.tick(state)
+    assert len(starts(machine["log"])) == 1 and state["work"]["next"] == 0
+    now[0] += manager.LOCK_GRACE + 1        # the new one never took its lock
+    manager.tick(state)
+    assert state["work"]["next"] > now[0] and len(starts(machine["log"])) == 1   # an exit: backoff, no start at once
+
+
+def test_a_dispatcher_from_before_builds_gets_ctrl_c_only_right_after_a_pass(machine, monkeypatch):
+    import os
+    import time
+    from pl import update
+    monkeypatch.setattr(update, "build_id", lambda fresh=False: "0.2.0-new")
+    (machine["home"] / ".pl-home" / "config.toml").write_text("[dispatch]\nautostart = false\n")
+    old_dispatcher(machine, "work", 5555, build=None, napping=False)
+    st_file = machine["home"] / ".pl-work" / "state" / "pl-dispatch.json"
+    state = {}
+    manager.tick(state)
+    assert ctrl_c(machine["log"], "pl-work") == []   # no state file: mid-pass or unknown, never interrupted
+    st_file.write_text("{}")
+    os.utime(st_file, (time.time() - 60, time.time() - 60))
+    manager.tick(state)
+    assert ctrl_c(machine["log"], "pl-work") == []   # its last pass ended a minute ago: it may be mid-pass now
+    st_file.write_text("{}")                          # a pass just ended: it naps
+    manager.tick(state)
+    assert len(ctrl_c(machine["log"], "pl-work")) == 1 and state["work"]["kick"]["tries"] == 1

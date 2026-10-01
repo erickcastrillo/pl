@@ -285,15 +285,23 @@ async def test_the_dashboard_shows_a_fresh_machine_status_and_not_a_stale_one(tm
             assert ("10 live agents" in bar) is shown
 
 
+def status(rows):
+    import time
+    manager._write("status.json", {"at": time.time(), "pid": 1, "profiles": rows, "hold": None, "build": "b"})
+
+
 async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_path, monkeypatch):
+    from pl.tui.app import DispatcherChoice
     machine(tmp_path, toml=True)
     got = []
     monkeypatch.setattr(manager, "start", lambda: got.append("start") or "manager: started (pid 9)")
     monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop") or "manager: stopped")
     monkeypatch.setattr(manager, "running", lambda: True)
     monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(manager, "restart_if_old", lambda: None)
     monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher"))
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
@@ -301,11 +309,72 @@ async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_pat
         assert "manager: started (pid 9)" in header(app)
         await pilot.press("D")                  # D on a managed machine: this profile's dispatcher only
         await settle(pilot)
-        assert isinstance(app.screen, ConfirmScreen)
+        assert isinstance(app.screen, DispatcherChoice)
         assert 'dispatcher of profile "work"' in app.screen.message and "pl manager stop" in app.screen.message
-        await pilot.press("y")
+        await pilot.press("s")
         await settle(pilot)
         assert got == ["start", ("stop", "work")] and "manager: stop work" in header(app)   # never manager.stop
+
+
+async def test_d_on_a_running_managed_dispatcher_offers_restart_and_twice_never_stops_it(tmp_path, monkeypatch):
+    from pl.tui.app import DispatcherChoice
+    machine(tmp_path, toml=True)
+    got = []
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "start", lambda: got.append("start"))
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    status([{"name": "work", "running": True, "stopped": False}])
+    app = PlApp(snapshot_provider=fake_data, autostart=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("D")
+        await settle(pilot)
+        assert isinstance(app.screen, DispatcherChoice) and "Restart" in app.screen.message
+        await pilot.press("r")
+        await settle(pilot)
+        assert got == [("restart", "work")]
+        await pilot.press("D", "D")             # D twice: the second D lands on the open choice and does nothing
+        await settle(pilot)
+        assert isinstance(app.screen, DispatcherChoice) and len(app.screen_stack) == 2
+        assert app.check_action("dispatcher", ()) is False   # refused while the choice is open
+        await pilot.press("escape")
+        await settle(pilot)
+        assert got == [("restart", "work")] and not isinstance(app.screen, DispatcherChoice)
+
+
+async def test_d_reads_the_status_fresh_a_pending_stop_counts_as_stopped(tmp_path, monkeypatch):
+    machine(tmp_path, toml=True)
+    got = []
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)   # the stopping dispatcher still holds its lock
+    status([{"name": "work", "running": True, "stopped": False}])
+    app = PlApp(snapshot_provider=fake_data, autostart=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        (manager.machine_dir() / "stop").mkdir(exist_ok=True)
+        (manager.machine_dir() / "stop" / "work").touch()   # s was pressed; the manager has not ticked yet
+        await pilot.press("D")
+        await settle(pilot)
+        assert got == [("restart", "work")]   # starts it again, never a second stop
+        status([{"name": "work", "running": False, "stopped": True}])
+        (manager.machine_dir() / "stop" / "work").unlink()
+        await pilot.press("D")
+        await settle(pilot)
+        assert got == [("restart", "work")] * 2
+
+
+async def test_console_start_asks_an_older_manager_to_restart_and_says_so(tmp_path, monkeypatch):
+    machine(tmp_path, toml=True)
+    monkeypatch.setattr(manager, "start", lambda: "manager: running (pid 9)")
+    monkeypatch.setattr(manager, "restart_if_old", lambda: "pl updated to v0.2.0 — background processes restarted")
+    notes = []
+    app = PlApp(snapshot_provider=fake_data, autostart=True)
+    monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert "pl updated to v0.2.0 — background processes restarted" in notes
 
 
 async def test_d_on_a_managed_profile_whose_dispatcher_is_stopped_asks_the_manager_to_restart_it(tmp_path, monkeypatch):

@@ -133,6 +133,28 @@ class UpdateScreen(ModalScreen):
         self.dismiss(None)
 
 
+class DispatcherChoice(ModalScreen):
+    """D on a running managed dispatcher: r restart, s stop, esc nothing."""
+    DEFAULT_CSS = """
+    DispatcherChoice { align: center middle; }
+    DispatcherChoice > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("r", "pick('restart')", "restart"), Binding("s", "pick('stop')", "stop"),
+                Binding("escape", "pick(None)", "cancel")]
+
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(self.message))
+            yield Static(Text("r restart · s stop · esc cancel", style="dim"))
+
+    def action_pick(self, what):
+        self.dismiss(what)
+
+
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
@@ -227,23 +249,28 @@ class PlApp(App):
     def dispatcher_job(self, what):
         """start: start it when not running. toggle: start it, or ask first and stop it. stop: stop it. Never on the UI thread.
         With the manager on (the default; machine.toml [manager] enabled = false turns it off) and a profile whose
-        autostart is not false, start on mount starts pl manager; D asks the manager to stop or restart THIS profile's
-        dispatcher only (a stop holds until D again or pl manager restart NAME). pl manager stop stops the manager."""
+        autostart is not false, start on mount starts pl manager (and restarts one on an older pl build); D on THIS
+        profile's dispatcher, read fresh from status.json: running offers restart or stop, stopped starts it."""
         try:
             managed = manager.enabled() and C.DISPATCH.get("autostart", True) is not False
             if managed and what == "start":
                 note = manager.start()
-            elif managed and what == "stop":
-                note = manager.restart(C.PROFILE_NAME, "stop")
-            elif managed and not dispatch.dispatcher_running():
+                if old := manager.restart_if_old():
+                    self.call_from_thread(self.notify, old, timeout=15, markup=False)
+            elif managed and what in ("stop", "restart"):
+                note = manager.restart(C.PROFILE_NAME, what)
+            elif managed and not self.managed_up():
                 note = manager.restart(C.PROFILE_NAME, "restart")
                 if not manager.running():
                     note = manager.start()
-            elif what == "toggle" and (managed or dispatch.dispatcher_running()):
-                msg = (f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? pl manager stops it and does not restart it '
-                       f"until you press D again; running agents keep running, and so do the manager and other "
-                       f"profiles' dispatchers (pl manager stop stops the manager)."
-                       if managed else f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '
+            elif managed:
+                msg = (f'Restart the dispatcher of profile "{C.PROFILE_NAME}"? Restart stops and starts it again; stop '
+                       f"stops it until you press D again. Running agents keep running, and so do the manager and other "
+                       f"profiles' dispatchers (pl manager stop stops the manager).")
+                self.call_from_thread(self.push_screen, DispatcherChoice(msg), lambda k: k and self.dispatcher_job(k))
+                return
+            elif what == "toggle" and dispatch.dispatcher_running():
+                msg = (f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '
                        f"{C.TMUX_SESSION}:dispatch; running agents keep running.")
                 self.call_from_thread(self.push_screen, ConfirmScreen(msg),
                                       lambda yes: yes and self.dispatcher_job("stop"))
@@ -254,6 +281,13 @@ class PlApp(App):
             note = f"dispatcher: failed to {'stop' if what == 'stop' else 'start'} — {type(e).__name__}: {e}"
         if note:
             self.call_from_thread(self.show_dispatcher_note, note)
+
+    @staticmethod
+    def managed_up():
+        """The manager's status, read now (never the refresh snapshot), runs this profile's dispatcher and no stop
+        is pending: a D right after s starts it again, never stops it twice."""
+        row = next((p for p in (manager.read_status() or {}).get("profiles") or [] if p.get("name") == C.PROFILE_NAME), {})
+        return bool(row.get("running") and not row.get("stopped") and not manager.stop_pending(C.PROFILE_NAME))
 
     def show_dispatcher_note(self, note):
         self.dispatcher_note = note
@@ -338,6 +372,8 @@ class PlApp(App):
             return self.active_tab == "dashboard" and len(self.screen_stack) == 1
         if action == "review":
             return self.active_tab == "needs" and len(self.screen_stack) == 1
+        if action == "dispatcher":
+            return len(self.screen_stack) == 1   # never a second D while its choice or confirm dialog is open
         return True
 
     async def action_cycle_window(self):
