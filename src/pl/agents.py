@@ -10,7 +10,7 @@ from datetime import datetime
 from pl import config as C
 from pl import harnesses
 from pl.board import col_name
-from pl.util import parse_iso
+from pl.util import mask, parse_iso
 
 # ---------- claude session registry (which agents are alive) ----------
 
@@ -82,6 +82,31 @@ def run_waiting(w, reg):
     return f"waiting (idle {int(idle // 60)} min)" if idle >= WAIT_IDLE else None
 
 
+PERMISSION_IDLE = 120   # an agent at a permission prompt this long, with no change on screen, is stuck there
+BOX_RE = re.compile(r"[│┃|╭╮╰╯─━]+")
+OPTION_RE = re.compile(r"^\s*(?:[❯›>]\s*)?[1-9][.)]\s")
+
+
+def permission_wait(h, pane):
+    """The tool line of a permission prompt on the pane's screen, masked and short, once the pane has been idle
+    PERMISSION_IDLE seconds; else None. pl only reads the screen: it never answers the prompt."""
+    pats = harnesses.permission_patterns(h)
+    if not pats or not pane:
+        return None
+    lines = [BOX_RE.sub(" ", ln).strip() for ln in
+             (harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-40"]).stdout or "").splitlines()]
+    lines = [ln for ln in lines if ln][-20:]   # the prompt sits at the bottom of the screen
+    at = next((i for i, ln in enumerate(lines) if any(re.search(p, ln, re.I) for p in pats)), None)
+    if at is None:
+        return None
+    act = (harnesses._run(["tmux", "display-message", "-p", "-t", pane, "#{window_activity}"]).stdout or "").strip()
+    if not act.isdigit() or time.time() - int(act) < PERMISSION_IDLE:
+        return None
+    near = [ln for ln in lines[max(0, at - 3):at] + lines[at + 1:at + 3]
+            if not OPTION_RE.match(ln) and not any(re.search(p, ln, re.I) for p in pats)]
+    return mask(" · ".join(near) or lines[at])[:120]
+
+
 def worker_view(c, reg):
     """One short phrase describing the card's agent, for pl list."""
     m = c.get("metadata") or {}
@@ -103,6 +128,8 @@ def worker_view(c, reg):
         except ValueError:
             when = "?"
         return f"limit hit — {hit.get('account')}, resets {when}"
+    if w.get("permission_wait"):   # set by the dispatcher while the agent sits at a permission prompt
+        return f"{w['stage']} agent waiting for permission ({w.get('profile')})"
     sid = w.get("session_id")
     rec = reg.get(sid)
     h = _harness(w)

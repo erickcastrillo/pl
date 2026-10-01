@@ -197,6 +197,33 @@ Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl
 
 Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
 
+## Permissions
+
+Pipeline agents and loops run in each harness's unattended mode, so an agent nobody is watching does not sit idle at a permission prompt. pl never uses a yolo, bypass or skip-all-permissions mode.
+
+| Agent | Mode |
+| --- | --- |
+| Spec, design, plan and run agents | Claude `--permission-mode auto`; Codex `--ask-for-approval never --sandbox workspace-write`; Antigravity `--mode accept-edits`; Gemini `--approval-mode auto_edit` |
+| Loops | the same as pipeline agents |
+| Assistant | always asks first (see Assistant); never changed by this setting |
+| Sub-agents | inherit the mode of the agent that started them |
+
+What auto allows. Claude's auto mode lets a safety classifier approve routine actions, such as edits, tests and builds, and block risky or suspicious ones, which then ask or fail. Codex never asks, and commands may write only inside the workspace; a blocked command fails back to the agent. Antigravity and Gemini approve file edits only: their only mode that never asks skips every check, so their agents still ask before commands. pl warns about this in `pl setup` and in the Settings tab. To let them run, allow the commands in agy's own settings, or with a Gemini policy file (`--policy`).
+
+Turn it off, so agents ask before each action:
+
+```toml
+[permissions]
+unattended = false     # every harness in this profile
+
+[harnesses.codex]
+unattended = false     # one harness only
+```
+
+A `[harnesses.<name>]` template that already sets its own permission or sandbox flag is left as it is.
+
+An agent that still waits at a permission prompt, with no change on its screen for 2 minutes, opens an alert: "agent waiting for permission in <window>: <the tool line>". Its card shows "waiting for permission". pl never answers the prompt. The alert clears once the prompt is gone.
+
 ## Assistant
 
 Tab `0` is a side chat that runs pl for you: "what is stuck?", "retry that card", "install this plugin", "change the review skill". It is a real, interactive harness session in the tmux window `assistant` of this profile's session, started the first time you open the tab. The tab shows its screen and types what you enter; a lone digit answers the harness's numbered permission menu. The window outlives the console, so reopening the console reattaches to the same conversation; if tmux lost the window, pl resumes the saved Claude conversation.

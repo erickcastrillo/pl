@@ -14,7 +14,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, events, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import hold_reason, pane_exists, registry, run_waiting, worker_status
+from pl.agents import hold_reason, pane_exists, permission_wait, registry, run_waiting, worker_status
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
@@ -118,7 +118,7 @@ def start_worker(c, stage, attempts, dry):
     tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
     pane = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
     sid = str(uuid.uuid4())
-    script = _launch(pane, name, harnesses.launch_script(h, profile, prompt, sid, label))
+    script = _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label))
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
@@ -201,7 +201,8 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                    "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
         tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
         pane = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
-        _launch(pane, name, harnesses.launch_script(harnesses.account_harness(use), use, svc["prompt"], None, name))
+        _launch(pane, name, harnesses.launch_script(harnesses.unattended(harnesses.account_harness(use)), use, svc["prompt"],
+                                                    None, name))
         old = svc_state.get(name, {})
         svc_state[name] = {"profile": use, "started_at": now_iso(), "sessions": old.get("sessions", []),
                            **({"context_restarts": old["context_restarts"]} if old.get("context_restarts") else {})}
@@ -303,7 +304,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     runs_live = 0   # every live run agent, waiting ones included
     prep_alive = 0
     todo = []
-    failed = set()   # stage_failed alert keys seen this pass
+    failed = set()   # stage_failed and permission_wait alert keys seen this pass
     for c in all_cards:
         m = c.get("metadata") or {}
         if m.get("pipeline_mode") != "auto":
@@ -381,6 +382,18 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         elif w.get("limit_hit") and status == "alive" and not dry:   # the agent is past its limit screen
             w = {k: v for k, v in w.items() if k != "limit_hit"}
             update(c["id"], metadata={"worker": w})
+        if w and status == "alive" and not busy and not screen and not dry:   # stuck at a permission prompt: tell, never answer
+            ask = permission_wait(wh, w.get("pane"))
+            if ask:
+                key = f"permission_wait:{c['id']}"
+                failed.add(key)
+                where = f"{w.get('stage')}-{slug_of(c)[:28]}"
+                if why := alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
+                                      f"answer it in the agent window (pl card {c['id'][:8]}); README: Permissions"):
+                    notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
+            if bool(ask) != bool(w.get("permission_wait")):
+                w = {**w, "permission_wait": ask} if ask else {k: v for k, v in w.items() if k != "permission_wait"}
+                update(c["id"], metadata={"worker": w})
         # a worker for an earlier stage that finished its job: clean its window once it has gone idle
         if w and w.get("stage") != stage and stage_complete(c, col, w["stage"]) and status == "alive":
             rec = reg.get(sid) or {}
@@ -540,6 +553,7 @@ def check_alerts(all_cards, failed):
     out = bool(C.PROFILES) and set(C.PROFILES) <= set(parked)
     alerts.sweep("accounts_all_out", {"accounts_all_out"} if out else set(), notify)
     alerts.sweep("stage_failed:", failed, notify)
+    alerts.sweep("permission_wait:", failed, notify)
     waiting, now = set(), time.time()
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")

@@ -281,7 +281,7 @@ def _copy(src, target, sid):
 def _relaunch(c, w, account, prompt):
     from pl import dispatch   # dispatch imports this module
     label = f"{w.get('stage')}:{slug_of(c)[:28]}"
-    return dispatch._launch(w["pane"], _window_name(c, w), harnesses.launch_script(harnesses.get("claude"), account, prompt,
+    return dispatch._launch(w["pane"], _window_name(c, w), harnesses.launch_script(harnesses.unattended(harnesses.get("claude")), account, prompt,
                                                                     w["session_id"], label, resume=True))
 
 

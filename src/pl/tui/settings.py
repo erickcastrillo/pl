@@ -170,7 +170,8 @@ class SettingsView(Widget):
             try:
                 h = harnesses.get(hname)
                 ok = "installed" if harnesses.available(h) else f"{h.bin} not found"
-                exp = "  experimental" if h.experimental else ""
+                exp = ("  experimental" if h.experimental else "") + \
+                    ("  may wait at permission prompts (README: Permissions)" if harnesses.still_asks(h.name) else "")
             except SystemExit:
                 ok, exp = "unknown harness", ""
             t.append(f"account  {name:<12} {hname:<12} {a.get('config_dir', '')}  {ok}{exp}\n")

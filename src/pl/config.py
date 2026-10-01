@@ -65,6 +65,7 @@ def _defaults():
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, **MEMORY_DEFAULTS}  # autostart: the console starts the dispatcher
     GATES = {"spec": False}
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
+    PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -135,6 +136,7 @@ def _apply(g, t):
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
     g["USAGE"] = dict(t.get("usage", {}))
+    g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))
 
 
@@ -205,6 +207,8 @@ def validate(doc) -> list[str]:
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
+    if not isinstance(doc.get("permissions", {}).get("unattended", True), bool):
+        errs.append("permissions.unattended must be true or false")
     for key in ("autostart", "kill_runaway"):
         if not isinstance(doc.get("dispatch", {}).get(key, True), bool):
             errs.append(f"dispatch.{key} must be true or false")

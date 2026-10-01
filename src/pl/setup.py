@@ -22,7 +22,7 @@ from pathlib import Path
 import tomlkit
 
 from pl import config as C
-from pl import profiles
+from pl import harnesses, profiles
 from pl.trackers import github
 
 HARNESSES = {"claude": "claude", "codex": "codex", "agy": "antigravity"}   # choice -> built-in harness
@@ -221,6 +221,8 @@ def ask_harnesses(answers, flags):
             print(f"{BINARIES[h]} is not on your PATH. Install it: {INSTALL[h]}\n"
                   f"setting up {h} is outside pl; pl only uses it once you are signed in")
             answers["todo"].append(f"install {h} and sign in to it: {INSTALL[h]}")
+        if warn := harnesses.still_asks(HARNESSES[h]):
+            print(f"warning: {warn}")
         if CONFIG_DIRS[h] is None:
             d = dirs.get(h) or _old(answers, "accounts", h, "config_dir") or "~"   # agy has no config folder setting: the account just names the harness
         else:

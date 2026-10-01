@@ -27,6 +27,8 @@ class Harness:
     experimental: bool = False
     note: str = ""
     resume: list = field(default_factory=list)   # relaunch a session by id in place (pl move-agent); empty = cannot
+    unattended: bool = True                      # [harnesses.<name>] unattended = false: pipeline agents ask first
+    permission_patterns: list | None = None      # its permission prompt on screen; None = PERMISSION_PATTERNS[name]
 
 
 SHELLS = ("zsh", "bash", "sh", "fish")
@@ -56,6 +58,49 @@ BUILTINS = {
 }
 FIELDS = {f.name for f in dataclasses.fields(Harness)}
 
+# The flags that let a pipeline agent or loop work without stopping for permission; never the Assistant. From each
+# CLI's --help: claude 2.1.286 (auto: a safety classifier approves routine actions and blocks risky ones), codex 0.150.1
+# (never ask, writes only inside the workspace), agy and gemini 0.32.1 (edits only: their one mode that never asks
+# skips every check, so pl keeps asking for commands, see STILL_ASKS). pl never uses a yolo, bypass or skip mode.
+UNATTENDED = {"claude": ["--permission-mode", "auto"],
+              "codex": ["--ask-for-approval", "never", "--sandbox", "workspace-write"],
+              "antigravity": ["--mode", "accept-edits"],
+              "gemini": ["--approval-mode", "auto_edit"]}
+STILL_ASKS = {"antigravity": "allow the commands in agy's own settings",
+              "gemini": "allow the commands with a gemini policy file (--policy)"}
+# A permission prompt on screen (strings of each CLI's binary at the versions above).
+PERMISSION_PATTERNS = {
+    "claude": [r"Do you want to (?:proceed|make this edit to|create|allow)", r"Yes, and don't ask again for"],
+    "codex": [r"Would you like to (?:run the following command|make the following edits|grant)"],
+    "antigravity": [r"Allow (?:access to this|calling this tool|creation of this file|administrator elevation)",
+                    r"Approve this action\?", r"Run this command\?", r"Do you want to proceed\?"],
+    "gemini": [r"Allow execution of", r"Apply this change\?", r"Do you want to proceed\?"]}
+# A template token that already chooses a permission or sandbox mode (the Assistant refuses such a template too).
+PERMISSION_FLAG_RE = re.compile(r"dangerously|bypass|yolo|full-auto|approve-for-me|permission|approval|sandbox|dontask"
+                                r"|acceptedits|accept-edits|allowed-?tools|settings|^-[as]$|^--mode(?:=|$)", re.I)
+
+
+def unattended(h):
+    """h with its unattended flags after the program name, for a pipeline agent or loop. h itself when [permissions]
+    unattended = false, [harnesses.<name>] unattended = false, it has none, or its template sets a permission flag."""
+    flags = UNATTENDED.get(h.name) if h.unattended and C.PERMISSIONS.get("unattended", True) is not False else None
+    if not flags or any(PERMISSION_FLAG_RE.search(t) for t in (*h.interactive, *h.resume)):
+        return h
+    return dataclasses.replace(h, interactive=[*h.interactive[:1], *flags, *h.interactive[1:]],
+                               resume=[*h.resume[:1], *flags, *h.resume[1:]] if h.resume else [])
+
+
+def still_asks(name):
+    """A warning when this harness's agents may still wait at a permission prompt, else None."""
+    if name not in STILL_ASKS:
+        return None
+    return (f"{name} agents may wait at a permission prompt for commands: its only mode that never asks skips every "
+            f"check, and pl never uses it. To let them run, {STILL_ASKS[name]}.")
+
+
+def permission_patterns(h):
+    return PERMISSION_PATTERNS.get(h.name, []) if h.permission_patterns is None else h.permission_patterns
+
 
 ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CACHE = {}   # config path -> validated [harnesses] table, parsed once per process
@@ -75,7 +120,9 @@ def _overrides():
             ev = ov.get("env_var")
             if ev is not None and not (isinstance(ev, str) and ENV_RE.fullmatch(ev)):
                 raise SystemExit(f"pl: [harnesses.{name}] env_var {ev!r} is not a variable name ({p})")
-            for k in ("interactive", "headless", "resume", "limit_patterns"):
+            if not isinstance(ov.get("unattended", True), bool):
+                raise SystemExit(f"pl: [harnesses.{name}] unattended must be true or false ({p})")
+            for k in ("interactive", "headless", "resume", "limit_patterns", "permission_patterns"):
                 if k in ov and not (isinstance(ov[k], list) and all(isinstance(x, str) for x in ov[k])):
                     raise SystemExit(f"pl: [harnesses.{name}] {k} must be a list of strings ({p})")
         _CACHE[p] = table

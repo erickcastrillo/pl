@@ -148,7 +148,7 @@ def test_move_stops_copies_and_resumes_under_the_target(fake_home, pane, monkeyp
     assert pane.order == ["C-c", "C-c", "launch"]          # stopped and verified before the relaunch
     script = _script(pane.typed[0])
     assert f"export CLAUDE_CONFIG_DIR={C.PROFILES['acme2']}" in script
-    assert f"exec claude --resume {SID}" in script
+    assert f"exec claude --permission-mode auto --resume {SID}" in script
     w = c["metadata"]["worker"]
     assert (w["profile"], w["session_id"], w["pane"], w["window"]) == ("acme2", SID, "%5", "@5")
     assert c["metadata"]["profile"] == "acme2"
@@ -265,6 +265,7 @@ def _dispatch(monkeypatch, c, screen, others=(), started=None, pick=lambda harne
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w.get("session_id")))
     monkeypatch.setattr(dispatch, "healthy_profile", lambda want, cs, harness=None: pick(harness))
     monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: None)
+    monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: None)
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: screen)
     monkeypatch.setattr(dispatch, "start_worker", lambda *a: started.append(a[0]["id"]))
     for name in ("sweep_untracked", "ensure_services", "mirror_to_product"):

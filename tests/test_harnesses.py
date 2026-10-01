@@ -1,4 +1,5 @@
 """WP7: agents run under Claude Code, Codex or Antigravity; every command is built from quoted template tokens."""
+import re
 import shlex
 import subprocess
 import time
@@ -85,7 +86,8 @@ def test_send_keys_string_returns_the_exact_hostile_tokens(fake_home, fake_tmux)
     c = {"id": "x'; rm -rf ~ #", "title": "t", "metadata": {"profile": "acme", "spec_slug": "$(id)"}}
     dispatch.start_worker(c, "spec", 1, False)
     assert len(sent) == 1
-    assert shlex.split(sent[0]) == [f"CLAUDE_CONFIG_DIR={fake_home / 'cfg dir'}", "claude", "--session-id", SID,
+    assert shlex.split(sent[0]) == [f"CLAUDE_CONFIG_DIR={fake_home / 'cfg dir'}", "claude", "--permission-mode", "auto",
+                                    "--session-id", SID,
                                     "--name", "spec:$(id)", "/spec-writer x'; rm -rf ~ #"]
 
 
@@ -144,14 +146,14 @@ def test_claude_builtin_reproduces_the_legacy_commands(fake_home, fake_tmux):
     acme = fake_home / ".claude-acme"
     c = {"id": "abc", "title": "Fix Thing", "metadata": {"profile": "acme", "pipeline_mode": "auto"}}
     dispatch.start_worker(c, "spec", 1, False)
-    legacy = f"CLAUDE_CONFIG_DIR={acme} claude --session-id {SID} --name 'spec:fix-thing' '/spec-writer abc'"
+    legacy = f"CLAUDE_CONFIG_DIR={acme} claude --permission-mode auto --session-id {SID} --name 'spec:fix-thing' '/spec-writer abc'"
     assert shlex.split(sent[0]) == shlex.split(legacy)
     assert updates[0][1]["metadata"]["worker"]["harness"] == "claude"
     # service loops: same command as the snapshot's ensure_services
     C.SERVICES = {"merge-check": {"prompt": "/loop 30m /merge-check", "profile": "acme"}}
     sent.clear()
     dispatch.ensure_services({}, [], {}, False, None)
-    legacy = f"CLAUDE_CONFIG_DIR={acme} claude --name 'merge-check' '/loop 30m /merge-check'"
+    legacy = f"CLAUDE_CONFIG_DIR={acme} claude --permission-mode auto --name 'merge-check' '/loop 30m /merge-check'"
     assert [shlex.split(s) for s in sent] == [shlex.split(legacy)]
 
 
@@ -320,7 +322,8 @@ def test_the_launch_script_round_trips_hostile_argv_through_sh(fake_home, fake_t
     script = shlex.split(typed[0])[1]
     import os
     REAL_RUN(["sh", script], env={"PATH": f"{bindir}:/usr/bin:/bin"}, check=True)
-    assert out.read_text().splitlines() == [str(tmp_path / "cfg dir $X"), "--session-id", SID, "--name", "spec:t",
+    assert out.read_text().splitlines() == [str(tmp_path / "cfg dir $X"), "--permission-mode", "auto", "--session-id",
+                                            SID, "--name", "spec:t",
                                             hostile + " abc"]
     assert not os.path.exists(script)   # it removes itself once it runs: a script left behind means it never ran
 
@@ -487,8 +490,9 @@ def test_run_waiting_reads_gate_markers_and_idle_time(fake_home, monkeypatch, te
     assert agents.run_waiting(RUN_W, {"s1": {"status": status}}) == want
 
 
-def _pass(monkeypatch, cs, waiting, max_runs=1):
+def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None):
     started = []
+    monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ask)   # the permission-prompt screen check
     monkeypatch.setattr(dispatch, "registry", lambda: {"s1": {"status": "idle"}})
     monkeypatch.setattr(dispatch, "cards", lambda: cs)
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
@@ -557,3 +561,141 @@ def test_a_card_stuck_on_a_limit_says_so_in_pl_list(fake_home, monkeypatch):
     c = {"id": "card0001", "list_id": "L", "metadata": {"pipeline_mode": "auto", "worker": w}}
     t = datetime.fromisoformat("2026-10-05T04:01:00+00:00").astimezone()
     assert agents.worker_view(c, {"s": {"status": "waiting"}}) == f"limit hit — acme, resets {t:%b} {t.day} {t:%H:%M}"
+
+
+# ---------- unattended permissions: pipeline agents and loops work without stopping at a prompt ----------
+
+UNATTENDED_WANT = {"claude": ["--permission-mode", "auto"],
+                   "codex": ["--ask-for-approval", "never", "--sandbox", "workspace-write"],
+                   "antigravity": ["--mode", "accept-edits"]}
+
+
+def _launched(fake_home, fake_tmux, harness, toml=""):
+    """The argv of a spec agent and of a loop started under one account of this harness."""
+    sent, _ = fake_tmux
+    _profile(fake_home, f'[accounts.a]\nharness = "{harness}"\nconfig_dir = "~"\n{toml}')
+    C.PROMPTS = {"spec": "/spec {id}"}
+    dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "spec", 1, False)
+    C.SERVICES = {"rev": {"prompt": "/loop 30m /rev", "profile": "a"}}
+    dispatch.ensure_services({}, [], {}, False, None)
+    return [[t for t in shlex.split(s) if "=" not in t or t.startswith("-")] for s in sent]
+
+
+@pytest.mark.parametrize("harness", sorted(UNATTENDED_WANT))
+def test_every_pipeline_agent_and_loop_carries_its_harness_unattended_flags(fake_home, fake_tmux, harness):
+    want = UNATTENDED_WANT[harness]
+    for argv in _launched(fake_home, fake_tmux, harness):
+        assert argv[1:1 + len(want)] == want, argv
+
+
+@pytest.mark.parametrize("toml", ["[permissions]\nunattended = false\n",
+                                  '[harnesses.claude]\nunattended = false\n'])
+def test_the_off_switch_works_per_profile_and_per_harness(fake_home, fake_tmux, toml):
+    for argv in _launched(fake_home, fake_tmux, "claude", toml):
+        assert "--permission-mode" not in argv and "auto" not in argv, argv
+
+
+def test_turning_one_harness_off_leaves_the_others_on(fake_home, fake_tmux):
+    argv = _launched(fake_home, fake_tmux, "codex", "[harnesses.claude]\nunattended = false\n")
+    assert all("never" in a for a in argv)
+
+
+def test_a_template_that_sets_its_own_permission_flag_is_left_alone(fake_home, fake_tmux):
+    toml = '[harnesses.claude]\ninteractive = ["claude", "--permission-mode", "acceptEdits", "{prompt}"]\n'
+    for argv in _launched(fake_home, fake_tmux, "claude", toml):
+        assert argv == ["claude", "--permission-mode", "acceptEdits", argv[-1]], argv
+
+
+def test_a_moved_agent_resumes_with_the_unattended_flags(fake_home, fake_tmux):
+    sent, _ = fake_tmux
+    from pl import move_agent
+    w = {"stage": "run", "session_id": SID, "pane": "%1", "window": "@1"}
+    move_agent._relaunch({"id": "abc", "title": "t", "metadata": {}}, w, "acme", "go on")
+    argv = shlex.split(sent[0])
+    assert argv[1:4] == ["claude", "--permission-mode", "auto"] and "--resume" in argv
+
+
+UNSAFE = re.compile(r"yolo|bypass|skip|dangerous|danger-full-access|full-auto|dontask", re.I)
+
+
+def test_no_harness_default_ever_uses_a_yolo_bypass_or_skip_mode():
+    assert set(harnesses.UNATTENDED) >= {*harnesses.BUILTINS, "gemini"}
+    for name, flags in harnesses.UNATTENDED.items():
+        assert flags and not any(UNSAFE.search(f) for f in flags), (name, flags)
+    for h in harnesses.BUILTINS.values():
+        assert not any(UNSAFE.search(t) for t in (*h.interactive, *h.headless, *h.resume)), h.name
+
+
+def test_harnesses_that_still_ask_say_so_with_the_setting_to_change(fake_home):
+    for name in ("antigravity", "gemini"):
+        warn = harnesses.still_asks(name)
+        assert warn and "may wait" in warn and "pl never" in warn
+    assert harnesses.still_asks("claude") is None and harnesses.still_asks("codex") is None
+
+
+# ---------- an agent stuck at a permission prompt: an alert and a card label ----------
+
+CLAUDE_ASK = """⏺ Pushing the branch now.
+
+╭──────────────────────────────────────────╮
+│ Bash command                             │
+│                                          │
+│   git push origin feat/x                 │
+│   Push the branch                        │
+│                                          │
+│ Do you want to proceed?                  │
+│ ❯ 1. Yes                                 │
+│   2. Yes, and don't ask again for git push│
+│   3. No, and tell Claude what to do       │
+╰──────────────────────────────────────────╯"""
+CODEX_ASK = """Would you like to run the following command?
+  $ npm test --token=ghp_abcdefghijklmnopqrstuvwxyz0123456789
+› 1. Yes, proceed
+  2. No, and tell Codex what to do differently"""
+
+
+@pytest.mark.parametrize("harness, text, idle, want", [
+    ("claude", CLAUDE_ASK, 130, "git push origin feat/x"),
+    ("codex", CODEX_ASK, 300, "npm test"),
+    ("claude", CLAUDE_ASK, 60, None),                       # at the prompt for under 2 minutes: maybe a person is on it
+    ("claude", "", 600, None),                              # an empty screen
+    ("claude", "⏺ Running the tests\n  ⎿  42 passed", 600, None),   # a normal, idle screen
+    ("codex", CLAUDE_ASK, 600, None),                       # another harness's prompt is not this one's
+])
+def test_permission_wait_needs_a_prompt_on_screen_and_two_idle_minutes(fake_home, monkeypatch, harness, text, idle, want):
+    _screen(monkeypatch, text, time.time() - idle)
+    got = agents.permission_wait(harnesses.get(harness), "%1")
+    assert (got is None) if want is None else (want in got)
+    if got:
+        assert "ghp_" not in got and len(got) <= 120
+
+
+def test_a_stuck_agent_opens_an_alert_and_its_card_says_waiting_for_permission(fake_home, monkeypatch):
+    from pl import alerts
+    updates, opened = [], []
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: updates.append(f))
+    real_open = alerts.open
+    monkeypatch.setattr(alerts, "open", lambda *a: opened.append(a) or real_open(*a))
+    c = _auto("eeee0005", "In progress", spec_slug="fix-x",
+              worker={**RUN_W, "profile": "acme", "started_at": now_iso()})
+    _pass(monkeypatch, [c], None, ask="Bash command · git push origin feat/x")
+    key, sev, title = opened[0][:3]
+    assert key == "permission_wait:eeee0005" and sev == "warn"
+    assert title == "agent waiting for permission in run-fix-x: Bash command · git push origin feat/x"
+    w = updates[-1]["metadata"]["worker"]
+    assert w["permission_wait"]
+    c["metadata"]["worker"] = w
+    monkeypatch.setattr(agents, "col_name", lambda lid: "In progress")
+    assert agents.worker_view(c, {}) == "run agent waiting for permission (acme)"
+    # the prompt is answered: the label and the alert clear
+    _pass(monkeypatch, [c], None)
+    assert "permission_wait" not in updates[-1]["metadata"]["worker"]
+    assert alerts.get("permission_wait:eeee0005")["resolved_at"]
+
+
+def test_a_normal_screen_opens_no_alert_and_changes_no_card(fake_home, monkeypatch):
+    from pl import alerts
+    updates = []
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: updates.append(f))
+    _pass(monkeypatch, [_auto("ffff0006", "In progress", worker=dict(RUN_W))], None)
+    assert updates == [] and alerts.get("permission_wait:ffff0006") is None

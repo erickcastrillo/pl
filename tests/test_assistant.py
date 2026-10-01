@@ -122,6 +122,14 @@ def test_a_first_ensure_starts_the_assistant_window_with_the_guide(tmux):
     assert len(ev) == 1 and ev[0]["resumed"] is False and ev[0]["account"] == "acme"
 
 
+@pytest.mark.parametrize("harness, unattended", [("claude", "auto"), ("codex", "never")])
+def test_the_assistant_never_gets_the_unattended_flags(tmux, harness, unattended):
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": harness}
+    assistant.ensure()
+    argv = _script(tmux).splitlines()[-1].split()
+    assert unattended not in argv and "workspace-write" not in argv
+
+
 def test_a_lost_window_resumes_the_saved_claude_conversation(tmux):
     _save_state(session_id=SID, account="acme", harness="claude", window="@3", pane="%3", started_at="x")
     assistant.ensure()

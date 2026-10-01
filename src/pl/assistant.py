@@ -52,8 +52,7 @@ DENY_RULES = [*(f"Read(**/{f})" for f in (".credentials*", "auth.json", ".env*",
 CLAUDE_RULES = {"permissions": {"allow": READ_TOOLS + READ_ONLY, "ask": ASK_RULES, "deny": DENY_RULES}}
 ASK_FIRST = {"claude": ["--permission-mode", "manual", "--settings", json.dumps(CLAUDE_RULES)],
              "codex": ["--ask-for-approval", "on-request", "--sandbox", "read-only"]}
-PERMISSION_FLAG_RE = re.compile(r"dangerously|bypass|yolo|full-auto|approve-for-me|permission|approval|sandbox|dontask"
-                                r"|acceptedits|allowed-?tools|settings|^-[as]$", re.I)
+PERMISSION_FLAG_RE = harnesses.PERMISSION_FLAG_RE
 RISKY = ("pl", "pl approve x", "gh", "gh pr merge 1", "git push", "git push origin main")   # what the ask rules cover
 OFFER_GAP = 60            # seconds between two alert offers
 KEY_RE = re.compile(r"[^A-Za-z0-9:_-]")
