@@ -54,6 +54,9 @@ ENTRIES = [
        "! Alerts · @ Pipeline · 4 Kanban", "pl alerts"),
     _e("2026-10-02.02", "Optional local model (Gemma 4 on Ollama) writes a short standup summary",
        "pl setup offers it on a new profile; [local_model] enabled = true; loopback url only, no API key", "pl standup --summary"),
+    _e("2026-10-02.03", "pl commands take a GitHub card's short id: repo#43 or #43",
+       "pl card, retry, review, approve, reject, done, move; hints show the id quoted (quote it in a shell: '#' starts a comment)",
+       "pl card '#43'"),
 ]
 
 

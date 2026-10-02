@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from pl import cli
+from pl import __version__, cli
 from pl import config as C
 
 
@@ -151,7 +151,7 @@ def test_without_a_profile_commands_refuse_but_help_and_profiles_work(fake_home,
     monkeypatch.setattr(sys, "argv", ["pl", "--version"])
     with pytest.raises(SystemExit) as e:
         cli.main()
-    assert e.value.code == 0 and capsys.readouterr().out.strip() == "pl 0.2.0"
+    assert e.value.code == 0 and capsys.readouterr().out.strip() == f"pl {__version__}"
     monkeypatch.setattr(sys, "argv", ["pl", "profiles"])
     cli.main()
     assert "pl profiles new" in capsys.readouterr().out
