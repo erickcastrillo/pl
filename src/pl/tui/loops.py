@@ -14,7 +14,7 @@ from pl import agents
 from pl import config as C
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
-from pl.util import tmux
+from pl.util import short_id, tmux
 
 TAIL_LINES = 40
 ACTIVE_RE = re.compile(r"active (\d+)([mhd]) ago")
@@ -257,7 +257,7 @@ class ActivityView(Widget):
         for e in shown:
             detail = " ".join(f"{k}={v}" for k, v in e.items() if k not in ("ts", "kind", "card", "profile"))
             t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
-                      Text(str(e.get("card") or "")[:8]), Text(detail))
+                      Text(short_id(e.get("card") or "")), Text(detail))
 
     def action_next_filter(self):
         self.filter = FILTERS[(FILTERS.index(self.filter) + 1) % len(FILTERS)]

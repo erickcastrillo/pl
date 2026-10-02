@@ -5,23 +5,31 @@ from textual.containers import Horizontal
 from textual.widgets import DataTable, Static
 
 from pl import alerts
-from pl.util import age
+from pl.util import age, short_id
 
 EMPTY = "Alerts: none open (pl alerts --all for history)"
+
+
+def title(a):
+    """The alert's title. An older title holds a GitHub card id cut to 8 characters ("Card your-org: ..."):
+    it shows the short id from the alert's key instead."""
+    t, parts = a.get("title") or "", str(a.get("key") or "").split(":")
+    cid = parts[1] if len(parts) > 1 else ""
+    return t.replace(cid[:8], short_id(cid), 1) if "#" in cid and short_id(cid) not in t else t
 
 
 def detail(a):
     """Plain text for the detail pane, from the alert's own fields."""
     if a is None:
         return Text(EMPTY, style="dim")
-    return Text("\n".join([a.get("title") or "", "", f"fix      {a.get('fix') or ''}", f"alert    {a['key']}",
+    return Text("\n".join([title(a), "", f"fix      {a.get('fix') or ''}", f"alert    {a['key']}",
                            f"severity {a['severity']}", f"open     {age(a.get('first_seen'))} · seen {a.get('count', 1)} times",
                            "acked: no more reminders until it clears" if a.get("acked") else "k acknowledges: no more reminders"]))
 
 
 def cells(a):
     return (Text(f"{a['severity']} {age(a.get('first_seen'))}", style="red" if a["severity"] == "high" else "#e0a040"),
-            Text(f"{a.get('title') or ''} · {a.get('fix') or ''}"),
+            Text(f"{title(a)} · {a.get('fix') or ''}"),
             Text(f"×{a.get('count', 1)}" + (" acked" if a.get("acked") else ""), style="dim"))
 
 

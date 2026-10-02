@@ -18,6 +18,7 @@ from textual.widgets.option_list import Option
 
 from pl import config as C
 from pl import harnesses, ideas
+from pl.util import short_id
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 SKIP_TEXT = "(skipped: I do not know yet; ask something else)"
@@ -233,7 +234,7 @@ class IdeasView(Widget):
             t.append("\n")
         t.append(f"brief {ideas.clear_count(brief)} of {len(ideas.FIELDS)} clear\n", style="dim")
         if idea and idea.get("card_id"):
-            t.append(f"card {str(idea['card_id'])[:8]} in Inbox\n", style="green")
+            t.append(f"card {short_id(idea['card_id'])} in Inbox\n", style="green")
         elif idea and ideas.is_clear(idea):
             t.append("A  approve brief, start spec\n", style="bold")
         else:
@@ -428,5 +429,5 @@ class IdeasView(Widget):
         if done.get("status") != "approved" or not done.get("card_id"):
             self.app.notify("another console is creating this card", markup=False)
             return self.reload(select=done["id"])
-        self.app.notify(f"card {str(done.get('card_id'))[:8]} created in Inbox; the spec stage picks it up", markup=False)
+        self.app.notify(f"card {short_id(done.get('card_id'))} created in Inbox; the spec stage picks it up", markup=False)
         self.reload(select=done["id"])

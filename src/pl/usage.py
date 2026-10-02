@@ -16,7 +16,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl import events, harnesses
-from pl.util import _nofollow, load_state, mask, parse_iso
+from pl.util import _nofollow, load_state, mask, parse_iso, short_id
 
 FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 HEAD = ("input", "output", "cache read", "cache write", "total")
@@ -290,11 +290,11 @@ def session_map(cards=None):
     out = {}
     for e in events._read():
         if e.get("kind") == "started" and e.get("session") and e.get("card"):
-            out[e["session"]] = ("card", f"{str(e['card'])[:8]} {e.get('stage') or ''}".strip())
+            out[e["session"]] = ("card", f"{short_id(e['card'])} {e.get('stage') or ''}".strip())
     for c in cards or []:
         w = (c.get("metadata") or {}).get("worker") or {}
         if w.get("session_id"):
-            out[w["session_id"]] = ("card", f"{str(c.get('id'))[:8]} {w.get('stage') or ''}".strip())
+            out[w["session_id"]] = ("card", f"{short_id(c.get('id'))} {w.get('stage') or ''}".strip())
     for name, s in (load_state().get("services") or {}).items():
         for sid in (s or {}).get("sessions") or []:
             out[sid] = ("loop", name)

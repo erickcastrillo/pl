@@ -11,6 +11,7 @@ from pl import config as C
 from pl.commands import PR_URL, intent_text
 from pl.setup import LABELS
 from pl.trackers import github
+from pl.tui.chrome import skip_headings
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run   # the one subprocess runner here (gh, argv only); tests fake it
@@ -152,6 +153,7 @@ class PrsView(Horizontal):
         self._prs, self._built, self._shown = {}, [], None
         self._cache, self._pending, self._method = {}, set(), {}   # (url, updatedAt) → fetch(); repo → merge method
         self._err = None   # (ckey, fetch error) shown until the cursor moves or refresh; errors are never cached
+        self._last = None   # the cursor row before the last move: which way it travels
 
     def compose(self):
         t = DataTable(id="prs-table", cursor_type="row", show_header=False, zebra_stripes=False)
@@ -194,6 +196,7 @@ class PrsView(Horizontal):
                 t.add_row(row, key=rid)
             first = next((i for i, (rid, _) in enumerate(built) if rid in self._prs), 0)
             t.move_cursor(row=t.get_row_index(keep) if keep in self._prs else first)
+        self._last = skip_headings(t, self._prs.__contains__)
         self._built = built
         self.selected()
 
@@ -297,5 +300,6 @@ class PrsView(Horizontal):
         self.run_worker(run, thread=True, group="prs-merge")
 
     def on_data_table_row_highlighted(self, _):
+        self._last = skip_headings(self.query_one(DataTable), self._prs.__contains__, self._last)
         self._err = None
         self.selected()

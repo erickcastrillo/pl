@@ -16,7 +16,7 @@ from pl import config as C
 from pl.trackers import mcp
 from pl.tui import subagents
 from pl.tui.review import ConfirmScreen
-from pl.util import mask
+from pl.util import mask, short_id
 
 BOOT = "You are the pl assistant for profile"     # pl's first prompt (assistant.first_prompt): not shown
 HIDDEN = ("<command-", "<local-command-", "<system-reminder>")
@@ -332,7 +332,7 @@ class AssistantView(Widget):
             done = ideas.approve(cur)
             if done.get("status") != "approved" or not done.get("card_id"):
                 raise SystemExit("another console is filing this idea right now")
-            return f"card {str(done['card_id'])[:8]} created in Inbox; the spec stage picks it up"
+            return f"card {short_id(done['card_id'])} created in Inbox; the spec stage picks it up"
 
         def filed(msg):
             self.ready = None

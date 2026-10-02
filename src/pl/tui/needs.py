@@ -7,9 +7,10 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Markdown, Static
 
 from pl import config as C
-from pl.tui.chrome import header_text
+from pl.tui.chrome import header_text, skip_headings
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, checks_text, confirm_and_approve, load_review, size_text
+from pl.util import short_id
 
 PR_WHAT = {"decide": "needs your decision (auto-review stopped on purpose)", "merge": "ready to merge",
            "rework": "merge check found problems", "gate": "waiting for the merge check"}
@@ -102,6 +103,7 @@ class NeedsView(Horizontal):
         self._bodies, self._pending = {}, {}   # key → (updated_at, text); read again only when the card changed
         self._now = {}   # card id -> {"line", "todos"} from the refresh
         self._shown, self._note = None, (None, "")   # what the pane shows; the "updated HH:MM" note
+        self._last = None   # the cursor row before the last move: which way it travels
 
     def compose(self):
         t = DataTable(id="needs-table", cursor_type="row", show_header=False, zebra_stripes=False)
@@ -137,7 +139,7 @@ class NeedsView(Horizontal):
                 if r.get("pr"):
                     cells = (f"{r['pr']['repo']}#{r['pr']['number']}", r["pr"]["title"] or "", r["pr"]["repo"], "")
                 else:
-                    cells = (str(r["card"]["id"])[:8], r["card"].get("title") or "", str((r["card"].get("tags") or [None])[0] or r.get("profile") or ""),
+                    cells = (short_id(r["card"]["id"]), r["card"].get("title") or "", str((r["card"].get("tags") or [None])[0] or r.get("profile") or ""),
                              (self._now.get(r["card"]["id"]) or {}).get("line") or "")
                 built.append((rid, (Text(cells[0], style="dim"), Text(cells[1]), Text(cells[2], style="dim"),
                                     Text(cells[3], style="red" if cells[3].startswith("error: ") else "dim"))))
@@ -159,6 +161,7 @@ class NeedsView(Horizontal):
             if t.row_count:   # the same card stays selected when rows reorder, so a / x never act on another card
                 idx = t.get_row_index(keep_key) if keep_key in self._rows else min(max(keep, 1), t.row_count - 1)   # row 0 is a heading
                 t.move_cursor(row=idx)
+        self._last = skip_headings(t, self._rows.__contains__)
         self._built = built
         self._bodies = {k: v for k, v in self._bodies.items() if k in self._rows}
         self._detail_for_cursor()
@@ -252,6 +255,7 @@ class NeedsView(Horizontal):
         self.review("answer")
 
     def on_data_table_row_highlighted(self, _):
+        self._last = skip_headings(self.query_one(DataTable), self._rows.__contains__, self._last)
         try:
             self._detail_for_cursor()
         except Exception as e:  # noqa: BLE001 - a bad card must not kill the console

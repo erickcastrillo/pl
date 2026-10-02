@@ -13,7 +13,7 @@ from pl.board import cards, col_name, sections
 from pl.commands import plan_path
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stage_for
 from pl.trackers import github
-from pl.util import age, card_url, parse_iso
+from pl.util import age, card_url, parse_iso, short_id
 
 
 def watch_snapshot():
@@ -106,10 +106,10 @@ def watch_snapshot():
             elif auto and cur and kind != "review":
                 if profile in per_prof:
                     per_prof[profile]["queued"] += 1
-            pc = (m.get("product_card") or "")[:8]
+            pc = short_id(m.get("product_card") or "")
             rows.append({"kind": kind, "card": c, "worker": w, "win": win, "col": col, "profile": profile, "failed": failed,
                          "approved": approved_label(c, col, reg) or (view if view.startswith(("run agent waiting", "limit hit")) else None),
-                         "text": f"{c['id'][:8]}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
+                         "text": f"{short_id(c['id'])}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
     bad = exhausted_profiles()
     stp = profile_state()
     prof = "  ".join(f"{p}: " + (f"PARKED until {parked_until(stp[p].get('until'))}" if p in bad else "ok")
@@ -174,16 +174,16 @@ def detail_for(r, full_card, full_pr):
     c = r["card"]
     m = c.get("metadata") or {}
     if r.get("win") and r.get("col") != "Plan for review":   # the agent's tmux window is open: show its screen
-        return f"{c['id'][:8]} agent: {r.get('win') or 'starting'}", [], True
+        return f"{short_id(c['id'])} agent: {r.get('win') or 'starting'}", [], True
     if r.get("col") == "Plan for review":
         path = plan_path(c)
         if path.exists():
-            return f"plan {c['id'][:8]}: {path.name}", path.read_text().splitlines(), False
+            return f"plan {short_id(c['id'])}: {path.name}", path.read_text().splitlines(), False
         full = full_card(c["id"])
         if full is None:
-            return f"plan {c['id'][:8]}", ["loading the plan from the board…"], False
+            return f"plan {short_id(c['id'])}", ["loading the plan from the board…"], False
         plan = sections(full.get("description")).get("PLAN")
-        return f"plan {c['id'][:8]}", (plan or "this card has no PLAN section yet").splitlines(), False
+        return f"plan {short_id(c['id'])}", (plan or "this card has no PLAN section yet").splitlines(), False
     full = full_card(c["id"]) or c
     secs = sections(full.get("description"))
     lines = [c["title"], "", f"column: {r.get('col')}   profile: {m.get('profile') or '-'}   tags: {', '.join(c.get('tags') or [])}",
@@ -197,7 +197,7 @@ def detail_for(r, full_card, full_pr):
     first = secs.get("SPEC") or secs.get("INPUT")
     if first:
         lines += ["", "── " + ("SPEC" if secs.get("SPEC") else "INPUT") + " ──"] + first.splitlines()
-    return f"card {c['id'][:8]}", lines, False
+    return f"card {short_id(c['id'])}", lines, False
 
 
 _pr_cache = {"at": 0, "counts": None}

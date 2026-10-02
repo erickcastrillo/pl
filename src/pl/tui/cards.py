@@ -8,9 +8,11 @@ from textual.widgets import DataTable, Markdown, OptionList, Static
 from pl import config as C
 from pl.board import card
 from pl.commands import move_to
+from pl.tui.chrome import skip_headings
 from pl.tui.needs import detail, review_kind, start_review
 from pl.tui.pipeline import STATE, CardActions, card_markdown, card_state
 from pl.tui.review import ConfirmScreen
+from pl.util import short_id
 
 
 def card_rows(data):
@@ -65,6 +67,7 @@ class CardsView(CardActions, Horizontal):
         self._rows, self._built, self._now = {}, [], {}
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
+        self._last = None   # the cursor row before the last move: which way it travels
 
     def compose(self):
         t = DataTable(id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
@@ -91,7 +94,7 @@ class CardsView(CardActions, Horizontal):
                 self._rows[cid] = r
                 label, colour = (r["approved"], "green") if r.get("approved") else STATE[card_state(r)]
                 line = (self._now.get(cid) or {}).get("line") or ""
-                built.append((cid, (Text(str(cid)[:8], style="dim"), Text(r["card"].get("title") or ""), Text(label, style=colour),
+                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or ""), Text(label, style=colour),
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
         if not built:
             built.append(("group:empty", (Text("■", style="dim"), Text("No cards on the board.", style="dim"), Text(""), Text(""))))
@@ -106,6 +109,7 @@ class CardsView(CardActions, Horizontal):
                 t.add_row(*cells, key=rid)
             idx = t.get_row_index(keep_key) if keep_key in self._rows else min(max(keep, 1), t.row_count - 1)   # row 0 is a heading
             t.move_cursor(row=idx)
+        self._last = skip_headings(t, self._rows.__contains__)
         self._built = built
         self._bodies = {k: v for k, v in self._bodies.items() if k in self._rows}
         self._detail_for_cursor()
@@ -190,7 +194,7 @@ class CardsView(CardActions, Horizontal):
             self.app.notify("select a card to move it to another column", markup=False)
             return
         c = r["card"]
-        head = f"{c['id'][:8]}  {str(c.get('title') or '')[:50]}"
+        head = f"{short_id(c['id'])}  {str(c.get('title') or '')[:50]}"
 
         def run(col):
             try:
@@ -207,6 +211,7 @@ class CardsView(CardActions, Horizontal):
         self.app.push_screen(ColumnPicker(f"Move {head} to which column?", r.get("col")), picked)
 
     def on_data_table_row_highlighted(self, _):
+        self._last = skip_headings(self.query_one(DataTable), self._rows.__contains__, self._last)
         try:
             self._detail_for_cursor()
         except Exception as e:  # noqa: BLE001 - a bad card must not kill the console

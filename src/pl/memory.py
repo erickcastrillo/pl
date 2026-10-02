@@ -9,7 +9,7 @@ from collections import Counter
 
 from pl import config as C
 from pl import alerts, events
-from pl.util import notify
+from pl.util import notify, short_id
 
 PLATFORM = sys.platform
 CACHE_SECONDS = 10
@@ -212,12 +212,12 @@ def guard_runaways(st, all_cards, dry=False):
         kill = C.DISPATCH.get("kill_runaway") is not False and not dry and bool(victims)
         if kill:
             _stop(harness, {x: procs[x][2] for x in victims})
-        msg = (f"{(c.get('id') or 'loop')[:8]} window {name}: {len(tree)} processes; {_short(top)} ×{n}, {gb(mem)}"
+        msg = (f"{short_id(c.get('id') or 'loop')} window {name}: {len(tree)} processes; {_short(top)} ×{n}, {gb(mem)}"
                + (f"; stopped {len(victims)} child processes" if kill else ""))
         # the command is the program name only: argv can hold secrets
         events.emit("runaway", c.get("id"), window=name, processes=len(tree), memory=gb(mem),
                     command=os.path.basename(top.split()[0]) if top.split() else "?", stopped=len(victims) if kill else 0)
-        who = f"card {c['id'][:8]}" if c.get("id") else f"loop {name}" if name in C.SERVICES else f"window {win}"
+        who = f"card {short_id(c['id'])}" if c.get("id") else f"loop {name}" if name in C.SERVICES else f"window {win}"
         if why := alerts.open(f"runaway:{win}", "high", f"Runaway agent in {who}",
                               "pl stopped its child processes" if kill else "stop it by hand (kill_runaway is off)"):
             notify(alerts.headline(why, f"Runaway agent: {(c.get('title') or name)[:40]}"), msg)

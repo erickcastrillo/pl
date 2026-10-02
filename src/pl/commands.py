@@ -17,7 +17,7 @@ from pl.board import card, cards, check_size, col_id, col_name, find_card, fresh
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
-from pl.util import age, notify, now_iso, parse_iso, slug_of, tmux
+from pl.util import age, notify, now_iso, parse_iso, short_id, slug_of, tmux
 
 
 def cmd_idea(a):
@@ -59,7 +59,7 @@ def cmd_idea(a):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
     events.emit("idea_approved", item["id"])
     where = "pipeline board, Inbox" if direct else "intake board, Triage"
-    print(f"created {item['id'] if direct else item['id'][:8]}  {title}\n  {where}, {len(docs)} document(s)\n  {t.url(item['id'])}")
+    print(f"created {item['id'] if direct else short_id(item['id'])}  {title}\n  {where}, {len(docs)} document(s)\n  {t.url(item['id'])}")
     print("  the dispatcher writes its spec on its next pass" if direct
           else "  assigned to you: the pipeline pulls it in within a few minutes" if a.start
           else "  unassigned, waiting to be assessed; assign it to yourself (or rerun with --start) to start the pipeline")
@@ -89,7 +89,7 @@ def cmd_list(a):
             rows = sorted(by_col.get(col, []), key=lambda c: c.get("updated_at") or "", reverse=True)
             print(f"{col}  ({len(rows)})")
             for c in rows:
-                print(f"  {c['id'][:8]}  {c['title'][:56]:<56}  {approved_label(c, col, reg) or worker_view(c, reg):<28} {age(parse_iso(c.get('updated_at') or ''))}")
+                print(f"  {short_id(c['id'])}  {c['title'][:56]:<56}  {approved_label(c, col, reg) or worker_view(c, reg):<28} {age(parse_iso(c.get('updated_at') or ''))}")
         print()
     # Intake board: everything assigned to you, linked funnel cards marked
     if not intake_configured():
@@ -108,9 +108,9 @@ def cmd_list(a):
         print(f"{col}  ({len(rows)})")
         for c in rows[:limit]:
             f = linked.get(c["id"])
-            mark = f"funnel {f['id'][:8]}:{col_name(f['list_id'])}" if f else ("in funnel" if (c.get("metadata") or {}).get("pipeline_card") else "")
+            mark = f"funnel {short_id(f['id'])}:{col_name(f['list_id'])}" if f else ("in funnel" if (c.get("metadata") or {}).get("pipeline_card") else "")
             tags = ",".join(t for t in (c.get("tags") or []) if t in ("p0", "p1", "p2", "p3", "p4", "security", "bug", "feature", *(C.INTAKE.get("repo_tags") or [])))[:28]
-            print(f"  {c['id'][:8]}  {c['title'][:56]:<56}  {tags:<28} {age(parse_iso(c.get('updated_at') or '')):>4}  {mark}")
+            print(f"  {short_id(c['id'])}  {c['title'][:56]:<56}  {tags:<28} {age(parse_iso(c.get('updated_at') or '')):>4}  {mark}")
         if limit and len(rows) > limit:
             print(f"  ... {len(rows) - limit} more")
     print("\npull one into the funnel: pl pull <id>")
@@ -131,13 +131,13 @@ def plan_path(c):
             return fallback
     except (OSError, ValueError):
         pass
-    raise SystemExit(f"pl: card {c['id'][:8]} has a plan path or slug outside the plans folder; nothing was read or written")
+    raise SystemExit(f"pl: card {short_id(c['id'])} has a plan path or slug outside the plans folder; nothing was read or written")
 
 
 def pull_plan(c):
     sec = sections(c.get("description")).get("PLAN")
     if sec is None:
-        raise SystemExit(f"pl: card {c['id'][:8]} has no '# PIPELINE: PLAN' section yet ({col_name(c['list_id'])})")
+        raise SystemExit(f"pl: card {short_id(c['id'])} has no '# PIPELINE: PLAN' section yet ({col_name(c['list_id'])})")
     path = plan_path(c)
     if path.exists() and path.stat().st_mtime > parse_iso(c.get("updated_at") or "") \
             and path.read_text().strip() != sec.strip():
@@ -226,7 +226,7 @@ def cmd_approve(a):
             return
         update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL})
         events.emit("spec_approved", c["id"])
-        print(f"spec approved {c['id'][:8]}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
+        print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
         return
     if col != "Plan for review" and not a.force:
         raise SystemExit(f"pl approve: card is in '{col}', not 'Plan for review' (use --force to override)")
@@ -245,7 +245,7 @@ def cmd_approve(a):
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
     events.emit("approved", c["id"])
-    print(f"approved {c['id'][:8]}  {c['title']}\n  the dispatcher starts the run on its next pass")
+    print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
     notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
 
 
@@ -263,7 +263,7 @@ def cmd_reject(a):
         update(c["id"], description=check_size(render(parts)))
         update(c["id"], list_id=col_id("Inbox"), metadata={"spec_round": n, "worker": None, "spec_approved_at": None})
         events.emit("spec_rejected", c["id"])
-        print(f"sent back {c['id'][:8]}  {c['title']}\n  back in Inbox with your notes; the spec writer rewrites it on the next pass")
+        print(f"sent back {short_id(c['id'])}  {c['title']}\n  back in Inbox with your notes; the spec writer rewrites it on the next pass")
         return
     n = int(m.get("review_round") or 0) + 1
     entry = f"## {now_iso()[:10]} round {n}\n{a.notes.strip()}"
@@ -271,7 +271,7 @@ def cmd_reject(a):
     update(c["id"], description=check_size(render(parts)))
     update(c["id"], list_id=col_id("Spec ready"), metadata={"review_round": n, "worker": None})
     events.emit("rejected", c["id"])
-    print(f"rejected {c['id'][:8]}  {c['title']}\n  back in Spec ready with your notes; the planner re-plans on the next pass")
+    print(f"rejected {short_id(c['id'])}  {c['title']}\n  back in Spec ready with your notes; the planner re-plans on the next pass")
 
 
 def cmd_done(a):
@@ -284,10 +284,10 @@ def cmd_done(a):
         if m.get("product_card") and intake_configured() and "Done" in product_lists():
             try:
                 trackers.get("intake").update(m["product_card"], verify=False, list_id=product_lists()["Done"])
-                print(f"  linked Product card {m['product_card'][:8]} moved to Done as well")
+                print(f"  linked Product card {short_id(m['product_card'])} moved to Done as well")
             except SystemExit as e:   # the pipeline card is done either way
-                print(f"  linked Product card {m['product_card'][:8]} not moved ({e}); move it by hand")
-        print(f"done {c['id'][:8]}  {c['title']}  (pipeline board, was in {col_name(c['list_id'])})")
+                print(f"  linked Product card {short_id(m['product_card'])} not moved ({e}); move it by hand")
+        print(f"done {short_id(c['id'])}  {c['title']}  (pipeline board, was in {col_name(c['list_id'])})")
         return
     pc = product_card(a.id) if len(a.id) >= 32 else None
     if pc is None:
@@ -301,8 +301,8 @@ def cmd_done(a):
         body["description"] = check_size((pc.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{a.note.strip()}\n")
     got = trackers.get("intake").update(pc["id"], verify=False, **body)
     if got.get("list_id") != product_lists()["Done"]:
-        raise SystemExit(f"pl done: move did not persist for {pc['id'][:8]}")
-    print(f"done {pc['id'][:8]}  {pc['title'][:70]}  (Product board, was in {product_col(pc['list_id'])})")
+        raise SystemExit(f"pl done: move did not persist for {short_id(pc['id'])}")
+    print(f"done {short_id(pc['id'])}  {pc['title'][:70]}  (Product board, was in {product_col(pc['list_id'])})")
 
 
 
@@ -357,7 +357,7 @@ def cmd_card(a):
     c = find_card(a.id)
     if a.delete:
         trackers.get("tracker").delete(c["id"])
-        print(f"deleted {c['id'][:8]}  {c['title']}")
+        print(f"deleted {short_id(c['id'])}  {c['title']}")
         return
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
     print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
@@ -412,7 +412,7 @@ def cmd_section(a):
     if a.from_ is None:
         text = sections(find_card(a.id).get("description")).get(name)
         if text is None:
-            print(f"pl: card {a.id[:8]} has no {name} section", file=sys.stderr)
+            print(f"pl: card {short_id(a.id)} has no {name} section", file=sys.stderr)
         else:
             print(text.rstrip("\n"))
         return
@@ -433,7 +433,7 @@ def cmd_section(a):
     parts = sections(c.get("description"))
     parts[name] = text.strip("\n")
     update(c["id"], description=check_size(render(parts)))
-    print(f"wrote {name} ({len(text.strip())} chars) to card {c['id'][:8]}")
+    print(f"wrote {name} ({len(text.strip())} chars) to card {short_id(c['id'])}")
 
 
 def cmd_board(a):
@@ -470,7 +470,7 @@ def cmd_pull(a):
         for c in sorted(rows, key=lambda c: c.get("updated_at") or "", reverse=True):
             why = pull_reason_to_skip(c, linked)
             flag = why or ("NEW" if c["id"] not in seen else "known")
-            print(f"  {c['id'][:8]}  {c['title'][:62]:<62}  {product_col(c['list_id']):<8} {flag}")
+            print(f"  {short_id(c['id'])}  {c['title'][:62]:<62}  {product_col(c['list_id']):<8} {flag}")
         print("\npull one by hand: pl pull <id>")
         return
     pull_new(a.dry_run)
@@ -480,11 +480,11 @@ def cmd_adopt(a):
     c = find_card(a.id)
     m = c.get("metadata") or {}
     if m.get("pipeline_mode") == "auto":
-        print(f"{c['id'][:8]} is already a funnel card (profile {m.get('profile')})")
+        print(f"{short_id(c['id'])} is already a funnel card (profile {m.get('profile')})")
         return
     update(c["id"], metadata={"pipeline_mode": "auto", "profile": a.account or m.get("profile") or next_profile(cards()),
                               "adopted_at": now_iso(), "adopted_by": C.USER_EMAIL})
-    print(f"adopted {c['id'][:8]}  {c['title']}  ({col_name(c['list_id'])}); the dispatcher takes it from here")
+    print(f"adopted {short_id(c['id'])}  {c['title']}  ({col_name(c['list_id'])}); the dispatcher takes it from here")
 
 
 def retry(ref, stage=None):
@@ -504,7 +504,7 @@ def retry(ref, stage=None):
     reg, out = registry(), []
     for c in picked:
         w = (c.get("metadata") or {}).get("worker") or {}
-        head = f"{c['id'][:8]}  {c['title'][:50]}"
+        head = f"{short_id(c['id'])}  {c['title'][:50]}"
         if not w or (stage and w.get("stage") != stage):
             out.append(f"{head}: no {stage or ''} agent to reset".replace("  agent", " agent"))
             continue
@@ -567,7 +567,7 @@ def intent_text(pr, body):
         except SystemExit:
             continue
         secs = sections(c.get("description"))
-        out += [f"## Card {cid[:8]}: {c['title']}", ""]
+        out += [f"## Card {short_id(cid)}: {c['title']}", ""]
         if secs.get("SPEC"):
             out += ["### SPEC", secs["SPEC"].strip(), ""]
         if secs.get("PLAN"):

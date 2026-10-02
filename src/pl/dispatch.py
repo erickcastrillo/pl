@@ -19,7 +19,7 @@ from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
 from pl.trackers.github import RateLimited, limited
-from pl.util import load_state, notify, now_iso, parse_iso, save_state, slug_of, tmux
+from pl.util import load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
 
 
 def has_design(c):
@@ -336,7 +336,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         try:
             wh = harnesses.get(w.get("harness") or "claude") if w else None
         except SystemExit as e:   # one card's bad harness must not stop the pass
-            print(f"{c['id'][:8]}  skipped: {e}", file=sys.stderr)
+            print(f"{short_id(c['id'])}  skipped: {e}", file=sys.stderr)
             continue
         status, sid = ("none", None) if not w else worker_status(w, reg)
         if w and status == "alive" and sid and sid != w.get("session_id") and not dry:
@@ -372,7 +372,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     if to and to != prof:
                         moved, why, changed = move_agent.move(c, to, "usage limit", dry, held=True)
                 switch = not changed and bool(alt) and alt != prof and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
-                print(f"{c['id'][:8]}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
+                print(f"{short_id(c['id'])}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
                       + (f"moved under {to}, same session" if moved else f"not moved: {why}" if changed
                          else f"{f'not moved ({why}); ' if why else ''}restarting under {alt} (agent was {int(age // 60)} min old)" if switch
                          else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
@@ -420,7 +420,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rec = reg.get(sid) or {}
             idle_for = time.time() - (rec.get("statusUpdatedAt", 0) / 1000)
             if rec.get("status") == "idle" and idle_for > 300 and w.get("window"):
-                print(f"{c['id'][:8]}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
+                print(f"{short_id(c['id'])}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
                 if not dry:
                     tmux("kill-window", "-t", w["window"], check=False)
                     update(c["id"], metadata={"worker": None})
@@ -434,7 +434,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 rec = reg.get(fw.get("session_id")) or {}
                 idle_for = time.time() - (rec.get("statusUpdatedAt", 0) / 1000) if rec else 1e9
                 if not rec or (rec.get("status") == "idle" and idle_for > 300):
-                    print(f"{c['id'][:8]}  closing finished {fw.get('stage')} agent window")
+                    print(f"{short_id(c['id'])}  closing finished {fw.get('stage')} agent window")
                     if not dry:
                         tmux("kill-window", "-t", fw["window"], check=False)
                 else:
@@ -447,7 +447,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 st["notified"][key] = time.time()  # the planner already told the human
             if key not in st["notified"]:
                 st["notified"][key] = time.time()
-                print(f"{c['id'][:8]}  plan ready for review: {c['title'][:50]}")
+                print(f"{short_id(c['id'])}  plan ready for review: {c['title'][:50]}")
                 notify(f"Plan ready: {c['title'][:50]}", f"pl review {c['id'][:8]} ; then pl approve or pl reject")
             continue
         if stage is None or hold_reason(c):   # a split or parked card gets no agent and holds no slot
@@ -460,7 +460,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 runs_live += 1
                 why = run_waiting(w, reg) if status == "alive" else None
                 if why:
-                    print(f"{c['id'][:8]}  run agent {why}; its slot is free")   # its window stays: no second agent
+                    print(f"{short_id(c['id'])}  run agent {why}; its slot is free")   # its window stays: no second agent
                 else:
                     runs_alive += 1
             else:
@@ -470,15 +470,15 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         script = _own_launch(w)
         if same_stage and status == "dead" and script and script.exists() and not dry:   # the script deletes itself when it runs
             script.unlink(missing_ok=True)   # one event per failed launch
-            print(f"{c['id'][:8]}  {stage} agent never started in {w.get('window')}: the launch command did not run")
+            print(f"{short_id(c['id'])}  {stage} agent never started in {w.get('window')}: the launch command did not run")
             events.emit("error", c["id"], message=f"agent never started in {w.get('window')}: the launch command did not run")
         if same_stage and status == "dead" and attempts >= MAX_ATTEMPTS:
             key = f"stage_failed:{c['id']}:{stage}"
             failed.add(key)
-            if why := alerts.open(key, "high", f"Card {c['id'][:8]}: the {stage} agent died {attempts} times",
+            if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: the {stage} agent died {attempts} times",
                                   f"pl card {c['id'][:8]} shows why; pl retry {c['id'][:8]} starts it fresh"):
                 notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent died {attempts} times; see pl card {c['id'][:8]}")
-                print(f"{c['id'][:8]}  {stage} agent failed {attempts} times; not retrying")
+                print(f"{short_id(c['id'])}  {stage} agent failed {attempts} times; not retrying")
             continue
         if attempts == 0:
             st["notified"].pop(f"{c['id']}:{stage}_failed", None)   # a fresh start (pl retry): a new failure notifies again
@@ -508,20 +508,20 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         if stage == "run":
             if runs_live >= LIVE_RUN_CAP * max_runs:
-                print(f"{c['id'][:8]}  run waits ({runs_live} live, cap {LIVE_RUN_CAP * max_runs})")
+                print(f"{short_id(c['id'])}  run waits ({runs_live} live, cap {LIVE_RUN_CAP * max_runs})")
                 continue
             if runs_alive >= max_runs:
                 key = f"{c['id']}:queued"
                 if key not in st["notified"]:
                     st["notified"][key] = time.time()
                     notify("Pipeline queue", f"{c['title'][:40]} waits: {runs_alive} runs already in flight (max {max_runs})")
-                print(f"{c['id'][:8]}  run waits ({runs_alive}/{max_runs} in flight)")
+                print(f"{short_id(c['id'])}  run waits ({runs_alive}/{max_runs} in flight)")
                 continue
             runs_alive += 1
             runs_live += 1
         else:
             if prep_alive >= max_prep:
-                print(f"{c['id'][:8]}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
+                print(f"{short_id(c['id'])}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
                 continue
             prep_alive += 1
         want = (c.get("metadata") or {}).get("profile")
@@ -530,14 +530,14 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if why := alerts.open("accounts_all_out", "high", "Every account is out of credits",
                                   "cards wait for the first reset; pl accounts shows when"):
                 notify(alerts.headline(why, "Every Claude profile is out of credits"), f"{c['title'][:40]} waits; pl profiles")
-            print(f"{c['id'][:8]}  {stage} waits: every profile is out of credits (pl profiles)")
+            print(f"{short_id(c['id'])}  {stage} waits: every profile is out of credits (pl profiles)")
             continue
         if prof != want:
-            print(f"{c['id'][:8]}  profile {want} is parked; using {prof}")
+            print(f"{short_id(c['id'])}  profile {want} is parked; using {prof}")
             if not dry:
                 update(c["id"], metadata={"profile": prof})
             c["metadata"] = {**(c.get("metadata") or {}), "profile": prof}
-        print(f"{c['id'][:8]}  {col} -> {stage} agent (attempt {attempts}): {c['title'][:50]}")
+        print(f"{short_id(c['id'])}  {col} -> {stage} agent (attempt {attempts}): {c['title'][:50]}")
         start_worker(c, stage, attempts, dry)
         if attempts <= 1 and room is not None:
             room -= 1
@@ -582,7 +582,7 @@ def check_alerts(all_cards, failed):
                 and t and now - t > PR_WAIT:
             key = f"pr_waiting:{c['id']}"
             waiting.add(key)
-            if why := alerts.open(key, "warn", f"Card {c['id'][:8]}: its PR waits over 24 h", "review and merge it, or move the card on"):
+            if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
                 notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {c['id'][:8]}")
     alerts.sweep("pr_waiting:", waiting, notify)
     if not C.SERVICES:

@@ -5,7 +5,7 @@ from pl import config as C
 from pl import trackers
 from pl.accounts import healthy_profile, next_profile
 from pl.board import MARK, cards, check_size, render, update
-from pl.util import card_url, notify, now_iso
+from pl.util import card_url, notify, now_iso, short_id
 
 
 def _t():
@@ -75,7 +75,7 @@ def pull_one(pc, all_cards, dry=False):
             "update it with the PR link and evidence at ship; do not create a second one."]
     profile = healthy_profile(None, all_cards) or next_profile(all_cards)
     if dry:
-        print(f"  would pull {pc['id'][:8]}  {pc['title'][:60]}  ({col}, profile {profile})")
+        print(f"  would pull {short_id(pc['id'])}  {pc['title'][:60]}  ({col}, profile {profile})")
         return None
     meta = {"pipeline_mode": "auto", "profile": profile, "submitted_by": C.USER_EMAIL, "submitted_at": now_iso(),
             "submitted_from": C.HOST, "product_card": pc["id"], "product_url": product_url(pc["id"]), "product_column": col}
@@ -88,8 +88,8 @@ def pull_one(pc, all_cards, dry=False):
         _t().update(pc["id"], verify=False, metadata={**(pc.get("metadata") or {}), "pipeline_card": item["id"],
                                                       "pipeline_url": card_url(item["id"]), "pipeline_pulled_at": now_iso()})
     except SystemExit as e:   # an unwritable Product card never stops the pull
-        print(f"  product card {pc['id'][:8]}: back-link not written ({e}); carrying on")
-    print(f"  pulled {pc['id'][:8]} -> funnel {item['id'][:8]}  {pc['title'][:60]}  (profile {profile})")
+        print(f"  product card {short_id(pc['id'])}: back-link not written ({e}); carrying on")
+    print(f"  pulled {short_id(pc['id'])} -> funnel {short_id(item['id'])}  {pc['title'][:60]}  (profile {profile})")
     return item
 
 
@@ -182,7 +182,7 @@ def pull_new(dry=False, quiet=False):
             continue
         why = pull_reason_to_skip(pc, linked)
         if why:
-            print(f"  skip {pc['id'][:8]} {pc['title'][:50]}: {why}")
+            print(f"  skip {short_id(pc['id'])} {pc['title'][:50]}: {why}")
             continue
         item = pull_one(pc, all_cards, dry)
         if item:
@@ -211,7 +211,7 @@ def mirror_to_product(c, col, dry):
     if target not in product_lists() or (cur in ahead and target == "In Progress") or cur == "Done":
         pass
     else:
-        print(f"{c['id'][:8]}  product card {pid[:8]}: {cur} -> {target}")
+        print(f"{short_id(c['id'])}  product card {short_id(pid)}: {cur} -> {target}")
         if not dry:
             body = {"list_id": product_lists()[target]}
             if col == "PR open" and m.get("pr_urls"):
@@ -219,6 +219,6 @@ def mirror_to_product(c, col, dry):
             try:
                 _t().update(pid, verify=False, **body)
             except SystemExit as e:   # an unwritable Product card never stops the run
-                print(f"{c['id'][:8]}  product card {pid[:8]}: write refused ({e}); carrying on")
+                print(f"{short_id(c['id'])}  product card {short_id(pid)}: write refused ({e}); carrying on")
     if not dry:
         update(c["id"], metadata={"product_synced_col": col})

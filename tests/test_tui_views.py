@@ -403,7 +403,7 @@ async def test_odd_card_ids_none_titles_duplicates_and_render_errors_do_not_kill
         assert "epoch card" in screen_text(app)
         await pilot.press("4")
         await pilot.pause()
-        assert "org/repo" in screen_text(app)
+        assert "repo#12" in screen_text(app) and "repo#13" in screen_text(app)   # GitHub ids show as repo#n
         monkeypatch.setattr(type(app.query_one("#tabs").parent.query_one("PrsView")), "show",
                             lambda self, d: (_ for _ in ()).throw(ValueError("boom")))
         app.refresh_data()
@@ -814,6 +814,22 @@ async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
         assert "none open" in screen_text(app) and "! Alerts 0" in screen_text(app)
 
 
+def test_an_old_alert_title_with_a_cut_github_id_shows_repo_and_number():
+    from pl.tui import alerts as tui_alerts
+    old = {"key": "pr_waiting:your-org/your-repo#43", "severity": "warn", "title": "Card your-org: its PR waits over 24 h",
+           "fix": "review and merge it, or move the card on", "first_seen": NOW.timestamp(), "count": 1}
+    assert "Card your-repo#43: its PR waits" in _cells(old, tui_alerts)
+    assert "Card your-repo#43: its PR waits" in tui_alerts.detail(old).plain
+    failed = {**old, "key": "stage_failed:your-org/your-repo#44:spec", "title": "Card your-org: the spec agent died 3 times"}
+    assert "Card your-repo#44: the spec agent died" in _cells(failed, tui_alerts)
+    board = {**old, "key": "pr_waiting:4a000001aaaa", "title": "Card 4a000001: its PR waits over 24 h"}
+    assert "Card 4a000001: its PR waits" in _cells(board, tui_alerts)
+
+
+def _cells(a, mod):
+    return " ".join(t.plain for t in mod.cells(a))
+
+
 async def test_needs_you_with_nothing_waiting_says_so_and_keys_only_notify():
     data = fake_data()
     data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"]
@@ -949,6 +965,103 @@ async def test_pipeline_shares_kanbans_card_keys(monkeypatch):
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, P.CardScreen)
+
+
+def _github_data():
+    """fake_data with GitHub-style card ids: every id starts with the same owner."""
+    data = fake_data()
+    for r in data["snapshot"]["rows"]:
+        if r.get("card"):
+            n = {"spec0001aaaa": 41, "4a000001aaaa": 42, "60000002aaaa": 43, "c0000003aaaa": 44, "d0000004aaaa": 45}[r["card"]["id"]]
+            r["card"]["id"] = f"your-org/your-repo#{n}"
+    return data
+
+
+async def test_github_card_ids_show_as_repo_and_number_on_every_list(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_github_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("2")
+        await pilot.pause()
+        text = screen_text(app)
+        assert all(f"your-repo#{n}" in text for n in (42, 43, 44)) and "your-org" not in text.split("card     ")[0]
+        await pilot.press("4")
+        await pilot.pause()
+        text = screen_text(app)
+        assert all(f"your-repo#{n}" in text for n in (41, 42, 43, 44, 45)) and "your-org" not in text
+        await _open_cards(pilot, app)
+        text = screen_text(app)
+        assert all(f"your-repo#{n}" in text for n in (41, 42, 43, 44, 45))
+
+
+def _cursor(app, table):
+    t = app.query_one(table)
+    return t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
+
+
+async def test_needs_you_down_and_up_skip_the_group_headings(monkeypatch):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("2")
+        await settle(pilot)
+        assert _cursor(app, "#needs-table") == "4a000001aaaa"   # the first row selected is a card
+        await pilot.press("down")
+        await settle(pilot)
+        assert _cursor(app, "#needs-table") == "60000002aaaa"
+        await pilot.press("down")   # onto PRS STOPPED FOR YOUR CALL: the group's first row instead
+        await settle(pilot)
+        assert _cursor(app, "#needs-table") == "pr:frontend#1117"
+        assert "frontend#1117   needs your decision" in screen_text(app)
+        await pilot.press("up")     # onto the heading again: the previous group's last card
+        await settle(pilot)
+        assert _cursor(app, "#needs-table") == "60000002aaaa"
+        text = screen_text(app)
+        assert "card     60000002aaaa" in text and "select a row" not in text
+        app.query_one("#needs-table").move_cursor(row=app.query_one("#needs-table").get_row_index("c0000003aaaa"))
+        await settle(pilot)
+        await pilot.press("down")   # "2 PRs ready to merge" is a pointer to tab 5, not a row to act on
+        await settle(pilot)
+        assert _cursor(app, "#needs-table") == "c0000003aaaa"
+
+
+async def test_pipeline_down_and_up_skip_the_column_headings(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        assert _cursor(app, "#cards-table") == "spec0001aaaa"   # the first row selected is a card
+        await pilot.press("down")   # onto PLAN FOR REVIEW 2: its first card instead
+        await settle(pilot)
+        assert _cursor(app, "#cards-table") == "4a000001aaaa"
+        assert "column   Plan for review" in screen_text(app)
+        await pilot.press("up")     # onto the heading: the previous column's last card
+        await settle(pilot)
+        assert _cursor(app, "#cards-table") == "spec0001aaaa"
+        await pilot.press("up")     # the top heading: the first card stays selected
+        await settle(pilot)
+        assert _cursor(app, "#cards-table") == "spec0001aaaa"
+        text = screen_text(app)
+        assert "column   Spec ready" in text and "select a row" not in text
+
+
+async def test_pull_requests_down_skips_headings_and_none_rows(monkeypatch):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        t = app.query_one("#prs-table")
+        first = _cursor(app, "#prs-table")
+        assert first.startswith("https://")
+        seen = [first]
+        for _ in range(8):
+            await pilot.press("down")
+            await settle(pilot)
+            seen.append(_cursor(app, "#prs-table"))
+        assert all(k.startswith("https://") for k in seen), seen
+        assert seen[-1] == seen[-2] and t.row_count > len(set(seen))
 
 
 # ---------- the Assistant tab ----------

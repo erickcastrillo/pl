@@ -29,6 +29,12 @@ def age(ts):
     return f"{d // 60}m" if d < 3600 else (f"{d // 3600}h" if d < 86400 else f"{d // 86400}d")
 
 
+def short_id(cid):
+    """A card id cut for display: "repo#43" for a GitHub id ("owner/repo#43"), else its first 8 characters."""
+    cid = str(cid)
+    return cid.rsplit("/", 1)[-1] if "#" in cid else cid[:8]
+
+
 def card_url(item_id):
     from pl import trackers
     return trackers.get("tracker").url(item_id)

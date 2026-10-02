@@ -20,7 +20,7 @@ from pl import commands
 from pl import config as C
 from pl.board import card, card_size, check_size, col_name, fresh_next, max_card_chars, render, sections, update
 from pl.ideas import _plain
-from pl.util import parse_iso, slug_of
+from pl.util import parse_iso, short_id, slug_of
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 
@@ -181,7 +181,7 @@ def review_file(kind, c):
     """The file `e` opens. Written 0600 from the card only when absent; never overwritten."""
     slug = slug_of(c)
     if not SLUG_RE.fullmatch(slug or ""):
-        raise SystemExit(f"pl: card {c['id'][:8]} has the slug {slug!r}, which is not a safe file name (a-z, 0-9 and -)")
+        raise SystemExit(f"pl: card {short_id(c['id'])} has the slug {slug!r}, which is not a safe file name (a-z, 0-9 and -)")
     if kind == "spec":
         path, text = C.PLANS.parent / "specs" / f"spec-{slug}.md", sections(c.get("description")).get("SPEC") or ""
     else:
@@ -241,7 +241,7 @@ def confirm_and_approve(app, card_id, title, kind, after=None, busy=None, done=N
             run_command(app, commands.cmd_approve, after, kind=kind, id=card_id, force=False,
                         says=lambda c: f"Approved: {title} → {col_name(c['list_id'])}", failed="Not approved: ",
                         done=done)
-    app.push_screen(ConfirmScreen(f"Approve the {kind} for {card_id[:8]}  {title}?"), answered)
+    app.push_screen(ConfirmScreen(f"Approve the {kind} for {short_id(card_id)}  {title}?"), answered)
 
 
 class ConfirmScreen(ModalScreen):
@@ -295,7 +295,7 @@ class ReviewScreen(Screen):
         self.sending = False   # a send back or approve is running: a second press does nothing
 
     def compose(self):
-        yield Static(Text(f"{self.kind.upper()} REVIEW · loading {self.card_id[:8]}"), id="review-title")
+        yield Static(Text(f"{self.kind.upper()} REVIEW · loading {short_id(self.card_id)}"), id="review-title")
         with Horizontal():
             with VerticalScroll(id="review-doc"):
                 yield Markdown("", open_links=False, id="review-md")
@@ -341,7 +341,7 @@ class ReviewScreen(Screen):
         self.card, self.text = c, text
         i = self.ids.index(self.card_id) + 1 if self.card_id in self.ids else 1
         self.query_one("#review-title", Static).update(
-            Text(f"{self.kind.upper()} REVIEW · {c['id'][:8]}  {str(c.get('title') or '')} · {i} of {len(self.ids)} · ")
+            Text(f"{self.kind.upper()} REVIEW · {short_id(c['id'])}  {str(c.get('title') or '')} · {i} of {len(self.ids)} · ")
             + size_text(c.get("description")))
         self.query_one("#review-checks", Static).update(checks_text(checks))
         await self.query_one("#review-md", Markdown).update(text)

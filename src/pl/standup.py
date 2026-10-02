@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pl import config as C
 from pl import events
 from pl.trackers import github
-from pl.util import parse_iso
+from pl.util import parse_iso, short_id
 
 IN_PROGRESS = ["Spec ready", "Plan for review", "Approved", "In progress", "PR open"]
 BULLETS, TITLE = 5, 70
@@ -141,7 +141,7 @@ def text(snapshot, start, prs, now=None, cards=None, col=None, markdown=False, f
     for cid in touched:
         if cid and cid not in seen:
             seen.append(cid)
-    out += bullets([titles.get(cid) or str(cid)[:8] for cid in seen])
+    out += bullets([titles.get(cid) or short_id(cid) for cid in seen])
 
     per = Counter(r.get("col") for r in rows if r.get("card"))
     working = [r["card"].get("title") for r in rows if r.get("card") and r.get("kind") == "working"]

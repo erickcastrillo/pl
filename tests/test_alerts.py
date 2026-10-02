@@ -202,6 +202,15 @@ def test_a_pr_waiting_over_24_hours_opens_and_resolves(monkeypatch):
     assert not _open("pr_waiting:card0001aaaa")
 
 
+def test_alert_titles_name_a_github_card_by_repo_and_number(monkeypatch):
+    stale = _card("your-org/your-repo#43", "PR open")
+    stale["updated_at"] = "2020-01-01T00:00:00+00:00"
+    w = {"stage": "spec", "attempts": 3, "session_id": "s", "pane": "%1", "window": "@1"}
+    _pass(monkeypatch, [stale, _card("your-org/your-repo#44", "Inbox", worker=w)], status="dead")
+    assert alerts.get("pr_waiting:your-org/your-repo#43")["title"] == "Card your-repo#43: its PR waits over 24 h"
+    assert alerts.get("stage_failed:your-org/your-repo#44:spec")["title"] == "Card your-repo#44: the spec agent died 3 times"
+
+
 def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(monkeypatch):
     notes = []
     monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append(t))

@@ -19,7 +19,7 @@ from pl import config as C
 from pl import harnesses
 from pl.trackers import mcp
 from pl.tui.loops import COPIERS, _copy_run
-from pl.util import PEM_RE, TOKEN_RE, _nofollow, mask  # noqa: F401  (shared with pl.usage, which must not load Textual)
+from pl.util import PEM_RE, TOKEN_RE, _nofollow, mask, short_id  # noqa: F401  (shared with pl.usage, which must not load Textual)
 
 RECENT = 6 * 3600          # transcripts modified longer ago are hidden
 IDLE = 120                 # seconds without a write before an agent counts as stopped
@@ -178,7 +178,7 @@ def scan(data=None):
     for r in ((data or {}).get("snapshot") or {}).get("rows") or []:
         sid, c = (r.get("worker") or {}).get("session_id"), r.get("card")
         if sid and c:
-            cards[sid] = f"{str(c.get('id'))[:8]} {c.get('title') or ''}".strip()
+            cards[sid] = f"{short_id(c.get('id'))} {c.get('title') or ''}".strip()
     rows, notes, seen, now = [], [], set(), time.time()
     for name in C.ACCOUNTS:
         h = (C.ACCOUNTS.get(name) or {}).get("harness") or "claude"

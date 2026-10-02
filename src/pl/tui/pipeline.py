@@ -15,6 +15,7 @@ from pl.commands import retry
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.review import ConfirmScreen, safe_link
 from pl.tui.subagents import TODO_MARK
+from pl.util import short_id
 
 STATE = {"review": ("your review", "#e0a040"), "manual": ("yours to do", "#5f9fff"), "working": ("working", "green"),
          "needs": ("needs you", "red"), "waiting": ("in review", "dim"), "queued": ("queued", "green")}
@@ -33,7 +34,7 @@ class CardBox(Static, can_focus=True):
         c = r["card"]
         label, colour = (r["approved"], "green") if r.get("approved") else STATE[card_state(r)]
         t = Text((c.get("title") or "") + "\n")
-        t.append(str(c["id"])[:8], style="dim")
+        t.append(short_id(c["id"]), style="dim")
         t.append(f"  {r.get('profile') or '-'}\n", style="dim")
         t.append(label, style=colour)
         if now and now.get("line"):
@@ -90,7 +91,7 @@ class CardScreen(Screen):
         self.card_id, self.col, self.card, self.approved, self.now = card_id, col, None, approved, now
 
     def compose(self):
-        yield Static(Text(f"loading… {self.card_id[:8]}", style="dim"), id="card-head", markup=False)
+        yield Static(Text(f"loading… {short_id(self.card_id)}", style="dim"), id="card-head", markup=False)
         with VerticalScroll(id="card-doc"):
             yield Markdown("", open_links=False, id="card-md")
         yield Footer()
@@ -175,7 +176,7 @@ class CardActions:
         def answered(yes):
             if yes:
                 self.app.run_worker(run, thread=True, group="keys")
-        self.app.push_screen(ConfirmScreen(f"Start {c['id'][:8]}  {str(c.get('title') or '')[:50]} fresh? "
+        self.app.push_screen(ConfirmScreen(f"Start {short_id(c['id'])}  {str(c.get('title') or '')[:50]} fresh? "
                                            "This clears its failed agent and attempt count."), answered)
 
     def action_move_agent(self):
@@ -198,7 +199,7 @@ class CardActions:
         def answered(yes):
             if yes:
                 self.app.run_worker(run, thread=True, group="keys")
-        self.app.push_screen(ConfirmScreen(f"Move the agent of {c['id'][:8]}  {str(c.get('title') or '')[:50]} from "
+        self.app.push_screen(ConfirmScreen(f"Move the agent of {short_id(c['id'])}  {str(c.get('title') or '')[:50]} from "
                                            f"{w.get('profile')} to another Claude account with credits? pl stops it with Ctrl-C in its window and "
                                            "resumes the same session there."), answered)
 
