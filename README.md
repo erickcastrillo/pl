@@ -17,8 +17,9 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Standup panel with Slack copy | Dashboard: `s`, then `y` | `pl standup --slack` |
 | Token spend per card, account, model and loop | Dashboard Health; Loops tab | `pl usage --by card` |
 | Loop context care: an idle loop over 80% context restarts fresh | Loops tab: context | `pl usage --by loop` |
-| Alerts that open, remind and clear themselves | Needs you: ALERTS | `pl alerts --all` |
-| A "doing now" line for each live agent | Needs you and Pipeline | `pl watch` |
+| Alerts that open, remind and clear themselves | Alerts tab (!) | `pl alerts --all` |
+| Every card in a list by column, with its full text | Pipeline tab (@) | `pl list` |
+| A "doing now" line for each live agent | Needs you and Kanban | `pl watch` |
 | Move a live agent to another account in place | on a usage limit; Activity tab | `pl move-agent <card> <account>` |
 | One machine manager for every profile's dispatcher | Dashboard: machine line; `D` | `pl manager status` |
 | Claude's weekly limit detected; the account parks until its reset | header: accounts | `pl accounts` |
@@ -187,7 +188,9 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | Key | Action |
 | --- | --- |
 | 0 | Assistant (the leftmost tab): a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
-| 1 to 9 | Dashboard, Needs you, Ideas, Pipeline, Pull requests, Loops, Activity, Settings, Background |
+| 1 to 9 | Dashboard, Needs you, Ideas, Kanban, Pull requests, Loops, Activity, Settings, Background |
+| ! | Alerts (k acknowledges) |
+| @ | Pipeline: every card by column. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, v move to another column (asks first) |
 | w | cycle the Dashboard time window |
 | s | standup summary of the last 24 hours on the Dashboard (y copies it) |
 | a / x | approve / send back the selected card |
@@ -274,7 +277,7 @@ proactive = true    # false: pl stops offering new alerts to an idle assistant
 
 Each conversation is in chat mode (ask pl to do things) or idea mode (ctrl+t). In idea mode the assistant shapes an idea brief with you one question at a time, and it may suggest the switch when a request sounds like something new. It saves the draft with `pl assistant idea save`, so the draft also shows on the Ideas tab. After you say yes to the exact text, it runs `pl assistant idea file`, which only marks the draft ready and writes nothing to the board. The tab then shows "Idea ready: <title>"; ctrl+f asks you once more and files it the same way as the Ideas tab's `A` (which files it too). Both tabs share `<profile>/state/ideas/`, and a draft interviewed in the Ideas tab can be continued in idea mode by its id (`pl assistant idea save --id <id>`).
 
-With `proactive` on (the default), new or escalated alerts are typed into an idle assistant as one line per dispatcher pass, at most once a minute: `[pl alert] <title> (<key>). Want me to look?`, or "two alerts open: ..." for several. Alert titles hold ids only. pl waits while the assistant shows a numbered menu or text you have not sent yet. A busy assistant gets the line on a later pass; a closed one gets nothing, and the alert still shows on Needs you.
+With `proactive` on (the default), new or escalated alerts are typed into an idle assistant as one line per dispatcher pass, at most once a minute: `[pl alert] <title> (<key>). Want me to look?`, or "two alerts open: ..." for several. Alert titles hold ids only. pl waits while the assistant shows a numbered menu or text you have not sent yet. A busy assistant gets the line on a later pass; a closed one gets nothing, and the alert still shows on the Alerts tab.
 
 ## Standup
 

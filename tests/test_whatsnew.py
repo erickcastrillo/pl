@@ -115,11 +115,11 @@ def whatsnew_screen():
 
 # ---- empty states ----
 
-async def test_needs_you_with_no_alerts_says_so():
+async def test_alerts_tab_with_no_alerts_says_so():
     app = PlApp(snapshot_provider=Provider({**fake_data(), "alerts": []}))
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("2")
+        await pilot.press("exclamation_mark")
         await pilot.pause()
         assert "Alerts: none open (pl alerts --all for history)" in screen_text(app)
 

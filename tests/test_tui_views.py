@@ -783,9 +783,9 @@ async def test_dashboard_header_shows_free_memory_and_a_red_warning_when_low():
         assert any("red" in str(s.style) for s in bar.spans if "LOW" in bar.plain[s.start:s.end])
 
 
-async def test_needs_you_shows_alerts_first_and_k_acknowledges(monkeypatch):
+async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
     from pl import alerts
-    from pl.tui import needs as tui_needs
+    from pl.tui import alerts as tui_alerts
     acked = []
     monkeypatch.setattr(alerts, "ack", lambda key: acked.append(key) or True)
     data = fake_data()
@@ -796,18 +796,159 @@ async def test_needs_you_shows_alerts_first_and_k_acknowledges(monkeypatch):
         await settle(pilot)
         await pilot.press("2")
         await pilot.pause()
+        assert "ALERTS" not in screen_text(app)   # Needs you lists only work for you; alerts live on their own tab
+        assert "! Alerts 1" in screen_text(app)
+        await pilot.press("exclamation_mark")
+        await pilot.pause()
+        assert app.active_tab == "alerts"
         text = screen_text(app)
-        for s in ("ALERTS 1", "high 2h", "pl retry abcd1234", "×4"):
+        for s in ("high 2h", "pl retry abcd1234", "×4"):
             assert s in text, s
-        assert text.index("ALERTS 1") < text.index("PLANS TO REVIEW")
-        assert app.query_one(tui_needs.NeedsView)._current()[0] == "alert:stage_failed:abcd1234:spec"
+        assert app.query_one(tui_alerts.AlertsView)._current()[0] == "stage_failed:abcd1234:spec"
         await pilot.press("k")
         await pilot.pause()
         assert acked == ["stage_failed:abcd1234:spec"] and "acked" in screen_text(app)
         data["alerts"] = []                       # resolved: the dispatcher's next read leaves it out
         app.refresh_data()
         await settle(pilot)
-        assert "ALERTS" not in screen_text(app)
+        assert "none open" in screen_text(app) and "! Alerts 0" in screen_text(app)
+
+
+async def test_needs_you_with_nothing_waiting_says_so_and_keys_only_notify():
+    data = fake_data()
+    data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"]
+                                if r.get("card") and r.get("col") not in ("Spec ready", "Plan for review", "Manual")]
+    assert data["snapshot"]["rows"]   # cards remain, none needs a person
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("2")
+        await pilot.pause()
+        text = screen_text(app)
+        assert "Nothing needs you." in text and "2 Needs you 0" in text and "select a row" in text
+        for s in ("SPECS TO REVIEW", "PLANS TO REVIEW", "PRS STOPPED", "NEEDS REWORK", "MANUAL", "ready to merge"):
+            assert s not in text, s
+        for key in ("a", "x", "o", "enter", "down", "up"):
+            await pilot.press(key)
+            await pilot.pause()
+        assert len(app.screen_stack) == 1 and app.is_running
+        assert any("select a spec" in str(n.message) for n in app._notifications)
+
+
+# ---------- the Pipeline tab: every card as a list, its text and actions ----------
+
+def _fake_card_read(monkeypatch, reads):
+    from pl.tui import cards as tui_cards
+
+    def read(cid):
+        reads.append((cid, threading.current_thread()))
+        return {"id": cid, "title": "t", "updated_at": "x", "description": f"[bold]the text of {cid[:8]}[/bold]"}
+    monkeypatch.setattr(tui_cards, "card", read)
+
+
+async def _open_cards(pilot, app, cid=None):
+    from pl.tui import cards as tui_cards
+    await settle(pilot)
+    await pilot.press("at")
+    await settle(pilot)
+    if cid is not None:
+        t = app.query_one("#cards-table")
+        t.move_cursor(row=t.get_row_index(cid))
+        await settle(pilot)
+    return app.query_one(tui_cards.CardsView)
+
+
+async def test_pipeline_lists_every_card_by_column_with_its_text(monkeypatch):
+    reads = []
+    _fake_card_read(monkeypatch, reads)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app, "4a000001aaaa")
+        assert app.active_tab == "cards"
+        text = screen_text(app)
+        assert "@ Pipeline 5" in text and "4 Kanban" in text
+        heads = ["SPEC READY 1", "PLAN FOR REVIEW 2", "MANUAL 1", "PR OPEN 1"]
+        for s in heads + ["4a000001", "60000002", "c0000003", "d0000004", "spec0001"]:
+            assert s in text, s
+        assert [text.index(h) for h in heads] == sorted(text.index(h) for h in heads)   # board order
+        assert "INBOX" not in text and "DONE" not in text   # empty columns and Done are left out
+        assert "column   Plan for review" in text
+        assert "[bold]the text of 4a000001[/bold]" in text   # card text is data, never markup
+        assert reads and all(t is not threading.main_thread() for _, t in reads)
+        assert view._current()[0] == "4a000001aaaa"
+
+
+async def test_pipeline_a_and_x_review_only_specs_and_plans(monkeypatch):
+    from pl.tui import needs as tui_needs
+    from pl.tui.review import ConfirmScreen, ReviewScreen
+    _fake_card_read(monkeypatch, [])
+    pushed = []
+    monkeypatch.setattr(tui_needs, "ReviewScreen", lambda *a, **kw: pushed.append((a, kw)) or ConfirmScreen("review"))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "d0000004aaaa")   # PR open: nothing to review
+        await pilot.press("a")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+        t = app.query_one("#cards-table")
+        t.move_cursor(row=t.get_row_index("4a000001aaaa"))
+        await settle(pilot)
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Approve the plan for 4a000001" in screen_text(app)
+        await pilot.press("n")
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert pushed and pushed[0][0][:2] == ("plan", "4a000001aaaa") and pushed[0][1]["notes_first"]
+        assert ReviewScreen is not None
+
+
+async def test_pipeline_v_moves_a_card_to_another_column_after_asking(monkeypatch):
+    from pl.tui import cards as tui_cards
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    moved = []
+    monkeypatch.setattr(tui_cards, "move_to", lambda cid, col: moved.append((cid, col, threading.current_thread())) or cid)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "c0000003aaaa")   # Manual
+        await pilot.press("v")
+        await pilot.pause()
+        assert isinstance(app.screen, tui_cards.ColumnPicker)
+        assert "Manual" not in app.screen.columns and "Done" in app.screen.columns   # not its own column
+        await pilot.press("escape")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1 and moved == []
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("down", "enter")   # Inbox, Spec ready: the second one
+        await settle(pilot)
+        assert isinstance(app.screen, ConfirmScreen), app.screen
+        assert "from Manual to Spec ready" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+    assert [m[:2] for m in moved] == [("c0000003aaaa", "Spec ready")] and moved[0][2] is not threading.main_thread()
+
+
+async def test_pipeline_shares_kanbans_card_keys(monkeypatch):
+    from pl.tui import pipeline as P
+    _fake_card_read(monkeypatch, [])
+    got = []
+    monkeypatch.setattr(tui_pipeline, "retry", lambda cid: got.append(cid) or ["reset"])
+    data = fake_data()
+    data["snapshot"]["rows"].append({**_card("dead0001aaaa", "A card whose spec agent died", "Inbox", kind="needs"), "failed": True})
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "dead0001aaaa")
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(pilot)
+        assert got == ["dead0001aaaa"]
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, P.CardScreen)
 
 
 # ---------- the Assistant tab ----------

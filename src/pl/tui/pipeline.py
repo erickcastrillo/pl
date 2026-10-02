@@ -1,4 +1,4 @@
-"""Pipeline: one column per board column (Done hidden), a card box per card; enter opens the whole card."""
+"""Kanban tab: one column per board column (Done hidden), a card box per card; enter opens the whole card."""
 import shutil
 
 from rich.text import Text
@@ -144,42 +144,10 @@ class CardScreen(Screen):
             self.app.notify("only web links open from here", markup=False)
 
 
-class PipelineView(Vertical):
-    BINDINGS = [Binding("enter", "view_card", "open card"), Binding("w", "jump", "agent window"),
-                Binding("c", "open_card", "card in browser"), Binding("t", "retry", "try again"),
-                Binding("m", "move_agent", "move to account")]
-
-    def compose(self):
-        yield Label("Feature Pipeline", id="pipeline-title")
-        yield HorizontalScroll(id="pipeline-scroll")
-
-    async def show(self, data):
-        rows = [r for r in data["snapshot"]["rows"] if r.get("card")]
-        now = data.get("now") or {}
-        cols = [c for c in C.COLUMNS if c != "Done"]
-        focused = self.app.focused.row["card"]["id"] if isinstance(self.app.focused, CardBox) else None
-        n_manual = sum(1 for r in rows if (r["card"].get("metadata") or {}).get("pipeline_mode") != "auto")
-        self.query_one("#pipeline-title", Label).update(
-            Text(f"Feature Pipeline · {len(rows) - n_manual} in the funnel · {n_manual} manual · Done is hidden"))
-        scroll = self.query_one("#pipeline-scroll", HorizontalScroll)
-        if repr((rows, now)) == getattr(self, "_shown", None):   # unchanged cards: the columns are not remounted
-            return
-        self._shown = repr((rows, now))
-        await scroll.remove_children()
-        widgets = []
-        for col in cols:
-            here = [r for r in rows if r.get("col") == col]
-            body = [CardBox(r, now.get(r['card']['id'])) for r in here] or [Static(Text("(empty)", style="dim"), classes="empty")]
-            widgets.append(Vertical(Label(Text(f"{col} ({len(here)})", style="bold")), VerticalScroll(*body), classes="pcol"))
-        await scroll.mount_all(widgets)
-        if focused is not None:
-            again = [b for b in self.query(CardBox) if b.row["card"]["id"] == focused]
-            if again:
-                again[0].focus()
-
-    def _row(self):
-        f = self.app.focused
-        return f.row if isinstance(f, CardBox) else None
+class CardActions:
+    """The card keys Kanban and the Pipeline list share. The view gives _row(): the selected row, or None."""
+    CARD_BINDINGS = [Binding("w", "jump", "agent window"), Binding("c", "open_card", "card in browser"),
+                     Binding("t", "retry", "try again"), Binding("m", "move_agent", "move to account")]
 
     def action_jump(self):
         r = self._row()
@@ -244,3 +212,39 @@ class PipelineView(Vertical):
         if r is not None:
             self.app.push_screen(CardScreen(r["card"]["id"], r.get("col"), r.get("approved"),
                                                ((self.app.data or {}).get("now") or {}).get(r["card"]["id"])))
+
+
+class PipelineView(CardActions, Vertical):
+    BINDINGS = [Binding("enter", "view_card", "open card"), *CardActions.CARD_BINDINGS]
+
+    def compose(self):
+        yield Label("Feature Pipeline", id="pipeline-title")
+        yield HorizontalScroll(id="pipeline-scroll")
+
+    async def show(self, data):
+        rows = [r for r in data["snapshot"]["rows"] if r.get("card")]
+        now = data.get("now") or {}
+        cols = [c for c in C.COLUMNS if c != "Done"]
+        focused = self.app.focused.row["card"]["id"] if isinstance(self.app.focused, CardBox) else None
+        n_manual = sum(1 for r in rows if (r["card"].get("metadata") or {}).get("pipeline_mode") != "auto")
+        self.query_one("#pipeline-title", Label).update(
+            Text(f"Feature Pipeline · {len(rows) - n_manual} in the funnel · {n_manual} manual · Done is hidden"))
+        scroll = self.query_one("#pipeline-scroll", HorizontalScroll)
+        if repr((rows, now)) == getattr(self, "_shown", None):   # unchanged cards: the columns are not remounted
+            return
+        self._shown = repr((rows, now))
+        await scroll.remove_children()
+        widgets = []
+        for col in cols:
+            here = [r for r in rows if r.get("col") == col]
+            body = [CardBox(r, now.get(r['card']['id'])) for r in here] or [Static(Text("(empty)", style="dim"), classes="empty")]
+            widgets.append(Vertical(Label(Text(f"{col} ({len(here)})", style="bold")), VerticalScroll(*body), classes="pcol"))
+        await scroll.mount_all(widgets)
+        if focused is not None:
+            again = [b for b in self.query(CardBox) if b.row["card"]["id"] == focused]
+            if again:
+                again[0].focus()
+
+    def _row(self):
+        f = self.app.focused
+        return f.row if isinstance(f, CardBox) else None

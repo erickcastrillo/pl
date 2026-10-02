@@ -324,13 +324,17 @@ def cmd_move(a):
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})
         print(f"recorded {pr}")
+    print(f"moved {move_to(a.id, a.column, cid)} to {a.column}")
+
+
+def move_to(ref, column, cid=None):
+    """Move one pipeline card to a column; returns its id. cid: the id when the caller already resolved it."""
     t = trackers.get("tracker")
     if hasattr(t, "move"):
-        cid = t.move(a.id, a.column)
-    else:
-        cid = cid or find_card(a.id)["id"]
-        t.update(cid, column=a.column)
-    print(f"moved {cid} to {a.column}")
+        return t.move(ref, column)
+    cid = cid or find_card(ref)["id"]
+    t.update(cid, column=column)
+    return cid
 
 
 def cmd_profiles(a):

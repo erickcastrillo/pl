@@ -6,9 +6,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Markdown, Static
 
-from pl import alerts
 from pl import config as C
-from pl.util import age
 from pl.tui.chrome import header_text
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, checks_text, confirm_and_approve, load_review, size_text
@@ -55,10 +53,6 @@ def detail(r, now=None):
     """Plain text for the detail pane, from the row's own data (no board call)."""
     if r is None:
         return Text("select a row", style="dim")
-    if "severity" in r:   # an alert
-        return Text("\n".join([r.get("title") or "", "", f"fix      {r.get('fix') or ''}", f"alert    {r['key']}",
-                               f"severity {r['severity']}", f"open     {age(r.get('first_seen'))} · seen {r.get('count', 1)} times",
-                               "acked: no more reminders until it clears" if r.get("acked") else "k acknowledges: no more reminders"]))
     if r.get("pr"):
         pr = r["pr"]
         return Text("\n".join([pr["title"] or "", "", f"{pr['repo']}#{pr['number']}   {PR_WHAT.get(pr['state'], pr['state'])}",
@@ -77,13 +71,30 @@ def detail(r, now=None):
 KIND = {"specs": "spec", "plans": "plan"}
 
 
+def review_kind(r):
+    """spec or plan when the row waits for a review on Needs you, else None."""
+    g = needs_groups([r])
+    return next((KIND[k] for k in KIND if g[k]), None)
+
+
+def start_review(app, what, r, kind, ids):
+    """approve (confirm dialog), send_back, answer or read (the review screen) on a spec or plan row; else a notice."""
+    if r is None or kind is None or (what == "answer" and kind != "spec"):
+        app.notify("select a spec to answer its open questions" if what == "answer" else "select a spec or a plan to review")
+        return
+    c = r["card"]
+    if what == "approve":
+        confirm_and_approve(app, c["id"], str(c.get("title") or ""), kind)
+    else:
+        app.push_screen(ReviewScreen(kind, c["id"], ids=ids, notes_first=what == "send_back", answers_first=what == "answer"))
+
+
 class NeedsView(Horizontal):
     DEFAULT_CSS = """
     #needs-side { width: 1fr; height: 1fr; }
     #needs-body { height: 1fr; }
     """
-    BINDINGS = [Binding("tab", "app.focus_next", "list / text"), Binding("o", "answer", "answer questions"),
-                Binding("k", "ack", "acknowledge alert")]
+    BINDINGS = [Binding("tab", "app.focus_next", "list / text"), Binding("o", "answer", "answer questions")]
 
     def __init__(self):
         super().__init__()
@@ -113,16 +124,6 @@ class NeedsView(Horizontal):
         keep_key = self._current()[0]
         self._rows, self._kinds = {}, {}
         built = []
-        al = data.get("alerts") or []
-        if al:
-            built.append(("group:alerts", (Text("■", style="red"), Text(f"ALERTS {len(al)}", style="bold"),
-                                           Text("k acknowledge", style="dim"))))
-        for a in al:
-            rid = f"alert:{a['key']}"
-            self._rows[rid], self._kinds[rid] = a, "alerts"
-            built.append((rid, (Text(f"{a['severity']} {age(a.get('first_seen'))}", style="red" if a["severity"] == "high" else "#e0a040"),
-                                Text(f"{a.get('title') or ''} · {a.get('fix') or ''}"),
-                                Text(f"×{a.get('count', 1)}" + (" acked" if a.get("acked") else ""), style="dim"))))
         for key, title, colour, hint in GROUPS:
             if not g[key]:
                 continue
@@ -143,9 +144,8 @@ class NeedsView(Horizontal):
         if g["merge"]:
             built.append(("group:merge", (Text("▸", style="green"), Text(f"{len(g['merge'])} PRs ready to merge"),
                                           Text("merge-gate passed · press 5", style="dim"), Text(""))))
-        if not al:   # last, so the cursor still lands on the first card: a quiet board still shows alerts exist
-            built.append(("group:alerts", (Text("■", style="dim"), Text("Alerts: none open (pl alerts --all for history)",
-                                                                        style="dim"), Text(""), Text(""))))
+        if not built:   # a heading row, so a / x / o find no spec or plan and only notify
+            built.append(("group:empty", (Text("■", style="dim"), Text("Nothing needs you.", style="dim"), Text(""), Text(""))))
         old = self._built
         if [k for k, _ in built] == [k for k, _ in old]:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, old):
@@ -239,17 +239,7 @@ class NeedsView(Horizontal):
         """what: approve (confirm dialog), send_back or read (the review screen)."""
         key, r = self._current()
         group = self._kinds.get(key)
-        kind = KIND.get(group)
-        if r is None or kind is None or (what == "answer" and kind != "spec"):
-            self.app.notify("select a spec to answer its open questions" if what == "answer" else "select a spec or a plan to review")
-            return
-        c = r["card"]
-        if what == "approve":
-            confirm_and_approve(self.app, c["id"], str(c.get("title") or ""), kind)
-        else:
-            ids = [rid for rid, g in self._kinds.items() if g == group]
-            self.app.push_screen(ReviewScreen(kind, c["id"], ids=ids, notes_first=what == "send_back",
-                                              answers_first=what == "answer"))
+        start_review(self.app, what, r, KIND.get(group), [rid for rid, g in self._kinds.items() if g == group])
 
     def select_group(self, group):
         """Put the cursor on the first row of a group (specs, plans, ...); stay put when the group is empty."""
@@ -257,17 +247,6 @@ class NeedsView(Horizontal):
         rid = next((k for k, g in self._kinds.items() if g == group), None)
         if rid is not None:
             t.move_cursor(row=t.get_row_index(rid))
-
-    def action_ack(self):
-        key, r = self._current()
-        if self._kinds.get(key) != "alerts":
-            self.app.notify("select an alert to acknowledge")
-            return
-        if alerts.ack(r["key"]):
-            r["acked"] = True
-            self.app.notify("acknowledged: no more reminders until it clears")
-        if self.app.data is not None:
-            self.show(self.app.data)
 
     def action_answer(self):
         self.review("answer")

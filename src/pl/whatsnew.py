@@ -17,9 +17,9 @@ ENTRIES = [
        "pl usage --by card"),
     _e("2026-09-30.03", "Loop context care: an idle loop over 80% context restarts fresh",
        "Loops tab: context; [loops.<name>] max_context (0 = off)", "pl usage --by loop"),
-    _e("2026-09-30.04", "Alerts that open, remind and clear themselves", "Needs you: the ALERTS group; k acknowledges",
+    _e("2026-09-30.04", "Alerts that open, remind and clear themselves", "Alerts tab (press !); k acknowledges",
        "pl alerts --all"),
-    _e("2026-09-30.05", "A doing now line for each live agent", "Needs you and Pipeline: under each working card", "pl"),
+    _e("2026-09-30.05", "A doing now line for each live agent", "Needs you and Kanban: under each working card", "pl"),
     _e("2026-09-30.06", "Move a live agent to another account in place", "done by itself on a usage limit; Activity tab",
        "pl move-agent <card> <account>"),
     _e("2026-09-30.07", "The machine manager runs every profile's dispatcher, on by default",
@@ -50,6 +50,8 @@ ENTRIES = [
     _e("2026-10-01.02", "The Assistant tab is a chat; its questions show as a card a number key answers",
        "tab 0 Assistant: turns, short tool lines, the status line; it restarts on a pl update when idle and unwatched",
        "open it and ask \"what is stuck?\""),
+    _e("2026-10-02.01", "Alerts and Pipeline have their own tabs; the board is now Kanban",
+       "! Alerts · @ Pipeline · 4 Kanban", "pl alerts"),
 ]
 
 
