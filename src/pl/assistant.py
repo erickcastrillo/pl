@@ -32,8 +32,8 @@ LOG_CHARS = 200
 # Reads and the read-only commands below run without a prompt; any other pl command, gh or git push asks.
 READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
 READ_ONLY = ["Bash(pl list*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)",
-             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(git status*)",
-             "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
+             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(pl local-model*)",
+             "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "move", "board", "retry",
              "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",

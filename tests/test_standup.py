@@ -405,3 +405,62 @@ async def test_y_copies_the_slack_version_and_says_so(monkeypatch):
         await _settled(pilot)
         await pilot.press("y")
         assert copied[1].startswith("*Standup") and notes[-1] == "copied for Slack"
+
+
+def _standup_cli(monkeypatch, *flags):
+    monkeypatch.setattr(watch, "watch_snapshot", lambda: _snap(_rows()))
+    monkeypatch.setattr(standup, "_cards", lambda: [])
+    monkeypatch.setattr(standup, "pr_summary", lambda start: "gh is not installed")
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "standup", *flags])
+    cli.main()
+
+
+def test_summary_from_the_local_model_goes_above_the_standup(monkeypatch, capsys):
+    from pl import local_model
+    seen = []
+    monkeypatch.setattr(local_model, "chat", lambda system, text, max_chars: seen.append(text) or ("Two PRs moved. All calm.", ""))
+    _standup_cli(monkeypatch, "--summary")
+    got = capsys.readouterr()
+    assert got.out.startswith("Two PRs moved. All calm.\n\nStandup for t") and got.err == ""
+    assert seen and seen[0].startswith("Standup for t")   # the model reads the standup text itself
+
+
+def test_slack_summary_is_escaped(monkeypatch, capsys):
+    from pl import local_model
+    monkeypatch.setattr(local_model, "chat", lambda *a, **k: ("Ping <!channel> & <http://x|y>", ""))
+    _standup_cli(monkeypatch, "--summary", "--slack")
+    assert capsys.readouterr().out.startswith("Ping &lt;!channel&gt; &amp; &lt;http://x|y&gt;\n\n*Standup")
+
+
+@pytest.mark.parametrize("reply", [OSError("down"), "not json", TimeoutError("slow")])
+def test_failing_model_leaves_the_standup_unchanged_with_one_note(monkeypatch, capsys, fake_home, reply):
+    from pl import local_model
+    (fake_home / ".pl-t" / "config.toml").write_text("[local_model]\nenabled = true\n")
+
+    def fake(url, payload, timeout):
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+    monkeypatch.setattr(local_model, "_request", fake)
+    _standup_cli(monkeypatch)
+    plain = capsys.readouterr().out
+    _standup_cli(monkeypatch, "--summary")
+    got = capsys.readouterr()
+    assert got.out == plain
+    assert got.err.startswith("pl standup: no summary (") and got.err.count("\n") == 1
+
+
+def test_summary_off_by_default_says_so_and_never_calls(monkeypatch, capsys):
+    from pl import local_model
+    monkeypatch.setattr(local_model, "_request", lambda *a: pytest.fail("called the model"))
+    _standup_cli(monkeypatch, "--summary")
+    got = capsys.readouterr()
+    assert got.out.startswith("Standup for t") and "[local_model] enabled" in got.err
+
+
+def test_no_summary_flag_never_calls_the_model(monkeypatch, capsys, fake_home):
+    from pl import local_model
+    (fake_home / ".pl-t" / "config.toml").write_text("[local_model]\nenabled = true\n")
+    monkeypatch.setattr(local_model, "_request", lambda *a: pytest.fail("called the model"))
+    _standup_cli(monkeypatch)
+    assert capsys.readouterr().err == ""

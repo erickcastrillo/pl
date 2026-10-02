@@ -201,7 +201,7 @@ alias pl-work='PL_CONFIG_DIR=~/.pl-work pl'
 
 A first run with an idea: [docs/github.md, section 6](docs/github.md#6-first-run).
 
-**Other choices.** `pl setup --help` lists every flag. The common ones: `--tracker github-issues` keeps cards as plain issues in one repo; `--tracker mcp` uses any MCP board server ([docs/mcp-trackers.md](docs/mcp-trackers.md)); `--harness codex` or `--harness agy` (Antigravity, experimental), with `--config-dir HARNESS=PATH` for a non-default folder; `--gh-config-dir PATH` uses a separate GitHub sign-in ([docs/github.md](docs/github.md#7-several-github-accounts)); `--no-views`, `--sprint`, `--no-labels`, `--no-notify-script` and `--attention-cmd CMD` change what setup creates.
+**Other choices.** `pl setup --help` lists every flag. The common ones: `--tracker github-issues` keeps cards as plain issues in one repo; `--tracker mcp` uses any MCP board server ([docs/mcp-trackers.md](docs/mcp-trackers.md)); `--harness codex` or `--harness agy` (Antigravity, experimental), with `--config-dir HARNESS=PATH` for a non-default folder; `--gh-config-dir PATH` uses a separate GitHub sign-in ([docs/github.md](docs/github.md#7-several-github-accounts)); `--no-views`, `--sprint`, `--no-labels`, `--no-notify-script` and `--attention-cmd CMD` change what setup creates. On a new profile setup also turns on the optional local model by default (Gemma 4 on Ollama): with `--yes` it runs `brew install ollama` on macOS when Ollama is missing, `brew services start ollama`, and `ollama pull gemma4`, a download of several GB. Ask the person first, and pass `--no-local-model` if they do not want it.
 
 ## 8. Update
 

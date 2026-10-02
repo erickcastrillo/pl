@@ -57,6 +57,7 @@ def _wp2_expected(args, legacy):
         out = out.replace("alerts,move-agent}", "alerts,move-agent,assistant}")   # pl assistant (the Assistant tab's session)
         out = out.replace("move-agent,assistant}", "move-agent,assistant,skills}")   # pl skills (list, share, link)
         out = out.replace("assistant,skills}", "assistant,skills,update}")   # pl update (prints the update commands)
+        out = out.replace("skills,update}", "skills,update,local-model}")   # pl local-model (checks the optional local model)
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
         out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all]\n")
         out = out.replace("usage: pl [-h]\n", "usage: pl [-h] [--profile NAME] [--version]\n", 1)

@@ -35,7 +35,7 @@ pl runs the harness CLIs you already installed and signed in to, on your own sub
 
 macOS or Linux, with git, tmux, gh, uv and a harness CLI. [INSTALL.md](INSTALL.md) has the install commands, the sign-ins, the exact `pl setup` flags, how to check it works, how to uninstall, and security notes.
 
-`pl setup` asks for a profile name, your harnesses, where cards live, your GitHub sign-in and the work folder, then writes and checks `~/.pl-<name>/config.toml`. `pl setup --yes` takes every answer from flags (`pl setup --help`); a missing answer exits 2 naming its flag. It never installs a harness or signs in for you. Bare `pl` in a terminal opens the console.
+`pl setup` asks for a profile name, your harnesses, where cards live, your GitHub sign-in and the work folder, then writes and checks `~/.pl-<name>/config.toml`. For a new profile it also offers the optional local model (Gemma 4 on Ollama, see [Local model](#local-model-optional)), yes by default. `pl setup --yes` takes every answer from flags (`pl setup --help`); a missing answer exits 2 naming its flag. It never installs a harness or signs in for you. Bare `pl` in a terminal opens the console.
 
 ## Profiles
 
@@ -262,7 +262,7 @@ Tab `0` is a side chat that runs pl for you: "what is stuck?", "retry that card"
 
 It uses `[assistant] account`, else the first account not parked, and its usage counts on that account. It starts in the profile's `work_dir`, where the code lives (the profile folder when that folder is missing). pl always starts it in the harness's ask-first mode, whatever the account's own default mode is: Claude with `--permission-mode manual`, Codex with `--ask-for-approval on-request --sandbox read-only`. Claude also gets `--add-dir` for the account's config folder, the profile folder and the folder of pl's guide (never HOME), and permission rules through `--settings`. Claude Code checks deny, then ask, then allow:
 
-- **Runs without asking:** reading, listing and searching files, and `pl list`, `pl card`, `pl alerts`, `pl usage`, `pl standup`, `pl manager status`, `pl accounts`, `pl whatsnew`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
+- **Runs without asking:** reading, listing and searching files, and `pl list`, `pl card`, `pl alerts`, `pl usage`, `pl standup`, `pl manager status`, `pl accounts`, `pl whatsnew`, `pl local-model`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
 - **Always asks**, even when an allow rule in a settings file covers it: every other `pl` command, `pl alerts --ack`, `pl accounts --reset`, `pl card --delete`, every other `gh` command, `git push`, and `git diff`/`git log` with `--output`. Edits and any other command ask too, through manual mode.
 - **Denied:** reading credential files (`.credentials*`, `auth.json`, `.env*`, `*.pem`, `id_rsa*`, `id_ed25519*`, `.netrc`, gh's `hosts.yml`) and the macOS keychain command `security`.
 
@@ -284,6 +284,28 @@ With `proactive` on (the default), new or escalated alerts are typed into an idl
 `pl standup` prints a short summary of the last 24 hours, ready to paste in a chat standup: PRs merged, opened and closed without merging; ideas added, specs and plans written and approved, cards sent back and done; cards per column and agents running now; what needs you; and errors, if any. Each line has up to five titles under it, never card text.
 
 `--since` takes `24h`, `90m`, `7d`, a date (`2026-09-29`) or a local time (`2026-09-29T09:00`). `--markdown` prints Markdown for docs, `--slack` Slack formatting. PR numbers cover every PR in the `[code_host]` owner's repos (or its `repos`), with how many merged ones are yours (authored by or assigned to you); they come from three GitHub searches. When GitHub cannot answer, the line says `PRs: unavailable` and why.
+
+`--summary` adds two or three plain sentences above the standup, written by the local model (below). When the model is off or fails, the standup prints unchanged and one note on stderr says why there is no summary.
+
+## Local model (optional)
+
+pl can use a small model that runs on your machine, Gemma 4 served by [Ollama](https://ollama.com), for small, bounded jobs. It runs only when `[local_model] enabled = true`. When it is off, unreachable, slow or gives a bad answer, pl works exactly as without it.
+
+Setup: `pl setup` offers it when it creates a new profile, and the answer defaults to yes (also with `--yes`). It then asks before each step: install Ollama if it is missing (`brew install ollama` on macOS; elsewhere it prints https://ollama.com/download and never runs a download script), start the server if it is not running (`brew services start ollama` when brew installed it; otherwise it tells you to run `ollama serve` or open the Ollama app), and download the model with `ollama pull gemma4` (several GB). A step that fails prints a warning and setup goes on. Re-running setup on an existing profile does not ask again and keeps its `[local_model]`; `--local-model` or `--no-local-model` changes it. By hand: install Ollama, run `ollama pull gemma4`, then set:
+
+```toml
+[local_model]
+enabled = false                    # true turns it on
+url = "http://localhost:11434"     # Ollama's address; only localhost, 127.0.0.1 or ::1
+model = "gemma4"                   # any model you pulled, for example "gemma4:e4b"
+timeout = 30                       # seconds to wait for an answer
+```
+
+Only a loopback url is accepted. Any other host is refused, so the text stays on this machine. There is no API key setting, and pl never holds one. The model's answer is shown as plain text only: control characters are removed, its length is capped, and it is never run.
+
+`pl local-model` prints whether it is on, the url, the model, and whether Ollama answers with that model pulled.
+
+What uses it today: `pl standup --summary`.
 
 ## License
 
