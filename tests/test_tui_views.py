@@ -1555,3 +1555,58 @@ async def test_a_slow_read_says_still_reading_and_lets_a_new_read_start(monkeypa
         finally:
             gate.set()
         await settle(pilot)
+
+
+# ---------- list tabs: the first heading on screen; long titles never hide state and now ----------
+
+def _many_cards_data():
+    """Enough cards on Needs you and the Pipeline tab that each list scrolls."""
+    data = fake_data()
+    data["snapshot"]["rows"] += [_card(f"b{i:07d}aaaa", f"another plan {i}", "Plan for review", kind="review") for i in range(80)]
+    return data
+
+
+@pytest.mark.parametrize("key,table,heading", [("2", "#needs-table", "PLANS TO REVIEW"), ("at", "#cards-table", "SPEC READY 1"),
+                                                ("5", "#prs-table", "NEED YOUR DECISION")])
+async def test_list_tabs_open_with_the_first_heading_on_screen(monkeypatch, key, table, heading):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_many_cards_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press(key)
+        await settle(pilot)
+        t = app.query_one(table)
+        assert t.cursor_row == 1 and t.scroll_y == 0
+        assert heading in screen_text(app)
+
+
+async def test_list_tab_refresh_keeps_the_scroll_while_browsing(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    prov = Provider(_many_cards_data())
+    app = PlApp(snapshot_provider=prov)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "b0000070aaaa")
+        t = app.query_one("#cards-table")
+        y = t.scroll_y
+        assert y > 0
+        prov.data["snapshot"]["rows"].append(_card("e0000005aaaa", "a new card", "Manual", auto=False))   # a full rebuild
+        app.refresh_data()
+        await settle(pilot)
+        assert _cursor(app, "#cards-table") == "b0000070aaaa" and t.scroll_y == y
+
+
+@pytest.mark.parametrize("size", [(176, 48), (120, 40)])
+async def test_long_titles_leave_state_and_now_on_screen(monkeypatch, size):
+    _fake_card_read(monkeypatch, [])
+    long = "a very long card title " * 7   # about 160 characters
+    data = fake_data(title=long)
+    data["now"] = {"4a000001aaaa": {"line": "writing the plan now"}}
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=size) as pilot:
+        await _open_cards(pilot, app)
+        line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
+        assert "writing the plan" in line and "…" in line
+        await pilot.press("2")
+        await settle(pilot)
+        line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
+        assert "writing the plan" in line and "…" in line

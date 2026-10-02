@@ -369,6 +369,8 @@ class PlApp(App):
             self.query_one(PrsView).selected()
         if self.active_tab == "assistant":
             self.query_one(AssistantView).opened()
+        if self.active_tab == "needs":
+            self.query_one(NeedsView).opened()
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
 

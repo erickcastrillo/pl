@@ -8,11 +8,13 @@ from textual.widgets import DataTable, Markdown, OptionList, Static
 from pl import config as C
 from pl.board import card
 from pl.commands import move_to
-from pl.tui.chrome import skip_headings
+from pl.tui.chrome import show_first_heading, skip_headings
 from pl.tui.needs import detail, review_kind, start_review
 from pl.tui.pipeline import STATE, CardActions, card_markdown, card_state
 from pl.tui.review import ConfirmScreen
 from pl.util import short_id
+
+TITLE_WIDTH = 36
 
 
 def card_rows(data):
@@ -71,7 +73,9 @@ class CardsView(CardActions, Horizontal):
 
     def compose(self):
         t = DataTable(id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_columns("id", "title", "state", "now")
+        t.add_column("id")
+        t.add_column("title", width=TITLE_WIDTH)   # a long title ends in … so state and now stay on screen
+        t.add_columns("state", "now")
         yield t
         with Vertical(id="cards-side", classes="panel"):
             yield Static(Text(""), id="cards-detail")
@@ -94,11 +98,12 @@ class CardsView(CardActions, Horizontal):
                 self._rows[cid] = r
                 label, colour = (r["approved"], "green") if r.get("approved") else STATE[card_state(r)]
                 line = (self._now.get(cid) or {}).get("line") or ""
-                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or ""), Text(label, style=colour),
+                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"), Text(label, style=colour),
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
         if not built:
             built.append(("group:empty", (Text("■", style="dim"), Text("No cards on the board.", style="dim"), Text(""), Text(""))))
-        if [k for k, _ in built] == [k for k, _ in self._built]:   # same rows, same order: change only the cells that differ
+        rebuilt = [k for k, _ in built] != [k for k, _ in self._built]
+        if not rebuilt:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, self._built):
                 for col, new, was in zip(t.columns, cells, before):
                     if new != was:
@@ -110,6 +115,8 @@ class CardsView(CardActions, Horizontal):
             idx = t.get_row_index(keep_key) if keep_key in self._rows else min(max(keep, 1), t.row_count - 1)   # row 0 is a heading
             t.move_cursor(row=idx)
         self._last = skip_headings(t, self._rows.__contains__)
+        if rebuilt:
+            show_first_heading(t, lambda k: k in self._rows)
         self._built = built
         self._bodies = {k: v for k, v in self._bodies.items() if k in self._rows}
         self._detail_for_cursor()
@@ -140,7 +147,8 @@ class CardsView(CardActions, Horizontal):
         self._paint_card(key)
 
     def opened(self):
-        """The tab was just shown: read the selected card's text now."""
+        """The tab was just shown: read the selected card's text now; on the first card, show its heading too."""
+        show_first_heading(self.query_one(DataTable), lambda k: k in self._rows)
         self._detail_for_cursor()
 
     def _load(self, key, stamp):

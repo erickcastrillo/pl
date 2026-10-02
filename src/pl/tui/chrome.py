@@ -28,6 +28,16 @@ def skip_headings(t, is_item, last=None):
     return row
 
 
+def show_first_heading(t, is_item):
+    """After the table's own scroll to the cursor (it runs after the next refresh): when only headings sit above the
+    cursor, scroll to the top so the first heading shows. A cursor further down keeps its scroll."""
+    def top():
+        keys = [r.key.value for r in t.ordered_rows]
+        if t.cursor_row < len(keys) and not any(is_item(k) for k in keys[:t.cursor_row]):
+            t.scroll_home(animate=False)
+    t.call_after_refresh(top)
+
+
 def tabs():
     """The tabs this console shows: all of them, less the Assistant when [assistant] enabled = false."""
     return [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]

@@ -7,7 +7,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Markdown, Static
 
 from pl import config as C
-from pl.tui.chrome import header_text, skip_headings
+from pl.tui.chrome import header_text, show_first_heading, skip_headings
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, checks_text, confirm_and_approve, load_review, size_text
 from pl.util import short_id
@@ -70,6 +70,7 @@ def detail(r, now=None):
 
 
 KIND = {"specs": "spec", "plans": "plan"}
+TITLE_WIDTH, WHERE_WIDTH = 30, 12   # the hints of the group headings sit in the last column, "now"
 
 
 def review_kind(r):
@@ -107,7 +108,10 @@ class NeedsView(Horizontal):
 
     def compose(self):
         t = DataTable(id="needs-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_columns("id", "title", "where", "now")
+        t.add_column("id")
+        t.add_column("title", width=TITLE_WIDTH)   # a long title ends in … so the now line stays on screen
+        t.add_column("where", width=WHERE_WIDTH)
+        t.add_column("now")
         yield t
         with Vertical(id="needs-side", classes="panel"):
             d = Static(Text(""), id="needs-detail")
@@ -130,7 +134,7 @@ class NeedsView(Horizontal):
             if not g[key]:
                 continue
             built.append((f"group:{key}", (Text("■", style=colour), Text(f"{title} {len(g[key])}", style="bold"),
-                                           Text(hint, style="dim"), Text(""))))
+                                           Text(""), Text(hint, style="dim"))))
             for r in g[key]:
                 rid = row_id(r)
                 if rid in self._rows:   # a duplicate row would raise DuplicateKey
@@ -141,15 +145,17 @@ class NeedsView(Horizontal):
                 else:
                     cells = (short_id(r["card"]["id"]), r["card"].get("title") or "", str((r["card"].get("tags") or [None])[0] or r.get("profile") or ""),
                              (self._now.get(r["card"]["id"]) or {}).get("line") or "")
-                built.append((rid, (Text(cells[0], style="dim"), Text(cells[1]), Text(cells[2], style="dim"),
+                built.append((rid, (Text(cells[0], style="dim"), Text(cells[1], no_wrap=True, overflow="ellipsis"),
+                                    Text(cells[2], style="dim", no_wrap=True, overflow="ellipsis"),
                                     Text(cells[3], style="red" if cells[3].startswith("error: ") else "dim"))))
         if g["merge"]:
             built.append(("group:merge", (Text("▸", style="green"), Text(f"{len(g['merge'])} PRs ready to merge"),
-                                          Text("merge-gate passed · press 5", style="dim"), Text(""))))
+                                          Text(""), Text("merge-gate passed · press 5", style="dim"))))
         if not built:   # a heading row, so a / x / o find no spec or plan and only notify
             built.append(("group:empty", (Text("■", style="dim"), Text("Nothing needs you.", style="dim"), Text(""), Text(""))))
         old = self._built
-        if [k for k, _ in built] == [k for k, _ in old]:   # same rows, same order: change only the cells that differ
+        rebuilt = [k for k, _ in built] != [k for k, _ in old]
+        if not rebuilt:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, old):
                 for col, new, was in zip(t.columns, cells, before):
                     if new != was:
@@ -162,9 +168,15 @@ class NeedsView(Horizontal):
                 idx = t.get_row_index(keep_key) if keep_key in self._rows else min(max(keep, 1), t.row_count - 1)   # row 0 is a heading
                 t.move_cursor(row=idx)
         self._last = skip_headings(t, self._rows.__contains__)
+        if rebuilt:
+            show_first_heading(t, lambda k: k in self._rows)
         self._built = built
         self._bodies = {k: v for k, v in self._bodies.items() if k in self._rows}
         self._detail_for_cursor()
+
+    def opened(self):
+        """The tab was just shown: on the first card, show its heading too."""
+        show_first_heading(self.query_one(DataTable), lambda k: k in self._rows)
 
     def _current(self):
         t = self.query_one(DataTable)
