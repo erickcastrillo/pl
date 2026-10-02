@@ -33,9 +33,10 @@
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
                           --plain prints a refreshing text frame instead; --once prints one frame and exits
-  pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack]
+  pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack] [--summary]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
-                          specs, plans, cards done, what is in progress, what needs you, errors
+                          specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
+                          2-3 plain sentences above it, written by the local model ([local_model])
   pl usage [--since 24h|7d|YYYY-MM-DD] [--by card|account|model|loop]
                           tokens spent (input, output, cache read, cache write), read from Claude transcripts;
                           [usage] prices = {model = dollars per million tokens} adds a cost column; [usage]
@@ -59,6 +60,8 @@
   pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
+  pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
+                          and model, and whether Ollama answers with that model pulled
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
@@ -169,6 +172,7 @@ def main():
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
+    p.add_argument("--summary", action="store_true", help="add a 2-3 sentence summary from the local model ([local_model])")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
@@ -187,6 +191,7 @@ def main():
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
+    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -202,4 +207,5 @@ def main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
-     "update": lambda a: __import__("pl.update").update.cmd_update(a)}[a.cmd](a)
+     "update": lambda a: __import__("pl.update").update.cmd_update(a),
+     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)

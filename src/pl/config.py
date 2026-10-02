@@ -69,6 +69,7 @@ def _defaults():
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
+    LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -158,6 +159,7 @@ def _apply(g, t):
     g["ASSISTANT"] = dict(t.get("assistant", {}))
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
+    g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
 
 
 def load(profile: str | None = None, config_dir: str | None = None) -> None:
@@ -267,6 +269,7 @@ def validate(doc) -> list[str]:
         for model, n in (doc.get("usage", {}).get(key) or {}).items():
             if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
                 errs.append(f"usage.{key}.{model} must be a number above 0")
+    errs += _local_model_errors(doc.get("local_model", {}))
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
@@ -294,6 +297,23 @@ def validate(doc) -> list[str]:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
                 errs.append(f"{table}.{name}: unknown harness {v['harness']!r}; known: {', '.join(known)}")
+    return errs
+
+
+def _local_model_errors(lm) -> list[str]:
+    """[local_model]: the four known keys only (there is no API key), and a loopback url."""
+    from pl import local_model
+    errs = [f"local_model.{k} is not a setting; the keys are {', '.join(local_model.DEFAULTS)}"
+            for k in lm if k not in local_model.DEFAULTS]
+    if not isinstance(lm.get("enabled", False), bool):
+        errs.append("local_model.enabled must be true or false")
+    if "url" in lm and (why := local_model.url_problem(lm["url"])):
+        errs.append(f"local_model.{why}")
+    if "model" in lm and not (isinstance(lm["model"], str) and lm["model"].strip()):
+        errs.append("local_model.model must be a model name like \"gemma4\"")
+    t = lm.get("timeout")
+    if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0):
+        errs.append("local_model.timeout must be a number of seconds above 0")
     return errs
 
 
