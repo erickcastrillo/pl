@@ -25,6 +25,11 @@ def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
+    from pl import local_model
+
+    def no_model(url, payload, timeout):
+        raise OSError("tests never reach a local model")
+    monkeypatch.setattr(local_model, "_request", no_model)   # a test that needs answers fakes _request itself
 
 
 PY = re.compile(r"python[\d.]*$")

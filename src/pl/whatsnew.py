@@ -51,7 +51,7 @@ ENTRIES = [
        "tab 0 Assistant: turns, short tool lines, the status line; it restarts on a pl update when idle and unwatched",
        "open it and ask \"what is stuck?\""),
     _e("2026-10-02.02", "Optional local model (Gemma 4 on Ollama) writes a short standup summary",
-       "off by default: [local_model] enabled = true; only a loopback url, no API key", "pl standup --summary"),
+       "pl setup offers it on a new profile; [local_model] enabled = true; loopback url only, no API key", "pl standup --summary"),
 ]
 
 

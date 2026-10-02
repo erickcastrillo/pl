@@ -656,6 +656,7 @@ def test_interactive_happy_path_uses_the_defaults(fake_home, monkeypatch, capsys
         "",                # work folder: this repo
         "",                # notifications: none
         "",                # create a notification script: yes
+        "",                # use the local model: yes (Ollama and gemma4 are there, so nothing else is asked)
         "y",               # write it
         "",                # create the 5 missing labels: yes
         "n",               # run uv tool update-shell
@@ -997,3 +998,174 @@ def test_use_builtin_stages_needs_an_existing_profile(fake_home, monkeypatch):
 def test_use_builtin_stages_checks_the_slug(fake_home, monkeypatch):
     with pytest.raises(SystemExit, match="lower-case"):
         _pl(monkeypatch, "--use-builtin-stages", "--slug", "../evil", "--yes")
+
+
+# ---------- the optional local model (Ollama + Gemma 4) ----------
+
+class _Ollama:
+    """Fakes for the local model step: brew and ollama calls are recorded, never run; which, the platform and what
+    Ollama answers (a set of pulled models per check, None = not answering) are set per test."""
+
+    def __init__(self):
+        self.calls, self.results = [], {}
+        self.which = {"ollama": "/usr/local/bin/ollama", "brew": None}
+        self.platform, self.models = "linux", [{"gemma4:latest"}]
+
+
+@pytest.fixture(autouse=True)
+def ollama(monkeypatch):
+    """Every setup test: a new profile turns the local model on by default, so no test reaches brew, ollama or a server."""
+    import shutil
+    from pl import local_model
+    st = _Ollama()
+    real_run, real_which = setup._run, shutil.which
+
+    def run(argv, env=None, stdout_only=False, timeout=60, live=False):
+        if argv[0] not in ("brew", "ollama"):
+            return real_run(argv, env=env, stdout_only=stdout_only)
+        st.calls.append((argv, live))
+        r = st.results.get(" ".join(argv[:2]), (0, ""))
+        if argv[:2] == ["brew", "install"] and r[0] == 0:
+            st.which["ollama"] = "/opt/homebrew/bin/ollama"
+        return r
+
+    monkeypatch.setattr(setup, "_run", run)
+    monkeypatch.setattr(shutil, "which", lambda n, *a, **k: st.which[n] if n in st.which else real_which(n, *a, **k))
+    monkeypatch.setattr(setup, "_platform", lambda: st.platform)
+    monkeypatch.setattr(setup, "_sleep", lambda s: None)
+    monkeypatch.setattr(local_model, "models", lambda s=None: st.models.pop(0) if len(st.models) > 1 else st.models[0])
+    return st
+
+
+def _argvs(st):
+    return [" ".join(a) for a, _ in st.calls]
+
+
+NEW_INTERACTIVE = ["--name", "Work – Acme", "--harness", "claude", "--work-dir", "~/work", "--tracker", "github-issues",
+                   "--repo", "acme/app", "--no-notify-script", "--no-create-labels"]
+
+
+def test_a_new_profile_turns_it_on_by_default_with_yes(fake_home, monkeypatch, capsys, ollama):
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    t = _cfg(fake_home, "work-acme")
+    assert t["local_model"] == {"enabled": True, "model": "gemma4"} and C.validate(t) == []
+    assert ollama.calls == [] and "gemma4 is pulled" in capsys.readouterr().out
+
+
+def test_a_new_profile_is_asked_and_yes_is_the_default(fake_home, monkeypatch, capsys, ollama):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda p="": (prompts.append(p), "")[1])
+    _pl(monkeypatch, *NEW_INTERACTIVE)
+    assert any("Gemma 4" in p and "[Y/n]" in p and "stays on this machine" in p for p in prompts)
+    assert _cfg(fake_home, "work-acme")["local_model"]["enabled"] is True
+
+
+def test_no_at_the_prompt_writes_nothing_and_runs_nothing(fake_home, monkeypatch, capsys, ollama):
+    ollama.which["ollama"] = None
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda p="": "n" if "Gemma 4" in p else "")
+    _pl(monkeypatch, *NEW_INTERACTIVE)
+    assert "local_model" not in _cfg(fake_home, "work-acme") and ollama.calls == []
+    assert "ollama.com" not in capsys.readouterr().out
+
+
+def test_a_missing_model_is_pulled_with_progress_shown(fake_home, monkeypatch, capsys, ollama):
+    ollama.models = [set()]
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    out = capsys.readouterr().out
+    assert ollama.calls == [(["ollama", "pull", "gemma4"], True)]
+    assert "several GB" in out
+
+
+def test_the_download_prompt_warns_and_can_be_declined(fake_home, monkeypatch, capsys, ollama):
+    ollama.models = [set()]
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda p="": (prompts.append(p), "n" if "ollama pull" in p else "")[1])
+    _pl(monkeypatch, *NEW_INTERACTIVE)
+    assert any("several GB" in p and "[Y/n]" in p for p in prompts) and ollama.calls == []
+    assert _cfg(fake_home, "work-acme")["local_model"]["enabled"] is True
+
+
+def test_a_failed_pull_is_a_warning_not_a_setup_failure(fake_home, monkeypatch, capsys, ollama):
+    ollama.models = [set()]
+    ollama.results["ollama pull"] = (1, "")
+    _pl(monkeypatch, *GITHUB_ISSUES)   # no SystemExit
+    out = capsys.readouterr().out
+    assert "warning" in out and "ollama pull gemma4" in out and "ACTION NEEDED: " not in out
+    assert _cfg(fake_home, "work-acme")["local_model"]["enabled"] is True
+
+
+def test_missing_ollama_on_macos_is_installed_with_brew(fake_home, monkeypatch, capsys, ollama):
+    ollama.which.update(ollama=None, brew="/opt/homebrew/bin/brew")
+    ollama.platform = "darwin"
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    assert _argvs(ollama)[0] == "brew install ollama" and ollama.calls[0][1] is True
+
+
+def test_a_failed_brew_install_is_a_warning(fake_home, monkeypatch, capsys, ollama):
+    ollama.which.update(ollama=None, brew="/opt/homebrew/bin/brew")
+    ollama.platform = "darwin"
+    ollama.results["brew install"] = (1, "")
+    _pl(monkeypatch, *GITHUB_ISSUES)   # no SystemExit
+    out = capsys.readouterr().out
+    assert _argvs(ollama) == ["brew install ollama"]
+    assert "warning" in out and "https://ollama.com/download" in out
+
+
+def test_missing_ollama_without_brew_prints_the_download_page_and_runs_nothing(fake_home, monkeypatch, capsys, ollama):
+    ollama.which["ollama"] = None
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    out = capsys.readouterr().out
+    assert "https://ollama.com/download" in out and "ollama pull gemma4" in out and "| sh" not in out
+    assert ollama.calls == [] and _cfg(fake_home, "work-acme")["local_model"]["enabled"] is True
+
+
+def test_a_stopped_server_installed_by_brew_is_started_with_brew_services(fake_home, monkeypatch, capsys, ollama):
+    ollama.which["brew"] = "/opt/homebrew/bin/brew"
+    ollama.platform = "darwin"
+    ollama.results["brew list"] = (0, "ollama 0.12.0\n")
+    ollama.models = [None, {"gemma4:latest"}]
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    assert _argvs(ollama) == ["brew list --versions ollama", "brew services start ollama"]
+
+
+def test_a_stopped_server_elsewhere_says_how_to_start_it(fake_home, monkeypatch, capsys, ollama):
+    ollama.models = [None]
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    out = capsys.readouterr().out
+    assert "ollama serve" in out and ollama.calls == []
+
+
+def test_an_existing_profile_is_not_asked_and_keeps_its_section(fake_home, monkeypatch, capsys, ollama):
+    _existing(fake_home, monkeypatch, capsys, "--no-local-model")
+    p = fake_home / ".pl-work-acme" / "config.toml"
+    p.write_text(p.read_text() + '\n[local_model]\nenabled = true\nmodel = "gemma4:e4b"\ntimeout = 60\n')
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda p="": (prompts.append(p), "")[1])
+    _pl(monkeypatch, "--slug", "work-acme")
+    assert not any("Gemma 4" in x for x in prompts) and ollama.calls == []
+    assert _cfg(fake_home, "work-acme")["local_model"] == {"enabled": True, "model": "gemma4:e4b", "timeout": 60}
+
+
+def test_an_existing_profile_without_the_section_gets_none(fake_home, monkeypatch, capsys, ollama):
+    _existing(fake_home, monkeypatch, capsys, "--no-local-model")
+    _pl(monkeypatch, "--yes", "--slug", "work-acme")
+    assert "local_model" not in _cfg(fake_home, "work-acme") and ollama.calls == []
+
+
+def test_flags_change_an_existing_profile(fake_home, monkeypatch, capsys, ollama):
+    _existing(fake_home, monkeypatch, capsys, "--no-local-model")
+    _pl(monkeypatch, "--yes", "--slug", "work-acme", "--local-model")
+    assert _cfg(fake_home, "work-acme")["local_model"] == {"enabled": True, "model": "gemma4"}
+    for b in (fake_home / ".pl-work-acme").glob("config.toml.bak-*"):   # a second save in the same second
+        b.unlink()
+    _pl(monkeypatch, "--yes", "--slug", "work-acme", "--no-local-model")
+    assert _cfg(fake_home, "work-acme")["local_model"] == {"enabled": False, "model": "gemma4"}
+
+
+def test_no_local_model_on_a_new_profile_writes_nothing(fake_home, monkeypatch, capsys, ollama):
+    _pl(monkeypatch, *GITHUB_ISSUES, "--no-local-model")
+    assert "local_model" not in _cfg(fake_home, "work-acme") and ollama.calls == []

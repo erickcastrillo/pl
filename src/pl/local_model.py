@@ -88,18 +88,37 @@ def ask(system, text, max_chars=MAX_CHARS) -> str | None:
     return chat(system, text, max_chars)[0]
 
 
-def available():
+def _settings(s):
+    return settings() if s is None else {**DEFAULTS, **s}
+
+
+def models(s=None):
+    """The names of the models Ollama has pulled, or None when it does not answer (or the url is refused).
+    s: [local_model] settings to use instead of the loaded profile's (pl setup, before the profile exists)."""
+    s = _settings(s)
+    if url_problem(s.get("url")):
+        return None
+    try:
+        tags = json.loads(_request(s["url"].rstrip("/") + "/api/tags", None, _timeout(s)))
+        return {m.get("name") for m in tags.get("models") or [] if isinstance(m, dict)}
+    except Exception:  # noqa: BLE001 - any failure means Ollama is not answering
+        return None
+
+
+def pulled(model, names):
+    return model in names or f"{model}:latest" in names
+
+
+def available(s=None):
     """(ok, line): Ollama answers at the url and the model is pulled. Checked whether or not it is enabled."""
-    s = settings()
+    s = _settings(s)
     url, model = s.get("url"), str(s.get("model"))
     if why := url_problem(url):
         return False, why
-    try:
-        tags = json.loads(_request(url.rstrip("/") + "/api/tags", None, _timeout(s)))
-        names = {m.get("name") for m in tags.get("models") or [] if isinstance(m, dict)}
-    except Exception as e:  # noqa: BLE001 - any failure means not available
-        return False, f"Ollama does not answer at {url} ({type(e).__name__}): start it with ollama serve"
-    if model in names or f"{model}:latest" in names:
+    names = models(s)
+    if names is None:
+        return False, f"Ollama does not answer at {url}: start it with ollama serve (or open the Ollama app)"
+    if pulled(model, names):
         return True, f"ok: {model} is pulled at {url}"
     return False, f"{model} is not pulled at {url}: run ollama pull {model}"
 

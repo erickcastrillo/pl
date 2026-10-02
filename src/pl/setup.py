@@ -71,13 +71,23 @@ printf '\a%s: %s\n' "$title" "$message" >&2
 """
 
 
-def _run(argv, env=None, stdout_only=False):
-    """The one subprocess seam: argv only, never a shell, no stdin. (exit code, stdout [+ stderr]), or None."""
+def _run(argv, env=None, stdout_only=False, timeout=60, live=False):
+    """The one subprocess seam: argv only, never a shell, no stdin. (exit code, stdout [+ stderr]), or None.
+    live: the output goes straight to the terminal, so a long install or download shows its progress; (code, "")."""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env, stdin=subprocess.DEVNULL)
+        if live:
+            return subprocess.run(argv, timeout=timeout, env=env, stdin=subprocess.DEVNULL).returncode, ""
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.returncode, r.stdout + ("" if stdout_only else r.stderr)
+
+
+def _platform():
+    return sys.platform
+
+
+_sleep = time.sleep
 
 
 def _input(prompt):
@@ -420,6 +430,75 @@ def ask_attention(answers, flags):
     return _tilde(v) if v else None
 
 
+LOCAL_MODEL_PROMPT = ("Use a local model (Gemma 4 on Ollama) for small jobs like the standup summary? "
+                      "Data stays on this machine. [Y/n]: ")
+OLLAMA_DOWNLOAD = "https://ollama.com/download"
+
+
+def ask_local_model(answers, flags):
+    """The optional local model. A new profile is offered it (yes by default, --yes too); an existing profile keeps
+    its [local_model] unless --local-model or --no-local-model says otherwise. The table to write, or None."""
+    from pl import local_model
+    old = _old(answers, "local_model")
+    old = old if isinstance(old, dict) else None
+    if answers.get("old_bytes") is not None and flags.local_model is None:
+        return None
+    if _consent(flags, flags.local_model, LOCAL_MODEL_PROMPT):
+        return {"enabled": True, "model": (old or {}).get("model") or local_model.DEFAULTS["model"]}
+    return {"enabled": False} if old is not None else None
+
+
+def setup_local_model(answers, flags):
+    """When setup just turned the local model on: install Ollama, start it and pull the model, asking before each
+    step. Any failure is a warning line; pl works without the model."""
+    lm = answers.get("local_model")
+    if not (lm and lm.get("enabled") is True):
+        return
+    from pl import local_model
+    s = {**(_old(answers, "local_model") or {}), **lm}
+    model = str(s.get("model") or local_model.DEFAULTS["model"])
+    mac = _platform() == "darwin"
+    brew = shutil.which("brew") if mac else None
+    if not shutil.which("ollama"):
+        if brew and _consent(flags, None, "Ollama is not installed. Install it now with brew install ollama? [Y/n]: "):
+            r = _run(["brew", "install", "ollama"], timeout=1800, live=True)
+            if not (r and r[0] == 0):
+                print("pl setup: warning: brew install ollama failed")
+        if not shutil.which("ollama"):
+            print(f"Ollama is not installed. Download it from {OLLAMA_DOWNLOAD}" + (" or run: brew install ollama" if mac else "")
+                  + f"\nThen run: ollama pull {model}  (pl works without the local model until then)")
+            return
+    names = local_model.models(s)
+    if names is None:
+        r = _run(["brew", "list", "--versions", "ollama"]) if brew else None
+        by_brew = bool(r and r[0] == 0 and r[1].strip())
+        if by_brew and _consent(flags, None, "Ollama is not running. Start it now with brew services start ollama? [Y/n]: "):
+            r = _run(["brew", "services", "start", "ollama"])
+            if r and r[0] == 0:
+                for _ in range(10):
+                    if (names := local_model.models(s)) is not None:
+                        break
+                    _sleep(1)
+            else:
+                print("pl setup: warning: brew services start ollama failed")
+        if names is None:
+            print("Ollama is not running. Start it with " + ("brew services start ollama, " if by_brew else "")
+                  + f"ollama serve, or open the Ollama app.\nThen run: ollama pull {model}  (pl works without it until then)")
+            return
+    if local_model.pulled(model, names):
+        print(f"local model: {model} is pulled and Ollama answers")
+        return
+    if not _consent(flags, None, f"Download {model} now with ollama pull {model}? It is several GB. [Y/n]: "):
+        print(f"Not downloading. Run ollama pull {model} (several GB) when you want the local model.")
+        return
+    print(f"downloading {model} (several GB; this can take a while)")
+    r = _run(["ollama", "pull", model], timeout=7200, live=True)
+    if r and r[0] == 0:
+        print(f"local model: {model} is pulled")
+    else:
+        print(f"pl setup: warning: ollama pull {model} failed; run it yourself later (pl works without it)")
+
+
 def write_notify_script(answers, d, force):
     """<profile>/notify, mode 0700. An existing file is kept unless --force."""
     if not answers.get("notify_script"):
@@ -453,6 +532,8 @@ def build_doc(a):
         doc["user"] = {**doc.get("user", {}), **user}
     if not a["labels"]:
         doc["code_host"].pop("labels", None)
+    if a.get("local_model"):
+        doc["local_model"] = dict(a["local_model"])
     return doc
 
 
@@ -467,7 +548,8 @@ def merged_doc(a):
     new = profiles._clean({"name": a["name"], "user": a["user"], "paths": {"work_dir": a["work_dir"], "attention_cmd": a["attention"]},
                            "tracker": t, "accounts": a["accounts"],
                            "stages": {s: {"account": a["default_account"]} for s in STAGES},
-                           "code_host": {"owner": a["owner"], "gh_config_dir": a["gh_config_dir"], "labels": a["labels"]}})
+                           "code_host": {"owner": a["owner"], "gh_config_dir": a["gh_config_dir"], "labels": a["labels"]},
+                           "local_model": a.get("local_model")})
 
     def merge(into, v):
         for k, x in v.items():
@@ -684,6 +766,9 @@ def _parser():
     ap.add_argument("--no-labels", action="store_true", help="write no PR labels (pl then does not track PRs)")
     ap.add_argument("--create-labels", action=argparse.BooleanOptionalAction, default=None,
                     help="create the PR labels the repo lacks (default: yes with --yes; asked otherwise)")
+    ap.add_argument("--local-model", action=argparse.BooleanOptionalAction, default=None,
+                    help="turn on the optional local model (Gemma 4 on Ollama; offers to install Ollama and pull the "
+                         "model). New profile: default yes, asked otherwise; an existing profile keeps its setting")
     ap.add_argument("--use-builtin-stages", action="store_true",
                     help="switch an existing profile (--slug, --profile or $PL_CONFIG_DIR) to pl's built-in stage "
                          "skills: /pl-spec, /pl-design, /pl-plan, /pl-run; config.toml is backed up first")
@@ -757,12 +842,15 @@ def cmd_setup(argv: list[str], profile=None):
     a["owner"] = flags.owner or (a["tracker"].get("repo") or "").partition("/")[0] or _old(a, "code_host", "owner")
     a["work_dir"] = ask_work_dir(a, flags)
     a["attention"] = ask_attention(a, flags)
+    a["local_model"] = ask_local_model(a, flags)
     d = Path.home() / f".pl-{a['slug']}"
     t = a["tracker"]
     print(f"\nProfile {a['name']} in {_tilde(d)}\n  harnesses  {', '.join(a['accounts'])} (stages use {a['default_account']})\n"
           f"  cards      {t['type']} {t.get('repo') or t.get('server') or ''}{' (new project)' if '_create' in t else ''}\n"
           f"  gh sign-in {a['gh_config_dir'] or 'the default'}\n  work folder {a['work_dir']}\n"
           f"  notifications {a['attention'] or 'none'}\n  PR labels  {', '.join(a['labels'].values()) if a['labels'] else 'none'}" +
+          (f"\n  local model {a['local_model']['model']} on Ollama (this machine only)"
+           if (a["local_model"] or {}).get("enabled") else "") +
           (f"\n  defaults   issue intake and auto-review loop on (assigned to you or labelled {C.START_LABEL}; "
            "off with [intake] or [loops.auto-review] enabled = false)" if t["type"] == "github-project" else ""))
     if flags.interactive and _input("Write this profile? [Y/n]: ").strip().lower() in ("n", "no"):
@@ -813,6 +901,7 @@ def cmd_setup(argv: list[str], profile=None):
                         f"2. set \"Column by\" to the \"{a['tracker']['status_field']}\" field")
     if a["labels"]:
         create_labels(a, flags, repo)
+    setup_local_model(a, flags)
     if not (doc.get("code_host") or {}).get("labels"):
         print("PR checks are off until [code_host] labels are set in config.toml.")
     if msg := path_check():

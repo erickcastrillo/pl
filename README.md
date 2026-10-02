@@ -34,7 +34,7 @@ pl runs the harness CLIs you already installed and signed in to, on your own sub
 
 macOS or Linux, with git, tmux, gh, uv and a harness CLI. [INSTALL.md](INSTALL.md) has the install commands, the sign-ins, the exact `pl setup` flags, how to check it works, how to uninstall, and security notes.
 
-`pl setup` asks for a profile name, your harnesses, where cards live, your GitHub sign-in and the work folder, then writes and checks `~/.pl-<name>/config.toml`. `pl setup --yes` takes every answer from flags (`pl setup --help`); a missing answer exits 2 naming its flag. It never installs a harness or signs in for you. Bare `pl` in a terminal opens the console.
+`pl setup` asks for a profile name, your harnesses, where cards live, your GitHub sign-in and the work folder, then writes and checks `~/.pl-<name>/config.toml`. For a new profile it also offers the optional local model (Gemma 4 on Ollama, see [Local model](#local-model-optional)), yes by default. `pl setup --yes` takes every answer from flags (`pl setup --help`); a missing answer exits 2 naming its flag. It never installs a harness or signs in for you. Bare `pl` in a terminal opens the console.
 
 ## Profiles
 
@@ -286,9 +286,9 @@ With `proactive` on (the default), new or escalated alerts are typed into an idl
 
 ## Local model (optional)
 
-pl can use a small model that runs on your machine, Gemma 4 served by [Ollama](https://ollama.com), for small, bounded jobs. It is off by default. When it is off, unreachable, slow or gives a bad answer, pl works exactly as without it.
+pl can use a small model that runs on your machine, Gemma 4 served by [Ollama](https://ollama.com), for small, bounded jobs. It runs only when `[local_model] enabled = true`. When it is off, unreachable, slow or gives a bad answer, pl works exactly as without it.
 
-Setup: install Ollama, run `ollama pull gemma4`, then turn it on in the profile:
+Setup: `pl setup` offers it when it creates a new profile, and the answer defaults to yes (also with `--yes`). It then asks before each step: install Ollama if it is missing (`brew install ollama` on macOS; elsewhere it prints https://ollama.com/download and never runs a download script), start the server if it is not running (`brew services start ollama` when brew installed it; otherwise it tells you to run `ollama serve` or open the Ollama app), and download the model with `ollama pull gemma4` (several GB). A step that fails prints a warning and setup goes on. Re-running setup on an existing profile does not ask again and keeps its `[local_model]`; `--local-model` or `--no-local-model` changes it. By hand: install Ollama, run `ollama pull gemma4`, then set:
 
 ```toml
 [local_model]
