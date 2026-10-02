@@ -13,7 +13,7 @@ from pl.board import cards, col_name, sections
 from pl.commands import plan_path
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stage_for
 from pl.trackers import github
-from pl.util import age, card_url, parse_iso, short_id
+from pl.util import age, card_url, cmd_id, parse_iso, short_id
 
 
 def watch_snapshot():
@@ -296,7 +296,7 @@ def render_watch(snap):
         out.append(flag + r["text"])
     out.append("")
     if needs_you:
-        out.append("NEEDS YOU: " + "   ".join(f"pl review {c['id'][:8]}" for c in needs_you))
+        out.append("NEEDS YOU: " + "   ".join(f"pl review {cmd_id(c['id'])}" for c in needs_you))
     out.append("dispatcher, last lines:")
     out += ["  " + l[:150] for l in pane_tail(None, 6)]
     out.append("")

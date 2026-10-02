@@ -622,6 +622,11 @@ class GitHubProject(_GitHub):
         """The card id for an issue number or card id, from the text alone."""
         ref = str(ref).strip()
         cid = ref if "#" in ref.strip("#") else f"{self.repo}#{ref.lstrip('#')}"
+        name, _, n = cid.rpartition("#")
+        if "/" not in name and self.repo:   # "repo#43": the short id pl shows
+            if name.lower() != self.repo.rsplit("/", 1)[-1].lower():
+                raise SystemExit(f"pl: {ref!r} is not in {self.repo}; give the full id (owner/{name}#{n})")
+            cid = f"{self.repo}#{n}"
         repo, num = _split(cid)
         if not (re.fullmatch(r"[\w.-]+/[\w.-]+", repo or "") and num.isdigit()):
             raise SystemExit(f"pl: not an issue number or card id: {ref!r}")

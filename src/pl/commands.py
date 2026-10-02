@@ -13,7 +13,8 @@ from pl import config as C
 from pl.accounts import exhausted_profiles, machine_entry, next_profile, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, registry, worker_status, worker_view
 from pl import events, ideas, trackers
-from pl.board import card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, render, sections, share, update
+from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
+                      share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
@@ -197,7 +198,7 @@ def open_in_nvim(path, here=False):
 
 
 def cmd_review(a):
-    if a.what and re.fullmatch(r"[0-9a-f-]{8,}", a.what):
+    if a.what and re.fullmatch(r"[0-9a-f-]{8,}|(?:[\w.-]+/)?[\w.-]*#\d+", a.what):   # a card id, "repo#43" or "#43"
         return open_in_nvim(pull_plan(find_card(a.what)), a.here)
     if a.what:
         p = Path(a.what).expanduser()
@@ -276,9 +277,9 @@ def cmd_reject(a):
 
 def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
-    hits = [c for c in cards() if c["id"].startswith(a.id)]
+    hits = matches(a.id, cards())
     if hits:
-        c = card(hits[0]["id"])
+        c = card(pick(a.id, hits, "pl done")["id"])   # two matches: refused, never the first
         update(c["id"], list_id=col_id("Done"), metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None})
         m = c.get("metadata") or {}
         if m.get("product_card") and intake_configured() and "Done" in product_lists():
@@ -291,7 +292,7 @@ def cmd_done(a):
         return
     pc = product_card(a.id) if len(a.id) >= 32 else None
     if pc is None:
-        ms = [c for c in product_cards_mine() if c["id"].startswith(a.id)]
+        ms = matches(a.id, product_cards_mine())
         if len(ms) != 1:
             raise SystemExit(f"pl done: {len(ms)} cards match {a.id!r} on either board")
         pc = product_card(ms[0]["id"])
@@ -496,11 +497,7 @@ def retry(ref, stage=None):
         picked = [c for c in cs if (c.get("metadata") or {}).get("pipeline_mode") == "auto"
                   and int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS]
     else:
-        n = ref[1:] if ref.startswith("#") else ""   # like find_card: the full id, an 8+ char prefix, or #n
-        picked = [c for c in cs if c["id"] == ref] or [
-            c for c in cs if (len(ref) >= 8 and c["id"].startswith(ref)) or (n.isdigit() and c["id"].endswith(f"#{n}"))]
-        if len(picked) != 1:
-            raise SystemExit(f"pl retry: {len(picked)} cards match {ref!r}")
+        picked = [pick(ref, cs, "pl retry", min_prefix=8)]   # like find_card, but a prefix needs 8+ chars
     reg, out = registry(), []
     for c in picked:
         w = (c.get("metadata") or {}).get("worker") or {}

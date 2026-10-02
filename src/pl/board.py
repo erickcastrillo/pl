@@ -116,14 +116,34 @@ def card(item_id):
     return _t().card(item_id)
 
 
+def matches(token, cs, min_prefix=1):
+    """The cards token names: the full id; for a GitHub id "owner/repo#43" also "repo#43" (any case) or "#43";
+    else the cards whose id starts with token (min_prefix+ chars)."""
+    token = str(token).strip()
+    if hits := [c for c in cs if c["id"] == token]:
+        return hits
+    if "#" in token and "/" not in token:
+        name, _, num = token.rpartition("#")
+        if num.isdigit():
+            return [c for c in cs if "#" in c["id"] and c["id"].rpartition("#")[2] == num
+                    and (not name or c["id"].rpartition("#")[0].rsplit("/", 1)[-1].lower() == name.lower())]
+    return [c for c in cs if len(token) >= min_prefix and c["id"].startswith(token)]
+
+
+def pick(token, cs, who="pl", min_prefix=1):
+    """The one card token names (see matches), or SystemExit naming every match: never a guess."""
+    hits = matches(token, cs, min_prefix)
+    if len(hits) != 1:
+        some = f": {', '.join(c['id'] for c in hits[:10])}; give the full id" if hits else ""
+        raise SystemExit(f"{who}: {len(hits)} cards match {token!r}{some}")
+    return hits[0]
+
+
 def find_card(token):
-    """Full id, or a unique id prefix (8+ chars)."""
+    """Full id, a unique id prefix, or for a GitHub card "repo#N" or "#N" (see matches)."""
     if len(token) >= 32:
         return card(token)
-    hits = [c for c in cards() if c["id"].startswith(token)]
-    if len(hits) != 1:
-        raise SystemExit(f"pl: {len(hits)} cards match {token!r}")
-    return card(hits[0]["id"])
+    return card(pick(token, cards())["id"])
 
 
 def update(item_id, **fields):

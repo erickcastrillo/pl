@@ -433,3 +433,14 @@ def test_a_flush_never_writes_back_a_stale_pane_id(helper, clock, monkeypatch):
     alerts.flush_offers()
     st = assistant.load()
     assert len(helper.lines()) == 1 and st["pane"] == "%9" and st["window"] == "@9" and not st.get("pending")
+
+
+def test_hints_for_a_github_card_use_the_quoted_short_id(monkeypatch):
+    import shlex
+    w = {"stage": "spec", "attempts": 3, "session_id": "s", "pane": "%1", "window": "@1"}
+    c = _card("your-org/your-repo#43", "Inbox", worker=w)
+    notes = _pass(monkeypatch, [c], status="dead")
+    fix = alerts.get("stage_failed:your-org/your-repo#43:spec")["fix"]
+    assert fix == "pl card 'your-repo#43' shows why; pl retry 'your-repo#43' starts it fresh"
+    assert shlex.split(fix.split(";")[0]) == ["pl", "card", "your-repo#43", "shows", "why"]
+    assert notes[0][1].endswith("see pl card 'your-repo#43'")

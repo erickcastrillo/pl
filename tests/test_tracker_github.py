@@ -687,3 +687,13 @@ def test_update_with_list_id_moves_the_card(gh, make):
     assert got["list_id"] == t.columns()["PR open"]
     assert t.card(cid)["list_id"] == t.columns()["PR open"]
     assert got["metadata"] == {"keep": 1, "approved_at": "now", "worker": None}
+
+
+def test_ref_id_takes_the_short_repo_and_number_of_the_set_repo(gh):
+    t = project()
+    assert t.ref_id("app#12") == "acme/app#12" and t.ref_id("App#12") == "acme/app#12"
+    assert t.ref_id("#12") == t.ref_id("12") == t.ref_id("acme/app#12") == "acme/app#12"
+    assert t.ref_id("other/lib#3") == "other/lib#3"
+    with pytest.raises(SystemExit) as e:
+        t.ref_id("lib#3")   # another repo: only its full id says which owner
+    assert "owner/lib#3" in str(e.value)

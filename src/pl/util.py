@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -33,6 +34,11 @@ def short_id(cid):
     """A card id cut for display: "repo#43" for a GitHub id ("owner/repo#43"), else its first 8 characters."""
     cid = str(cid)
     return cid.rsplit("/", 1)[-1] if "#" in cid else cid[:8]
+
+
+def cmd_id(cid):
+    """The short id for a pl command hint, quoted for a shell: "'repo#43'" (an unquoted '#' starts a comment)."""
+    return shlex.quote(short_id(cid))
 
 
 def card_url(item_id):

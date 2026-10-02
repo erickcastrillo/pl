@@ -731,3 +731,14 @@ def test_the_worker_record_is_written_before_the_agent_starts_so_a_ctrl_c_never_
     assert (w["window"], w["pane"], w["stage"]) == ("@7", "%9", "spec") and dispatch._own_launch(w)
     monkeypatch.setattr(agents, "pane_exists", lambda pane: pane == "%9")
     assert agents.worker_status(w, {})[0] == "starting"   # the next pass counts it: no second agent
+
+
+def test_retry_takes_repo_and_number_and_refuses_an_ambiguous_number(fake_home, monkeypatch):
+    from pl import commands
+    cs = [{**_dead("x", 3), "id": "o/r#12"}, {**_dead("x", 3), "id": "o/s#12"}]
+    writes = _funnel(monkeypatch, cs)
+    with pytest.raises(SystemExit) as e:
+        commands.retry("#12")
+    assert "o/r#12" in str(e.value) and "o/s#12" in str(e.value) and writes == []
+    commands.retry("s#12")
+    assert writes == [("o/s#12", {"metadata": {"worker": None}})]

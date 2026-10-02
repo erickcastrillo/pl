@@ -19,7 +19,7 @@ from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
 from pl.trackers.github import RateLimited, limited
-from pl.util import load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
+from pl.util import cmd_id, load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
 
 
 def has_design(c):
@@ -410,7 +410,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
                 if why := alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
-                                      f"answer it in the agent window (pl card {c['id'][:8]}); README: Permissions"):
+                                      f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions"):
                     notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
             if bool(ask) != bool(w.get("permission_wait")):
                 w = {**w, "permission_wait": ask} if ask else {k: v for k, v in w.items() if k != "permission_wait"}
@@ -448,7 +448,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if key not in st["notified"]:
                 st["notified"][key] = time.time()
                 print(f"{short_id(c['id'])}  plan ready for review: {c['title'][:50]}")
-                notify(f"Plan ready: {c['title'][:50]}", f"pl review {c['id'][:8]} ; then pl approve or pl reject")
+                notify(f"Plan ready: {c['title'][:50]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
             continue
         if stage is None or hold_reason(c):   # a split or parked card gets no agent and holds no slot
             mirror_to_product(c, col, dry)
@@ -476,8 +476,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             key = f"stage_failed:{c['id']}:{stage}"
             failed.add(key)
             if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: the {stage} agent died {attempts} times",
-                                  f"pl card {c['id'][:8]} shows why; pl retry {c['id'][:8]} starts it fresh"):
-                notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent died {attempts} times; see pl card {c['id'][:8]}")
+                                  f"pl card {cmd_id(c['id'])} shows why; pl retry {cmd_id(c['id'])} starts it fresh"):
+                notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent died {attempts} times; see pl card {cmd_id(c['id'])}")
                 print(f"{short_id(c['id'])}  {stage} agent failed {attempts} times; not retrying")
             continue
         if attempts == 0:
@@ -583,7 +583,7 @@ def check_alerts(all_cards, failed):
             key = f"pr_waiting:{c['id']}"
             waiting.add(key)
             if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
-                notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {c['id'][:8]}")
+                notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {cmd_id(c['id'])}")
     alerts.sweep("pr_waiting:", waiting, notify)
     if not C.SERVICES:
         return
