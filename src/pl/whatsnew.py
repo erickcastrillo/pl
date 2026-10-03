@@ -57,6 +57,8 @@ ENTRIES = [
     _e("2026-10-02.03", "pl commands take a GitHub card's short id: repo#43 or #43",
        "pl card, retry, review, approve, reject, done, move; hints show the id quoted (quote it in a shell: '#' starts a comment)",
        "pl card '#43'"),
+    _e("2026-10-02.04", "pl says who stopped a dispatcher; D then s asks first", "header and pl manager status",
+       "pl manager status"),
 ]
 
 
