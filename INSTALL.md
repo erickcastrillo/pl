@@ -97,8 +97,8 @@ pl --version
 command -v pl
 ```
 
-- `uv tool list` shows `pl-funnel v0.3.0` and `- pl`.
-- `pl --version` prints `pl 0.3.0`.
+- `uv tool list` shows `pl-funnel v0.3.1` and `- pl`.
+- `pl --version` prints `pl 0.3.1`.
 - `command -v pl` prints a path inside the folder `uv tool dir --bin` names, usually `~/.local/bin/pl`. On macOS, `/usr/bin/pl` is Apple's property-list tool, not this pl.
 
 An assistant's shell may not keep the `export` line between commands, so an assistant puts it before every `pl` command in this guide.
