@@ -37,14 +37,16 @@
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
                           2-3 plain sentences above it, written by the local model ([local_model])
-  pl usage [--since 24h|7d|YYYY-MM-DD] [--by card|account|model|loop]
+  pl usage [--since 24h|7d|YYYY-MM-DD] [--by card|account|model|loop] [--github]
                           tokens spent (input, output, cache read, cache write), read from Claude transcripts;
                           [usage] prices = {model = dollars per million tokens} adds a cost column; [usage]
                           windows = {model = context tokens} sets a context window (200k by default; a session
                           past 200k counts as 1M). A loop keeps its last 20 sessions: older ones show as "other".
                           Every Claude loop restarts fresh when idle above 80% of its window ([loops.<name>]
                           max_context = 60 sets another percent, 0 turns it off; one loop interval apart, at most
-                          3 an hour; background shells or agents the session started end with it)
+                          3 an hour; background shells or agents the session started end with it). --github
+                          shows GitHub's GraphQL budget this hour instead: points left, the reset, what each
+                          profile and caller spent and each profile's fair share
   pl alerts [--all] [--ack KEY]
                           open alerts (account parked, all accounts out, a stage failed 3 times, a dead loop,
                           GitHub rate limit, low memory, a runaway agent, a PR waiting over 24 h): each notifies
@@ -176,6 +178,7 @@ def main():
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
+    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
     p = sub.add_parser("alerts"); p.add_argument("--all", action="store_true", help="include resolved alerts")
     p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears")
     p = sub.add_parser("move-agent"); p.add_argument("card"); p.add_argument("account", choices=list(C.PROFILES))
@@ -200,6 +203,8 @@ def main():
             return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False))
         ap.print_help()
         return
+    from pl import ghquota
+    ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,

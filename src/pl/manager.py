@@ -26,7 +26,7 @@ MACHINE_TOML = """# pl manager settings for this machine. Deleting this file kee
 enabled = true               # false: each console starts its own profile's dispatcher instead of the manager
 
 [limits]
-# max_live_agents = 12       # spec/design/plan/run agent windows across every profile; more hold new starts.
+# max_live_agents = 12       # spec/design/plan/run agent windows across every profile; each profile gets a share.
                              # Unset: every managed profile's max_runs + max_prep added up, at least 8
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
@@ -232,15 +232,64 @@ def _machine_check(state):
     return note
 
 
+WAITS_FRESH = 1200   # seconds a dispatcher's list of agents waiting at a prompt stays good (its passes nap up to 15 min)
+
+
+def _waiting(p):
+    """Window ids of the profile's agents that wait at a trust or permission prompt, as its dispatcher last saw them."""
+    try:
+        got = json.loads((p["dir"] / "state" / "agent-waits.json").read_text())
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
+    at = got.get("at") if isinstance(got, dict) else None
+    if not isinstance(at, (int, float)) or not 0 <= _clock() - at <= WAITS_FRESH:
+        return set()
+    return {w for w in got.get("windows") or [] if isinstance(w, str)}
+
+
+def shares(cap, slots, active, stuck):
+    """Each profile's part of the machine's agent cap. slots {profile: max_runs + max_prep}; active {profile: agents
+    working}; stuck {profile: agents waiting at a trust or permission prompt}.
+    A profile's share is its slots, or its part of the cap split by slots when the cap is smaller (at least 1); what
+    the shares leave of the cap is a pool any profile may borrow from. Stuck agents fill only their own profile's
+    share, never the pool, so a profile whose agents wait on a person cannot hold back the others.
+    Returns {profile: {share, used, stuck, room}}; room = new starts allowed now."""
+    names, total = sorted(slots), sum(max(0, v) for v in slots.values()) or 1
+    share = {p: max(1, min(max(0, slots[p]), cap * max(0, slots[p]) // total)) for p in names}
+    pool = max(0, cap - sum(share.values()))
+    own, borrowed = {}, {}
+    for p in names:
+        s_in = min(stuck.get(p, 0), share[p])
+        a_in = min(active.get(p, 0), share[p] - s_in)
+        own[p], borrowed[p] = s_in + a_in, active.get(p, 0) - a_in
+    left = max(0, pool - sum(borrowed.values()))
+    return {p: {"share": share[p], "used": active.get(p, 0) + stuck.get(p, 0), "stuck": stuck.get(p, 0),
+                "room": share[p] - own[p] + left} for p in names}
+
+
+def room_for(st, name):
+    """New agents profile name may start now by the manager's status st: its own row's room, else (a manager from
+    before per-profile shares) the machine's; None when the status says nothing."""
+    row = next((p for p in (st or {}).get("profiles") or [] if p.get("name") == name), None)
+    agents = (row or {}).get("agents")
+    if isinstance(agents, dict) and isinstance(agents.get("room"), int):
+        return agents["room"]
+    room = (st or {}).get("room")
+    return room if isinstance(room, int) and not isinstance(room, bool) else None
+
+
 def _caps(state, profs):
     """Count agent windows and their memory across every managed profile's tmux session; stop the largest runaway
     tree past max_agents_memory (one per tick). Loops count toward memory, never toward max_live_agents.
-    Returns (live agents, max live agents, agent memory %, the hold reason or None)."""
+    Returns (live agents, max live agents, agent memory %, the memory hold reason or None, {profile: share row}).
+    The agent cap holds no profile as a whole machine: each profile gets its share (see shares)."""
     from pl import memory
     from pl.agents import run_waiting
     lim, r = _limits(profs), memory.reading()
     panes = memory._run(["tmux", "list-panes", "-a", "-F", "#{session_name} #{window_id} #{pane_pid} #{window_name}"])
     procs, by_session, trees, live, extra = memory._procs(), {p["session"]: p for p in profs}, [], 0, 0
+    waits = {p["name"]: _waiting(p) for p in profs}
+    active, stuck = {p["name"]: 0 for p in profs}, {p["name"]: 0 for p in profs}
     for line in (panes or "").splitlines():
         s = line.split(" ", 3)
         p = by_session.get(s[0])
@@ -254,9 +303,16 @@ def _caps(state, profs):
         # a run agent waiting at a GATE or idle holds no start, as in the dispatcher; it still counts toward memory
         if s[3].startswith(memory.AGENT_PREFIXES) and not (s[3].startswith("run-") and run_waiting({"pane": s[1]}, {})):
             live += 1
+            (stuck if s[1] in waits[p["name"]] else active)[p["name"]] += 1
     used, why = sum(t[0] for t in trees) + extra, []
-    if live >= lim["max_live_agents"]:
-        why.append(f"{live} live agents across profiles (max {lim['max_live_agents']})")
+    per = shares(lim["max_live_agents"], {p["name"]: p.get("slots", 0) for p in profs}, active, stuck)
+    full = {n for n, r in per.items() if r["room"] <= 0}
+    for n in sorted(full - set(state.get("full") or ())):   # one log line when a profile reaches its share
+        row = per[n]
+        print(f"{n}: holds new agents: {row['used']} of its {row['share']} agent slots"
+              + (f" ({row['stuck']} waiting at a prompt)" if row["stuck"] else "")
+              + f"; machine {live} of {lim['max_live_agents']}", flush=True)
+    state["full"] = full
     pct, before = None, set(state.get("runaway") or ())
     over = set()
     if r:
@@ -292,7 +348,7 @@ def _caps(state, profs):
             state["hold_notified"] = _clock()
             _notify("pl manager holds new agents", hold, _alerts(profs))
     state["hold"] = hold
-    return live, lim["max_live_agents"], pct, hold
+    return live, lim["max_live_agents"], pct, hold, per
 
 
 SOURCES = ("cli", "console-D")   # who may write a request: `pl manager ...`, or the console's D key
@@ -358,59 +414,22 @@ def tick(state):
     restart request file); its exit on the way is expected, never counted. One from before build ids gets the
     one-time Ctrl-C step instead."""
     from pl import update
-    from pl.dispatch import RESTART_REQUEST, start_for
     now, rows, profs = _clock(), [], managed()
     build, installed = update.build_id(), update.build_id(fresh=True)
     bad, profs = [p for p in profs if "error" in p], [p for p in profs if "error" not in p]
     machine_error = _machine_check(state)
-    live, cap, pct, hold = _caps(state, profs)
+    try:
+        live, cap, pct, hold, per = state["caps"] = _caps(state, profs)
+    except Exception as e:  # noqa: BLE001 - a tmux or ps problem keeps the last counts, never stops the tick
+        print(f"caps failed: {type(e).__name__}: {e}", flush=True)
+        live, cap, pct, hold, per = state.get("caps") or (0, _limits(profs)["max_live_agents"], None, None, {})
     for p in profs:
-        r = state.setdefault(p["name"], _fresh())
-        if _asked("restart", p["name"]):
-            r.update(_fresh())
-            if p["running"] and p["build"]:   # it restarts itself at the end of its pass
-                (p["dir"] / "state" / RESTART_REQUEST).touch()
-            elif p["running"]:
-                r.pop("kick", None)   # one more Ctrl-C round
-        if src := _asked("stop", p["name"]):
-            r["stopped"] = r["stopping"] = True
-            r["stopped_by"], r["stopped_at"] = src, now
-        r["restarts"] = [t for t in r["restarts"] if now - t < 3600]
-        if r.get("stopped"):   # stopped by you: Ctrl-C until it exits, then leave the profile alone
-            r["stopping"] = r.get("stopping") and p["running"]
-            if r["stopping"]:
-                _run(["tmux", "send-keys", "-t", f"={p['session']}:dispatch", "C-c"], timeout=10)
-            r["up"] = False
-        elif p["running"]:
-            r["up"] = r["seen"] = True
-            r["ran"] = p["build"] or ""   # the build it runs; "" from before build ids
-            if not p["build"] and installed:
-                _kick(p, r, installed)
-        elif r["up"] and not r["seen"] and now - r["since"] < LOCK_GRACE:
-            pass   # started, has not taken its lock yet: not an exit
-        elif r["up"] and installed and r.get("ran", installed) != installed:
-            r["up"] = False   # it ran an older build and went away to restart: started below at once, not an exit
-        elif r["up"]:   # it ran (or was started and never took its lock) and is gone: an exit
-            r["up"] = False
-            if len(r["restarts"]) >= MAX_RESTARTS:
-                r["gave_up"] = True
-                print(f"{p['name']}: dispatcher exited {len(r['restarts']) + 1} times in an hour; not restarting", flush=True)
-                _notify("pl manager gave up", f"the dispatcher of profile {p['name']} keeps exiting; pl manager stopped "
-                        f"restarting it (see its tmux window dispatch; pl manager restart {p['name']})", _alerts([p]))
-            else:
-                r["next"] = now + BACKOFF[min(len(r["restarts"]), len(BACKOFF) - 1)]
-        if not p["running"] and not r["up"] and not r["gave_up"] and not r.get("stopped") and now >= r["next"]:
-            err = start_for(p["dir"], p["session"], p["gh"], managed=True)
-            print(f"{p['name']}: " + (f"dispatcher failed to start — {err}" if err else "dispatcher started"), flush=True)
-            if r["next"]:
-                r["restarts"].append(now)
-            r["up"], r["seen"], r["since"], r["next"] = True, False, now, 0
-            r.pop("ran", None)   # the new one's exits count until it is seen running
-        rows.append({"name": p["name"], "running": p["running"], "dispatcher_pid": p["pid"] if p["running"] else None,
-                     "restarts": len(r["restarts"]), "gave_up": r["gave_up"], "stopped": bool(r.get("stopped")),
-                     "stopping": bool(r.get("stopping"))})
-        if r.get("stopped") and r.get("stopped_by"):
-            rows[-1].update(stopped_by=r["stopped_by"], stopped_at=r.get("stopped_at"))
+        try:
+            rows.append(_tick_one(p, state, now, installed, per.get(p["name"])))
+        except Exception as e:  # noqa: BLE001 - one profile's failure never stops the others' ticks
+            print(f"{p['name']}: tick failed: {type(e).__name__}: {e}", flush=True)
+            rows.append({"name": p["name"], "running": p.get("running", False), "dispatcher_pid": None, "restarts": 0,
+                         "gave_up": False, "error": f"manager tick failed: {type(e).__name__}"})
     rows += [{"name": p["name"], "running": False, "dispatcher_pid": None, "restarts": 0, "gave_up": False,
               "error": p["error"]} for p in bad]
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
@@ -418,6 +437,66 @@ def tick(state):
               "build": build, "pkg": str(update.PKG)}
     _write("status.json", status)
     return status
+
+
+def _tick_one(p, state, now, installed, agents):
+    """One profile's part of a tick: its restart or stop request, its dispatcher's start or restart. Its row."""
+    from pl.dispatch import RESTART_REQUEST, start_for
+    r = state.setdefault(p["name"], _fresh())
+    if _asked("restart", p["name"]):
+        r.update(_fresh())
+        if p["running"] and p["build"]:   # it restarts itself at the end of its pass
+            (p["dir"] / "state" / RESTART_REQUEST).touch()
+        elif p["running"]:
+            r.pop("kick", None)   # one more Ctrl-C round
+    if src := _asked("stop", p["name"]):
+        r["stopped"] = r["stopping"] = True
+        r["stopped_by"], r["stopped_at"] = src, now
+    r["restarts"] = [t for t in r["restarts"] if now - t < 3600]
+    if r.get("stopped"):   # stopped by you: Ctrl-C until it exits, then leave the profile alone
+        r["stopping"] = r.get("stopping") and p["running"]
+        if r["stopping"]:
+            _run(["tmux", "send-keys", "-t", f"={p['session']}:dispatch", "C-c"], timeout=10)
+        r["up"] = False
+    elif p["running"]:
+        r["up"] = r["seen"] = True
+        r["ran"] = p["build"] or ""   # the build it runs; "" from before build ids
+        if not p["build"] and installed:
+            _kick(p, r, installed)
+    elif r["up"] and not r["seen"] and now - r["since"] < LOCK_GRACE:
+        pass   # started, has not taken its lock yet: not an exit
+    elif r["up"] and installed and r.get("ran", installed) != installed:
+        r["up"] = False   # it ran an older build and went away to restart: started below at once, not an exit
+    elif r["up"]:   # it ran (or was started and never took its lock) and is gone: an exit
+        r["up"] = False
+        if len(r["restarts"]) >= MAX_RESTARTS:
+            r["gave_up"] = True
+            print(f"{p['name']}: dispatcher exited {len(r['restarts']) + 1} times in an hour; not restarting", flush=True)
+            _notify("pl manager gave up", f"the dispatcher of profile {p['name']} keeps exiting; pl manager stopped "
+                    f"restarting it (see its tmux window dispatch; pl manager restart {p['name']})", _alerts([p]))
+        else:
+            r["next"] = now + BACKOFF[min(len(r["restarts"]), len(BACKOFF) - 1)]
+    if not p["running"] and not r["up"] and not r["gave_up"] and not r.get("stopped") and now >= r["next"]:
+        err = start_for(p["dir"], p["session"], p["gh"], managed=True)
+        print(f"{p['name']}: " + (f"dispatcher failed to start — {err}" if err else "dispatcher started"), flush=True)
+        if r["next"]:
+            r["restarts"].append(now)
+        r["up"], r["seen"], r["since"], r["next"] = True, False, now, 0
+        r.pop("ran", None)   # the new one's exits count until it is seen running
+    row = {"name": p["name"], "running": p["running"], "dispatcher_pid": p["pid"] if p["running"] else None,
+           "restarts": len(r["restarts"]), "gave_up": r["gave_up"], "stopped": bool(r.get("stopped")),
+           "stopping": bool(r.get("stopping"))}
+    if agents:
+        row["agents"] = agents
+    try:
+        from pl import ghquota
+        if gh := ghquota.usage_for(p.get("gh"), p["name"]):
+            row["github"] = gh
+    except Exception:  # noqa: BLE001 - a garbled ledger never stops the tick
+        pass
+    if r.get("stopped") and r.get("stopped_by"):
+        row.update(stopped_by=r["stopped_by"], stopped_at=r.get("stopped_at"))
+    return row
 
 
 def restart(name, kind="restart", source="cli"):
@@ -596,13 +675,34 @@ def show():
     if not running() or not st:
         return "manager: not running" + ("" if _path("machine.toml").exists() else " (never started on this machine)")
     lines = [f"manager: running (pid {st['pid']}), status {int(_clock() - st['at'])} s old",
-             f"{'profile':<16}{'dispatcher':<12}{'pid':<8}restarts"]
+             f"{'profile':<16}{'dispatcher':<12}{'pid':<8}{'restarts':<10}{'agents':<9}{'github':<12}held because"]
+    accounts = {}
     for p in st["profiles"]:
         state = (p.get("error") or "gave up" if p.get("error") or p["gave_up"] else "stopped by you" if p.get("stopped")
                  else "running" if p["running"] else "stopped")
         who = f"   ({p['stopped_by']}, {time.strftime('%H:%M:%S', time.localtime(p['stopped_at']))})" \
             if p.get("stopped") and p.get("stopped_by") and p.get("stopped_at") else ""
-        lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']}{who}")
+        a, g = p.get("agents") or {}, p.get("github") or {}
+        agents = f"{a['used']}/{a['used'] + max(0, a['room'])}" if a else "-"
+        github = f"{g['spent']}/{g['share']}" if g else "-"
+        why = []
+        if a and a["room"] <= 0:
+            why.append(f"{a['used']} of its {a['share']} agent slots in use"
+                       + (f", {a['stuck']} waiting at a prompt" if a.get("stuck") else ""))
+        if g and g["remaining"] < 0.5 * g["limit"] and g["spent"] >= g["share"]:
+            why.append(f"used its GitHub share until {time.strftime('%H:%M', time.localtime(g['reset']))}")
+        if st.get("hold"):
+            why.append("machine hold")
+        if g:
+            accounts[g["account"]] = g
+        lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']:<10}{agents:<9}"
+                     f"{github:<12}{'; '.join(why) or '-'}{who}")
+    lines.append(f"agents: {st.get('live_agents', 0)} live of {st.get('max_live_agents', '?')} on this machine "
+                 "(agents column: in use/allowed now; each profile has its own share)")
+    for acct, g in sorted(accounts.items()):
+        lines.append(f"GitHub {acct.split('@')[0]}: {g['remaining']} of {g['limit']} GraphQL points left, resets "
+                     f"{time.strftime('%H:%M', time.localtime(g['reset']))} (github column: spent/fair share; "
+                     "pl usage --github for callers)")
     if st.get("hold"):
         lines.append(f"hold: {st['hold']}")
     if st.get("machine_error"):

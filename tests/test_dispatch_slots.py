@@ -193,3 +193,40 @@ def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch
     monkeypatch.setattr(agents, "col_name", lambda lid: "Inbox")
     assert agents.worker_view({**c, "metadata": {**c["metadata"], "worker": writes[-1][1]["metadata"]["worker"]}}, {}) \
         == "spec agent waiting: trust the folder (claude)"
+
+
+# ---------- profiles do not starve each other: the manager's share ----------
+
+def _status(rooms, hold=None):
+    """A fresh pl manager status: each profile's own room, the machine already at its cap."""
+    from pl import manager
+    return {"at": manager._clock(), "live_agents": 15, "max_live_agents": 15, "room": 0, "hold": hold,
+            "profiles": [{"name": n, "agents": {"share": 5, "used": 5 - r, "stuck": 0, "room": r}} for n, r in rooms.items()]}
+
+
+def test_a_profile_with_room_in_its_share_starts_although_the_machine_is_full(monkeypatch):
+    from pl import manager
+    monkeypatch.setattr(manager, "read_status", lambda: _status({C.PROFILE_NAME: 2, "busy": 0}))
+    started, _ = _pass(monkeypatch, [_card(1), _card(2), _card(3)], max_prep=5)
+    assert [c["id"] for c in started] == ["o/r#1", "o/r#2"]   # its own room, not the machine's 0
+
+
+def test_a_profile_at_its_share_waits_and_says_why(monkeypatch, capsys):
+    from pl import manager
+    monkeypatch.setattr(manager, "read_status", lambda: _status({C.PROFILE_NAME: 0}))
+    started, _ = _pass(monkeypatch, [_card(1)])
+    assert started == [] and "share of the machine's agents is in use" in capsys.readouterr().out
+
+
+def test_agents_waiting_at_a_prompt_are_reported_to_the_manager(monkeypatch):
+    import json
+    w = {"stage": "spec", "pane": "%1", "window": "@7", "session_id": "s", "profile": "claude", "harness": "claude",
+         "started_at": "2020-01-01T00:00:00+00:00"}
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
+    monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w["session_id"]))
+    monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)
+    monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: "/Users/me/Code/Proj")
+    _pass(monkeypatch, [_card(1, profile="claude", worker=w), _card(2)])
+    got = json.loads((C.STATE_DIR / "agent-waits.json").read_text())
+    assert got["windows"] == ["@7"] and got["at"] > 0

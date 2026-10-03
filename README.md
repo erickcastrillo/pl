@@ -137,7 +137,7 @@ The manager is on by default: every console starts it when it is not running. It
 
 ```
 pl manager start          # start it by hand; a console does this for you
-pl manager status         # each profile's dispatcher, live agents, any hold
+pl manager status         # each profile's dispatcher, agents and GitHub points used and allowed, why it is held
 pl manager stop [--all]   # --all also stops the dispatchers
 pl manager restart NAME   # start a profile's dispatcher again (after a give-up or a stop), or restart a running one
 pl manager stop NAME      # stop one profile's dispatcher; the manager leaves it alone until restart
@@ -150,7 +150,7 @@ The settings live in `~/.local/state/pl-machine/machine.toml`, which `pl setup` 
 enabled = true               # false: each console starts its own profile's dispatcher instead of the manager
 
 [limits]
-# max_live_agents = 12       # spec/design/plan/run agent windows across every profile; more hold new starts.
+# max_live_agents = 12       # spec/design/plan/run agent windows across every profile; each profile gets a share.
                              # Unset: every managed profile's max_runs + max_prep added up, at least 8
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts

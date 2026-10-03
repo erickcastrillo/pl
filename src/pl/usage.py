@@ -367,6 +367,10 @@ def summary(st, now=None):
 
 
 def cmd_usage(a):
+    if getattr(a, "github", False):
+        from pl import ghquota
+        print(ghquota.report())
+        return
     from pl.standup import parse_since
     since = parse_since(a.since or "24h").timestamp()
     cards = None

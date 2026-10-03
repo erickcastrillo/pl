@@ -231,7 +231,14 @@ This covers `gh` only. SSH keys and host aliases only decide who `git push` and 
 | `set repo in the github-project tracker settings` | Add `repo` to `[tracker]`. |
 | `gh timed out after 60s` | GitHub is slow or unreachable. The dispatcher tries again next pass. |
 
-**Rate limits.** Every card read lists the whole project (up to 500 items) plus one issue list per repo on it. The dispatcher does this every pass. If gh reports a rate limit, raise `[dispatch] interval` (seconds between passes, default 120). PR search is cached for 60 seconds.
+**Rate limits.** GitHub gives each user 5,000 GraphQL points an hour, shared by every profile, console and agent signed in as that user. pl reads the board with its own query, 2 points per 100 cards (gh's `project item-list` costs about 1 point per card), and reads one card by itself with one issue lookup of about 1 point: `pl card`, `pl section` and the check after a write never read the whole board. Each of pl's queries also brings the points left and the reset time, kept in one ledger per GitHub user under the machine folder (`github/<login>@github.com.json`). From it:
+
+- below half the budget, each profile's periodic reads (the dispatcher's pass, the console's refresh) keep to a fair share, the limit split among the profiles that spent points this hour; below 20 % they stop until the reset;
+- agents' and your commands stop below 5 %; writes (edits, moves, new cards) go on until the budget is spent;
+- passes and console refreshes come up to 4 times further apart as the budget falls;
+- when GitHub refuses a call for the rate limit, every profile of the same user waits for the reset it named. Profiles signed in as another GitHub user, or on another tracker, are never held by it.
+
+A pass that waits prints `pass waits: GitHub budget: ...` once, not a failure. `pl usage --github` shows the points left, the reset, and what each profile and caller spent; `pl manager status` shows each profile's part. PR search is cached for 5 minutes.
 
 ## Not supported yet
 

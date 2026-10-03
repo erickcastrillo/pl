@@ -60,6 +60,35 @@ class FakeGh:
                 "updatedAt": "2026-09-28T10:00:00Z",
                 "labels": [{"name": x} for x in i["labels"]], "assignees": [{"login": x} for x in i["assignees"]]}
 
+    def _field(self, query):
+        """The stage field as the query names it: GitHub answers null for a field the project does not have."""
+        name = re.search(r'field\(name:"([^"]+)"\)', query).group(1)
+        return {"id": "PVTSSF_status", "options": list(self.options)} if name == self.field else None
+
+    def _value(self, status):
+        opt = {o["id"]: o["name"] for o in self.options}
+        return {"name": opt[status], "optionId": status} if status in opt else None
+
+    def _content(self, n):
+        i = self.issues[n]
+        return {"number": n, "title": i["title"], "body": i["body"], "url": i["url"], "updatedAt": "2026-09-28T10:00:00Z",
+                "labels": {"nodes": [{"name": x} for x in i["labels"]]},
+                "assignees": {"nodes": [{"login": x} for x in i["assignees"]]}}
+
+    def project(self, query):
+        nodes = [{"id": "PVTI_draft", "fieldValueByName": None, "content": {}}]   # a draft: no Issue fields
+        nodes += [{"id": iid, "fieldValueByName": self._value(it["status"]), "content": self._content(it["number"])}
+                  for iid, it in self.items.items()]
+        return {"id": "PVT_1", "field": self._field(query), "items": {"pageInfo": {"hasNextPage": False}, "nodes": nodes}}
+
+    def issue_node(self, n, query):
+        if n not in self.issues:
+            return None
+        items = [{"id": iid, "fieldValueByName": self._value(it["status"]),
+                  "project": {"id": "PVT_1", "number": NUM, "owner": {"login": OWNER}, "field": self._field(query)}}
+                 for iid, it in self.items.items() if it["number"] == n]
+        return {**self._content(n), "projectItems": {"nodes": items}}
+
     def __call__(self, args):
         self.log.append(list(args))
         pos, fl = _flags(args)
@@ -107,9 +136,11 @@ class FakeGh:
             on = {it["number"] for it in self.items.values()} if f"-project:{OWNER}/{NUM}" in fl["--search"][0] else set()
             return json.dumps([{k: v for k, v in self.issue_json(n).items() if k in fl["--json"][0].split(",")}
                                for n, i in self.issues.items() if i["state"] == "OPEN" and (n not in on or n in self.search_ignores_project)])
-        if cmd == ("api", "graphql") and "{updatedAt}" in args[-1]:
-            return json.dumps({"data": {a: {"issue": {"updatedAt": "2026-09-28T10:00:00Z"}}
-                                        for a in re.findall(r"(i\d+):repository", args[-1])}})
+        if cmd == ("api", "graphql") and "repositoryOwner(" in args[-1]:   # pl's board read: one page of items
+            return json.dumps({"data": {"repositoryOwner": {"projectV2": self.project(args[-1])}}})
+        if cmd == ("api", "graphql") and "projectItems" in args[-1]:        # pl's card lookup by issue
+            return json.dumps({"data": {a: {"issue": self.issue_node(int(n), args[-1])} for a, n in
+                                        re.findall(r'(i\d+):repository\(owner:"[^"]+",name:"[^"]+"\)\{issue\(number:(\d+)\)', args[-1])}})
         if cmd == ("issue", "list"):
             return json.dumps([self.issue_json(n) for n, i in self.issues.items() if i["state"] == "OPEN"])
         if cmd == ("issue", "edit"):
@@ -319,40 +350,90 @@ def test_trailing_whitespace_after_the_meta_line_keeps_metadata(gh):
     assert t.card(cid)["description"] == "d"
 
 
-def test_project_cards_colliding_numbers_get_their_own_repo_stamp(gh, monkeypatch):
+def test_project_cards_colliding_numbers_keep_their_own_repo_and_stamp(gh, monkeypatch):
     stamps = {"acme/app": "2026-01-01T00:00:00Z", "acme/other": "2026-02-02T00:00:00Z"}
 
-    def item(repo):
-        url = f"https://github.com/{repo}/issues/5"
-        return {"id": f"PVTI_{repo}", "title": "t", "status": "Inbox", "labels": [], "assignees": [],
-                "content": {"type": "Issue", "number": 5, "title": "t", "body": "", "url": url, "repository": repo}}
+    def node(repo):
+        return {"id": f"PVTI_{repo}", "fieldValueByName": {"name": "Inbox", "optionId": "opt-inbox"},
+                "content": {"number": 5, "title": "t", "body": "", "url": f"https://github.com/{repo}/issues/5",
+                            "updatedAt": stamps[repo], "labels": {"nodes": []}, "assignees": {"nodes": []}}}
 
     real = gh.__call__
 
     def two_repos(args):
-        pos, fl = _flags(args)
-        if tuple(pos[:2]) == ("project", "item-list"):
-            return json.dumps({"items": [item("acme/app"), item("acme/other")]})
-        if tuple(pos[:2]) == ("api", "graphql"):
-            return json.dumps({"data": {a: {"issue": {"updatedAt": stamps[f"{o}/{n}"]}} for a, o, n in
-                                        re.findall(r'(i\d+):repository\(owner:"([^"]+)",name:"([^"]+)"\)', args[-1])}})
+        if args[:2] == ["api", "graphql"] and "repositoryOwner(" in args[-1]:
+            proj = {"id": "PVT_1", "field": {"id": "PVTSSF_status", "options": OPTIONS},
+                    "items": {"pageInfo": {"hasNextPage": False}, "nodes": [node("acme/app"), node("acme/other")]}}
+            return json.dumps({"data": {"repositoryOwner": {"projectV2": proj}}})
         return real(args)
 
     monkeypatch.setattr(github, "_gh", two_repos)
-    got = {c["url"].split("/issues")[0].removeprefix("https://github.com/"): c["updated_at"] for c in project().cards()}
-    assert got == {"acme/app": "2026-01-01T00:00:00+00:00", "acme/other": "2026-02-02T00:00:00+00:00"}
+    got = {c["id"]: c["updated_at"] for c in project().cards()}
+    assert got == {"acme/app#5": "2026-01-01T00:00:00+00:00", "acme/other#5": "2026-02-02T00:00:00+00:00"}
 
 
-def test_project_cards_fill_updated_at_with_one_graphql_query_and_no_issue_list(gh):
+def test_a_board_read_is_one_graphql_query_with_updated_at_and_no_gh_item_list(gh):
+    """gh project item-list cost about 1 point per item (44 for a 44-card board); pl's own read costs 2 per 100 and
+    brings updatedAt, the stage field and the project id with it."""
     t = project()
     t.create("Inbox", title="a")
     t.create("Inbox", title="b")
     gh.log.clear()
-    got = t.cards()
+    trackers.reset()
+    github.forget()
+    got = project().cards()
     assert {c["updated_at"] for c in got} == {"2026-09-28T10:00:00+00:00"}
-    assert [a for a in gh.log if a[:2] == ["issue", "list"]] == []
-    (q,) = [a[-1] for a in gh.log if a[:2] == ["api", "graphql"]]
-    assert "issue(number:1){updatedAt}" in q and "issue(number:2){updatedAt}" in q
+    assert [c["list_id"] for c in got] == ["opt-inbox", "opt-inbox"]
+    (q,) = [a[-1] for a in gh.log]                        # no field-list, no item-list, no stamp query
+    assert "items(first:100" in q and "rateLimit{" in q and "fieldValues" not in q
+
+
+def test_a_board_read_pages_through_a_board_over_100_items(gh, monkeypatch):
+    pages = []
+    real = gh.__call__
+
+    def paged(args):
+        if args[:2] == ["api", "graphql"] and "repositoryOwner(" in args[-1]:
+            after = re.search(r'after:"([^"]+)"', args[-1])
+            pages.append(after.group(1) if after else None)
+            n0 = 0 if not after else 100
+            nodes = [{"id": f"PVTI_{n}", "fieldValueByName": None,
+                      "content": {"number": n, "title": "t", "body": "", "url": f"https://github.com/acme/app/issues/{n}",
+                                  "updatedAt": "2026-09-28T10:00:00Z", "labels": {"nodes": []}, "assignees": {"nodes": []}}}
+                     for n in range(n0 + 1, n0 + (101 if not after else 31))]
+            proj = {"id": "PVT_1", "field": {"id": "PVTSSF_status", "options": OPTIONS},
+                    "items": {"pageInfo": {"hasNextPage": not after, "endCursor": "c100"}, "nodes": nodes}}
+            return json.dumps({"data": {"repositoryOwner": {"projectV2": proj}}})
+        return real(args)
+
+    monkeypatch.setattr(github, "_gh", paged)
+    assert len(project().cards()) == 130 and pages == [None, "c100"]
+
+
+def test_a_card_is_one_issue_lookup_not_the_board(gh):
+    t = project()
+    cid = t.create("Inbox", title="a", metadata={"k": 1})["id"]
+    trackers.reset()
+    github.forget()
+    gh.log.clear()
+    c = project().card(cid)
+    assert c["metadata"] == {"k": 1} and c["list_id"] == "opt-inbox" and c["item_id"]
+    (q,) = [a[-1] for a in gh.log]
+    assert "projectItems" in q and "repositoryOwner(" not in q
+    with pytest.raises(SystemExit, match="no card acme/app#99"):
+        project().card("acme/app#99")
+    with pytest.raises(SystemExit, match="no card not-an-id"):
+        project().card("not-an-id")
+
+
+def test_update_reads_and_verifies_one_card_never_the_board(gh):
+    t = project()
+    cid = t.create("Inbox", title="a")["id"]
+    gh.log.clear()
+    t.update(cid, metadata={"worker": {"stage": "spec"}})
+    assert not [a for a in gh.log if "repositoryOwner(" in a[-1]]
+    assert len([a for a in gh.log if "projectItems" in a[-1]]) == 2   # the merge's read and the check after the write
+    assert t.card(cid)["metadata"] == {"worker": {"stage": "spec"}}
 
 
 @pytest.mark.parametrize("make", [project, issues], ids=["project", "issues"])

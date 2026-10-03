@@ -42,7 +42,8 @@ def default_interval():
 
 def default_provider():
     """The real data for one refresh: board + tmux snapshot, event metrics per window, GitHub PR activity."""
-    from pl import events, memory, watch
+    from pl import events, ghquota, memory, watch
+    ghquota.set_role("console")   # a periodic reader: it yields first when GitHub's budget runs low
     board.share("read")   # reuse the dispatcher's board read while it is young
     snap = watch.watch_snapshot()
     return {"snapshot": snap,

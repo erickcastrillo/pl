@@ -44,18 +44,29 @@ if state["mode"] == "unknown-owner" and args[:1] == ["project"]:
 if args[:2] == ["project", "field-list"]:
     out({{"fields": [{{"id": "F1", "name": "Status", "type": "ProjectV2SingleSelectField",
                      "options": [{{"id": "opt-" + c, "name": c}} for c in COLS]}}], "totalCount": 1}})
-if args[:2] == ["project", "item-list"]:
-    items = []
-    for n in range(1, state["items"] + 1):
-        long = n == 1   # a Spec ready frontend card whose body is long: has_design looks it up by id
-        body = ("x" * (1000 if long else 50)) + '\n<!-- pl:meta {{"pipeline_mode":"auto","profile":"main"}} -->'
-        body = state.get("bodies", {{}}).get(str(n), body)
-        col = state.get("status", {{}}).get(str(n)) or ("Spec ready" if long else COLS[n % 7])
-        items.append({{"id": f"PVTI_{{n}}", "status": col,
-                      "labels": ["frontend"] if long else [], "assignees": [],
-                      "content": {{"type": "Issue", "number": n, "title": f"card {{n}}", "body": body,
-                                  "url": f"https://github.com/acme/app/issues/{{n}}"}}}})
-    out({{"items": items[:int(flag("--limit", "30"))], "totalCount": len(items)}})
+def board_card(n):
+    """(body, column, labels, updatedAt) of issue n as the board holds it."""
+    long = n == 1   # a Spec ready frontend card whose body is long: has_design looks it up by id
+    body = ("x" * (1000 if long else 50)) + '\n<!-- pl:meta {{"pipeline_mode":"auto","profile":"main"}} -->'
+    body = state.get("bodies", {{}}).get(str(n), body)
+    col = state.get("status", {{}}).get(str(n)) or ("Spec ready" if long else COLS[n % 7])
+    return body, col, (["frontend"] if long else []), state.get("stamps", {{}}).get(str(n), "2026-09-28T10:00:00Z")
+if args[:2] == ["api", "graphql"] and "repositoryOwner(" in args[-1]:   # pl's board read, 100 items a page
+    import re
+    after = re.search(r'after:"c(\d+)"', args[-1])
+    start = int(after.group(1)) if after else 0
+    nodes = []
+    for n in range(start + 1, min(state["items"], start + 100) + 1):
+        body, col, labels, at = board_card(n)
+        nodes.append({{"id": f"PVTI_{{n}}", "fieldValueByName": {{"name": col, "optionId": "opt-" + col}},
+                      "content": {{"number": n, "title": f"card {{n}}", "body": body, "updatedAt": at,
+                                  "url": f"https://github.com/acme/app/issues/{{n}}",
+                                  "labels": {{"nodes": [{{"name": x}} for x in labels]}}, "assignees": {{"nodes": []}}}}}})
+    more = state["items"] > start + 100
+    rate = state.get("rate")
+    out({{"data": {{**({{"rateLimit": rate, "viewer": {{"login": "acme-bot"}}}} if rate else {{}}),
+                   "repositoryOwner": {{"projectV2": {{"id": "PVT_1", "field": {{"id": "F1", "options": [{{"id": "opt-" + c, "name": c}} for c in COLS]}},
+                   "items": {{"pageInfo": {{"hasNextPage": more, "endCursor": f"c{{start + 100}}"}}, "nodes": nodes}}}}}}}}}})
 if args[:2] == ["api", "graphql"] and "projectItems" in args[-1]:
     import re
     if state.get("lookup_error"):
@@ -66,12 +77,16 @@ if args[:2] == ["api", "graphql"] and "projectItems" in args[-1]:
     for alias, n in re.findall(r'(i\d+):repository\(owner:"acme",name:"app"\)\{{issue\(number:(\d+)\)', args[-1]):
         n = int(n)
         on = n not in state.get("off_project", [])
+        if n <= state["items"]:   # on the board: the lookup sees what the board read sees
+            body, col, labels, at = board_card(n)
+        else:                     # a card pl just created that the project listing lacks
+            body, col, labels, at = 'new\n<!-- pl:meta {{"pipeline_mode":"auto"}} -->', "Inbox", ["backend"], "2026-09-28T11:00:00Z"
         data[alias] = {{"issue": {{"number": n, "title": f"card {{n}}", "url": f"https://github.com/acme/app/issues/{{n}}",
-            "body": 'new\n<!-- pl:meta {{"pipeline_mode":"auto"}} -->', "updatedAt": "2026-09-28T11:00:00Z",
-            "labels": {{"nodes": [{{"name": "backend"}}]}}, "assignees": {{"nodes": []}},
+            "body": body, "updatedAt": at,
+            "labels": {{"nodes": [{{"name": x}} for x in labels]}}, "assignees": {{"nodes": []}},
             "projectItems": {{"nodes": [{{"id": f"PVTI_{{n}}", "project": {{"id": "PVT_1", "number": 7, "owner": {{"login": "acme"}},
                 "field": {{"id": "F1", "options": [{{"id": "opt-" + c, "name": c}} for c in COLS]}}}},
-                "fieldValueByName": {{"name": "Inbox", "optionId": "opt-Inbox"}}}}] if on else []}}}}}}
+                "fieldValueByName": {{"name": col, "optionId": "opt-" + col}}}}] if on else []}}}}}}
         if state.get("decoys"):
             data[alias]["issue"]["projectItems"]["nodes"][:0] = decoys
     out({{"data": data}})
@@ -101,6 +116,9 @@ if args[:2] == ["issue", "list"]:
 if args[:2] in (["search", "prs"], ["label", "list"]):
     out([])
 if args[:2] == ["issue", "edit"]:
+    if "--body" in args:   # the board and lookups show the new body, as GitHub does
+        state.setdefault("bodies", {{}})[args[2]] = flag("--body")
+        json.dump(state, open(os.environ["FAKE_GH_STATE"], "w"))
     sys.exit(0)
 print("github.com: signed in"); sys.exit(0)
 '''
@@ -204,6 +222,11 @@ def gh(tmp_path, monkeypatch):
     getattr(github, "_LIMIT_SEARCH", {}).update(until=0, hits=0)
 
 
+def reads(gh):
+    """Whole-board reads: pl's own GraphQL board query (it replaced gh project item-list)."""
+    return sum(1 for a in gh.calls() if a[:2] == ["api", "graphql"] and "repositoryOwner(" in a[-1])
+
+
 def _pass():
     dispatch.cmd_dispatch(argparse.Namespace(once=True, dry_run=True, no_pull=False, max_runs=None, max_prep=None,
                                              interval=None))
@@ -215,7 +238,7 @@ def test_one_console_refresh_reads_the_board_once(gh):
     """Measured before the fix: 9 calls, 2 item-lists (has_design re-read the whole board for one card).
     The need: field-list 1 (cold), item-list 1, issue list 1 (one repo), pr_counts 2 searches, pr_activity 2 = 7."""
     tui_app.default_provider()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
     assert len(gh.calls()) <= 7
 
 
@@ -224,30 +247,27 @@ def test_one_dispatcher_pass_reads_the_board_once(gh):
     graphql for the updatedAt stamps (WP37 replaced the per-read issue list; a warm pass skips it) = 3, plus the
     default issue intake's one open-issue search (WP36) = 4."""
     _pass()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
     assert gh.count("issue", "list") == 1
     assert len(gh.calls()) <= 4
 
 
-def test_views_in_one_refresh_share_one_item_list_and_a_write_reads_fresh(gh):
+def test_views_in_one_refresh_share_one_board_read_and_a_write_reads_the_card_fresh(gh):
     t = trackers.get("tracker")
     t.cards()
     t.card("acme/app#3")
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1 and _lookups(gh) == 0
     t.update("acme/app#3", verify=False, title="renamed")
     t.card("acme/app#3")
-    assert gh.count("project", "item-list") == 2   # the write dropped the cached list
+    assert reads(gh) == 1 and _lookups(gh) == 1   # the write dropped the cached list: one issue read, not the board
 
 
-def test_item_list_asks_for_what_the_board_holds_and_pages_when_full(gh):
-    t = trackers.get("tracker")
-    assert len(t.cards()) == 11
-    limits = [int(a[a.index("--limit") + 1]) for a in gh.calls() if a[:2] == ["project", "item-list"]]
-    assert limits and limits[0] < 500
+def test_a_board_read_pages_100_items_at_a_time(gh):
+    assert len(trackers.get("tracker").cards()) == 11 and reads(gh) == 1
     trackers.reset()
-    gh.set(items=limits[0] + 7)                    # a board bigger than the first read
+    gh.set(items=130)                              # a board over one page
     gh.clear()
-    assert len(trackers.get("tracker").cards()) == limits[0] + 7
+    assert len(trackers.get("tracker").cards()) == 130 and reads(gh) == 2
 
 
 # ---------- rate-limit backoff ----------
@@ -435,17 +455,17 @@ def test_dispatcher_logs_one_event_per_backoff_window(gh, monkeypatch):
     assert len(passes) == 3
     errors = [e for e in events._read() if e.get("kind") == "error"]
     assert len(errors) == 2 and all("rate-limited" in e["message"] for e in errors)   # WP40: one per window, searches apart
-    assert gh.count("project") + gh.count("issue", "list") == 2   # pass 1: the intake search, then the board read; 2 and 3 made none
+    assert reads(gh) + gh.count("issue", "list") == 2   # pass 1: the intake search, then the board read; 2 and 3 made none
 
 
 # ---------- fewer calls: the stage field, pl move, index lag ----------
 
-def test_the_stage_field_is_read_once_across_dispatcher_passes(gh):
+def test_the_stage_field_comes_with_the_board_read(gh):
     _pass()
     dispatch.reload_config()                              # the loop re-reads settings, which rebuilds the tracker
     _pass()
-    assert gh.count("project", "field-list") == 1
-    assert gh.count("project", "item-list") == 2
+    assert gh.count("project", "field-list") == 0         # the board query brings the field and its options
+    assert reads(gh) == 2
 
 
 def test_an_unknown_option_on_the_board_reads_the_field_again(gh):
@@ -464,7 +484,7 @@ def _move(ref, column):
 @pytest.mark.parametrize("ref", ["acme/app#3", "#3", "3"])
 def test_pl_move_sets_the_stage_with_one_lookup_and_no_board_listing(gh, ref, capsys):
     _move(ref, "Plan for review")
-    assert gh.count("project", "item-list") == 0 and gh.count("project", "field-list") == 0
+    assert reads(gh) == 0 and gh.count("project", "field-list") == 0
     (edit,) = [a for a in gh.calls() if a[:2] == ["project", "item-edit"]]
     assert edit[2:] == ["--id", "PVTI_3", "--project-id", "PVT_1", "--field-id", "F1",
                         "--single-select-option-id", "opt-Plan for review"]
@@ -483,7 +503,7 @@ def test_a_stale_cached_field_is_read_again_once_when_an_edit_fails(gh):
     t = trackers.get("tracker")
     t.columns()
     github._KNOWN[("field", "acme", "7", "Status")]["id"] = "F-stale"   # the column was deleted and re-added
-    t.update("acme/app#3", verify=False, column="Plan for review")
+    t._set_status("PVTI_3", "Plan for review")
     edits = [a for a in gh.calls() if a[:2] == ["project", "item-edit"]]
     assert [a[a.index("--field-id") + 1] for a in edits] == ["F-stale", "F1"]
     assert gh.count("project", "field-list") == 2
@@ -555,13 +575,13 @@ def test_a_lagging_card_is_forgotten_after_15_minutes(gh, monkeypatch):
 def test_unknown_owner_type_under_an_exhausted_limit_is_the_rate_limit(gh):
     gh.set(mode="unknown-owner", remaining=0)
     with pytest.raises(github.RateLimited):
-        trackers.get("tracker").cards()
+        trackers.get("tracker").test()   # gh project field-list
 
 
 def test_unknown_owner_type_with_budget_left_keeps_the_message_and_adds_a_hint(gh):
     gh.set(mode="unknown-owner", remaining=4000)
     with pytest.raises(SystemExit) as e:
-        trackers.get("tracker").cards()
+        trackers.get("tracker").test()   # gh project field-list
     assert not isinstance(e.value, github.RateLimited)
     msg = str(e.value)
     assert "unknown owner type" in msg and "owner" in msg and "gh auth status" in msg
@@ -586,7 +606,7 @@ def test_unknown_owner_type_trusts_the_probe_headers_over_a_misreporting_rate_li
     gh.set(mode="unknown-owner", remaining=4996, reset=now + 3600,
            headers=f"HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 0\r\nX-Ratelimit-Used: 5000\r\nX-Ratelimit-Reset: {now + 1350}\r\n\r\n{{}}")
     with pytest.raises(github.RateLimited) as e:
-        trackers.get("tracker").cards()
+        trackers.get("tracker").test()   # gh project field-list
     assert e.value.until == now + 1350
     assert json.loads(github._limit_file().read_text())["until"] == now + 1350
     assert gh.count("api", "-i") == 1                     # back_off takes the probe's answer: no second probe
@@ -596,26 +616,12 @@ def _stamp_queries(gh):
     return [a[-1] for a in gh.calls() if a[:2] == ["api", "graphql"] and "projectItems" not in a[-1]]
 
 
-def test_a_board_read_lists_no_issues_and_stamps_only_cards_that_changed(gh, monkeypatch):
-    now = [time.time()]
-    monkeypatch.setattr(github, "_clock", lambda: now[0])
-    got = trackers.get("tracker").cards()
-    assert gh.count("issue", "list") == 0
-    assert {c["updated_at"] for c in got} == {"2026-09-28T10:00:00+00:00"}
-    assert len(_stamp_queries(gh)) == 1
-    gh.clear()
-    now[0] += 60                                          # past READ_TTL, same process: nothing changed
-    trackers.reset("tracker")
-    trackers.get("tracker").cards()
-    assert _stamp_queries(gh) == []
-    gh.set(status={"3": "Done"}, stamps={"3": "2026-09-28T11:00:00Z"})
-    now[0] += 60
-    trackers.reset("tracker")
+def test_a_board_read_brings_updated_at_with_no_second_query(gh):
+    gh.set(stamps={"3": "2026-09-28T11:00:00Z"})
     got = {c["id"]: c for c in trackers.get("tracker").cards()}
-    (q,) = _stamp_queries(gh)
-    assert "number:3)" in q and "number:4)" not in q
     assert got["acme/app#3"]["updated_at"] == "2026-09-28T11:00:00+00:00"
     assert got["acme/app#4"]["updated_at"] == "2026-09-28T10:00:00+00:00"
+    assert [a[:2] for a in gh.calls()] == [["api", "graphql"]]   # no issue list, no stamp query, no field-list
 
 
 def test_the_console_and_pl_list_reuse_the_dispatchers_board_read(gh, monkeypatch, capsys):
@@ -626,12 +632,12 @@ def test_the_console_and_pl_list_reuse_the_dispatchers_board_read(gh, monkeypatc
     gh.clear()
     tui_app.default_provider()
     commands.cmd_list(argparse.Namespace(product=False, all=False))
-    assert gh.count("project", "item-list") == 0 and _stamp_queries(gh) == []
+    assert reads(gh) == 0 and _stamp_queries(gh) == []
     later = time.time() + 271                             # older than the dispatcher's longest next wait (240 s) + 30
     monkeypatch.setattr(board, "_clock", lambda: later)
     monkeypatch.setattr(github, "_clock", lambda: later)
     board.cards()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
 
 
 def test_a_write_through_pl_or_r_makes_the_next_console_read_fresh(gh):
@@ -641,16 +647,16 @@ def test_a_write_through_pl_or_r_makes_the_next_console_read_fresh(gh):
     _move("3", "Plan for review")                         # an agent's pl move
     gh.clear()
     board.cards()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
     _pass()
     trackers.reset()
     board.share("read")
     gh.clear()
     board.cards()
-    assert gh.count("project", "item-list") == 0
+    assert reads(gh) == 0
     board.fresh_next()                                    # r in the console
     board.cards()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
 
 
 def test_a_read_that_started_before_a_write_is_not_shared(gh, monkeypatch):
@@ -668,12 +674,12 @@ def test_a_read_that_started_before_a_write_is_not_shared(gh, monkeypatch):
     board.share("read")
     gh.clear()
     board.cards()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
 
 
 class _Proc:
     """One pl process: what github.py, trackers, watch and board remember lives per process."""
-    NAMES = ((github, "_KNOWN"), (github, "_LIMITS"), (github, "_STAMPS"), (github, "_LIMIT"), (trackers, "_cache"),
+    NAMES = ((github, "_KNOWN"), (github, "_LIMIT"), (trackers, "_cache"),
              (watch, "_pr_cache"), (board, "_SHARE"))
 
     def __init__(self):
@@ -708,16 +714,16 @@ def _hour(monkeypatch, console_every):
             tui_app.default_provider()
 
 
-def test_an_hour_of_dispatcher_and_console_stays_inside_a_1500_point_budget(gh, monkeypatch):
+def test_an_hour_of_dispatcher_and_console_stays_inside_a_300_point_budget(gh, monkeypatch):
     _hour(monkeypatch, 60)
-    print(f"github points/hour: {gh.points()}  item-lists {gh.count('project', 'item-list')}  "
+    print(f"github points/hour: {gh.points()}  item-lists {reads(gh)}  "
           f"issue lists {gh.count('issue', 'list')}  searches {gh.count('search')}  graphql {gh.count('api', 'graphql')}")
     by = {}
     for a in gh.calls():
         k = " ".join(a[:2])
         by[k] = by.get(k, 0) + (int(a[a.index("--limit") + 1]) if a[:2] == ["project", "item-list"] else 1)
     print(by)
-    assert gh.points() < 1500
+    assert gh.points() < 300                     # was about 1,400 with gh project item-list (1 point per item)
     assert gh.count("issue", "list") <= 12      # the default issue intake searches at most every 5 minutes
 
 
@@ -823,7 +829,7 @@ def test_readers_reuse_a_save_for_at_most_120_seconds_however_long_the_dispatche
     board.share("read")
     gh.clear()
     board.cards()
-    assert gh.count("project", "item-list") == 1
+    assert reads(gh) == 1
 
 
 def test_approve_reads_the_card_fresh_not_from_the_save(gh):
@@ -899,13 +905,6 @@ def test_two_threads_never_share_a_temp_file(gh, monkeypatch):
     t.join()
     board.dirty()
     assert len(set(names)) == 2
-
-
-def test_one_deleted_issue_leaves_the_rest_of_its_batch_stamped(gh):
-    gh.set(stamp_gone=[4], stamps={"3": "2026-09-28T11:00:00Z"})
-    got = {c["id"]: c for c in trackers.get("tracker").cards()}
-    assert got["acme/app#3"]["updated_at"] == "2026-09-28T11:00:00+00:00"
-    assert got["acme/app#4"]["updated_at"] == ""
 
 
 def test_a_failed_intake_search_is_tried_again_on_the_next_pass(gh):
@@ -1033,7 +1032,7 @@ def test_a_search_limit_pauses_only_the_searches_and_the_board_keeps_working(gh)
     GraphQL budget had 4326 left; pl then stopped every gh call, board reads included, for hours."""
     gh.set(mode="search-limit")
     _pass()
-    assert gh.count("project", "item-list") == 1          # the board was read in the same pass
+    assert reads(gh) == 1          # the board was read in the same pass
     assert not github._limit_file().exists()               # board reads and moves are not stopped
     assert github.limited() is None and github.limited("search") is not None
     errors = [e for e in events._read() if e.get("kind") == "error"]
@@ -1082,3 +1081,165 @@ def test_pr_searches_are_cached_5_minutes_and_shared_through_the_state_folder(gh
     watch.pr_counts()
     watch.pr_activity()
     assert gh.count("search", "prs") == 4
+
+
+# ---------- the GitHub budget shared by profiles of one GitHub user (ghquota) ----------
+
+from pl import ghquota  # noqa: E402
+
+
+def _rate(remaining, reset, cost=2):
+    return {"cost": cost, "remaining": remaining, "limit": 5000,
+            "resetAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset))}
+
+
+@pytest.fixture
+def role():
+    yield ghquota.set_role
+    ghquota.set_role("command")
+
+
+def _ledger(remaining, spent, reset=None):
+    """This user's ledger as if pl had read it: remaining points and what each profile spent this window."""
+    reset = reset or int(time.time()) + 1800
+    ghquota._write(ghquota._path(), {"limit": 5000, "remaining": remaining, "reset": reset, "at": time.time(),
+                                     "window": reset, "spent": spent, "by": {}})
+    return reset
+
+
+def test_a_board_read_records_the_budget_and_who_spent_it(gh, role):
+    role("dispatcher")
+    reset = int(time.time()) + 1800
+    gh.set(rate=_rate(4200, reset, cost=2))
+    trackers.get("tracker").cards()
+    assert ghquota.account() == "acme-bot@github.com"           # the login came with the read, for free
+    led = ghquota.ledger()
+    assert led["remaining"] == 4200 and led["reset"] == reset
+    assert led["spent"] == {C.PROFILE_NAME: 2} and led["by"] == {f"{C.PROFILE_NAME} dispatcher": 2}
+    assert "acme-bot@github.com: 4200 of 5000" in ghquota.report() and "dispatcher 2" in ghquota.report()
+
+
+def test_periodic_reads_keep_to_a_fair_share_when_the_budget_runs_low(gh, role):
+    me = C.PROFILE_NAME
+    _ledger(2000, {me: 2600, "quiet": 300})                     # under half left: the share is 5000 / 2 = 2500
+    role("dispatcher")
+    assert ghquota.check("read") is not None                    # this profile spent past its share
+    assert ghquota.check("write") is None                       # its writes still go
+    role("pl card")
+    assert ghquota.check("read") is None                        # an agent's command still reads
+    role("dispatcher")
+    C.PROFILE_NAME = "quiet"
+    assert ghquota.check("read") is None                        # the other profile is not starved
+
+
+def test_the_budget_keeps_the_last_points_for_commands_then_writes(gh, role):
+    _ledger(900, {})                                            # under 20 %: periodic reads stop
+    role("console")
+    assert ghquota.check("read")
+    role("pl section")
+    assert ghquota.check("read") is None
+    _ledger(200, {})                                            # under 5 %: only writes
+    assert ghquota.check("read") and ghquota.check("write") is None
+    _ledger(10, {})                                             # spent: nothing
+    assert ghquota.check("write")
+
+
+def test_the_dispatcher_waits_for_the_reset_without_calling_gh_or_failing(gh, role, capsys):
+    reset = _ledger(500, {})
+    _pass()
+    assert gh.calls() == []
+    err = capsys.readouterr().err
+    assert "pass waits: GitHub budget" in err and "pass failed" not in err
+    assert time.strftime("%H:%M", time.localtime(reset)) in err
+    assert [e["kind"] for e in events._read()] == ["github_budget_wait"]
+
+
+def test_a_write_goes_through_while_periodic_reads_wait(gh, role):
+    _ledger(900, {})
+    role("dispatcher")
+    with pytest.raises(github.OverBudget):
+        trackers.get("tracker").cards()
+    trackers.get("tracker").update("acme/app#3", verify=False, title="renamed")   # the agent's start record
+    assert gh.count("issue", "edit") == 1
+
+
+def test_a_rate_limit_in_one_profile_stops_the_other_profile_of_the_same_user(gh, tmp_path):
+    reset = int(time.time()) + 900
+    gh.set(rate=_rate(4000, reset))
+    trackers.get("tracker").cards()                             # learns the user: acme-bot
+    gh.set(mode="ratelimit", remaining=0, reset=reset)
+    with pytest.raises(github.RateLimited) as e:
+        trackers.reset()
+        trackers.get("tracker").cards()
+    assert e.value.until == reset
+    other = tmp_path / "other-state"                            # another profile: its own state folder and back-off
+    other.mkdir()
+    C.STATE_DIR, C.PROFILE_NAME = other, "other"
+    github._LIMIT.update(until=0, hits=0)
+    gh.set(mode="ok")
+    gh.clear()
+    trackers.reset()
+    with pytest.raises(github.RateLimited) as e:
+        trackers.get("tracker").cards()
+    assert e.value.until == reset and gh.calls() == []          # it waits for the same reset and asks GitHub nothing
+    C.GH_CONFIG_DIR = tmp_path / "another-sign-in"              # a profile signed in as another GitHub user
+    trackers.reset()
+    assert len(trackers.get("tracker").cards()) == 11           # never throttled by this user's limit
+
+
+def test_reads_slow_down_as_the_budget_falls(gh):
+    assert ghquota.pace() == 1                                  # no reading yet
+    _ledger(3000, {})
+    assert ghquota.pace() == 1
+    _ledger(2000, {})
+    assert ghquota.pace() == 2
+    _ledger(1000, {})
+    assert ghquota.pace() == 4
+    _ledger(1000, {}, reset=int(time.time()) - 1)               # the window ended: full speed
+    assert ghquota.pace() == 1
+
+
+def test_a_low_budget_makes_the_console_reuse_the_dispatchers_read_longer(gh, monkeypatch):
+    _pass()
+    trackers.reset()
+    board.share("read")
+    later = time.time() + 200                                   # past the usual hold (150 s here)
+    monkeypatch.setattr(board, "_clock", lambda: later)
+    monkeypatch.setattr(github, "_clock", lambda: later)
+    _ledger(2000, {})                                           # pace 2
+    gh.clear()
+    board.cards()
+    assert reads(gh) == 0
+
+
+# ---------- an agent's own pl commands ----------
+
+def test_a_spec_agents_commands_never_read_the_whole_board(gh, tmp_path, capsys, role):
+    """Before: pl card, pl section INPUT and pl section SPEC --from read the whole board 1, 1 and 3 times (about 50
+    points each on a fresh process). Now each is one issue lookup, and the write one lookup before and one after."""
+    from pl import commands
+    role("pl card")
+    spec = tmp_path / "spec.md"
+    spec.write_text("## Spec\nAC-1 Given a card, when it is read, then it is cheap.\n")
+    cid = "acme/app#3"
+    gh.set(bodies={"3": '# PIPELINE: INPUT\nthe idea\n<!-- pl:meta {"pipeline_mode":"auto"} -->'}, status={"3": "Inbox"})
+    commands.cmd_card(argparse.Namespace(id=cid, delete=False))
+    commands.cmd_section(argparse.Namespace(id=cid, name="INPUT", from_=None))
+    commands.cmd_section(argparse.Namespace(id=cid, name="SPEC", from_=str(spec), force=False))
+    _move(cid, "Spec ready")
+    out = capsys.readouterr().out
+    assert "the idea" in out and "wrote SPEC" in out and "moved acme/app#3 to Spec ready" in out
+    assert reads(gh) == 0 and gh.count("project", "field-list") == 0
+    assert _lookups(gh) == 6                                    # card, section, section --from (3), move
+    assert gh.points() <= 20
+
+
+def test_pl_usage_github_prints_the_budget(gh, capsys):
+    from pl import usage
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by="account"))
+    assert "no GraphQL reading this hour" in capsys.readouterr().out
+    gh.set(rate=_rate(3100, int(time.time()) + 600))
+    trackers.get("tracker").cards()
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by="account"))
+    out = capsys.readouterr().out
+    assert "acme-bot@github.com: 3100 of 5000 GraphQL points left" in out and "fair share 5000" in out

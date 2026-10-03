@@ -120,6 +120,7 @@ def test_a_dispatcher_that_dies_six_times_in_an_hour_is_given_up(machine, monkey
     # it never takes its lock: each start counts as an exit after the 30 s grace, then backoff 10 s, 30 s, 2 min, 5 min
     assert at == [0, 40, 100, 250, 580, 910]
     status = json.loads((manager.machine_dir() / "status.json").read_text())
+    assert status["profiles"][0].pop("agents")["room"] == 8
     assert status["profiles"] == [{"name": "work", "running": False, "dispatcher_pid": None, "restarts": 5,
                                    "gave_up": True, "stopped": False, "stopping": False}]
     assert len(machine["notes"]) == 1 and "work" in machine["notes"][0][1]
@@ -149,7 +150,7 @@ def limits(machine, text):
     (manager.machine_dir() / "machine.toml").write_text(text)
 
 
-def test_ten_agents_across_two_profiles_past_a_cap_of_eight_set_the_hold_and_notify_once(machine, monkeypatch):
+def test_ten_agents_across_two_profiles_past_a_cap_of_eight_hold_each_profile_at_its_share(machine, monkeypatch, capsys):
     limits(machine, "[limits]\nmax_live_agents = 8\n")
     panes = "".join(f"pl-{p} @{p}{i} {1000 * (p == 'home') + 2000 + 10 * i} run-{p}-{i}\n" for p in ("work", "home") for i in range(5))
     fake_machine(monkeypatch, panes + "pl-work @d 900 dispatch\nother @x 950 run-not-ours\n", "1 0 5000 /sbin/launchd\n")
@@ -157,9 +158,13 @@ def test_ten_agents_across_two_profiles_past_a_cap_of_eight_set_the_hold_and_not
     manager.tick(state)
     manager.tick(state)
     status = json.loads((manager.machine_dir() / "status.json").read_text())
-    assert status["hold"] and "10 live agents" in status["hold"] and "max 8" in status["hold"]
-    assert status["live_agents"] == 10
-    assert [t for t, _ in machine["notes"]] == ["pl manager holds new agents"]
+    assert status["hold"] is None and status["live_agents"] == 10   # no machine-wide hold: the shares do it
+    rows = {p["name"]: p["agents"] for p in status["profiles"]}
+    assert rows == {n: {"share": 4, "used": 5, "stuck": 0, "room": 0} for n in ("work", "home")}
+    assert manager.room_for(status, "work") == 0
+    out = capsys.readouterr().out
+    assert out.count("work: holds new agents: 5 of its 4 agent slots") == 1   # logged when it starts, not every tick
+    assert machine["notes"] == []
     assert any("max_live_agents" in e for e in C.validate_machine({"limits": {"max_live_agents": 0}}))
     assert any("max_agents_memory" in e for e in C.validate_machine({"limits": {"max_agents_memory": "lots"}}))
 
@@ -210,13 +215,14 @@ def test_loop_windows_do_not_count_as_live_agents(machine, monkeypatch):
     assert st["live_agents"] == 7 and st["hold"] is None and st["room"] == 1
 
 
-def test_the_live_cap_holds_at_exactly_max(machine, monkeypatch):
-    limits(machine, "[limits]\nmax_live_agents = 8\n")
-    fake_machine(monkeypatch, runs(7), "1 0 5000 /sbin/launchd\n")
-    assert manager.tick({})["hold"] is None
-    fake_machine(monkeypatch, runs(8), "1 0 5000 /sbin/launchd\n")
+def test_a_profile_is_held_at_exactly_its_share_and_the_other_keeps_its_own(machine, monkeypatch):
+    limits(machine, "[limits]\nmax_live_agents = 8\n")      # work and home: 4 each
+    fake_machine(monkeypatch, runs(3), "1 0 5000 /sbin/launchd\n")
     st = manager.tick({})
-    assert st["hold"] and "8 live agents" in st["hold"] and st["room"] == 0
+    assert st["hold"] is None and manager.room_for(st, "work") == 1 and manager.room_for(st, "home") == 4
+    fake_machine(monkeypatch, runs(4), "1 0 5000 /sbin/launchd\n")
+    st = manager.tick({})
+    assert manager.room_for(st, "work") == 0 and manager.room_for(st, "home") == 4
 
 
 def _tree(kb):
@@ -632,13 +638,13 @@ def tomllib_loads(text):
 
 
 def test_the_hold_notifies_when_it_starts_and_at_most_once_an_hour(machine, monkeypatch):
-    limits(machine, "[limits]\nmax_live_agents = 2\n")
+    limits(machine, '[limits]\nmin_free_memory = "15%"\n')   # 4.8 GB of 32
     now = [0.0]
     monkeypatch.setattr(manager, "_clock", lambda: now[0])
     state = {}
-    for t, n in ((0, 3), (5, 1), (10, 3), (1000, 1), (3599, 3), (3600, 1), (3601, 3)):
+    for t, free in ((0, 1), (5, 20), (10, 1), (1000, 20), (3599, 1), (3600, 20), (3601, 1)):
         now[0] = float(t)
-        fake_machine(monkeypatch, runs(n), "1 0 5000 /sbin/launchd\n")
+        fake_machine(monkeypatch, runs(1), "1 0 5000 /sbin/launchd\n", free_gb=free)
         manager.tick(state)
     assert [t for t, _ in machine["notes"]] == ["pl manager holds new agents"] * 2   # at 0 and at 3601
 
@@ -1100,3 +1106,134 @@ def test_the_cli_stop_says_cli_and_the_loaded_profile_gets_an_event(machine, mon
     assert seen == [("dispatcher_stop_requested", {"source": "cli"})]
     manager.restart("home", "stop")       # another profile: no event in this profile's log
     assert len(seen) == 1
+
+
+# ---------- profiles never starve, block or break each other ----------
+
+def test_shares_split_the_cap_and_stuck_agents_fill_only_their_own_share():
+    got = manager.shares(15, {"a": 5, "b": 5, "c": 5}, {"a": 0, "b": 1, "c": 0}, {"a": 14, "b": 0, "c": 0})
+    assert got["a"] == {"share": 5, "used": 14, "stuck": 14, "room": 0}   # 14 at a trust prompt: only its own 5 count
+    assert got["b"]["room"] == 4 and got["c"]["room"] == 5               # the others keep their whole share
+    got = manager.shares(20, {"a": 5, "b": 5}, {"a": 12, "b": 0}, {})     # a pool of 10: a borrows 7 of it
+    assert got["a"]["room"] == 3 and got["b"]["room"] == 5 + 3            # b keeps its share, the pool's rest is open
+    assert manager.shares(2, {"a": 5, "b": 5, "c": 5}, {}, {}) == {        # a cap under the profiles: at least 1 each
+        n: {"share": 1, "used": 0, "stuck": 0, "room": 1} for n in "abc"}
+
+
+def _waits(machine, name, windows):
+    import time
+    (machine["home"] / f".pl-{name}" / "state" / "agent-waits.json").write_text(json.dumps({"at": time.time(), "windows": windows}))
+
+
+def test_fourteen_agents_stuck_at_a_trust_prompt_hold_only_their_own_profile(machine, monkeypatch, capsys):
+    """Live 2026-10-03: one profile's 14 windows at the trust prompt paused new starts for every profile."""
+    limits(machine, "[limits]\nmax_live_agents = 10\n")                  # work and home: 5 each
+    stuck = "".join(f"pl-home @h{i} {3000 + i} spec-h{i}\n" for i in range(14))
+    fake_machine(monkeypatch, stuck + runs(1), "1 0 5000 /sbin/launchd\n")
+    _waits(machine, "home", [f"@h{i}" for i in range(14)])
+    st = manager.tick({})
+    assert st["hold"] is None
+    assert manager.room_for(st, "work") == 4                              # work starts agents as before
+    home = next(p for p in st["profiles"] if p["name"] == "home")["agents"]
+    assert home == {"share": 5, "used": 14, "stuck": 14, "room": 0}
+    shown = manager.show() if manager.running() else None
+    assert shown is None or "home" in shown
+
+
+def test_a_stale_waits_file_counts_its_windows_as_working(machine, monkeypatch):
+    limits(machine, "[limits]\nmax_live_agents = 10\n")
+    fake_machine(monkeypatch, "".join(f"pl-home @h{i} {3000 + i} spec-h{i}\n" for i in range(6)), "1 0 5000 /sbin/launchd\n")
+    (machine["home"] / ".pl-home" / "state" / "agent-waits.json").write_text(json.dumps({"at": 1, "windows": ["@h0"]}))
+    st = manager.tick({})
+    home = next(p for p in st["profiles"] if p["name"] == "home")["agents"]
+    assert home["stuck"] == 0 and home["used"] == 6
+
+
+def test_one_profiles_failing_tick_never_stops_the_others(machine, monkeypatch, capsys):
+    real = dispatch.start_for
+
+    def start_for(d, session, gh=None, managed=False):
+        if "home" in str(d):
+            raise RuntimeError("tmux exploded")
+        return real(d, session, gh, managed)
+    monkeypatch.setattr(dispatch, "start_for", start_for)
+    st = manager.tick({})
+    rows = {p["name"]: p for p in st["profiles"]}
+    assert rows["home"]["error"] == "manager tick failed: RuntimeError"
+    assert [c[4] for c in starts(machine["log"])] == ["pl-work"]           # work was started all the same
+    assert "home: tick failed: RuntimeError: tmux exploded" in capsys.readouterr().out
+    assert json.loads((manager.machine_dir() / "status.json").read_text())["profiles"]
+
+
+def test_a_failing_count_keeps_the_last_one_and_the_tick_goes_on(machine, monkeypatch, capsys):
+    state = {}
+    manager.tick(state)
+    monkeypatch.setattr(manager, "_caps", lambda state, profs: 1 / 0)
+    st = manager.tick(state)
+    assert st["profiles"] and "caps failed: ZeroDivisionError" in capsys.readouterr().out
+
+
+def test_a_hung_tmux_start_returns_after_its_timeout(machine, monkeypatch):
+    def hang(argv, **kw):
+        assert kw.get("timeout") == 10
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+    monkeypatch.setattr(subprocess, "run", hang)
+    assert dispatch.start_for(machine["home"] / ".pl-work", "pl-work") == "tmux did not answer in 10 s"
+
+
+def test_status_shows_each_profiles_agents_and_github_share(machine, monkeypatch):
+    import time
+    from pl import ghquota
+    limits(machine, "[limits]\nmax_live_agents = 10\n")
+    fake_machine(monkeypatch, "".join(f"pl-home @h{i} {3000 + i} spec-h{i}\n" for i in range(5)) + runs(2),
+                 "1 0 5000 /sbin/launchd\n")
+    _waits(machine, "home", [f"@h{i}" for i in range(5)])
+    reset = time.time() + 1200
+    ghquota._write(ghquota._path(ghquota.account()), {"limit": 5000, "remaining": 1800, "reset": reset, "at": time.time(),
+                                                      "window": reset, "spent": {"work": 300, "home": 2900},
+                                                      "by": {"home pl section": 2900, "work dispatcher": 300}})
+    manager.tick({})
+    f = hold(manager.machine_dir() / "manager.lock")
+    f.write("pid 777 on h since now")
+    f.flush()
+    machine["alive"].add(777)
+    st = json.loads((manager.machine_dir() / "status.json").read_text())
+    st["pid"] = 777
+    (manager.machine_dir() / "status.json").write_text(json.dumps(st))
+    try:
+        out = manager.show()
+    finally:
+        f.close()
+    work = next(line for line in out.splitlines() if line.startswith("work"))
+    home = next(line for line in out.splitlines() if line.startswith("home"))
+    assert "2/5" in work and "300/2500" in work
+    assert "5/5" in home and "2900/2500" in home and "5 of its 5 agent slots in use, 5 waiting at a prompt" in home
+    assert "used its GitHub share until" in home
+    assert "1800 of 5000 GraphQL points left" in out
+
+
+def test_shared_state_is_per_profile_except_what_is_really_shared(machine):
+    """Locks, state, caches, alerts and tmux sessions are per profile; restart/stop requests are keyed by profile name;
+    the GitHub budget is shared only by profiles signed in as the same GitHub user."""
+    from pl import ghquota
+    from pl.profiles import list_profiles
+    rows = {r["name"]: r for r in list_profiles(check_lock=False)}
+    assert rows["work"]["tmux_session"] != rows["home"]["tmux_session"]
+    paths = {}
+    for name in ("work", "home"):
+        C.load(config_dir=str(machine["home"] / f".pl-{name}"))
+        paths[name] = {C.LOCK_FILE, C.STATE_FILE, C.STATE_DIR / "board-cache.json", C.STATE_DIR / "alerts.json",
+                       C.STATE_DIR / "gh-ratelimit.json"}
+    assert not paths["work"] & paths["home"]
+    manager.restart("work", "stop")
+    assert (manager.machine_dir() / "stop" / "work").exists() and not (manager.machine_dir() / "stop" / "home").exists()
+    assert manager.restart("../home", "stop") is None                    # a name is never a path
+    C.GH_CONFIG_DIR = machine["home"] / "gh-a"
+    a = ghquota.account()
+    C.GH_CONFIG_DIR = machine["home"] / "gh-b"
+    assert ghquota.account() != a                                         # another sign-in, another budget
+    ghquota.learn("same-user")
+    b = ghquota.account()
+    C.GH_CONFIG_DIR = machine["home"] / "gh-a"
+    ghquota.learn("same-user")
+    assert ghquota.account() == b == "same-user@github.com"               # two folders, one GitHub user: one budget

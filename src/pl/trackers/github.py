@@ -14,6 +14,7 @@ import threading
 import time
 
 from pl import config as C
+from pl import ghquota
 
 META_RE = re.compile(r"^<!-- pl:meta (\{.*\}) -->$")
 OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
@@ -43,6 +44,32 @@ class RateLimited(SystemExit):
         if self.err:
             self.note += f": {self.err}"
         super().__init__(f"pl: {self.note}")
+
+
+class OverBudget(RateLimited):
+    """pl's own GraphQL budget says wait (ghquota.check): no gh call until `until`. Nothing failed on GitHub."""
+
+    def __init__(self, until, why):
+        SystemExit.__init__(self)
+        self.until, self.resource, self.err = until, "budget", why
+        self.note = f"GitHub budget: {why}; next try at {time.strftime('%H:%M', time.localtime(until))}"
+        self.args = (f"pl: {self.note}",)
+
+
+WRITES = {("issue", "create"), ("issue", "edit"), ("issue", "close"), ("project", "item-add"), ("project", "item-edit"),
+          ("project", "item-delete"), ("project", "field-create"), ("project", "create"), ("label", "create")}
+
+
+def _writes(args):
+    """A gh call that changes something on GitHub: it goes first when the budget is low."""
+    return tuple(args[:2]) in WRITES or (args[:2] == ["api", "graphql"] and "query=mutation" in (args[-1] or "")[:20])
+
+
+def _points(args):
+    """GraphQL points a gh call costs when its answer does not say: gh issue create/edit look the issue up first."""
+    if args[:2] == ["api", "rate_limit"] or (args[:2] == ["api", "graphql"] and "rateLimit{" in (args[-1] or "")):
+        return 0   # free, or the answer's own rateLimit is recorded (_graphql)
+    return 2 if tuple(args[:2]) in (("issue", "create"), ("issue", "edit")) else 1
 
 
 def _is_search(args):
@@ -86,6 +113,8 @@ def limited(resource="graphql"):
     """The RateLimited error while this profile backs off from GitHub, else None. A search call also waits out
     the general back-off; other calls ignore a search back-off."""
     until = max(_LIMIT["until"], _shared()[1])
+    if resource != "search" and _clock() >= until and (spent := ghquota.check("write")):
+        return RateLimited(spent[0], spent[1])   # another profile of the same GitHub user saw the budget run out
     if resource == "search" and _clock() >= until:
         until = max(_LIMIT_SEARCH["until"], _shared("search")[1])
         return RateLimited(until, resource="search") if _clock() < until else None
@@ -191,6 +220,8 @@ def _back_off(err, budget, told, resource):
     if until is None:
         until = now + min(BACKOFF, FIRST_WAIT * 2 ** min(hits, 20)) * random.uniform(1, 1.25)
         hits += 1
+    elif resource != "search" and until <= now + LONGEST:
+        ghquota.exhausted(until)   # GitHub said when: every profile signed in as this user waits for it
     until = max(min(until, now + LONGEST), saved)   # a short wait never cuts short a longer one another process saved
     mem.update(until=until, hits=hits)
     _save(_limit_file(resource), {"until": until, "hits": hits})
@@ -202,6 +233,8 @@ def _gh(args):
     resource = "search" if _is_search(args) else "graphql"
     if hit := limited(resource):
         raise hit
+    if resource != "search" and (wait := ghquota.check("write" if _writes(args) else "read")):
+        raise OverBudget(*wait)
     r = _run(args)
     if r.returncode:
         err = r.stderr.strip()
@@ -221,6 +254,8 @@ def _gh(args):
         e.out = r.stdout   # a GraphQL error still carries the data GitHub could answer
         raise e
     _passed(resource)
+    if resource != "search" and (n := _points(args)):
+        ghquota.record(n)
     return r.stdout
 
 
@@ -443,8 +478,17 @@ def _lit(v):
 
 
 def _graphql(query):
-    """One `gh api graphql -f query=...` call; gh exits non-zero on a GraphQL error, which _gh turns into SystemExit."""
-    return json.loads(_gh(["api", "graphql", "-f", "query=" + query]) or "{}").get("data") or {}
+    """One `gh api graphql -f query=...` call; gh exits non-zero on a GraphQL error, which _gh turns into SystemExit.
+    A query that asks for rateLimit and viewer has them recorded in the shared budget (ghquota)."""
+    data = json.loads(_gh(["api", "graphql", "-f", "query=" + query]) or "{}").get("data") or {}
+    if isinstance(data.get("viewer"), dict):   # first: the reading goes to this user's ledger
+        ghquota.learn(data["viewer"].get("login"))
+    if isinstance(data.get("rateLimit"), dict):
+        ghquota.record(rate=data["rateLimit"])
+    return data
+
+
+RATE = "rateLimit{cost remaining resetAt limit} viewer{login} "   # free in any query: the budget left and who asks
 
 
 def _mutate(name, inp):
@@ -492,25 +536,15 @@ def create_iteration_field(project_id, name, start, days):
 
 
 READ_TTL = 20      # seconds one board read is reused within this process
-FIRST_LIMIT = 50   # items asked for on a board's first read in a process; later reads ask for what it held plus 20
-_LIMITS = {}       # (owner, number) -> item-list --limit that fits the board
+PAGE = 100         # items per page of a board read (GitHub's most; the read costs 2 points a page)
 _KNOWN = {}        # ("field", owner, number, name) -> stage field; ("id", owner, number) -> project id. Kept for the
-                   # process (across dispatcher passes); a column that is not in it reads the field again.
-_STAMPS = {}       # card id -> (what the card looked like, its issue's updatedAt), kept for the process
+                   # process (across dispatcher passes); every board read and card lookup refreshes them for free.
 LAG = 15 * 60      # seconds a card pl created is looked up by issue while GitHub's project listing lacks it
 
 
 def forget():
     """Drop what this process remembers about projects (trackers.reset() with no kind calls it)."""
     _KNOWN.clear()
-    _LIMITS.clear()
-    _STAMPS.clear()
-
-
-def _print(card):
-    """What a card looks like on the board, for telling whether it changed since the last read."""
-    return json.dumps([card[k] for k in ("list_id", "title", "description", "labels", "metadata", "assigned_to")],
-                      sort_keys=True)
 
 
 def _recent_file():
@@ -529,6 +563,17 @@ def _recent(keep=None):
     _save(path, keep)
     return keep
 
+
+# One page of a project's items with only what a card needs. gh's own `project item-list` asks for every field value
+# with four nested lists each, about 1 point per item (44 for a 44-item read); this costs 2 points per 100 items and
+# brings updatedAt, so no second query stamps the cards. The stage field and project id come along for free.
+BOARD_READ = ("query{{" + RATE.replace("{", "{{").replace("}", "}}") + "repositoryOwner(login:{owner}){{... on ProjectV2Owner{{projectV2(number:{number}){{id "
+              "field(name:{field}){{... on ProjectV2SingleSelectField{{id options{{id name}}}}}} "
+              "items(first:{page}{after}){{pageInfo{{hasNextPage endCursor}} nodes{{id "
+              "fieldValueByName(name:{field}){{... on ProjectV2ItemFieldSingleSelectValue{{name optionId}}}} "
+              "content{{... on Issue{{number title body url updatedAt labels(first:50){{nodes{{name}}}} "
+              "assignees(first:10){{nodes{{login}}}}}}}}}}}}}}}}}}}}")
+ISSUE_RE = re.compile(r"[\w.-]+/[\w.-]+#\d+")
 
 ISSUE_READ = ("{{number title body url updatedAt labels(first:50){{nodes{{name}}}} assignees(first:10){{nodes{{login}}}} "
               "projectItems(first:20){{nodes{{id fieldValueByName(name:{field}){{... on ProjectV2ItemFieldSingleSelectValue"
@@ -609,8 +654,39 @@ class GitHubProject(_GitHub):
             owner, _, name = repo.partition("/")
             parts.append(f"i{n}:repository(owner:{_lit(owner)},name:{_lit(name)}){{issue(number:{int(num)})"
                          f"{ISSUE_READ.format(field=_lit(self.status_field))}}}")
-        data = _graphql("query{" + " ".join(parts) + "}")
+        data = _graphql("query{" + RATE + " ".join(parts) + "}")
         return {cid: (data.get(f"i{n}") or {}).get("issue") for n, cid in enumerate(ids)}
+
+    def _from_issue(self, cid, issue, it):
+        """A card from an issue node and its item on this project; the item's stage field is remembered."""
+        repo, num = _split(cid)
+        field = (it.get("project") or {}).get("field") or {}
+        if field.get("id") and field.get("options"):
+            self._learn(field, (it.get("project") or {}).get("id"))
+        card = self._card(repo, num, issue.get("title"), issue.get("body"), (issue.get("labels") or {}).get("nodes"),
+                          (issue.get("assignees") or {}).get("nodes"), issue.get("url"), issue.get("updatedAt"),
+                          (it.get("fieldValueByName") or {}).get("optionId"))
+        card["item_id"] = it["id"]
+        return card
+
+    def _learn(self, field, project_id=None):
+        """The stage field (and project id) as GitHub just sent them: no field-list call needed."""
+        key = ("field", self.owner, self.number, self.status_field)
+        if _KNOWN.get(key, {}).get("options") != field["options"] or _KNOWN.get(key, {}).get("id") != field["id"]:
+            _KNOWN[key] = {"id": field["id"], "name": self.status_field, "options": list(field["options"])}
+            self._columns = None
+        if project_id:
+            _KNOWN[("id", self.owner, self.number)] = project_id
+
+    def _one(self, cid):
+        """One card by id from one issue lookup (about 1 point), never the whole board."""
+        if not ISSUE_RE.fullmatch(cid or ""):
+            raise SystemExit(f"pl: no card {cid} in project {self.owner}/{self.number}")
+        issue = self._issues([cid])[cid]
+        it = self._mine(issue)
+        if it is None:
+            raise SystemExit(f"pl: no card {cid} in project {self.owner}/{self.number}")
+        return self._from_issue(cid, issue, it)
 
     def _mine(self, issue):
         """The issue's item on this project, or None."""
@@ -650,63 +726,40 @@ class GitHubProject(_GitHub):
     def _items(self):
         if self._read and _clock() - self._read[0] < READ_TTL:
             return [dict(c) for c in self._read[1]]
-        start = _clock()
-        key = (self.owner, self.number)
-        limit = _LIMITS.get(key, FIRST_LIMIT)
-        while True:   # a bigger board than asked for: ask again for all of it
-            j = json.loads(_gh(["project", "item-list", self.number, "--owner", self.owner, "--format", "json",
-                                "--limit", str(limit)]))
-            if len(j.get("items", [])) < limit:
+        start, nodes, after = _clock(), [], ""
+        while True:
+            data = _graphql(BOARD_READ.format(owner=_lit(self.owner), number=int(self.number), field=_lit(self.status_field),
+                                              page=PAGE, after=f",after:{_lit(after)}" if after else ""))
+            proj = (data.get("repositoryOwner") or {}).get("projectV2")
+            if not proj:
+                raise SystemExit(f"pl: no project {self.number} owned by {self.owner} (check [tracker] owner and number, "
+                                 "and that gh's sign-in can see the project: gh auth status)")
+            if (proj.get("field") or {}).get("id"):
+                self._learn(proj["field"], proj.get("id"))
+            page = proj.get("items") or {}
+            nodes += [n for n in page.get("nodes") or [] if n]
+            info = page.get("pageInfo") or {}
+            if not (info.get("hasNextPage") and info.get("endCursor")):
                 break
-            limit = max(int(j.get("totalCount") or 0) + 1, limit * 2)
-        _LIMITS[key] = len(j.get("items", [])) + 20   # GitHub charges per item asked for
+            after = info["endCursor"]
         by_name = self.columns()
-        key = self.status_field[:1].lower() + self.status_field[1:]
-        if any(it.get(key) and it.get(key) not in by_name for it in j.get("items", [])):
+        if any((n.get("fieldValueByName") or {}).get("name") not in (None, *by_name) for n in nodes):
             self._refield()
             by_name = self.columns()
         out = []
-        for it in j.get("items", []):
+        for it in nodes:
             c = it.get("content") or {}
             m = URL_RE.search(c.get("url") or "")
-            if c.get("type") != "Issue" or not m:
-                continue
-            card = self._card(m.group(1), m.group(2), c.get("title") or it.get("title"), c.get("body"),
-                              it.get("labels"), it.get("assignees"), c["url"], c.get("updatedAt"),
-                              by_name.get(it.get(key)))
+            if not m:
+                continue   # a draft or a pull request: not a card
+            card = self._card(m.group(1), m.group(2), c.get("title"), c.get("body"), (c.get("labels") or {}).get("nodes"),
+                              (c.get("assignees") or {}).get("nodes"), c["url"], c.get("updatedAt"),
+                              by_name.get((it.get("fieldValueByName") or {}).get("name")))
             card["item_id"] = it["id"]
             out.append(card)
-        self._stamp(out)
         out += self._lagging({c["id"] for c in out})
         self._read = (_clock(), out, start)
         return [dict(c) for c in out]
-
-    def _stamp(self, cards):
-        """Set updated_at, which gh's item-list lacks: one aliased GraphQL query for the cards that are new to this
-        process or changed since its last read (column, title, body, labels, assignee); the rest keep their stamp."""
-        todo = [c for c in cards if c["updated_at"] == "" and _STAMPS.get(c["id"], (None,))[0] != _print(c)]
-        for part in (todo[i:i + 100] for i in range(0, len(todo), 100)):
-            q = []
-            for n, c in enumerate(part):
-                owner, _, name = _split(c["id"])[0].partition("/")
-                q.append(f"i{n}:repository(owner:{_lit(owner)},name:{_lit(name)}){{issue(number:{int(_split(c['id'])[1])})"
-                         "{updatedAt}}")
-            try:
-                data = _graphql("query{" + " ".join(q) + "}")
-            except RateLimited:
-                raise
-            except SystemExit as e:   # one issue gone fails the query: stamp what came back; the rest are asked again
-                try:
-                    data = json.loads(getattr(e, "out", "") or "{}").get("data") or {}
-                except ValueError:
-                    continue
-            for n, c in enumerate(part):
-                at = ((data.get(f"i{n}") or {}).get("issue") or {}).get("updatedAt")
-                if at:
-                    _STAMPS[c["id"]] = (_print(c), at.replace("Z", "+00:00"))
-        for c in cards:
-            if c["updated_at"] == "" and _STAMPS.get(c["id"], (None,))[0] == _print(c):
-                c["updated_at"] = _STAMPS[c["id"]][1]
 
     def _lagging(self, listed):
         """Cards pl created that GitHub's project listing does not show yet, read by issue; listed ones are forgotten."""
@@ -725,18 +778,7 @@ class GitHubProject(_GitHub):
             return []
         if gone := [cid for cid, issue in found.items() if issue is None]:
             _recent([r for r in keep if r["id"] not in gone])
-        out = []
-        for cid, issue in found.items():
-            it = self._mine(issue)
-            if it is None:
-                continue
-            repo, num = _split(cid)
-            card = self._card(repo, num, issue.get("title"), issue.get("body"), (issue.get("labels") or {}).get("nodes"),
-                              (issue.get("assignees") or {}).get("nodes"), issue.get("url"), issue.get("updatedAt"),
-                              (it.get("fieldValueByName") or {}).get("optionId"))
-            card["item_id"] = it["id"]
-            out.append(card)
-        return out
+        return [self._from_issue(cid, issue, it) for cid, issue in found.items() if (it := self._mine(issue)) is not None]
 
     def cards(self, query=None):
         return self._items()
@@ -747,10 +789,12 @@ class GitHubProject(_GitHub):
         self._read = (min(_clock(), until - READ_TTL), [dict(c) for c in cards], at)
 
     def card(self, item_id):
-        hit = next((c for c in self._items() if c["id"] == item_id), None)
-        if hit is None:
-            raise SystemExit(f"pl: no card {item_id} in project {self.owner}/{self.number}")
-        return hit
+        """From this process's board read while it is young, else one issue lookup: a card is never worth the board."""
+        if self._read and _clock() - self._read[0] < READ_TTL:
+            hit = next((c for c in self._read[1] if c["id"] == item_id), None)
+            if hit is not None:
+                return dict(hit)
+        return self._one(item_id)
 
     def _set_status(self, project_item, column, retry=True):
         try:

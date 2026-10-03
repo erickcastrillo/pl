@@ -7,7 +7,7 @@ import threading
 import time
 
 from pl import config as C
-from pl import trackers
+from pl import ghquota, trackers
 
 
 # ---------- board access (thin wrappers over the configured tracker; names and signatures are a compat contract) ----------
@@ -95,7 +95,8 @@ def cards():
     mode = _mode()
     if mode == "read" and not _fresh():
         got = _load(C.STATE_DIR / "board-cache.json")
-        at, hold = got.get("at"), min(got.get("hold") or C.DISPATCH["interval"] + 30, REUSE_MAX)
+        pace = ghquota.pace() if str((C.TRACKER or {}).get("type") or "").startswith("github") else 1
+        at, hold = got.get("at"), min(got.get("hold") or C.DISPATCH["interval"] + 30, REUSE_MAX) * pace   # low budget: longer
         if (got.get("key") == _key() and isinstance(at, (int, float)) and 0 <= _clock() - at < hold
                 and at > (last_write() or 0) and isinstance(got.get("cards"), list) and not _fresh()):
             if hasattr(_t(), "seed"):   # a tracker whose card(id) reads from its own listing takes this one, until the save's end
@@ -140,9 +141,11 @@ def pick(token, cs, who="pl", min_prefix=1):
 
 
 def find_card(token):
-    """Full id, a unique id prefix, or for a GitHub card "repo#N" or "#N" (see matches)."""
-    if len(token) >= 32:
-        return card(token)
+    """Full id, a unique id prefix, or for a GitHub card "repo#N" or "#N" (see matches). A full GitHub id
+    "owner/repo#N" (what agents' pl card and pl section pass) is one issue read, never the whole board."""
+    if len(token) >= 32 or ((C.TRACKER or {}).get("type") == "github-project"
+                            and re.fullmatch(r"[\w.-]+/[\w.-]+#\d+", token.strip())):
+        return card(token.strip())
     return card(pick(token, cards())["id"])
 
 

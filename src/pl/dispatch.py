@@ -12,13 +12,13 @@ import uuid
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, harnesses, manager, memory, move_agent, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import hold_reason, pane_exists, permission_wait, registry, run_waiting, trust_wait, worker_status
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
-from pl.trackers.github import RateLimited, limited
+from pl.trackers.github import OverBudget, RateLimited, limited
 from pl.util import cmd_id, load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
 
 
@@ -306,6 +306,10 @@ def live_agent_window(name, own=None):
     return False
 
 
+def github_board():
+    return str((C.TRACKER or {}).get("type") or "").startswith("github")
+
+
 INTAKE_EVERY = 300   # seconds between the default issue intake's searches (one GraphQL search each; the board is read every pass)
 _INTAKE = {"at": None, "noted": None}   # noted: the search back-off window already logged as an event
 
@@ -313,6 +317,8 @@ _INTAKE = {"at": None, "noted": None}   # noted: the search back-off window alre
 def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     if hit := limited():       # GitHub rate limit: no board work until the reset
         raise hit
+    if github_board() and (wait := ghquota.check("read")):   # the shared budget is low: this pass waits
+        raise OverBudget(*wait)
     trackers.reset("tracker")  # a fresh tracker each pass; the stage field stays remembered across passes
     st = load_state()
     intake = pull and C.ISSUE_INTAKE   # the issue intake searches at most every INTAKE_EVERY s; a Product board bridge every pass
@@ -349,6 +355,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     prep_alive = 0
     todo = []
     failed = set()   # stage_failed and permission_wait alert keys seen this pass
+    waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
     for c in all_cards:
         m = c.get("metadata") or {}
         if m.get("pipeline_mode") != "auto":
@@ -435,10 +442,14 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} once (open the window or run claude in it)",
                                       f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt"):
                     notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: open {where} and answer once")
+            if trust and w.get("window"):
+                waiting.append(w["window"])
             if bool(trust) != bool(w.get("trust_wait")):
                 w = {**w, "trust_wait": trust} if trust else {k: v for k, v in w.items() if k != "trust_wait"}
                 update(c["id"], metadata={"worker": w})
             ask = None if trust else permission_wait(wh, w.get("pane"))
+            if ask and w.get("window"):
+                waiting.append(w["window"])
             if ask:
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
@@ -520,9 +531,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     prep_alive += sweep_untracked(all_cards, reg, dry) or 0   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
+    if not dry:
+        board._save(C.STATE_DIR / "agent-waits.json", {"at": time.time(), "windows": waiting})
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
-    room = ms.get("room") if ms and isinstance(ms.get("room"), int) else None   # new agents the machine has room for
+    room = manager.room_for(ms, C.PROFILE_NAME)   # new agents this profile's share of the machine has room for
+    shared = 0                                    # new starts the share held back this pass
     for line in (low, mhold):
         if line:
             print(line)
@@ -539,6 +553,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if low:   # low memory: no start at all, restarts included
             continue
         if attempts <= 1 and (mhold or room is not None and room <= 0):   # machine limit: new starts only
+            shared += room is not None and room <= 0 and not mhold
             continue
         if live_agent_window(f"{stage}-{slug_of(c)[:28]}", (w or {}).get("window")):
             # an agent window for this card is already running that its record does not name (a lost write):
@@ -596,6 +611,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if prev and prev.get("stage") != stage and prev.get("window") and not dry:
             fin = list((c.get("metadata") or {}).get("finished_workers") or []) + [prev]
             update(c["id"], metadata={"finished_workers": fin})
+    if shared:
+        print(f"{shared} new start(s) wait: this profile's share of the machine's agents is in use (pl manager status)")
     if pause:
         print(f"PAUSED since {pause.get('since', '?')[:16]} UTC: {held} card(s) held back, no new agents (pl resume)")
         n = busy_agents(reg)
@@ -755,12 +772,14 @@ def start_for(config_dir, session, gh_dir=None, managed=False):
     env = ["-e", f"PL_CONFIG_DIR={config_dir}", *(["-e", f"GH_CONFIG_DIR={gh_dir}"] if gh_dir else []),
            *(["-e", "PL_MANAGED=1"] if managed else [])]
     try:
-        has = subprocess.run(["tmux", "has-session", "-t", f"={session}"], capture_output=True).returncode == 0
+        has = subprocess.run(["tmux", "has-session", "-t", f"={session}"], capture_output=True, timeout=10).returncode == 0
         where = ["new-window", "-d", "-t", f"={session}:"] if has else ["new-session", "-d", "-s", session]
         r = subprocess.run(["tmux", *where, "-n", "dispatch", *env, "--", sys.executable, "-m", "pl", "dispatch"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, timeout=10)
     except OSError as e:
         return f"tmux: {e.strerror or e}"
+    except subprocess.TimeoutExpired:   # a hung tmux never stalls the manager's tick for every profile
+        return "tmux did not answer in 10 s"
     if r.returncode:
         return (r.stderr.strip().splitlines() or [f"tmux exited {r.returncode}"])[-1][:100]
     return None
@@ -863,6 +882,7 @@ def cmd_dispatch(a):
     for w in profiles.shared_warnings(profiles.list_profiles(), profiles.current_row()):
         print(f"warning: {w}")
     first = True
+    ghquota.set_role("dispatcher")
     noted = None   # the rate-limit window already logged as an event
     wait, last = None, None   # an idle board doubles the wait between passes, up to IDLE_MAX
 
@@ -879,6 +899,11 @@ def cmd_dispatch(a):
         try:
             seen = dispatch_once(setting("max_runs"), a.dry_run, setting("max_prep"), not a.no_pull)
             alerts.resolve("github_rate_limited")
+        except OverBudget as e:   # not a failure: the pass waits for GitHub's reset, once said per window
+            if e.until != noted:
+                print(f"pass waits: {e.note}", file=sys.stderr)
+                events.emit("github_budget_wait", message=e.note)
+            noted = e.until
         except SystemExit as e:
             print(f"pass failed: {e}", file=sys.stderr)
             if isinstance(e, RateLimited) and (why := alerts.open(
@@ -894,6 +919,8 @@ def cmd_dispatch(a):
             seen = (seen, *_marks())
         wait = max(base, min(2 * wait, IDLE_MAX)) if seen is not None and seen == last else base
         last = seen
+        if github_board():
+            wait = min(wait * ghquota.pace(), IDLE_MAX * 3)   # a low shared budget: passes come further apart
         if lock:
             lock = _restart_if_new(lock)
         _nap(wait, lambda: _fast_guard(a.dry_run))
