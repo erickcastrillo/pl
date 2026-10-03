@@ -331,9 +331,19 @@ def real_path(root, p, shape):
     if kind in ("skills", "commands", "prompts"):
         ok = r.name == kind and r.parent in roots
     elif kind == "skill":
-        ok = r.parent.name == "skills" and r.parent.parent in roots
+        try:
+            from pl import skills
+            in_lib = r.parent == skills.library().resolve()
+        except (OSError, SystemExit):
+            in_lib = False
+        ok = (r.parent.name == "skills" and r.parent.parent in roots) or in_lib
     elif kind == "SKILL.md":
-        ok = r.name == "SKILL.md" and r.parent.parent.name == "skills" and r.parent.parent.parent in roots
+        try:
+            from pl import skills
+            in_lib = r.parent.parent == skills.library().resolve()
+        except (OSError, SystemExit):
+            in_lib = False
+        ok = r.name == "SKILL.md" and ((r.parent.parent.name == "skills" and r.parent.parent.parent in roots) or in_lib)
     elif kind == "command":
         ok = r.suffix == ".md" and r.parent.name == cdir and r.parent.parent in roots
     elif kind == "settings.json":

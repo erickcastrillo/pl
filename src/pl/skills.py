@@ -21,9 +21,9 @@ from pl import harnesses
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,48}")
 KINDS = {"skill": "skills", "agent": "agents", "command": "commands"}
 SHARED, LIBRARY = "shared", "library"
-# How a library skill reaches an account, by harness. Both follow a symlinked skill folder (Claude Code docs, "Symlinked
-# folders"; Codex docs, "Codex supports symlinked skill folders"); Codex keeps its skills in $CODEX_HOME/skills.
-LINKABLE = {"claude", "codex"}
+# How a library skill reaches an account, by harness. Claude Code, Codex and Antigravity follow a symlinked skill folder
+# (Codex keeps its skills in $CODEX_HOME/skills, Antigravity in ~/.gemini/skills).
+LINKABLE = {"claude", "codex", "antigravity"}
 TEMPLATE = ("---\nname: {name}\ndescription: Say in one sentence when to use this {kind}.\n---\n\n# {name}\n\n"
             "## When to use\n\n- \n\n## Steps\n\n1. \n")
 
@@ -352,6 +352,33 @@ def link(name, account):
     return dest
 
 
+def install_in_all_harnesses(name=None):
+    """Ensure library skill `name` (or every built-in skill if name is None) is linked into every account
+    whose harness is linkable (claude, codex, antigravity), creating destination skills dirs as needed.
+    Returns list of installed/linked descriptions."""
+    out = []
+    names = [name] if name else builtin_names()
+    lib = library()
+    for n in names:
+        src = lib / n
+        if not (src / "SKILL.md").is_file():
+            continue
+        for account, _ in sources():
+            if account in (LIBRARY, SHARED):
+                continue
+            try:
+                h = harnesses.account_harness(account)
+                if h.name not in LINKABLE:
+                    continue
+                dest = _base(account, "skill") / n
+                if not os.path.lexists(dest):
+                    os.symlink(src, dest, target_is_directory=True)
+                    out.append(f"linked {n} into {account}")
+            except (OSError, SystemExit):
+                continue
+    return out
+
+
 # ---------- launches: Claude loads the library as a plugin; other harnesses get the skill inlined ----------
 
 def plugin_dir():
@@ -557,6 +584,10 @@ def _install(lib):
             _save_state(st)
     except OSError:
         pass
+    try:
+        out.extend(install_in_all_harnesses())
+    except Exception:
+        pass
     return out
 
 
@@ -602,13 +633,21 @@ def _cmd_reset(a):
 
 
 def cmd_skills(a):
-    """pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]."""
+    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes]."""
     if a.skills_cmd == "reset":
         return _cmd_reset(a)
     if a.skills_cmd == "share":
         print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":
-        print(f"linked: {link(a.name, a.account)}")
+        target = getattr(a, "account", None) or "all"
+        if target == "all":
+            msgs = install_in_all_harnesses(a.name)
+            if not msgs:
+                print(f"skill {a.name} is already linked into all accounts (or no linkable accounts configured)")
+            for m in msgs:
+                print(m)
+        else:
+            print(f"linked: {link(a.name, target)}")
     else:
         rows = [(i["name"], i["account"], i["kind"], i["origin"],
                  ", ".join(i["linked"]) if i["account"] == LIBRARY else ("library" if i["library"] else ""),

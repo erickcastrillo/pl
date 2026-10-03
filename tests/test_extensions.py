@@ -101,6 +101,18 @@ def test_a_skill_symlinked_outside_the_config_dir_is_not_listed_or_read(accounts
     assert "evil" not in [s["name"] for s in harnesses.extensions(CLAUDE, "a")["skills"]]
 
 
+def test_a_skill_symlinked_to_library_is_listed(accounts, tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "shared-skill").mkdir()
+    (lib / "shared-skill" / "SKILL.md").write_text(SKILL.format(n="shared-skill", d="Shared in library"))
+    from pl import skills
+    monkeypatch.setattr(skills, "library", lambda: lib)
+    (accounts["a"] / "skills" / "shared-skill").symlink_to(lib / "shared-skill")
+    ext = harnesses.extensions(CLAUDE, "a")
+    assert "shared-skill" in [s["name"] for s in ext["skills"]]
+
+
 def test_only_the_extension_paths_are_ever_opened(accounts, tmp_path, monkeypatch):
     opened = []
     real = builtins.open
@@ -365,6 +377,10 @@ def test_missing_skill_warns_only_when_the_account_lacks_it(accounts):
     assert extensions.missing_skill("/deploy {id}", CLAUDE, "a") is None        # a command counts
     assert extensions.missing_skill("Write a spec for {id}", CLAUDE, "a") is None
     assert extensions.missing_skill("/anything {id}", CODEX, "c") is None       # no skills there: nothing to check
+    assert extensions.missing_skill("/pl-spec {id}", CLAUDE, "a") is None       # built-in stage skill
+    assert extensions.missing_skill("/pl-design {id}", CLAUDE, "a") is None
+    assert extensions.missing_skill("/pl-plan {id}", CLAUDE, "a") is None
+    assert extensions.missing_skill("/pl-run {id}", CLAUDE, "a") is None
 
 
 # ---------- the screen ----------

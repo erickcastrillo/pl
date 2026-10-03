@@ -191,7 +191,7 @@ def main():
     r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
-    q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account")
+    q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")

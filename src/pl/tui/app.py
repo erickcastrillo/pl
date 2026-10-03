@@ -7,6 +7,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static, Tabs, TabbedContent, TabPane
+from textual.css.query import NoMatches
 
 from pl import board, dispatch, manager, update, whatsnew
 from pl import config as C
@@ -360,7 +361,10 @@ class PlApp(App):
 
     @property
     def active_tab(self):
-        return self.query_one(TabbedContent).active
+        try:
+            return self.query_one(TabbedContent).active
+        except NoMatches:
+            return None
 
     def action_tab(self, tid):
         self.query_one(TabbedContent).active = tid

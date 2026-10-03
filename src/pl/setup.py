@@ -234,7 +234,7 @@ def ask_harnesses(answers, flags):
         if warn := harnesses.still_asks(HARNESSES[h]):
             print(f"warning: {warn}")
         if CONFIG_DIRS[h] is None:
-            d = dirs.get(h) or _old(answers, "accounts", h, "config_dir") or "~"   # agy has no config folder setting: the account just names the harness
+            d = dirs.get(h) or _old(answers, "accounts", h, "config_dir") or "~/.gemini"   # agy has no config folder setting: the account just names the harness
         else:
             d = _ask(flags, dirs.get(h), f"{h} config folder",
                      _old(answers, "accounts", h, "config_dir") or CONFIG_DIRS[h], "--config-dir", f"{h}=PATH",

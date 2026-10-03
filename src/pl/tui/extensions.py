@@ -120,12 +120,21 @@ def _check_tree(root, src):
 def missing_skill(prompt, h, account):
     """The `/name` a stage prompt starts with when the account has no such skill or command, else None."""
     m = re.match(r"\s*/([a-z0-9][a-z0-9-]*)(?=\s|$)", prompt or "")
-    if not m or not harnesses.supported(h)["skills"]:
+    if not m:
+        return None
+    name = m.group(1)
+    from pl import skills
+    try:
+        if (skills.library() / name / "SKILL.md").is_file() or name in skills.builtin_names():
+            return None
+    except (OSError, SystemExit):
+        pass
+    if not harnesses.supported(h)["skills"]:
         return None
     ext = harnesses.extensions(h, account)
     if ext["error"] and not ext["skills"] and not ext["commands"]:
         return None
-    return None if m.group(1) in {i["name"] for i in ext["skills"] + ext["commands"]} else m.group(1)
+    return None if name in {i["name"] for i in ext["skills"] + ext["commands"]} else name
 
 
 class NameScreen(ModalScreen):

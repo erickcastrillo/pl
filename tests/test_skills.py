@@ -166,22 +166,37 @@ def test_share_refuses_a_name_already_in_the_library(home):
 
 def test_link_creates_a_link_for_claude_and_codex_and_never_overwrites(home):
     lib = skills.share("a", "alpha")
-    for acct in ("b", "c"):
+    for acct in ("b", "c", "g"):
         dest = skills.link("alpha", acct)
         assert dest == home[acct] / "skills/alpha" and dest.is_symlink() and dest.resolve() == lib.resolve()
-    assert item("alpha", "library")["linked"] == ["a", "b", "c"]
+    assert item("alpha", "library")["linked"] == ["a", "b", "c", "g"]
     make_skill(home["b"], "beta2")
     with pytest.raises(SystemExit, match="already exists"):
         skills.link("alpha", "b")
 
 
-def test_link_refuses_unsupported_harnesses_clearly(home):
+def test_link_refuses_unsupported_harnesses_clearly(home, monkeypatch):
     skills.share("a", "alpha")
-    with pytest.raises(SystemExit, match="not supported for antigravity"):
-        skills.link("alpha", "g")
-    assert not (home["g"] / "skills").exists()
+    m = home["home"] / ".custom-m"
+    m.mkdir()
+    monkeypatch.setattr(C, "ACCOUNTS", {**C.ACCOUNTS, "m": {"harness": "custom"}})
+    monkeypatch.setattr(C, "PROFILES", {**C.PROFILES, "m": m})
+    monkeypatch.setattr(skills.harnesses, "account_harness", lambda a: skills.harnesses.Harness(name="custom", bin="custom"))
+    with pytest.raises(SystemExit, match="not supported for custom"):
+        skills.link("alpha", "m")
+    assert not (m / "skills").exists()
     with pytest.raises(SystemExit, match="no library skill"):
         skills.link("nope", "b")
+
+
+def test_install_in_all_harnesses_links_missing_skills(home):
+    skills.share("a", "alpha")
+    msgs = skills.install_in_all_harnesses("alpha")
+    assert any("linked alpha into b" in m for m in msgs)
+    assert any("linked alpha into c" in m for m in msgs)
+    assert any("linked alpha into g" in m for m in msgs)
+    for acct in ("b", "c", "g"):
+        assert (home[acct] / "skills/alpha").is_symlink()
 
 
 def test_link_refuses_a_skills_dir_that_leaves_the_account(home, tmp_path_factory):
