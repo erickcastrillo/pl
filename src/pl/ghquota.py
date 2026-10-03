@@ -128,7 +128,8 @@ def ledger(acct=None):
 
 def record(points=1, rate=None):
     """Count points spent by this profile and role; rate is a GraphQL rateLimit object ({cost, remaining, resetAt,
-    limit}) when the answer carried one, and then its cost is what was spent. A failure to write never fails the call."""
+    limit}) when the answer carried one, and then its cost is what was spent. Without one, an estimate counts only
+    against a reading of this window. A failure to write never fails the call."""
     prof, role = C.PROFILE_NAME or "-", ROLE["name"]
     try:
         with _locked():
@@ -138,8 +139,10 @@ def record(points=1, rate=None):
                 points = int(rate.get("cost") or 0)
                 led.update(limit=int(rate.get("limit") or led.get("limit") or 5000), remaining=rate["remaining"],
                            reset=reset, at=_clock())
-            elif isinstance(led.get("remaining"), int):
+            elif isinstance(led.get("remaining"), int) and (led.get("reset") or 0) > _clock():
                 led["remaining"] = max(0, led["remaining"] - points)
+            else:
+                return   # no reading this window: nothing to count against yet
             if led.get("window") != led.get("reset") or (led.get("reset") or 0) <= _clock():
                 led.update(window=led.get("reset"), spent={}, by={})
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
@@ -155,9 +158,9 @@ def exhausted(until):
     try:
         with _locked():
             led = ledger()
-            if led.get("window") != until:
-                led.update(window=until, spent={}, by={})
-            led.update(remaining=0, reset=until, at=_clock(), limit=led.get("limit") or 5000)
+            if (led.get("reset") or 0) <= _clock():   # a new window: what was spent before it no longer counts
+                led.update(spent={}, by={})
+            led.update(remaining=0, reset=until, window=until, at=_clock(), limit=led.get("limit") or 5000)
             _write(_path(), led)
     except OSError:
         pass
@@ -173,8 +176,12 @@ def check(kind="read"):
     """None when this call may go ahead, else (until, why). kind "write" for a change on GitHub, else "read"."""
     led, now = ledger(), _clock()
     rem, lim, reset = led.get("remaining"), led.get("limit") or 5000, led.get("reset") or 0
-    if not isinstance(rem, int) or reset <= now:
+    if not isinstance(rem, int):
         return None
+    if reset <= now:   # a new window; after a spent one, each process starts a random few seconds late (no herd)
+        from pl.trackers import github
+        late = reset + github._jitter(reset) if rem < FLOOR else reset
+        return (late, "waiting a few seconds past the reset so every process does not call at once") if now < late else None
     if rem < FLOOR:
         return reset, f"GitHub GraphQL budget spent ({rem} of {lim} left)"
     if kind == "write":

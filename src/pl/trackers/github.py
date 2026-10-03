@@ -109,10 +109,29 @@ def _shared(resource="graphql"):
     return raw, (until if math.isfinite(until) and until <= _clock() + LONGEST else 0.0), hits
 
 
+JITTER = {"periodic": 120, "other": 30}   # seconds: the most a process waits past a reset before its first call
+_JIT = {}
+
+
+def _jitter(until):
+    """This process's extra wait past a back-off or budget reset at `until`: random, fixed per reset, longer for
+    periodic readers. Every process that waited for the reset would otherwise call GitHub in the same second
+    (live 2026-10-03: the whole budget went within 2 minutes of the reset)."""
+    if not until:
+        return 0.0
+    if _JIT.get("until") != until:
+        top = JITTER["periodic" if ghquota.ROLE["name"] in ghquota.PERIODIC_ROLES else "other"]
+        _JIT.update(until=until, wait=random.uniform(0, top))
+    return _JIT["wait"]
+
+
 def limited(resource="graphql"):
     """The RateLimited error while this profile backs off from GitHub, else None. A search call also waits out
-    the general back-off; other calls ignore a search back-off."""
+    the general back-off; other calls ignore a search back-off. A back-off ends for each process a random few
+    seconds after its reset (_jitter), so they do not all call at once."""
     until = max(_LIMIT["until"], _shared()[1])
+    if until and _clock() < until + _jitter(until):
+        until += _jitter(until)
     if resource != "search" and _clock() >= until and (spent := ghquota.check("write")):
         return RateLimited(spent[0], spent[1])   # another profile of the same GitHub user saw the budget run out
     if resource == "search" and _clock() >= until:
@@ -146,13 +165,22 @@ def _run(args):
 
 
 def _graphql_budget():
-    """(remaining, reset epoch) of the GraphQL budget from one cheap REST call; None when gh cannot say."""
+    """(remaining, reset epoch) of the GraphQL budget from GraphQL's own rateLimit field; (0, None) when GraphQL
+    refuses even that for the rate limit; None when gh cannot say. REST /rate_limit is never asked: live 2026-10-03
+    it said 5,000 left while GraphQL refused every call."""
     try:
-        r = _run(["api", "rate_limit", "--jq", ".resources.graphql.remaining,.resources.graphql.reset"])
-        remaining, reset = (int(x) for x in r.stdout.split()[:2]) if not r.returncode else (None, None)
-    except (SystemExit, ValueError):
+        r = _run(["api", "graphql", "-f", "query={rateLimit{remaining resetAt}}", "--jq",
+                  ".data.rateLimit.remaining,.data.rateLimit.resetAt"])
+    except SystemExit:
         return None
-    return None if remaining is None else (remaining, reset)
+    if r.returncode:
+        return (0, None) if "rate limit" in (r.stderr + r.stdout).lower() else None
+    try:
+        remaining, reset = r.stdout.split()[:2]
+        from pl.util import parse_iso
+        return int(remaining), (parse_iso(reset) or None)
+    except ValueError:
+        return None
 
 
 def _search_budget():
@@ -215,7 +243,7 @@ def _back_off(err, budget, told, resource):
         until = told or (None if budget else _reset_from_headers())
     if until is None and resource != "search":
         budget = budget or _graphql_budget()
-        if budget and budget[0] == 0 and budget[1] > now:
+        if budget and budget[0] == 0 and budget[1] and budget[1] > now:
             until = float(budget[1])
     if until is None:
         until = now + min(BACKOFF, FIRST_WAIT * 2 ** min(hits, 20)) * random.uniform(1, 1.25)

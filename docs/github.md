@@ -237,6 +237,8 @@ This covers `gh` only. SSH keys and host aliases only decide who `git push` and 
 - agents' and your commands stop below 5 %; writes (edits, moves, new cards) go on until the budget is spent;
 - passes and console refreshes come up to 4 times further apart as the budget falls;
 - when GitHub refuses a call for the rate limit, every profile of the same user waits for the reset it named. Profiles signed in as another GitHub user, or on another tracker, are never held by it.
+- after a reset that ended a wait, each process makes its first call a random few seconds late (up to 30 s for commands and agents, 2 minutes for the dispatcher and console), so they do not all call in the same second;
+- the points left come from GraphQL itself (the `rateLimit` field, or the headers of a refused GraphQL call), never from REST `/rate_limit`, which can show 5,000 left while GraphQL refuses every call.
 
 A pass that waits prints `pass waits: GitHub budget: ...` once, not a failure. `pl usage --github` shows the points left, the reset, and what each profile and caller spent; `pl manager status` shows each profile's part. PR search is cached for 5 minutes.
 

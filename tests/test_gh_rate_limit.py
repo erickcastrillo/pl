@@ -31,6 +31,13 @@ if args[:2] == ["api", "-i"] and state.get("headers") is not None:
     print(state["headers"]); sys.exit(1)   # gh api -i prints the failing reply's headers and body, then exits 1
 if args[:2] == ["api", "rate_limit"] and "search" in args[-1]:   # the REST search budget: 30 a minute
     print(state.get("search_remaining", 30)); print(state.get("search_reset", 0)); sys.exit(0)
+if args[:2] == ["api", "graphql"] and args[3].startswith("query={{rateLimit"):   # GraphQL's own budget
+    if state["mode"] in ("ratelimit", "unknown-owner") and state.get("remaining", 0) == 0:
+        print("GraphQL: API rate limit already exceeded for user ID 1.", file=sys.stderr); sys.exit(1)
+    if state.get("reset") is None:
+        print("gh: cannot reach api.github.com", file=sys.stderr); sys.exit(1)
+    import time as _t
+    print(state.get("remaining", 0)); print(_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(state["reset"]))); sys.exit(0)
 if args[:2] == ["api", "rate_limit"]:
     if state.get("reset") is None:
         print("gh: cannot reach api.github.com", file=sys.stderr); sys.exit(1)
@@ -211,6 +218,7 @@ def gh(tmp_path, monkeypatch):
     trackers.reset()
     github._LIMIT.update(until=0, hits=0)
     getattr(github, "_LIMIT_SEARCH", {}).update(until=0, hits=0)
+    monkeypatch.setattr(github, "JITTER", {"periodic": 0, "other": 0})   # exact times here; one test turns it on
     monkeypatch.setattr(watch, "_pr_cache", {"at": 0, "counts": None})
     monkeypatch.setattr(board, "_SHARE", {}, raising=False)
     monkeypatch.setattr(dispatch, "_INTAKE", {"at": None})
@@ -220,6 +228,16 @@ def gh(tmp_path, monkeypatch):
     trackers.reset()
     github._LIMIT.update(until=0, hits=0)
     getattr(github, "_LIMIT_SEARCH", {}).update(until=0, hits=0)
+
+
+def _spent(reset):
+    """The headers of a GraphQL call refused for the rate limit: GitHub's own word on when it resets."""
+    return f"HTTP/2.0 200 OK\nX-Ratelimit-Remaining: 0\nX-Ratelimit-Used: 5000\nX-Ratelimit-Reset: {reset}\n\n{{}}"
+
+
+def budget_asks(gh):
+    """Asks for the GraphQL budget: the headers probe and GraphQL's own rateLimit field (never REST /rate_limit)."""
+    return sum(1 for a in gh.calls() if a[:2] == ["api", "-i"] or (a[:2] == ["api", "graphql"] and a[3].startswith("query={rateLimit")))
 
 
 def reads(gh):
@@ -274,11 +292,11 @@ def test_a_board_read_pages_100_items_at_a_time(gh):
 
 def test_rate_limit_stops_gh_calls_until_the_reset(gh, monkeypatch):
     reset = int(time.time()) + 600
-    gh.set(mode="ratelimit", reset=reset)
+    gh.set(mode="ratelimit", reset=reset, headers=_spent(reset))
     with pytest.raises(github.RateLimited) as e:
         trackers.get("tracker").cards()
     assert e.value.until == reset
-    assert gh.count("api", "rate_limit") == 1
+    assert budget_asks(gh) == 1
     gh.clear()
     for _ in range(3):
         with pytest.raises(github.RateLimited):
@@ -389,7 +407,7 @@ def test_the_failing_calls_own_headers_beat_the_rate_limit_endpoint(gh, headers,
 
 def test_the_back_off_is_shared_with_other_processes_of_the_profile(gh, monkeypatch):
     reset = int(time.time()) + 600
-    gh.set(mode="ratelimit", reset=reset)
+    gh.set(mode="ratelimit", reset=reset, headers=_spent(reset))
     with pytest.raises(github.RateLimited):
         trackers.get("tracker").cards()
     github._LIMIT.update(until=0, hits=0)                # a second process: pl list, the console, an agent's pl move
@@ -421,7 +439,7 @@ def test_console_header_shows_the_resume_time_and_keeps_the_numbers(gh):
             assert first is not None
             await pilot.pause()
             await app.workers.wait_for_complete()   # the first render's standup and review workers call gh too
-            gh.set(mode="ratelimit", reset=reset)
+            gh.set(mode="ratelimit", reset=reset, headers=_spent(reset))
             trackers.reset()
             for _ in range(3):
                 app.error = None   # wait for this refresh to land: overlapping ones all call gh before the back-off is saved
@@ -435,7 +453,7 @@ def test_console_header_shows_the_resume_time_and_keeps_the_numbers(gh):
             assert "refresh failed" not in header
             assert app.data is first
     asyncio.run(run())
-    assert gh.count("api", "rate_limit") == 1
+    assert budget_asks(gh) == 1
 
 
 def test_dispatcher_logs_one_event_per_backoff_window(gh, monkeypatch):
@@ -1167,7 +1185,7 @@ def test_a_rate_limit_in_one_profile_stops_the_other_profile_of_the_same_user(gh
     reset = int(time.time()) + 900
     gh.set(rate=_rate(4000, reset))
     trackers.get("tracker").cards()                             # learns the user: acme-bot
-    gh.set(mode="ratelimit", remaining=0, reset=reset)
+    gh.set(mode="ratelimit", remaining=0, reset=reset, headers=_spent(reset))
     with pytest.raises(github.RateLimited) as e:
         trackers.reset()
         trackers.get("tracker").cards()
@@ -1243,3 +1261,47 @@ def test_pl_usage_github_prints_the_budget(gh, capsys):
     usage.cmd_usage(argparse.Namespace(github=True, since=None, by="account"))
     out = capsys.readouterr().out
     assert "acme-bot@github.com: 3100 of 5000 GraphQL points left" in out and "fair share 5000" in out
+
+
+# ---------- no herd at the reset; the GraphQL budget comes from GraphQL ----------
+
+def test_processes_waiting_for_one_reset_resume_spread_out(gh, monkeypatch):
+    """Live 2026-10-03: 57 board reads in the 2 minutes after the 08:28 reset, the whole 5,000 points gone by 08:33."""
+    monkeypatch.setattr(github, "JITTER", {"periodic": 120, "other": 30})
+    reset = time.time() + 10
+    github._limit_file().write_text(json.dumps({"until": reset, "hits": 0}))
+    waits = []
+    for role, n in (("dispatcher", 20), ("pl section", 20)):
+        ghquota.set_role(role)
+        for _ in range(n):
+            github._JIT.clear()                                   # another process
+            waits.append((role, github._jitter(reset)))
+    ghquota.set_role("command")
+    periodic = [w for r, w in waits if r == "dispatcher"]
+    other = [w for r, w in waits if r != "dispatcher"]
+    assert max(periodic) <= 120 and max(other) <= 30 and len({round(w) for w in periodic}) > 5
+    github._JIT.clear()
+    monkeypatch.setattr(github, "_clock", lambda: reset + 1)    # past the reset, inside this process's extra wait
+    monkeypatch.setattr(github.random, "uniform", lambda a, b: b)
+    assert github.limited() is not None
+    monkeypatch.setattr(github, "_clock", lambda: reset + 31)
+    assert github.limited() is None
+
+
+def test_a_spent_budget_lets_each_process_back_in_late_after_the_reset(gh, monkeypatch):
+    monkeypatch.setattr(github, "JITTER", {"periodic": 120, "other": 30})
+    monkeypatch.setattr(github.random, "uniform", lambda a, b: b)
+    reset = _ledger(10, {})
+    monkeypatch.setattr(github, "_clock", lambda: reset + 5)
+    assert ghquota.check("read")                                # spent, and the reset just passed: not yet
+    monkeypatch.setattr(github, "_clock", lambda: reset + 31)
+    assert ghquota.check("read") is None
+
+
+def test_the_budget_is_asked_of_graphql_never_of_rest_rate_limit(gh):
+    """REST /rate_limit said 5,000 left while GraphQL refused every call (live 2026-10-03)."""
+    gh.set(mode="unknown-owner", remaining=4000, reset=int(time.time()) + 3000)
+    with pytest.raises(SystemExit):
+        trackers.get("tracker").test()
+    assert gh.count("api", "rate_limit") == 0
+    assert any(a[:2] == ["api", "graphql"] and a[3].startswith("query={rateLimit") for a in gh.calls())
