@@ -292,12 +292,13 @@ def status(rows):
 
 async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_path, monkeypatch):
     from pl.tui.app import DispatcherChoice
+    from pl.tui.review import ConfirmScreen
     machine(tmp_path, toml=True)
     got = []
     monkeypatch.setattr(manager, "start", lambda: got.append("start") or "manager: started (pid 9)")
     monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop") or "manager: stopped")
     monkeypatch.setattr(manager, "running", lambda: True)
-    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart", source=None: got.append((kind, name)) or f"manager: {kind} {name}")
     monkeypatch.setattr(manager, "restart_if_old", lambda: None)
     monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher"))
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
@@ -313,6 +314,13 @@ async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_pat
         assert 'dispatcher of profile "work"' in app.screen.message and "pl manager stop" in app.screen.message
         await pilot.press("s")
         await settle(pilot)
+        assert got == ["start"] and isinstance(app.screen, ConfirmScreen)      # s asks once more
+        assert app.screen.message == ('Stop the dispatcher of work? It stays stopped until you restart it. y/n')
+        await pilot.press("n")
+        await settle(pilot)
+        assert got == ["start"] and len(app.screen_stack) == 1                 # n: nothing written
+        await pilot.press("D", "s", "y")
+        await settle(pilot)
         assert got == ["start", ("stop", "work")] and "manager: stop work" in header(app)   # never manager.stop
 
 
@@ -322,7 +330,7 @@ async def test_d_on_a_running_managed_dispatcher_offers_restart_and_twice_never_
     got = []
     monkeypatch.setattr(manager, "running", lambda: True)
     monkeypatch.setattr(manager, "start", lambda: got.append("start"))
-    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart", source=None: got.append((kind, name)) or f"manager: {kind} {name}")
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=False)
@@ -347,7 +355,7 @@ async def test_d_reads_the_status_fresh_a_pending_stop_counts_as_stopped(tmp_pat
     machine(tmp_path, toml=True)
     got = []
     monkeypatch.setattr(manager, "running", lambda: True)
-    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart", source=None: got.append((kind, name)) or f"manager: {kind} {name}")
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)   # the stopping dispatcher still holds its lock
     status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=False)
@@ -382,7 +390,7 @@ async def test_d_on_a_managed_profile_whose_dispatcher_is_stopped_asks_the_manag
     got = []
     monkeypatch.setattr(manager, "running", lambda: True)
     monkeypatch.setattr(manager, "start", lambda: got.append("start"))
-    monkeypatch.setattr(manager, "restart", lambda name, kind="restart": got.append((kind, name)) or f"manager: {kind} {name}")
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart", source=None: got.append((kind, name)) or f"manager: {kind} {name}")
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
@@ -458,3 +466,22 @@ def test_manager_start_writes_machine_toml_with_the_defaults(tmp_path, monkeypat
     monkeypatch.setattr(manager, "_wait", lambda held: True)
     manager.start()
     assert (manager.machine_dir() / "machine.toml").read_text() == manager.MACHINE_TOML
+
+
+async def test_the_console_names_itself_as_the_source_of_a_stop_and_the_header_says_who(tmp_path, monkeypatch):
+    from pl.tui.chrome import header_text
+    machine(tmp_path, toml=True)
+    sources = []
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "restart", lambda name, kind="restart", source=None: sources.append(source) or "ok")
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    status([{"name": "work", "running": True, "stopped": False}])
+    app = PlApp(snapshot_provider=fake_data, autostart=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("D", "s", "y")
+        await settle(pilot)
+        assert sources == ["console-D"]
+    data = {"snapshot": {"disp": "stopped", "prof": "p", "summary": "", "at": "t"},
+            "machine": {"profiles": [{"name": "work", "stopped": True, "stopped_by": "console-D", "stopped_at": 1}]}}
+    assert "stopped by you: console-D " in header_text(data).plain

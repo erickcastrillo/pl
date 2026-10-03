@@ -6,7 +6,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Static, TabbedContent, TabPane
+from textual.widgets import Footer, Static, Tabs, TabbedContent, TabPane
 
 from pl import board, dispatch, manager, update, whatsnew
 from pl import config as C
@@ -261,7 +261,7 @@ class PlApp(App):
                 if old := manager.restart_if_old():
                     self.call_from_thread(self.notify, old, timeout=15, markup=False)
             elif managed and what in ("stop", "restart"):
-                note = manager.restart(C.PROFILE_NAME, what)
+                note = manager.restart(C.PROFILE_NAME, what, source="console-D")
             elif managed and not self.managed_up():
                 note = manager.restart(C.PROFILE_NAME, "restart")
                 if not manager.running():
@@ -270,7 +270,7 @@ class PlApp(App):
                 msg = (f'Restart the dispatcher of profile "{C.PROFILE_NAME}"? Restart stops and starts it again; stop '
                        f"stops it until you press D again. Running agents keep running, and so do the manager and other "
                        f"profiles' dispatchers (pl manager stop stops the manager).")
-                self.call_from_thread(self.push_screen, DispatcherChoice(msg), lambda k: k and self.dispatcher_job(k))
+                self.call_from_thread(self.push_screen, DispatcherChoice(msg), self.dispatcher_chosen)
                 return
             elif what == "toggle" and dispatch.dispatcher_running():
                 msg = (f'Stop the dispatcher of profile "{C.PROFILE_NAME}"? Ctrl-C goes to tmux window '
@@ -284,6 +284,14 @@ class PlApp(App):
             note = f"dispatcher: failed to {'stop' if what == 'stop' else 'start'} — {type(e).__name__}: {e}"
         if note:
             self.call_from_thread(self.show_dispatcher_note, note)
+
+    def dispatcher_chosen(self, what):
+        """The DispatcherChoice answer. r restarts at once; s asks once more, as a stop lasts until you restart it."""
+        if what == "stop":
+            self.push_screen(ConfirmScreen(f'Stop the dispatcher of {C.PROFILE_NAME}? It stays stopped until you '
+                                           "restart it. y/n"), lambda yes: yes and self.dispatcher_job("stop"))
+        elif what:
+            self.dispatcher_job(what)
 
     @staticmethod
     def managed_up():
@@ -369,10 +377,17 @@ class PlApp(App):
             self.query_one(PrsView).selected()
         if self.active_tab == "assistant":
             self.query_one(AssistantView).opened()
+            self.call_after_refresh(self.query_one(AssistantView).focus_box)
         if self.active_tab == "needs":
             self.query_one(NeedsView).opened()
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
+
+    def on_descendant_focus(self, event):
+        """A click on a tab leaves the focus on the tab bar, where typed letters run console commands (D, s, q, r ...)
+        instead of reaching the Assistant's box: on the Assistant tab the box takes the focus back."""
+        if isinstance(event.widget, Tabs) and self.active_tab == "assistant" and len(self.screen_stack) == 1:
+            self.call_after_refresh(self.query_one(AssistantView).focus_box)
 
     def check_action(self, action, parameters):
         if action == "tab":

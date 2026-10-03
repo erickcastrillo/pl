@@ -66,6 +66,8 @@ def chat_items(entries):
 
 def render_chat(items, updated_at=None):
     """The conversation as Ideas-style turns; the update notice sits where the restart happened."""
+    if not items:
+        return Text("no messages in this conversation yet (ask something below; ctrl+r starts over)", style="dim")
     t, last, note = Text(), None, str(updated_at or "")[:19] or None
     for ts, kind, text in items:
         if note and ts > note:
@@ -89,7 +91,7 @@ def _transcript(st):
     acct = st.get("account")
     if st.get("harness") != "claude" or acct not in C.PROFILES:
         return None
-    return subagents._transcript(Path(C.PROFILES[acct]).expanduser(), st.get("session_id"))
+    return subagents._transcript(Path(C.PROFILES[acct]).expanduser(), assistant.live_session(st))
 
 
 def menu_card(m):
@@ -163,6 +165,12 @@ class AssistantView(Widget):
         self._show_status()
         self.set_interval(1, self._poll)
 
+    def focus_box(self):
+        """Typed text must reach the box: with the focus anywhere else a letter is a console command."""
+        box = self.query_one("#assistant-input", AssistantInput)
+        if not box.disabled and self.app.screen is self.screen and len(self.app.screen_stack) == 1:
+            box.focus()
+
     def _poll(self):   # a slow read is never cancelled: the next poll waits, then after SLOW s starts a new read too
         if not any(w.group == "assistant-screen" and w.is_running for w in self.workers):
             self.tick()
@@ -222,6 +230,7 @@ class AssistantView(Widget):
 
         def fn():   # a pane that died while the console stays open (/exit, tmux lost it) is started again
             status = None if assistant.pane() else assistant.ensure()
+            assistant.sync_session()              # /clear gives the harness a new session id and transcript
             assistant.restart_if_updated()        # reads the screen again itself, under the lock
             lines = assistant.screen(SCREEN_LINES)
             st = assistant.load()
@@ -282,7 +291,12 @@ class AssistantView(Widget):
         m.input.value = ""
         if not text.strip():     # a bare Enter could accept a menu's default
             return
-        self._bg(lambda: assistant.send(text), "assistant-send", lambda _: self.tick())
+
+        def failed():      # the notice says why; the text comes back so nothing the person wrote is lost
+            box = self.query_one("#assistant-input", AssistantInput)
+            if not box.value:
+                box.value = text
+        self._bg(lambda: assistant.send(text), "assistant-send", lambda _: self.tick(), failed)
 
     def on_assistant_input_answer(self, m):
         def done(typed):

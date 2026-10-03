@@ -295,13 +295,23 @@ def _caps(state, profs):
     return live, lim["max_live_agents"], pct, hold
 
 
+SOURCES = ("cli", "console-D")   # who may write a request: `pl manager ...`, or the console's D key
+
+
 def _asked(kind, name):
-    """`pl manager restart|stop NAME` (or the console's D key) left a request file: take it."""
+    """`pl manager restart|stop NAME` (or the console's D key) left a request file: take it. Returns the source the
+    file names (always a non-empty string, so it is true), or False when there is no request."""
     f = _path(kind) / name
     if not f.exists():
         return False
+    try:
+        src = f.read_text().strip()[:20]
+    except OSError:
+        src = ""
     f.unlink(missing_ok=True)
-    return True
+    src = src if src in SOURCES else "unknown"
+    print(f"{name}: {kind} requested by {src}", flush=True)
+    return src
 
 
 def _fresh():
@@ -362,8 +372,9 @@ def tick(state):
                 (p["dir"] / "state" / RESTART_REQUEST).touch()
             elif p["running"]:
                 r.pop("kick", None)   # one more Ctrl-C round
-        if _asked("stop", p["name"]):
+        if src := _asked("stop", p["name"]):
             r["stopped"] = r["stopping"] = True
+            r["stopped_by"], r["stopped_at"] = src, now
         r["restarts"] = [t for t in r["restarts"] if now - t < 3600]
         if r.get("stopped"):   # stopped by you: Ctrl-C until it exits, then leave the profile alone
             r["stopping"] = r.get("stopping") and p["running"]
@@ -398,6 +409,8 @@ def tick(state):
         rows.append({"name": p["name"], "running": p["running"], "dispatcher_pid": p["pid"] if p["running"] else None,
                      "restarts": len(r["restarts"]), "gave_up": r["gave_up"], "stopped": bool(r.get("stopped")),
                      "stopping": bool(r.get("stopping"))})
+        if r.get("stopped") and r.get("stopped_by"):
+            rows[-1].update(stopped_by=r["stopped_by"], stopped_at=r.get("stopped_at"))
     rows += [{"name": p["name"], "running": False, "dispatcher_pid": None, "restarts": 0, "gave_up": False,
               "error": p["error"]} for p in bad]
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
@@ -407,16 +420,20 @@ def tick(state):
     return status
 
 
-def restart(name, kind="restart"):
+def restart(name, kind="restart", source="cli"):
     """Ask the manager to start a profile's dispatcher again on the next tick (clearing a give-up or a stop), or,
-    kind "stop", to stop it and not restart it until `pl manager restart NAME`."""
+    kind "stop", to stop it and not restart it until `pl manager restart NAME`. source ("cli" or "console-D") goes in
+    the request file, an event (when name is the loaded profile) and the manager's log, so a stop is never anonymous."""
     from pl import config as C
     if not C.NAME_RE.match(name or ""):
         return None
     d = _path(kind)
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     (_path("stop" if kind == "restart" else "restart") / name).unlink(missing_ok=True)   # the last request wins
-    (d / name).touch()
+    (d / name).write_text(source if source in SOURCES else "unknown")
+    if name == C.PROFILE_NAME:
+        from pl import events
+        events.emit(f"dispatcher_{'restart' if kind == 'restart' else 'stop'}_requested", None, source=source)
     return (f"manager: {'restarting' if kind == 'restart' else 'stopping'} the dispatcher of {name} on the next tick"
             + ("" if running() else " (manager not running)"))
 
@@ -487,7 +504,8 @@ def _resumed():
     for p in (read_status() or {}).get("profiles") or []:
         if p.get("name") and (p.get("stopped") or p.get("gave_up")):
             state[p["name"]] = {**_fresh(), "gave_up": bool(p.get("gave_up")), "stopped": bool(p.get("stopped")),
-                                "stopping": bool(p.get("stopping"))}
+                                "stopping": bool(p.get("stopping")),
+                                "stopped_by": p.get("stopped_by"), "stopped_at": p.get("stopped_at")}
     return state
 
 
@@ -582,7 +600,9 @@ def show():
     for p in st["profiles"]:
         state = (p.get("error") or "gave up" if p.get("error") or p["gave_up"] else "stopped by you" if p.get("stopped")
                  else "running" if p["running"] else "stopped")
-        lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']}")
+        who = f"   ({p['stopped_by']}, {time.strftime('%H:%M:%S', time.localtime(p['stopped_at']))})" \
+            if p.get("stopped") and p.get("stopped_by") and p.get("stopped_at") else ""
+        lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']}{who}")
     if st.get("hold"):
         lines.append(f"hold: {st['hold']}")
     if st.get("machine_error"):

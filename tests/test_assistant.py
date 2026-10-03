@@ -748,3 +748,16 @@ def test_saves_keep_fields_this_build_does_not_know(tmux):
     assistant.set_mode("idea")
     d = json.loads((C.STATE_DIR / "assistant.json").read_text())
     assert d["future"] == "kept" and d["mode"] == "idea"
+
+
+def test_after_clear_the_live_session_is_the_one_the_pane_runs(monkeypatch):
+    new = "99999999-8888-7777-6666-555555555555"
+    assistant._save({"session_id": SID, "account": "acme", "harness": "claude", "window": "@7", "pane": "%7"})
+    rec = {"sessionId": new, "status": "idle", "tmux": f"{C.TMUX_SESSION}:@7.%7"}
+    monkeypatch.setattr(agents, "registry", lambda: {new: rec})     # /clear: the old id is gone from the registry
+    assert assistant.live_session() == new and assistant._status(assistant.load()) == "idle"
+    monkeypatch.setattr(assistant, "pane", lambda st=None: "%7")
+    assert assistant.sync_session() is True and assistant.load()["session_id"] == new
+    assert assistant.sync_session() is False                      # nothing left to sync
+    monkeypatch.setattr(agents, "registry", lambda: {})
+    assert assistant.live_session() == new                          # no registry entry: the saved id

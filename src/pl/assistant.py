@@ -334,13 +334,46 @@ def reset():
     events.emit("assistant_reset", None)
 
 
+def _record(st):
+    """The session registry's entry for the harness running in the assistant's pane, else for the saved session id."""
+    reg = agents.registry()
+    return next((r for r in reg.values() if agents._on_pane(r, st)), None) or reg.get(st.get("session_id"))
+
+
+def live_session(st=None):
+    """The session id the harness runs in the assistant's pane now. /clear gives the same process a new session id and
+    a new transcript file; the saved id then names a finished file and the Assistant tab would show a stale chat."""
+    st = load() if st is None else st
+    return (_record(st) or {}).get("sessionId") or st.get("session_id")
+
+
+def sync_session():
+    """Save the live session id when /clear (or the harness) changed it, so a restart resumes the conversation the
+    person is in. Skipped, never an error, while another console holds the lock."""
+    st = load()
+    live = live_session(st)
+    if not live or live == st.get("session_id") or not pane(st):
+        return False
+    try:
+        with _locked(LOCK_WAIT):
+            cur = load()
+            if cur.get("pane") != st.get("pane"):
+                return False
+            _save({**cur, "session_id": live})
+    except SystemExit as e:
+        if str(e) != BUSY:
+            raise
+        return False
+    return True
+
+
 def _status(st):
     """The session registry's status of the saved session ("idle", "busy", ...), None when it does not know it."""
     try:
         h = harnesses.get(st.get("harness") or "claude")
     except SystemExit:
         return None
-    rec = agents.registry().get(st.get("session_id")) if h.session_registry else None
+    rec = _record(st) if h.session_registry else None
     return rec.get("status") if rec else None
 
 

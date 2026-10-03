@@ -1067,3 +1067,36 @@ def test_a_dispatcher_from_before_builds_gets_ctrl_c_only_right_after_a_pass(mac
     st_file.write_text("{}")                          # a pass just ended: it naps
     manager.tick(state)
     assert len(ctrl_c(machine["log"], "pl-work")) == 1 and state["work"]["kick"]["tries"] == 1
+
+
+def test_a_stop_request_records_who_asked_and_status_says_so(machine, capsys, monkeypatch):
+    state = {}
+    manager.restart("work", "stop", source="console-D")
+    assert (manager._path("stop") / "work").read_text() == "console-D"
+    st = manager.tick(state)
+    row = next(r for r in st["profiles"] if r["name"] == "work")
+    assert row["stopped"] and row["stopped_by"] == "console-D" and row["stopped_at"]
+    assert "work: stop requested by console-D" in capsys.readouterr().out     # the manager's log
+    manager._write("status.json", {**st, "at": manager._clock()})
+    monkeypatch.setattr(manager, "running", lambda: True)
+    assert "stopped by you" in manager.show() and "(console-D, " in manager.show()
+
+
+def test_a_request_with_an_unknown_source_is_recorded_as_unknown(machine):
+    manager.restart("work", "stop", source="whatever")
+    assert manager.restart("work", "stop") and manager._asked("stop", "work") == "cli"
+    (manager._path("stop") / "work").write_text("junk")
+    assert manager._asked("stop", "work") == "unknown"
+
+
+def test_the_cli_stop_says_cli_and_the_loaded_profile_gets_an_event(machine, monkeypatch):
+    from pl import config as C
+    seen = []
+    from pl import events
+    monkeypatch.setattr(events, "emit", lambda kind, card=None, **d: seen.append((kind, d)))
+    monkeypatch.setattr(C, "PROFILE_NAME", "work")
+    manager.cmd_manager(["stop", "work"])
+    assert (manager._path("stop") / "work").read_text() == "cli"
+    assert seen == [("dispatcher_stop_requested", {"source": "cli"})]
+    manager.restart("home", "stop")       # another profile: no event in this profile's log
+    assert len(seen) == 1

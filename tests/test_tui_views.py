@@ -1610,3 +1610,93 @@ async def test_long_titles_leave_state_and_now_on_screen(monkeypatch, size):
         await settle(pilot)
         line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
         assert "writing the plan" in line and "…" in line
+
+
+async def _click_assistant_tab(pilot):
+    await settle(pilot)
+    await pilot.click("Tab#--content-tab-assistant")     # the mouse leaves the focus on the tab bar
+    await settle(pilot)
+
+
+async def _type(pilot, text):
+    names = {" ": "space", "?": "question_mark", "!": "exclamation_mark", "@": "at"}
+    for ch in text:
+        await pilot.press(names.get(ch, ch))
+
+
+async def test_a_question_typed_after_clicking_the_tab_reaches_the_box_not_the_console_commands(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _click_assistant_tab(pilot)
+        assert app.focused is app.query_one("#assistant-input")
+        await _type(pilot, "Does it quit? Stop! @me")        # D, s, q, ?, !, @ are all console keys elsewhere
+        await pilot.press("enter")
+        await settle(pilot)
+        assert fa.sent == ["Does it quit? Stop! @me"]
+        assert len(app.screen_stack) == 1 and app.active_tab == "assistant"
+
+
+async def test_clicking_the_active_assistant_tab_again_gives_the_box_the_focus_back(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _click_assistant_tab(pilot)
+        await pilot.click("Tab#--content-tab-assistant")
+        await settle(pilot)
+        assert app.focused is app.query_one("#assistant-input")
+
+
+async def test_ctrl_r_works_after_clicking_the_tab(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _click_assistant_tab(pilot)
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert type(app.screen).__name__ == "ConfirmScreen"
+
+
+async def test_a_send_that_fails_shows_a_notice_and_keeps_the_text(monkeypatch):
+    from pl import assistant
+    fa = FakeAssistant(monkeypatch)
+    notes = []
+
+    def boom(text):
+        raise SystemExit(assistant.BUSY)
+    monkeypatch.setattr(assistant, "send", boom)
+    app = PlApp(snapshot_provider=Provider())
+    monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await _type(pilot, "why?")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert any("busy" in n for n in notes), notes
+        assert app.query_one("#assistant-input").value == "why?" and fa.sent == []
+
+
+async def test_a_reset_that_fails_shows_a_notice(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    notes = []
+
+    def boom():
+        raise SystemExit("pl: tmux kill-window: no such window")
+    monkeypatch.setattr(fa, "reset", boom)
+    from pl import assistant
+    monkeypatch.setattr(assistant, "reset", boom)
+    app = PlApp(snapshot_provider=Provider())
+    monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        app.screen.dismiss(True)
+        await settle(pilot)
+        assert any("kill-window" in n for n in notes), notes
+
+
+async def test_an_empty_conversation_says_so_instead_of_showing_a_blank_tab(monkeypatch):
+    from pl.tui import assistant as view
+    assert "no messages" in view.render_chat([]).plain
+    assert view.render_chat([("2026-10-02T10:00:00", "you", "hi")]).plain.startswith("you")

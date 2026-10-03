@@ -1,4 +1,6 @@
 """The console chrome: tab list and the header line (canvas row 0)."""
+import time
+
 from rich.text import Text
 
 from pl import config as C
@@ -43,6 +45,14 @@ def tabs():
     return [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]
 
 
+def stopped_by(data):
+    """"console-D 19:16:02" or "cli 19:16:02" when the manager marks this profile's dispatcher stopped by a request."""
+    row = next((p for p in ((data or {}).get("machine") or {}).get("profiles") or [] if p.get("name") == C.PROFILE_NAME), {})
+    if not (row.get("stopped") and row.get("stopped_by") and row.get("stopped_at")):
+        return None
+    return f"{row['stopped_by']} {time.strftime('%H:%M:%S', time.localtime(row['stopped_at']))}"
+
+
 def header_text(data, error=None, note=None):
     """pl, profile badge, tracker type, dispatcher state, accounts, pause state, clock, and the last refresh error."""
     t = Text(no_wrap=True, overflow="ellipsis")
@@ -54,6 +64,8 @@ def header_text(data, error=None, note=None):
         up = snap["disp"] == "running"
         t.append("   ● " if up else "   ✕ ", style="green" if up else "red")
         t.append(f"dispatcher {snap['disp']}")
+        if not up and (by := stopped_by(data)):
+            t.append(f" (stopped by you: {by})", style="bold red")
         t.append(f"   {snap['prof']}", style="red" if snap.get("parked") else "dim")
         t.append("   PAUSED" if snap["summary"].startswith("PAUSED") else "   not paused",
                  style="bold #e0a040" if snap["summary"].startswith("PAUSED") else "dim")
