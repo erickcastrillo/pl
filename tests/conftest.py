@@ -157,3 +157,10 @@ def no_real_tmux(monkeypatch, tmp_path_factory):
         if hasattr(os, name):
             monkeypatch.setattr(os, name, argv_guard(getattr(os, name), 2, name.startswith("spawnv"),
                                                      name in ("spawnle", "spawnlpe")))
+
+
+@pytest.fixture(autouse=True)
+def no_live_agent_window(monkeypatch):
+    """The dispatcher's look for an agent window it does not track reads tmux: off unless a test turns it on."""
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)

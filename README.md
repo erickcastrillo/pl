@@ -256,6 +256,8 @@ A `[harnesses.<name>]` template that already sets its own permission or sandbox 
 
 An agent that still waits at a permission prompt, with no change on its screen for 2 minutes, opens an alert: "agent waiting for permission in <window>: <the tool line>". Its card shows "waiting for permission". pl never answers the prompt. The alert clears once the prompt is gone.
 
+A Claude Code agent in a folder it has never opened stops at the "Is this a project you trust?" prompt. pl shows the card as "waiting: trust the folder" and opens an alert, "agent waiting: trust the folder <path> once (open the window or run claude in it)". It does not restart the agent and never answers the prompt: open the window and trust the folder once.
+
 ## Assistant
 
 Tab `0` is a side chat that runs pl for you: "what is stuck?", "retry that card", "install this plugin", "change the review skill". It is a real, interactive harness session in the tmux window `assistant` of this profile's session, started the first time you open the tab. The tab shows its screen and types what you enter; a lone digit answers the harness's numbered permission menu. The window outlives the console, so reopening the console reattaches to the same conversation; if tmux lost the window, pl resumes the saved Claude conversation.

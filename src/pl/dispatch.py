@@ -14,7 +14,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, events, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import hold_reason, pane_exists, permission_wait, registry, run_waiting, worker_status
+from pl.agents import hold_reason, pane_exists, permission_wait, registry, run_waiting, trust_wait, worker_status
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
@@ -126,10 +126,14 @@ def start_worker(c, stage, attempts, dry):
     pane, script = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0], launch_path(name)
     # the record first, then the agent: a Ctrl-C after it leaves a record the next pass counts ("starting", then
     # "never started"), never a second agent; a Ctrl-C during it leaves no agent
-    update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
-                                         "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
-                                         "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
-                                         "launch": str(script)}})
+    try:
+        update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
+                                             "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
+                                             "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
+                                             "launch": str(script)}})
+    except BaseException:   # a rate limit or a failed write: no record, so no window and no agent
+        tmux("kill-window", "-t", win, check=False)
+        raise
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
@@ -256,31 +260,50 @@ def _context_restart(name, svc, sid, s, ust, dry):
 def sweep_untracked(all_cards, reg, dry):
     """Close spec/design/plan agent windows that no card tracks any more (a same-stage restart or a lost
     finished_workers write leaves them behind), once idle for 5 minutes. Run windows are never touched:
-    an idle run agent may be waiting at a human gate."""
+    an idle run agent may be waiting at a human gate. Returns how many untracked prep windows with a live
+    process it left open: they still hold a prep slot."""
     tracked = set()
     for c in all_cards:
         m = c.get("metadata") or {}
         for w in ([m["worker"]] if m.get("worker") else []) + (m.get("finished_workers") or []):
             if w.get("window"):
                 tracked.add(w["window"])
-    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{window_activity} #{window_name}"],
+    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{window_activity} #{window_name} #{pane_current_command}"],
                          capture_output=True, text=True).stdout
+    live = 0
     for line in out.splitlines():
         parts = line.split(" ", 3)
         if len(parts) < 4:
             continue
         wid, pane, activity, name = parts
+        name, _, cmd = name.rpartition(" ") if " " in name else (name, "", "")   # the command is last; a bare name has none
         if wid in tracked or not name.startswith(("spec-", "design-", "plan-")):
             continue
         rec = next((r for r in reg.values() if (r.get("tmux") or "").endswith(pane)), None)
         if rec:
             if rec.get("status") != "idle" or time.time() - rec.get("statusUpdatedAt", 0) / 1000 <= 300:
+                live += 1   # a session is registered on it: really running
                 continue
         elif time.time() - int(activity or 0) <= 600:
+            live += cmd not in harnesses.SHELLS
             continue
         print(f"closing untracked {name} agent window {wid}")
         if not dry:
             tmux("kill-window", "-t", wid, check=False)
+    return live
+
+
+def live_agent_window(name, own=None):
+    """True when a tmux window of this name runs something other than a shell, and it is not the card's own recorded
+    window (own): an agent exists that the card's record does not show."""
+    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_current_command} #{window_name}"],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        wid, _, rest = line.partition(" ")
+        cmd, _, wname = rest.partition(" ")
+        if wname == name and wid != own and cmd not in ("", *harnesses.SHELLS):
+            return True
+    return False
 
 
 INTAKE_EVERY = 300   # seconds between the default issue intake's searches (one GraphQL search each; the board is read every pass)
@@ -404,7 +427,18 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             w = {k: v for k, v in w.items() if k != "limit_hit"}
             update(c["id"], metadata={"worker": w})
         if w and status == "alive" and not busy and not screen and not dry:   # stuck at a permission prompt: tell, never answer
-            ask = permission_wait(wh, w.get("pane"))
+            trust = None if sid in reg else trust_wait(wh, w.get("pane"))   # a registered session is past the trust prompt
+            if trust:   # a new folder: the person trusts it once; the agent keeps its window, no restart
+                key = f"permission_wait:{c['id']}"
+                failed.add(key)
+                where = f"{w.get('stage')}-{slug_of(c)[:28]}"
+                if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} once (open the window or run claude in it)",
+                                      f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt"):
+                    notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: open {where} and answer once")
+            if bool(trust) != bool(w.get("trust_wait")):
+                w = {**w, "trust_wait": trust} if trust else {k: v for k, v in w.items() if k != "trust_wait"}
+                update(c["id"], metadata={"worker": w})
+            ask = None if trust else permission_wait(wh, w.get("pane"))
             if ask:
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
@@ -483,7 +517,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if attempts == 0:
             st["notified"].pop(f"{c['id']}:{stage}_failed", None)   # a fresh start (pl retry): a new failure notifies again
         todo.append((c, stage, attempts + 1, col))
-    sweep_untracked(all_cards, reg, dry)
+    prep_alive += sweep_untracked(all_cards, reg, dry) or 0   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
@@ -506,6 +540,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         if attempts <= 1 and (mhold or room is not None and room <= 0):   # machine limit: new starts only
             continue
+        if live_agent_window(f"{stage}-{slug_of(c)[:28]}", (w or {}).get("window")):
+            # an agent window for this card is already running that its record does not name (a lost write):
+            # a second one would double the work; the sweep closes it if it goes idle
+            print(f"{short_id(c['id'])}  {stage} agent window {stage}-{slug_of(c)[:28]} is already running; not starting another")
+            continue
         if stage == "run":
             if runs_live >= LIVE_RUN_CAP * max_runs:
                 print(f"{short_id(c['id'])}  run waits ({runs_live} live, cap {LIVE_RUN_CAP * max_runs})")
@@ -517,23 +556,35 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     notify("Pipeline queue", f"{c['title'][:40]} waits: {runs_alive} runs already in flight (max {max_runs})")
                 print(f"{short_id(c['id'])}  run waits ({runs_alive}/{max_runs} in flight)")
                 continue
-            runs_alive += 1
-            runs_live += 1
+        elif prep_alive >= max_prep:
+            print(f"{short_id(c['id'])}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
+            continue
+        # one account for the log, the card and the launch: the stage's own account when it sets one, else the
+        # card's, else the least loaded; start_worker's harness_for then picks the same one
+        pinned = (C.STAGES.get(stage) or {}).get("account")
+        pinned = pinned if pinned in C.PROFILES else None
+        want = pinned or (c.get("metadata") or {}).get("profile")
+        if pinned:
+            prof = None if pinned in accounts.exhausted_profiles() else pinned
         else:
-            if prep_alive >= max_prep:
-                print(f"{short_id(c['id'])}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
-                continue
-            prep_alive += 1
-        want = (c.get("metadata") or {}).get("profile")
-        prof = healthy_profile(want, all_cards)
+            prof = healthy_profile(want, all_cards)
         if prof is None:
+            if pinned:
+                print(f"{short_id(c['id'])}  {stage} waits: its account {pinned} is parked (pl accounts)")
+                continue
             if why := alerts.open("accounts_all_out", "high", "Every account is out of credits",
                                   "cards wait for the first reset; pl accounts shows when"):
                 notify(alerts.headline(why, "Every Claude profile is out of credits"), f"{c['title'][:40]} waits; pl profiles")
             print(f"{short_id(c['id'])}  {stage} waits: every profile is out of credits (pl profiles)")
             continue
-        if prof != want:
-            print(f"{short_id(c['id'])}  profile {want} is parked; using {prof}")
+        if stage == "run":
+            runs_alive += 1
+            runs_live += 1
+        else:
+            prep_alive += 1
+        if prof != (c.get("metadata") or {}).get("profile"):
+            if want and prof != want:
+                print(f"{short_id(c['id'])}  profile {want} is parked; using {prof}")
             if not dry:
                 update(c["id"], metadata={"profile": prof})
             c["metadata"] = {**(c.get("metadata") or {}), "profile": prof}

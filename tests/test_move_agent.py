@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from pl import accounts, dispatch, move_agent
+from pl import accounts, dispatch, harnesses, move_agent
 from pl import config as C
 
 SID = "11111111-2222-3333-4444-555555555555"
@@ -266,6 +266,7 @@ def _dispatch(monkeypatch, c, screen, others=(), started=None, pick=lambda harne
     monkeypatch.setattr(dispatch, "healthy_profile", lambda want, cs, harness=None: pick(harness))
     monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: None)
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: None)
+    monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: None)
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: screen)
     monkeypatch.setattr(dispatch, "start_worker", lambda *a: started.append(a[0]["id"]))
     for name in ("sweep_untracked", "ensure_services", "mirror_to_product"):
@@ -700,6 +701,7 @@ def test_a_reused_pane_id_in_another_window_name_is_refused(fake_home, pane, mon
 def test_worker_status_matches_the_pane_exactly(monkeypatch):
     from pl import agents
     monkeypatch.setattr(agents, "pane_exists", lambda p: True)
+    monkeypatch.setattr(harnesses, "pane_command", lambda p: "")
     w = {"session_id": "mine", "pane": "%5", "window": "@5", "harness": "claude", "started_at": "2026-01-01T00:00:00+00:00"}
     assert agents.worker_status(w, {"theirs": {"tmux": "other-session:@5.%5"}}) == ("dead", "mine")
     assert agents.worker_status(w, {"theirs": {"tmux": f"{C.TMUX_SESSION}:@5.%5"}}) == ("alive", "theirs")

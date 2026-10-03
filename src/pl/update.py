@@ -43,7 +43,11 @@ def build_id_of(root):
                 h.update(f"{p.relative_to(root)} {s.st_size} {s.st_mtime_ns}\n".encode())
         except OSError:
             continue
-    return f"{__version__}-{h.hexdigest()[:10]}"
+    try:   # the version of the files at root, not of this running process (after an upgrade they differ)
+        found = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', (root / "__init__.py").read_text(), re.M)
+    except OSError:
+        found = None
+    return f"{found.group(1) if found else __version__}-{h.hexdigest()[:10]}"
 
 
 def build_id(fresh=False):

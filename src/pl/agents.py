@@ -107,6 +107,25 @@ def permission_wait(h, pane):
     return mask(" · ".join(near) or lines[at])[:120]
 
 
+def trust_wait(h, pane):
+    """The folder a harness asks the person to trust on this pane's screen ("this folder" when the screen does not
+    name it), else None. A first run in a new folder stops here, so the session never registers. pl only reads the
+    screen: it never answers the prompt."""
+    pats = harnesses.trust_patterns(h) if h else []
+    if not pats or not pane or not pane_exists(pane):
+        return None
+    lines = [BOX_RE.sub(" ", ln).strip() for ln in
+             (harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-40"]).stdout or "").splitlines()]
+    if not any(re.search(p, ln, re.I) for ln in lines for p in pats):
+        return None
+    for i, ln in enumerate(lines):
+        if re.search(r"Accessing workspace", ln, re.I):
+            path = next((x for x in [ln.split(":", 1)[1].strip() if ":" in ln else "", *lines[i + 1:i + 4]]
+                         if x.startswith(("/", "~"))), "")
+            return mask(path)[:120] or "this folder"
+    return "this folder"
+
+
 def worker_view(c, reg):
     """One short phrase describing the card's agent, for pl list."""
     m = c.get("metadata") or {}
@@ -128,6 +147,8 @@ def worker_view(c, reg):
         except ValueError:
             when = "?"
         return f"limit hit — {hit.get('account')}, resets {when}"
+    if w.get("trust_wait"):   # set by the dispatcher while the agent sits at the folder trust prompt
+        return f"{w['stage']} agent waiting: trust the folder ({w.get('profile')})"
     if w.get("permission_wait"):   # set by the dispatcher while the agent sits at a permission prompt
         return f"{w['stage']} agent waiting for permission ({w.get('profile')})"
     sid = w.get("session_id")
@@ -170,6 +191,8 @@ def worker_status(w, reg):
         since = max(parse_iso(w.get("started_at") or ""), parse_iso(w.get("moved_at") or ""))   # a move relaunches it
         if time.time() - since < 180:
             return "starting", sid
+        if harnesses.pane_command(pane) not in ("", *harnesses.SHELLS) and trust_wait(h, pane):
+            return "alive", sid   # held at the folder trust prompt: waiting for a person, not dead; no second window
     return "dead", sid
 
 

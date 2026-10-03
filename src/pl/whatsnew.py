@@ -59,6 +59,8 @@ ENTRIES = [
        "pl card '#43'"),
     _e("2026-10-02.04", "pl says who stopped a dispatcher; D then s asks first", "header and pl manager status",
        "pl manager status"),
+    _e("2026-10-03.01", "A folder trust prompt shows on the card and raises an alert",
+       "Needs you: waiting: trust the folder; pl never answers it", "pl alerts"),
 ]
 
 

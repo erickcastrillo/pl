@@ -276,3 +276,10 @@ def test_an_asked_restart_needs_a_present_settled_build_even_when_it_is_the_same
     reads = iter(["b0", "b1"])
     monkeypatch.setattr(update, "build_id_of", lambda root: next(reads))
     assert update.restart_build(asked=True) is None
+
+
+def test_build_id_of_reads_the_version_from_the_files_under_root(tmp_path):
+    (tmp_path / "__init__.py").write_text('__version__ = "9.8.7"\n')
+    assert update.build_id_of(tmp_path).startswith("9.8.7-") and update.__version__ != "9.8.7"
+    (tmp_path / "__init__.py").write_text("")   # no readable version: the running one stands in
+    assert update.build_id_of(tmp_path).startswith(f"{update.__version__}-")

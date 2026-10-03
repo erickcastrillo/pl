@@ -75,6 +75,8 @@ PERMISSION_PATTERNS = {
     "antigravity": [r"Allow (?:access to this|calling this tool|creation of this file|administrator elevation)",
                     r"Approve this action\?", r"Run this command\?", r"Do you want to proceed\?"],
     "gemini": [r"Allow execution of", r"Apply this change\?", r"Do you want to proceed\?"]}
+# A first-run folder trust prompt on screen. Only Claude Code asks it; pl never answers it (the person does, once per folder).
+TRUST_PATTERNS = {"claude": [r"Accessing workspace", r"Yes, I trust this folder", r"Quick safety check"]}
 # A template token that already chooses a permission or sandbox mode (the Assistant refuses such a template too).
 PERMISSION_FLAG_RE = re.compile(r"dangerously|bypass|yolo|full-auto|approve-for-me|permission|approval|sandbox|dontask"
                                 r"|acceptedits|accept-edits|allowed-?tools|settings|^-[as]$|^--mode(?:=|$)", re.I)
@@ -96,6 +98,10 @@ def still_asks(name):
         return None
     return (f"{name} agents may wait at a permission prompt for commands: its only mode that never asks skips every "
             f"check, and pl never uses it. To let them run, {STILL_ASKS[name]}.")
+
+
+def trust_patterns(h):
+    return TRUST_PATTERNS.get(h.name, [])
 
 
 def permission_patterns(h):

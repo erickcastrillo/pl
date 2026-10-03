@@ -199,7 +199,7 @@ In the console:
 
 From the shell, `pl --profile work approve <id>` and `pl --profile work reject <id> "notes"` do the same.
 
-`pl idea "text"` posts to an intake board's Triage column instead, so it needs an `[intake]` tracker. In a GitHub-only profile, use the Ideas tab.
+`pl idea "text"` files the idea in the pipeline board's Inbox when the profile has no `[intake]` type, which is the normal GitHub-only case. With an `[intake]` tracker configured, it goes to that board's Triage column to be assessed instead. The Ideas tab works either way.
 
 ## 7. Several GitHub accounts
 
