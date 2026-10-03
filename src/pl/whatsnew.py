@@ -61,6 +61,10 @@ ENTRIES = [
        "pl manager status"),
     _e("2026-10-03.01", "A folder trust prompt shows on the card and raises an alert",
        "Needs you: waiting: trust the folder; pl never answers it", "pl alerts"),
+    _e("2026-10-03.02", "pl uses about 20× fewer GitHub points; profiles on one GitHub account share a fair budget",
+       "pl usage --github", "pl usage --github"),
+    _e("2026-10-03.03", "Profiles no longer block each other: each gets its own agent share", "pl manager status",
+       "pl manager status"),
 ]
 
 
