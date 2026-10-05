@@ -24,7 +24,7 @@ Nothing else is changed. pl does not edit your shell profile, does not need `sud
 
 ## 1. Check the prerequisites
 
-pl runs on **macOS or Linux**. It needs tmux, so Windows is not supported.
+pl runs on **macOS or Linux**. On Windows it runs inside WSL2: read [Windows: use WSL2](#windows-use-wsl2) below first.
 
 Run every check. For a tool that is missing, use the install line for your system. **(you)** run the `sudo` lines and `xcode-select --install` yourself.
 
@@ -42,6 +42,26 @@ Notes:
 - Homebrew itself: if `brew --version` fails, **(you)** install it from https://brew.sh.
 - Never use `sudo` with `npm install -g`. If npm says permission denied, fix npm's folder first: https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally
 - Some tools also offer a `curl ... | sh` installer. This guide avoids them on purpose: a package manager checks what it downloads.
+
+### Windows: use WSL2
+
+pl does not run natively on Windows. This is not a choice against Windows: pl is built on tmux, and tmux does not run on Windows. pl starts each agent in its own tmux window and types the start command into it. It reads the window's screen to see when an agent hits a usage limit or waits for you. It sends Ctrl-C to stop an agent, and you attach to a window to watch one. pl also uses Unix file locks and file permissions. A native port would need a different terminal layer. The supported way is WSL2 (Windows Subsystem for Linux) with Ubuntu.
+
+1. **(you)** In PowerShell, run `wsl --install -d Ubuntu`. Windows may ask you to restart. On first start, Ubuntu asks you to create a Linux user name and password.
+2. Check it in PowerShell: `wsl -l -v` lists Ubuntu with VERSION `2`.
+3. Open the Ubuntu terminal. Everything after this runs inside Ubuntu, never in PowerShell.
+4. Install the prerequisites with the Linux column of the table above (the `apt` lines). Tools installed on Windows (git, gh, tmux, Claude Code) are not seen inside Ubuntu, and tools installed inside Ubuntu are not seen on Windows.
+5. **(you)** Sign in again inside Ubuntu, as step 2 says: `claude` then `/exit`, and `gh auth login -s project`. Sign-ins on Windows do not carry over.
+6. Continue with step 2 and the rest of this guide, unchanged.
+
+Good practice on WSL:
+
+- Keep pl's clone and every work repository in the Linux file system, for example `~/code/...`. Never use a folder under `/mnt/c/...`. Files on the Windows drive are much slower to read from Linux, and agents read many files.
+- Run the console in the Ubuntu terminal. Windows Terminal works well for this.
+- Links: the console opens card and pull request links with Python's `webbrowser` module. Inside WSL it may find no browser, and then nothing opens. To open links in your Windows browser, install wslu (**(you)** `sudo apt install wslu`) and add `export BROWSER=wslview` to `~/.bashrc`. The card screen also shows each link, so you can copy it instead.
+- Notifications: pl's notify script uses `notify-send` when it exists. Otherwise it prints the message with a terminal bell.
+- WSL can shut Ubuntu down a short while after you close the last Ubuntu terminal. That stops pl's dispatcher and its agents. Keep an Ubuntu terminal open while pl is working.
+- If a command says `tmux` or `pl` is not found, check that you are in the Ubuntu terminal, not PowerShell.
 
 ## 2. Sign in (you)
 

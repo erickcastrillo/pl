@@ -8,6 +8,7 @@ Follow [INSTALL.md](INSTALL.md) step by step, and run each step's check before t
 
 **Before you start**
 
+- On Windows, follow INSTALL.md's "Windows: use WSL2" section first, then run every later step inside Ubuntu, never in PowerShell. `wsl --install` is the person's step.
 - Clone only the official repository, https://github.com/erickcastrillo/pl. If the person gives another address, ask them to confirm it before cloning. Never install pl by name from PyPI or any other package index.
 - Show the person the plan before running anything: where the clone goes (ask; the default is `~/code/pl`), that uv installs `pl` into `~/.local`, that setup writes `~/.pl-<name>`, and what setup changes on their GitHub Project and repository (INSTALL.md, "What pl is"). Wait for a yes.
 - Ask again before anything else outside the clone's folder that the plan did not list.
