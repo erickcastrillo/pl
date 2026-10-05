@@ -113,6 +113,7 @@ max_prep = 2
 interval = 120
 autostart = true                # the console starts this dispatcher in tmux; D starts or stops it by hand
 account_checks = [10, 30, 60]   # minutes between health checks of a parked account; the last repeats; [] turns them off
+release_waiting_after = 30      # minutes a run agent may wait before pl stops it (see Run slots below); 0 turns it off
 
 [code_host]                     # PR labels pl reads (set by your review tools)
 owner = "your-org"
@@ -261,6 +262,8 @@ unattended = false     # one harness only
 A `[harnesses.<name>]` template that already sets its own permission or sandbox flag is left as it is.
 
 An agent that still waits at a permission prompt, with no change on its screen for 2 minutes, opens an alert: "agent waiting for permission in <window>: <the tool line>". Its card shows "waiting for permission". pl never answers the prompt. The alert clears once the prompt is gone.
+
+**Run slots.** `max_runs` run agents work at once. A run agent that is waiting does not take a slot: its screen shows a /run-plan `GATE:` line (for example `GATE: nothing-runnable` while a PR it depends on is unmerged), or its screen has not changed for 10 minutes. Waiting agents still count toward the hard cap of 2 × `max_runs` live run agents. Once a run agent has waited `release_waiting_after` minutes (default 30), pl stops it (Ctrl-C in its window, as `pl drop` does), closes the window and frees its place. This is not a failed attempt. The card is held back for 30 minutes, then 60, then 120 after each further release, and shows "blocked: <reason> · retry HH:MM" with a red `!` in the Pipeline and in `pl list`. The hold clears when the card's text or column changes, or when you run `pl retry <id>`. An agent waiting at a permission or trust prompt or on a usage limit is never released.
 
 A Claude Code agent in a folder it has never opened stops at the "Is this a project you trust?" prompt. pl shows the card as "waiting: trust the folder" and opens an alert, "agent waiting: trust the folder <path> once (open the window or run claude in it)". It does not restart the agent and never answers the prompt: open the window and trust the folder once.
 

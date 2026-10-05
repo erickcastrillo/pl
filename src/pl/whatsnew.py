@@ -74,6 +74,9 @@ ENTRIES = [
     _e("2026-10-05.04", "A parked account is checked and comes back as soon as it works; its loops run elsewhere",
        "pl accounts: last check and next check; header: checked; alert when a loop misses 2 of its fires; "
        "[dispatch] account_checks, [loops.<name>] fallback = false", "pl accounts"),
+    _e("2026-10-05.05", "A run agent waiting 30 min is stopped to free its place; the card shows blocked",
+       "Pipeline: a red ! with blocked: <reason> · retry HH:MM; [dispatch] release_waiting_after (minutes, 0 = off)",
+       "pl retry <id>"),
 ]
 
 

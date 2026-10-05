@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from pl import config as C
 from pl.accounts import exhausted_profiles, parking
-from pl.agents import hold_reason, pane_tail, registry, worker_status, worker_view
+from pl.agents import hold_reason, pane_tail, registry, run_blocked, worker_status, worker_view
 from pl.board import cards, col_name, sections
 from pl.commands import plan_path
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stage_for
@@ -81,8 +81,12 @@ def watch_snapshot():
             status = worker_status(w, reg)[0] if w else "none"
             failed = bool(w) and status == "dead" and int(w.get("attempts") or 0) >= MAX_ATTEMPTS   # pl retry / t
             view = worker_view(c, reg)
+            blocked = auto and not w and bool(run_blocked(c))   # its waiting run agent was released; held back
             if hold_reason(c):
                 kind = "row"   # split or parked: nothing for a person to do on this card
+            elif blocked:
+                kind = "needs"
+                needs["attention"] += 1
             elif rec and rec.get("status") == "needs-attention":
                 kind = "needs"
                 needs["attention"] += 1
@@ -108,7 +112,8 @@ def watch_snapshot():
                     per_prof[profile]["queued"] += 1
             pc = short_id(m.get("product_card") or "")
             rows.append({"kind": kind, "card": c, "worker": w, "win": win, "col": col, "profile": profile, "failed": failed,
-                         "approved": approved_label(c, col, reg) or (view if view.startswith(("run agent waiting", "limit hit")) else None),
+                         "blocked": blocked,
+                         "approved": approved_label(c, col, reg) or (view if view.startswith(("run agent waiting", "limit hit", "blocked")) else None),
                          "text": f"{short_id(c['id'])}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
     # Done cards came with the same board read; they stay out of rows (and every count) for the Pipeline's z only
     done = [{"kind": "row", "card": c, "worker": {}, "win": "", "col": "Done", "profile": (c.get("metadata") or {}).get("profile") or ""}

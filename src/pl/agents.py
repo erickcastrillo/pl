@@ -1,4 +1,5 @@
 """Which agents are alive, and their tmux windows."""
+import hashlib
 import json
 import os
 import re
@@ -82,6 +83,39 @@ def run_waiting(w, reg):
     return f"waiting (idle {int(idle // 60)} min)" if idle >= WAIT_IDLE else None
 
 
+PR_RE = re.compile(r"(?<![\w&#])#(\d{1,7})\b")   # a PR or issue reference like #1757
+# card metadata of a released run agent (dispatch.release_run): why, when it may start again, how many releases, and
+# the card's column and description at release (a change clears the hold)
+RELEASE_KEYS = ("run_released_at", "run_released_why", "run_retry_at", "run_releases", "run_released_on")
+
+
+def gate_pr(pane):
+    """The first PR reference like "#1757" within 3 lines of the last /run-plan GATE line on the pane's screen, or
+    None. Read from the screen only; nothing is looked up."""
+    lines = (harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-60"]).stdout or "").splitlines()
+    at = next((i for i in range(len(lines) - 1, -1, -1) if GATE_RE.search(lines[i])), None)
+    if at is None:
+        return None
+    m = next((m for ln in lines[max(0, at - 3):at + 4] if (m := PR_RE.search(ln))), None)
+    return f"#{m.group(1)}" if m else None
+
+
+def release_key(c):
+    """The card's column and a hash of its description: a released run card is held while this stays the same."""
+    d = str(c.get("description") or "").encode()
+    return f"{col_name(c['list_id'])}:{hashlib.sha256(d).hexdigest()[:16]}"
+
+
+def run_blocked(c, now=None):
+    """'blocked: <why> · retry HH:MM' while a released run card waits out its backoff (the card unchanged since),
+    else None."""
+    m = c.get("metadata") or {}
+    t = parse_iso(str(m.get("run_retry_at") or ""))
+    if not t or (now or time.time()) >= t or m.get("run_released_on") != release_key(c):
+        return None
+    return f"blocked: {m.get('run_released_why') or 'waiting'} \u00b7 retry {datetime.fromtimestamp(t):%H:%M}"
+
+
 PERMISSION_IDLE = 120   # an agent at a permission prompt this long, with no change on screen, is stuck there
 BOX_RE = re.compile(r"[│┃|╭╮╰╯─━]+")
 OPTION_RE = re.compile(r"^\s*(?:[❯›>]\s*)?([1-9])[.)]\s+(.*?)\s*$")   # a numbered option; groups: digit, label
@@ -134,6 +168,8 @@ def worker_view(c, reg):
         return hold_reason(c)
     if m.get("pipeline_mode") != "auto":
         return "manual"
+    if not w and (blocked := run_blocked(c)):
+        return blocked
     if col_name(c["list_id"]) == "Plan for review":
         return "ready for your review"
     if col_name(c["list_id"]) == "Manual":

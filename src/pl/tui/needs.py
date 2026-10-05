@@ -36,12 +36,12 @@ CARD_GROUPS = ("specs", "plans", "manual")   # the groups that hold cards; the r
 
 
 def needs_me(r):
-    """True for a card row that waits on a person: a spec or plan to review, a Manual card, or an agent that needs
-    you or died (kind "needs" covers both)."""
+    """True for a card row that waits on a person: a spec or plan to review, a Manual card, an agent that needs
+    you or died (kind "needs" covers both), or a run held back after its waiting agent was released (blocked)."""
     if not r.get("card"):
         return False
     g = needs_groups([r])
-    return any(g[k] for k in CARD_GROUPS) or r.get("kind") == "needs" or bool(r.get("failed"))
+    return any(g[k] for k in CARD_GROUPS) or r.get("kind") == "needs" or bool(r.get("failed")) or bool(r.get("blocked"))
 
 
 def detail(r, now=None):

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
-from pl.agents import NEW_WINDOW_SCRIPT, registry, worker_status, worker_view
+from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
 from pl import events, ideas, move_agent, trackers
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -567,18 +567,24 @@ def cmd_adopt(a):
 
 def retry(ref, stage=None):
     """Clear the worker (and its attempt count) of one card, or with ref "all" of every funnel card whose agent hit the
-    attempt limit, so the dispatcher starts it fresh. A running agent is left alone. Returns one line per card."""
+    attempt limit, so the dispatcher starts it fresh. A card held back after its waiting run agent was released
+    (blocked) has the hold cleared too. A running agent is left alone. Returns one line per card."""
     fresh_next()   # it resets what it read: never a worker restarted since a cached copy
     cs = cards()
     if ref == "all":
         picked = [c for c in cs if (c.get("metadata") or {}).get("pipeline_mode") == "auto"
-                  and int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS]
+                  and (int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS
+                       or run_blocked(c))]
     else:
         picked = [pick(ref, cs, "pl retry", min_prefix=8)]   # like find_card, but a prefix needs 8+ chars
     reg, out = registry(), []
     for c in picked:
         w = (c.get("metadata") or {}).get("worker") or {}
         head = f"{short_id(c['id'])}  {c['title'][:50]}"
+        if not w and (c.get("metadata") or {}).get("run_retry_at"):
+            update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
+            out.append(f"{head}: cleared the blocked hold of its released run agent; the dispatcher starts it now")
+            continue
         if not w or (stage and w.get("stage") != stage):
             out.append(f"{head}: no {stage or ''} agent to reset".replace("  agent", " agent"))
             continue
@@ -589,7 +595,7 @@ def retry(ref, stage=None):
             continue
         update(c["id"], metadata={"worker": None})
         out.append(f"{head}: reset the {w.get('stage')} agent ({int(w.get('attempts') or 0)} attempts); the dispatcher starts it fresh")
-    return out or ["no card hit the attempt limit"]
+    return out or ["no card hit the attempt limit or is blocked"]
 
 
 def cmd_retry(a):

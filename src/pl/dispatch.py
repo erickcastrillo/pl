@@ -9,12 +9,14 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
 from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import hold_reason, pane_exists, permission_wait, registry, run_waiting, trust_wait, worker_status
+from pl.agents import (RELEASE_KEYS, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
+                       run_blocked, run_waiting, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
@@ -74,6 +76,54 @@ def _gh_env_args():
 
 MAX_ATTEMPTS = 3   # a stage whose agent died this many times waits for a person (pl retry)
 LIVE_RUN_CAP = 2   # live run agents (waiting + working) never exceed this x max_runs: each is a ~250 MB process
+RELEASE_BACKOFF = (30, 60, 120)   # minutes a released run card waits before its next start: 1st, 2nd, 3rd+ release
+
+
+def _wait_due(waits, seen, c, w):
+    """True when this waiting run agent has waited [dispatch] release_waiting_after minutes (0 is off). The clock
+    starts the first pass that sees it waiting (kept per card and session in the dispatcher state). An agent at a
+    permission or trust prompt or a limit screen waits for a person or a reset: it is never released."""
+    if w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit"):
+        return False
+    rec = waits.get(c["id"]) or {}
+    if rec.get("session") != w.get("session_id") or not isinstance(rec.get("since"), (int, float)):
+        rec = {"since": time.time(), "session": w.get("session_id")}
+    seen[c["id"]] = rec
+    limit = C.DISPATCH.get("release_waiting_after", 30)
+    return bool(limit) and time.time() - rec["since"] >= limit * 60
+
+
+def release_run(c, w, why, dry):
+    """Stop a run agent that has waited too long, the way pl drop stops one (the move lock, the pane check, Ctrl-C),
+    hand its window to the finished-window cleanup and clear the worker: the next start is a fresh attempt 1, not a
+    death. The card is held back RELEASE_BACKOFF minutes (see run_blocked). True when released."""
+    reason = why.removeprefix("waiting (").removesuffix(")")
+    if not reason.startswith("idle") and (pr := gate_pr(w.get("pane"))):
+        reason += f" ({pr})"
+    head = short_id(c["id"])
+    if dry:
+        print(f"{head}  would release the run agent ({reason})")
+        return False
+    if not move_agent.lock(c["id"]):
+        return False   # pl move-agent or pl drop has the card
+    try:
+        if (no := move_agent.pane_refusal(c, w)) or not move_agent.stop(w["pane"], w.get("session_id")):
+            print(f"{head}  run agent {why}; could not stop it ({no or 'still running after Ctrl-C'}); it keeps its window")
+            return False
+        m = c.get("metadata") or {}
+        n = int(m.get("run_releases") or 0) + 1
+        mins = RELEASE_BACKOFF[min(n, len(RELEASE_BACKOFF)) - 1]
+        retry = datetime.fromtimestamp(time.time() + mins * 60, timezone.utc).isoformat(timespec="seconds")
+        meta = {"worker": None, "finished_workers": list(m.get("finished_workers") or []) + [w],
+                "run_released_at": now_iso(), "run_released_why": reason, "run_retry_at": retry, "run_releases": n,
+                "run_released_on": release_key(c)}
+        update(c["id"], metadata=meta)
+        c["metadata"] = {**m, **meta}
+    finally:
+        move_agent.unlock(c["id"])
+    events.emit("run_released", c["id"], reason=reason, releases=n, retry_at=retry)
+    print(f"{head}  released the run agent ({reason}); its card waits {mins} min before the next start")
+    return True
 
 
 def launch_path(name):
@@ -380,6 +430,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     todo = []
     failed = set()   # stage_failed and permission_wait alert keys seen this pass
     waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
+    waits, seen_waits = st.get("run_waits") or {}, {}   # card id -> when its run agent was first seen waiting
     for c in all_cards:
         m = c.get("metadata") or {}
         if m.get("pipeline_mode") != "auto":
@@ -520,6 +571,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 print(f"{short_id(c['id'])}  plan ready for review: {c['title'][:50]}")
                 notify(f"Plan ready: {c['title'][:50]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
             continue
+        if m.get("run_retry_at") and not dry and (on := release_key(c)) != m.get("run_released_on") and \
+                (not w or on.split(":")[0] != str(m.get("run_released_on") or "").split(":")[0]):
+            # a released run card changed (its text with no agent on it, or its column): the hold and its count go
+            print(f"{short_id(c['id'])}  card changed since its run agent was released; no longer held back")
+            update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
+            m = c["metadata"] = {**m, **dict.fromkeys(RELEASE_KEYS)}
         if stage is None or hold_reason(c):   # a split or parked card gets no agent and holds no slot
             mirror_to_product(c, col, dry)
             continue
@@ -527,14 +584,20 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         same_stage = w.get("stage") == stage
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
-                runs_live += 1
                 why = run_waiting(w, reg) if status == "alive" else None
+                if why and _wait_due(waits, seen_waits, c, w) and release_run(c, w, why, dry):
+                    seen_waits.pop(c["id"], None)
+                    continue   # stopped: it holds no slot and no live place
+                runs_live += 1
                 if why:
                     print(f"{short_id(c['id'])}  run agent {why}; its slot is free")   # its window stays: no second agent
                 else:
                     runs_alive += 1
             else:
                 prep_alive += 1
+            continue
+        if stage == "run" and (blocked := run_blocked(c)):   # released: held back, no slot, not live
+            print(f"{short_id(c['id'])}  run {blocked}")
             continue
         attempts = int(w.get("attempts") or 0) if same_stage else 0
         script = _own_launch(w)
@@ -553,6 +616,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if attempts == 0:
             st["notified"].pop(f"{c['id']}:{stage}_failed", None)   # a fresh start (pl retry): a new failure notifies again
         todo.append((c, stage, attempts + 1, col))
+    st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
     prep_alive += sweep_untracked(all_cards, reg, dry) or 0   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
