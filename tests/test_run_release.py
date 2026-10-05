@@ -354,3 +354,19 @@ def test_an_api_error_on_an_earlier_stage_worker_is_left_to_the_finished_cleanup
     c = _auto("aaaa0001", "Approved", worker=dict(PLAN_W))   # the plan is done: the card is on run now
     fake.run([c])
     assert fake.stops == []
+
+
+# ---------- an agent that exits with an error line ----------
+
+def test_a_dead_agent_keeps_its_error_line_on_the_card_once(fake, monkeypatch):
+    monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("dead", None))
+    monkeypatch.setattr(dispatch, "death_line", lambda pane: 'Error: unexpected argument "/pl-run x"')
+    c = _auto("aaaa0001", "Approved", worker=dict(RUN_W))
+    fake.run([c])
+    m = _meta_write(fake, "aaaa0001")
+    assert m["agent_error"]["line"] == 'Error: unexpected argument "/pl-run x"' and m["agent_error"]["stage"] == "run"
+    assert fake.started == [("aaaa0001", 2)]   # still a death: attempt 2
+    assert [(k, d) for k, _, d in fake.events if k == "agent_died"] == [("agent_died", {"stage": "run", "attempts": 1})]
+    fake.writes.clear()
+    fake.run([c])   # the same line again: nothing new written
+    assert not [w for w in fake.writes if "agent_error" in (w[1].get("metadata") or {})]

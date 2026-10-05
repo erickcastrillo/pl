@@ -52,9 +52,10 @@ BUILTINS = {
         [r"You've hit your usage limit\.", r"You've reached your (?:usage|workspace credit) limit",
          r"Your workspace is out of credits"]),   # Codex's own wording (strings of codex 0.150.1)
     "antigravity": Harness(
-        "antigravity", "agy", None, ["agy", "{prompt}"], ["agy", "-p", "{prompt}"], [], experimental=True,
-        note="agy --help does not list a positional prompt for interactive use; headless (-p) cannot prompt for "
-             "tool permissions, so allow the tools in agy's own settings (pl never adds --dangerously-skip-permissions)"),
+        "antigravity", "agy", None, ["agy", "-i", "{prompt}"], ["agy", "-p", "{prompt}"], [], experimental=True,
+        note="agy reads an interactive prompt only from -i (--prompt-interactive): a bare prompt argument is refused; "
+             "headless (-p) cannot prompt for tool permissions, so allow the tools in agy's own settings (pl never adds "
+             "--dangerously-skip-permissions)"),
 }
 FIELDS = {f.name for f in dataclasses.fields(Harness)}
 

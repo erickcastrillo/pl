@@ -175,3 +175,4 @@ def no_live_agent_window(monkeypatch):
     from pl import dispatch
     monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda *a, **k: None)   # it reads the agent's screen: tests fake it
+    monkeypatch.setattr(dispatch, "death_line", lambda *a, **k: None)

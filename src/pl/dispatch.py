@@ -15,7 +15,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (RELEASE_KEYS, api_error_wait, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
+from pl.agents import (MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
@@ -74,7 +74,6 @@ def _gh_env_args():
         (["-e", f"GH_CONFIG_DIR={C.GH_CONFIG_DIR}"] if C.GH_CONFIG_DIR else [])
 
 
-MAX_ATTEMPTS = 3   # a stage whose agent died this many times waits for a person (pl retry)
 LIVE_RUN_CAP = 2   # live run agents (waiting + working) never exceed this x max_runs: each is a ~250 MB process
 RELEASE_BACKOFF = (30, 60, 120)   # minutes a released run card waits before its next start: 1st, 2nd, 3rd+ release
 # /run-plan gates a person must act on (approve the plan, allow the push, allow work outside the worktree): a
@@ -648,6 +647,13 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             script.unlink(missing_ok=True)   # one event per failed launch
             print(f"{short_id(c['id'])}  {stage} agent never started in {w.get('window')}: the launch command did not run")
             events.emit("error", c["id"], message=f"agent never started in {w.get('window')}: the launch command did not run")
+        if same_stage and status == "dead" and not dry and (err := death_line(w.get("pane"))) \
+                and err != (m.get("agent_error") or {}).get("line"):   # it exited with an error line: keep it, once
+            meta = {"agent_error": {"stage": stage, "at": now_iso(), "line": err}}
+            update(c["id"], metadata=meta)
+            m = c["metadata"] = {**m, **meta}
+            events.emit("agent_died", c["id"], stage=stage, attempts=attempts)   # the line is screen text: card only
+            print(f"{short_id(c['id'])}  {stage} agent exited: {err[:120]}")
         if same_stage and status == "dead" and attempts >= MAX_ATTEMPTS:
             key = f"stage_failed:{c['id']}:{stage}"
             failed.add(key)

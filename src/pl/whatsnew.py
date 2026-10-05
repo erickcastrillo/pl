@@ -80,6 +80,8 @@ ENTRIES = [
     _e("2026-10-05.06", "Restart, hold or adopt a card from the Pipeline; agents stuck on an API error restart",
        "Pipeline: R restarts its agent, p holds or releases it, i hands a manual card to the pipeline (all ask first)",
        "pl restart <id>, pl hold <id> --reason TEXT"),
+    _e("2026-10-05.07", "Antigravity agents start again; a card whose agent died says why",
+       "Pipeline: <stage> agent died 3x with its last error line; t or pl retry starts it fresh", "pl list"),
 ]
 
 

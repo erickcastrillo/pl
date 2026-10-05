@@ -340,7 +340,7 @@ class CardsView(CardActions, Horizontal):
                 if r.get("col") == "Done":   # dropped (with its reason) or done
                     label, colour = ("dropped", "yellow") if m.get("dropped_at") else ("done", "green")
                 else:
-                    label, colour = (r["approved"], "red" if r.get("blocked") else "green") if r.get("approved") else STATE[card_state(r)]
+                    label, colour = (r["approved"], "red" if r.get("blocked") or r.get("failed") else "green") if r.get("approved") else STATE[card_state(r)]
                 state = Text.assemble(("! ", "bold red") if needs_me(r) else "  ", (label, colour))   # ! = waits on a person
                 line = str(m.get("drop_reason") or "") if r.get("col") == "Done" else (self._now.get(cid) or {}).get("line") or ""
                 built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"), state,

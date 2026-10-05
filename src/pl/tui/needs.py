@@ -2,6 +2,7 @@
 from rich.text import Text
 
 from pl import config as C
+from pl.util import cmd_id
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, confirm_and_approve
 
@@ -56,6 +57,11 @@ def detail(r, now=None):
     if m.get("dropped_at"):   # card text: shown as plain text, never markup
         lines.append(f"dropped  {str(m['dropped_at'])[:16].replace('T', ' ')} from {m.get('dropped_from') or '-'}: "
                      f"{m.get('drop_reason') or 'no reason given'}")
+    if r.get("failed"):   # the agent died too often: why (screen text, plain) and what to do
+        w, err = r.get("worker") or {}, m.get("agent_error") or {}
+        lines.append(f"died     {w.get('stage')} agent died {int(w.get('attempts') or 0)}\u00d7"
+                     + (f"; last error: {err.get('line')}" if err.get("line") and err.get("stage") == w.get("stage") else ""))
+        lines.append(f"         press t or run pl retry {cmd_id(c['id'])}")
     if now and now.get("line"):
         lines.append(f"now      {now['line']}")
     lines += [f"         {TODO_MARK.get(s, '[ ]')} {t}" for s, t in (now or {}).get("todos") or []]

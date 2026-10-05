@@ -119,6 +119,34 @@ def run_blocked(c, now=None):
     return f"blocked: {m.get('run_released_why') or 'waiting'} \u00b7 retry {datetime.fromtimestamp(t):%H:%M}"
 
 
+MAX_ATTEMPTS = 3   # a stage whose agent died this many times waits for a person (pl retry)
+ERROR_LINE_RE = re.compile(r"\b[Ee]rror:")
+
+
+def death_line(pane):
+    """The last "Error: ..." line (masked, at most 200 characters) on a dead agent's pane, for example the harness
+    refusing its command line; None when the pane is gone or shows none. Read from the screen only."""
+    if not pane:
+        return None
+    r = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-40"])
+    if getattr(r, "returncode", 1):
+        return None
+    lines = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()][-15:]
+    hit = next((ln for ln in reversed(lines) if ERROR_LINE_RE.search(ln)), None)
+    return mask(hit)[:200] if hit else None
+
+
+def died_label(c, hint):
+    """"<stage> agent died N× · <its last error line, short> · <hint>" for a card whose agent died MAX_ATTEMPTS
+    times. The error line is screen text: data, shown as plain text only."""
+    m = c.get("metadata") or {}
+    w = m.get("worker") or {}
+    err = m.get("agent_error") or {}
+    line = str(err.get("line") or "") if err.get("stage") == w.get("stage") else ""
+    short = line if len(line) <= 60 else line[:59] + "\u2026"
+    return f"{w.get('stage')} agent died {int(w.get('attempts') or 0)}\u00d7" + (f" \u00b7 {short}" if short else "") + f" \u00b7 {hint}"
+
+
 API_ERROR_IDLE = 600   # an agent idle this long at the prompt right after an "API Error:" line is stopped, not working
 API_ERROR_RE = re.compile(r"API Error:")
 
@@ -204,6 +232,8 @@ def worker_view(c, reg):
         return "manual: yours to do"
     if not w:
         return "waiting"
+    if int(w.get("attempts") or 0) >= MAX_ATTEMPTS and worker_status(w, reg)[0] == "dead":
+        return died_label(c, "pl retry")
     if (hit := w.get("limit_hit")) and isinstance(hit, dict):   # set by the dispatcher while the agent sits on a limit screen
         try:
             t = datetime.fromisoformat(str(hit.get("until"))).astimezone()
