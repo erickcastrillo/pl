@@ -17,8 +17,8 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Standup panel with Slack copy | Dashboard: `s`, then `y` | `pl standup --slack` |
 | Token spend per card, account, model and loop | Dashboard Health; Loops tab | `pl usage --by card` |
 | Loop context care: an idle loop over 80% context restarts fresh | Loops tab: context | `pl usage --by loop` |
-| Alerts that open, remind and clear themselves | Alerts tab (4) | `pl alerts --all` |
-| Every card in a list by column, with its full text; a red ! on the cards that need you | Pipeline tab (2); `n` shows only those | `pl list` |
+| Alerts that open, remind and clear themselves | Alerts tab (6) | `pl alerts --all` |
+| Every card in a list by column, with its full text; a red ! on the cards that need you | Pipeline tab (3); `n` shows only those | `pl list` |
 | A "doing now" line for each live agent | Pipeline tab | `pl watch` |
 | Move a live agent to another account in place | on a usage limit; Activity tab | `pl move-agent <card> <account>` |
 | One machine manager for every profile's dispatcher | Dashboard: machine line; `D` | `pl manager status` |
