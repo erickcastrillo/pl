@@ -44,13 +44,16 @@ def _iso(t):
 def fake(monkeypatch):
     """The dispatcher with board, tmux and the stop path faked. Returns a namespace of what happened."""
     ns = types.SimpleNamespace(started=[], writes=[], stops=[], events=[], stop_ok=True, refusal=None, waiting=None,
-                               locked=[], ask=None, trust=None)
+                               locked=[], ask=None, trust=None, api_error=None)
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ns.ask)
     monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: ns.trust)
     monkeypatch.setattr(dispatch, "registry", lambda: {"s1": {"status": "idle"}})
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w.get("session_id")))
     monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: ns.waiting)
+    monkeypatch.setattr(dispatch, "api_error_wait", lambda w, reg: ns.api_error)
+    monkeypatch.setattr(dispatch, "pane_exists", lambda pane: False)   # a stopped agent's window is gone
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "")
     monkeypatch.setattr(dispatch, "gate_pr", lambda pane: "#1757")
     monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: ns.started.append((c["id"], attempts)))
     monkeypatch.setattr(dispatch, "update", lambda cid, **f: ns.writes.append((cid, f)))
@@ -115,6 +118,14 @@ def test_the_release_limit_is_a_dispatch_setting_and_zero_turns_it_off(fake):
     _seed_wait("aaaa0001", 45 * 60)
     fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
     assert fake.stops == []
+
+
+@pytest.mark.parametrize("gate", ["before-push", "not-approved", "outside-worktree"])
+def test_a_gate_that_needs_a_person_is_never_released(fake, gate):
+    fake.waiting = f"waiting ({gate})"
+    _seed_wait("aaaa0001", 5 * 3600)
+    fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
+    assert fake.stops == [] and fake.writes == []
 
 
 def test_an_idle_wait_is_released_with_its_reason(fake):
@@ -290,3 +301,56 @@ def test_release_waiting_after_is_validated(value, ok):
     doc["dispatch"] = {"release_waiting_after": value}
     errs = C.validate(doc)
     assert (not any("release_waiting_after" in e for e in errs)) == ok
+
+
+# ---------- an agent idle after an API error restarts fresh ----------
+
+def test_api_error_wait_reads_the_error_line_once_the_pane_is_idle(monkeypatch):
+    screen = "⏺ Writing the plan\n  ⎿  API Error: Your computer went to sleep mid-response.\n\n> \n  ? for shortcuts\n"
+    for idle, status, want in ((700, "idle", "API Error: Your computer went to sleep mid-response."), (60, "idle", None),
+                               (700, "busy", None)):
+        def run(argv, **kw):
+            out = str(int(time.time() - idle)) if "display-message" in argv else screen
+            return types.SimpleNamespace(returncode=0, stdout=out, stderr="")
+        monkeypatch.setattr(harnesses, "_run", run)
+        assert agents.api_error_wait(RUN_W, {"s1": {"status": status}}) == want
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: types.SimpleNamespace(
+        returncode=0, stdout=str(int(time.time() - 700)) if "display-message" in argv else "API Error: x\n" + "work\n" * 20, stderr=""))
+    assert agents.api_error_wait(RUN_W, {}) is None   # an old error, scrolled up: the agent went on
+
+
+PLAN_W = {"stage": "plan", "harness": "claude", "pane": "%2", "window": "@2", "session_id": "s1", "attempts": 2}
+
+
+def test_a_stage_agent_idle_after_an_api_error_is_stopped_and_started_fresh(fake):
+    fake.api_error = "API Error: Your computer went to sleep mid-response."
+    c = _auto("aaaa0001", "Spec ready", spec_approved_at="2026-10-01T00:00:00+00:00", worker=dict(PLAN_W))
+    fake.run([c])
+    assert fake.stops == [("%2", "s1")]
+    m = _meta_write(fake, "aaaa0001")
+    assert m["worker"] is None and m["finished_workers"] == [PLAN_W]
+    assert fake.started == [("aaaa0001", 1)]   # attempt 1: not a death
+    assert [(k, c, d) for k, c, d in fake.events if k == "agent_restarted"] == \
+        [("agent_restarted", "aaaa0001", {"stage": "plan", "reason": "api_error"})]
+
+
+def test_api_error_restarts_are_capped_per_day_then_raise_an_alert(fake, monkeypatch):
+    fake.api_error = "API Error: overloaded"
+    opened = []
+    monkeypatch.setattr(dispatch.alerts, "open", lambda key, *a, **k: opened.append(key) or None)
+    save_state({"notified": {}, "api_restarts": {"aaaa0001": [time.time() - 3600] * 3 + [time.time() - 90000]}})
+    c = _auto("aaaa0001", "Spec ready", spec_approved_at="2026-10-01T00:00:00+00:00", worker=dict(PLAN_W))
+    fake.run([c])
+    assert fake.stops == [] and fake.started == []
+    assert "api_error:aaaa0001" in opened
+    save_state({"notified": {}, "api_restarts": {"aaaa0001": [time.time() - 3600] * 2 + [time.time() - 90000]}})
+    fake.run([c])
+    assert fake.stops == [("%2", "s1")]
+    assert len(load_state()["api_restarts"]["aaaa0001"]) == 3   # the day-old one dropped, this one added
+
+
+def test_an_api_error_on_an_earlier_stage_worker_is_left_to_the_finished_cleanup(fake):
+    fake.api_error = "API Error: overloaded"
+    c = _auto("aaaa0001", "Approved", worker=dict(PLAN_W))   # the plan is done: the card is on run now
+    fake.run([c])
+    assert fake.stops == []

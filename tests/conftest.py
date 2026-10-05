@@ -174,3 +174,4 @@ def no_live_agent_window(monkeypatch):
     """The dispatcher's look for an agent window it does not track reads tmux: off unless a test turns it on."""
     from pl import dispatch
     monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)
+    monkeypatch.setattr(dispatch, "api_error_wait", lambda *a, **k: None)   # it reads the agent's screen: tests fake it

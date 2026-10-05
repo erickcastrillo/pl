@@ -1869,3 +1869,105 @@ async def test_an_empty_conversation_says_so_instead_of_showing_a_blank_tab(monk
     from pl.tui import assistant as view
     assert "no messages" in view.render_chat([]).plain
     assert view.render_chat([("2026-10-02T10:00:00", "you", "hi")]).plain.startswith("you")
+
+
+# ---------- restart (R), adopt (i) and hold (p) ----------
+
+def _with_controls():
+    data = fake_data()
+    manual = _card("e0000005aaaa", "A manual card in Spec ready", "Spec ready", auto=False, hours=3)
+    live = _card("e0000006aaaa", "A card with a stuck planner", "Spec ready", hours=4)
+    live["worker"] = {"stage": "plan", "window": "@9", "pane": "%9", "profile": "acme"}
+    held = _card("e0000007aaaa", "A held card", "Approved", hours=6)
+    held["card"]["tags"] = ["parked"]
+    data["snapshot"]["rows"] += [manual, live, held]
+    return data
+
+
+def _notes(app):
+    return " | ".join(str(n.message) for n in app._notifications)
+
+
+def test_the_new_pipeline_keys_do_not_clash():
+    app_keys = {b.key for b in PlApp.BINDINGS}
+    view_keys = [b.key for b in tui_cards.CardsView.BINDINGS]
+    assert len(view_keys) == len(set(view_keys))
+    assert {"R", "i", "p"} <= set(view_keys) and not ({"R", "i", "p"} & app_keys)
+
+
+async def test_a_on_a_manual_spec_card_says_how_to_hand_it_to_the_pipeline(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_controls()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "e0000005aaaa")
+        for key in ("a", "x", "o"):
+            await pilot.press(key)
+            await settle(pilot)
+        assert len(app.screen_stack) == 1
+        assert _notes(app).count("this card is manual: press i to hand it to the pipeline (pl adopt)") == 3
+
+
+async def test_i_adopts_a_manual_card_after_a_confirm(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "adopt", ["adopted e0000005"])
+    app = PlApp(snapshot_provider=Provider(_with_controls()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "spec0001aaaa")   # already in the pipeline: a notice
+        await pilot.press("i")
+        await settle(pilot)
+        assert len(app.screen_stack) == 1 and "already in the pipeline" in _notes(app)
+        await _open_cards(pilot, app, "e0000005aaaa")
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "pl adopt" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in got] == [("e0000005aaaa",)] and got[0][1] is not threading.main_thread()
+
+
+async def test_R_restarts_the_agent_of_a_card_after_a_confirm(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "restart", ["restarted e0000006"])
+    app = PlApp(snapshot_provider=Provider(_with_controls()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "spec0001aaaa")   # no agent: a notice
+        await pilot.press("R")
+        await settle(pilot)
+        assert len(app.screen_stack) == 1 and "R restarts" in _notes(app)
+        await _open_cards(pilot, app, "e0000006aaaa")
+        await pilot.press("R")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "plan agent" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in got] == [("e0000006aaaa",)] and got[0][1] is not threading.main_thread()
+
+
+async def test_p_holds_a_card_with_a_reason_and_releases_a_held_one(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    held = _called(monkeypatch, "hold", ["held e0000006"])
+    freed = _called(monkeypatch, "unhold", ["unheld e0000007"])
+    app = PlApp(snapshot_provider=Provider(_with_controls()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "e0000006aaaa")
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, tui_cards.ReasonScreen)
+        for ch in "legal":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Hold" in app.screen.message and "legal" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+        await _open_cards(pilot, app, "e0000007aaaa")
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Release the hold" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in held] == [("e0000006aaaa", "legal")]
+    assert [g[0] for g in freed] == [("e0000007aaaa",)]

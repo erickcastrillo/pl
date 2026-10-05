@@ -24,6 +24,9 @@
                           a pipeline card no longer needed: stops its live agent, moves it to Done marked dropped
                           (not done) with who, when, why and the column it was in; its linked Product card goes to Done
   pl undrop <id>          put a dropped card back in the column it was dropped from (Inbox if unknown)
+  pl hold <id> [--reason TEXT] / pl unhold <id>
+                          hold a card (the parked tag, other tags kept): the dispatcher starts no agent on it; its
+                          running agent is not stopped. unhold removes the tag and the reason
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete] show a card's sections and metadata, or delete it
   pl section <id> NAME [--from FILE [--force]]
@@ -33,6 +36,9 @@
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
+  pl restart <id> [--stage S]
+                          stop a card's agent even while it runs (Ctrl-C in its window, as pl drop does) so the
+                          dispatcher starts its stage fresh as attempt 1; --stage: only an agent of that stage
   pl watch [--interval SEC] [--plain] [--once]
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
@@ -107,7 +113,7 @@ from pl import alerts, assistant, config, events, profiles, setup, skills
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
                          cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
-                         cmd_review)
+                         cmd_review, cmd_restart, cmd_hold, cmd_unhold)
 from pl.dispatch import cmd_dispatch
 from pl.move_agent import cmd_move_agent
 from pl.standup import cmd_standup
@@ -117,7 +123,8 @@ from pl.watch import cmd_watch
 
 PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFIG_DIR)"
 # commands that change the pipeline; the event is a record for the Activity feed, not a guard
-ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt")
+ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
+                     "restart", "hold", "unhold")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -163,6 +170,8 @@ def main():
     p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'")
     p = sub.add_parser("drop"); p.add_argument("id"); p.add_argument("--reason", help="why it is no longer needed (kept on the card)")
     p = sub.add_parser("undrop"); p.add_argument("id")
+    p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)")
+    p = sub.add_parser("unhold"); p.add_argument("id")
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("board"); p.add_argument("action")
     p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
@@ -170,6 +179,7 @@ def main():
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
+    p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
     q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
@@ -215,6 +225,7 @@ def main():
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
+     "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,

@@ -77,6 +77,9 @@ ENTRIES = [
     _e("2026-10-05.05", "A run agent waiting 30 min is stopped to free its place; the card shows blocked",
        "Pipeline: a red ! with blocked: <reason> · retry HH:MM; [dispatch] release_waiting_after (minutes, 0 = off)",
        "pl retry <id>"),
+    _e("2026-10-05.06", "Restart, hold or adopt a card from the Pipeline; agents stuck on an API error restart",
+       "Pipeline: R restarts its agent, p holds or releases it, i hands a manual card to the pipeline (all ask first)",
+       "pl restart <id>, pl hold <id> --reason TEXT"),
 ]
 
 

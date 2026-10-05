@@ -15,7 +15,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (RELEASE_KEYS, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
+from pl.agents import (RELEASE_KEYS, api_error_wait, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
@@ -77,13 +77,62 @@ def _gh_env_args():
 MAX_ATTEMPTS = 3   # a stage whose agent died this many times waits for a person (pl retry)
 LIVE_RUN_CAP = 2   # live run agents (waiting + working) never exceed this x max_runs: each is a ~250 MB process
 RELEASE_BACKOFF = (30, 60, 120)   # minutes a released run card waits before its next start: 1st, 2nd, 3rd+ release
+# /run-plan gates a person must act on (approve the plan, allow the push, allow work outside the worktree): a
+# fresh agent would stop at the same gate, so an agent waiting there keeps its window
+HUMAN_GATES = ("not-approved", "before-push", "outside-worktree")
+API_RESTARTS = 3   # automatic restarts after an API error per card in 24 h; then an alert and a person decides
 
 
-def _wait_due(waits, seen, c, w):
+def stop_worker(c, w, meta=None, live=True):
+    """Stop the card's agent the way pl drop does (the move lock, the pane check, Ctrl-C in its own pane), hand its
+    window to the finished-window cleanup and clear the worker, so its stage starts fresh as attempt 1 (never a
+    death). meta: more metadata for the same write. live=False: the agent is already gone, only the record is
+    cleared. Returns None when done, else why not (nothing written)."""
+    if not move_agent.lock(c["id"]):
+        return "an agent move of this card is in progress"
+    try:
+        if live:
+            if why := move_agent.pane_refusal(c, w):
+                return why
+            if not move_agent.stop(w["pane"], w.get("session_id")):
+                return "still running after Ctrl-C"
+        m = c.get("metadata") or {}
+        full = {"worker": None, **({"finished_workers": list(m.get("finished_workers") or []) + [w]} if w.get("window") else {}),
+                **(meta or {})}
+        update(c["id"], metadata=full)
+        c["metadata"] = {**m, **full}
+    finally:
+        move_agent.unlock(c["id"])
+    return None
+
+
+def _api_restart(st, c, w, err, failed):
+    """Stop an agent left idle by an API error so its stage starts fresh; at most API_RESTARTS a day per card,
+    then an alert. True when stopped."""
+    now, key, stage = time.time(), f"api_error:{c['id']}", w.get("stage")
+    times = [t for t in (st.setdefault("api_restarts", {}).get(c["id"]) or []) if isinstance(t, (int, float)) and now - t < 86400]
+    if len(times) >= API_RESTARTS:
+        failed.add(key)
+        if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: its {stage} agent stopped on an API error {len(times)} times today",
+                              f"see its window; pl restart {cmd_id(c['id'])} starts it fresh"):
+            notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent keeps stopping on an API error")
+        return False
+    if no := stop_worker(c, w):
+        print(f"{short_id(c['id'])}  {stage} agent idle after an API error; could not stop it ({no})")
+        return False
+    st["api_restarts"][c["id"]] = times + [now]
+    events.emit("agent_restarted", c["id"], stage=stage, reason="api_error")
+    print(f"{short_id(c['id'])}  {stage} agent idle after {err}; stopped it, its stage starts fresh")
+    return True
+
+
+def _wait_due(waits, seen, c, w, why):
     """True when this waiting run agent has waited [dispatch] release_waiting_after minutes (0 is off). The clock
     starts the first pass that sees it waiting (kept per card and session in the dispatcher state). An agent at a
-    permission or trust prompt or a limit screen waits for a person or a reset: it is never released."""
-    if w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit"):
+    permission or trust prompt, a limit screen or a HUMAN_GATES gate waits for a person or a reset: it is never
+    released."""
+    gate = why.removeprefix("waiting (").removesuffix(")")
+    if w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit") or gate in HUMAN_GATES:
         return False
     rec = waits.get(c["id"]) or {}
     if rec.get("session") != w.get("session_id") or not isinstance(rec.get("since"), (int, float)):
@@ -104,23 +153,13 @@ def release_run(c, w, why, dry):
     if dry:
         print(f"{head}  would release the run agent ({reason})")
         return False
-    if not move_agent.lock(c["id"]):
-        return False   # pl move-agent or pl drop has the card
-    try:
-        if (no := move_agent.pane_refusal(c, w)) or not move_agent.stop(w["pane"], w.get("session_id")):
-            print(f"{head}  run agent {why}; could not stop it ({no or 'still running after Ctrl-C'}); it keeps its window")
-            return False
-        m = c.get("metadata") or {}
-        n = int(m.get("run_releases") or 0) + 1
-        mins = RELEASE_BACKOFF[min(n, len(RELEASE_BACKOFF)) - 1]
-        retry = datetime.fromtimestamp(time.time() + mins * 60, timezone.utc).isoformat(timespec="seconds")
-        meta = {"worker": None, "finished_workers": list(m.get("finished_workers") or []) + [w],
-                "run_released_at": now_iso(), "run_released_why": reason, "run_retry_at": retry, "run_releases": n,
-                "run_released_on": release_key(c)}
-        update(c["id"], metadata=meta)
-        c["metadata"] = {**m, **meta}
-    finally:
-        move_agent.unlock(c["id"])
+    n = int((c.get("metadata") or {}).get("run_releases") or 0) + 1
+    mins = RELEASE_BACKOFF[min(n, len(RELEASE_BACKOFF)) - 1]
+    retry = datetime.fromtimestamp(time.time() + mins * 60, timezone.utc).isoformat(timespec="seconds")
+    if no := stop_worker(c, w, {"run_released_at": now_iso(), "run_released_why": reason, "run_retry_at": retry,
+                                "run_releases": n, "run_released_on": release_key(c)}):
+        print(f"{head}  run agent {why}; could not stop it ({no}); it keeps its window")
+        return False
     events.emit("run_released", c["id"], reason=reason, releases=n, retry_at=retry)
     print(f"{head}  released the run agent ({reason}); its card waits {mins} min before the next start")
     return True
@@ -536,6 +575,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if bool(ask) != bool(w.get("permission_wait")):
                 w = {**w, "permission_wait": ask} if ask else {k: v for k, v in w.items() if k != "permission_wait"}
                 update(c["id"], metadata={"worker": w})
+        if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
+                and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
+                and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh
+            m, w, status = c["metadata"], {}, "none"
         # a worker for an earlier stage that finished its job: clean its window once it has gone idle
         if w and w.get("stage") != stage and stage_complete(c, col, w["stage"]) and status == "alive":
             rec = reg.get(sid) or {}
@@ -585,7 +628,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
                 why = run_waiting(w, reg) if status == "alive" else None
-                if why and _wait_due(waits, seen_waits, c, w) and release_run(c, w, why, dry):
+                if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
                 runs_live += 1
@@ -738,6 +781,7 @@ def check_alerts(all_cards, failed, st=None):
     alerts.sweep("accounts_all_out", {"accounts_all_out"} if out else set(), notify)
     alerts.sweep("stage_failed:", failed, notify)
     alerts.sweep("permission_wait:", failed, notify)
+    alerts.sweep("api_error:", failed, notify)
     waiting, now = set(), time.time()
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")

@@ -11,7 +11,8 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 
 ## The rules
 
-1. Never run `pl approve`, `pl reject`, `pl done`, `pl drop`, `pl undrop`, `pl move`, `pl retry`, `pl pause`,
+1. Never run `pl approve`, `pl reject`, `pl done`, `pl drop`, `pl undrop`, `pl hold`, `pl unhold`, `pl move`,
+   `pl retry`, `pl restart`, `pl pause`,
    `pl resume`, `pl move-agent`, `pl idea`, `pl pull`, `pl adopt`, `pl alerts --ack`, `pl accounts --reset`,
    `pl manager start|stop|restart`, `pl board init`, `pl assistant idea file`, `gh pr merge` or any merge unless
    the person asked for that exact action in this chat and said yes. Never add a permission rule that would skip the prompt for these.
@@ -48,6 +49,8 @@ Moving work (rule 1 applies):
 - `pl undrop <id>`: put a dropped card back in the column it came from.
 - `pl move <id> "<column>"`: move a card to a column.
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
+- `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
+- `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
 - `pl move-agent <card> <account>`: move a live agent to another account.
 - `pl pause` / `pl resume`: stop or restart new agent starts.
 

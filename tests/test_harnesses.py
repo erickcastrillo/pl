@@ -564,7 +564,7 @@ def test_a_waiting_run_agent_frees_its_slot_and_is_never_started_twice(fake_home
     assert _pass(monkeypatch, [idle, new], None) == []   # a working run agent still holds the only slot
 
 
-@pytest.mark.parametrize("tag, label", [("split", "split — see child cards"), ("parked", "parked")])
+@pytest.mark.parametrize("tag, label", [("split", "split — see child cards"), ("parked", "held")])
 def test_split_and_parked_cards_get_no_agent_and_say_why(fake_home, monkeypatch, tag, label):
     held = _auto("cccc0003", "Spec ready", tags=("api", tag), spec_approved_at="2026-09-29T10:00:00+00:00")
     run = _auto("dddd0004", "Approved", tags=(tag,))

@@ -15,7 +15,7 @@ from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, wo
 from pl import events, ideas, move_agent, trackers
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
-from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused
+from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
 from pl.util import age, notify, now_iso, parse_iso, short_id, slug_of, tmux
@@ -554,15 +554,84 @@ def cmd_pull(a):
     pull_new(a.dry_run)
 
 
-def cmd_adopt(a):
-    c = find_card(a.id)
+def adopt(ref, account=None):
+    """Flag an existing pipeline card for the funnel (pipeline_mode auto) under account, its own or the least loaded
+    one. Returns the lines to show."""
+    c = find_card(ref)
     m = c.get("metadata") or {}
     if m.get("pipeline_mode") == "auto":
-        print(f"{short_id(c['id'])} is already a funnel card (profile {m.get('profile')})")
-        return
-    update(c["id"], metadata={"pipeline_mode": "auto", "profile": a.account or m.get("profile") or next_profile(cards()),
+        return [f"{short_id(c['id'])} is already a funnel card (profile {m.get('profile')})"]
+    update(c["id"], metadata={"pipeline_mode": "auto", "profile": account or m.get("profile") or next_profile(cards()),
                               "adopted_at": now_iso(), "adopted_by": C.USER_EMAIL})
-    print(f"adopted {short_id(c['id'])}  {c['title']}  ({col_name(c['list_id'])}); the dispatcher takes it from here")
+    return [f"adopted {short_id(c['id'])}  {c['title']}  ({col_name(c['list_id'])}); the dispatcher takes it from here"]
+
+
+def cmd_adopt(a):
+    for line in adopt(a.id, a.account):
+        print(line)
+
+
+def restart(ref, stage=None):
+    """Stop a card's agent even while pl sees it alive (Ctrl-C in its own window, as pl drop does) and clear its
+    worker, so the dispatcher starts its stage fresh as attempt 1. Refuses when the agent cannot be stopped.
+    Returns the lines to show."""
+    fresh_next()   # it writes what it read: never from a copy that may be minutes old
+    c = card(pick(ref, cards(), "pl restart", min_prefix=8)["id"])
+    w, head = (c.get("metadata") or {}).get("worker") or {}, f"{short_id(c['id'])}  {c['title'][:50]}"
+    if not w or (stage and w.get("stage") != stage):
+        return [f"{head}: no {stage or ''} agent to restart".replace("  agent", " agent")]
+    live = worker_status(w, registry())[0] in ("alive", "starting")
+    if why := stop_worker(c, w, live=live):
+        raise SystemExit(f"pl restart: {head}: its {w.get('stage')} agent could not be stopped ({why}); "
+                         "stop it in its window, then restart again")
+    events.emit("agent_restarted", c["id"], stage=w.get("stage"), reason="by hand")
+    return [f"{head}: " + (f"stopped its {w.get('stage')} agent (Ctrl-C in its window); " if live else "")
+            + f"the dispatcher starts the {w.get('stage')} stage fresh (attempt 1)"]
+
+
+def cmd_restart(a):
+    for line in restart(a.id, a.stage):
+        print(line)
+
+
+HOLD_KEYS = ("hold_reason", "held_at", "held_by")
+
+
+def hold(ref, reason=None):
+    """Hold a card: add the parked tag (other tags kept), so the dispatcher starts no agent on it; the reason, who
+    and when go in its metadata. A running agent is not stopped. Returns the lines to show."""
+    fresh_next()
+    c = card(pick(ref, cards(), "pl hold")["id"])
+    tags, head = list(c.get("tags") or []), f"{short_id(c['id'])}  {c['title'][:50]}"
+    if "parked" in tags:
+        raise SystemExit(f"pl hold: {head} is already held (pl unhold {short_id(c['id'])} releases it)")
+    update(c["id"], tags=tags + ["parked"], metadata={"hold_reason": reason, "held_at": now_iso(), "held_by": C.USER_EMAIL})
+    events.emit("held", c["id"])   # the reason is card text: never in the event log
+    w = (c.get("metadata") or {}).get("worker") or {}
+    return [f"held {head}: the dispatcher starts no agent on it (pl unhold {short_id(c['id'])} releases it)"
+            + ("; its running agent is not stopped" if w.get("window") else "")]
+
+
+def unhold(ref):
+    """Release a held card: remove the parked tag (other tags kept) and the hold reason. Returns the lines to show."""
+    fresh_next()
+    c = card(pick(ref, cards(), "pl unhold")["id"])
+    tags, head = list(c.get("tags") or []), f"{short_id(c['id'])}  {c['title'][:50]}"
+    if "parked" not in tags:
+        raise SystemExit(f"pl unhold: {head} is not held")
+    update(c["id"], tags=[t for t in tags if t != "parked"], metadata=dict.fromkeys(HOLD_KEYS))
+    events.emit("unheld", c["id"])
+    return [f"unheld {head}: the dispatcher takes it again"]
+
+
+def cmd_hold(a):
+    for line in hold(a.id, a.reason):
+        print(line)
+
+
+def cmd_unhold(a):
+    for line in unhold(a.id):
+        print(line)
 
 
 def retry(ref, stage=None):

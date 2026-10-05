@@ -28,6 +28,9 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Start a failed agent fresh | Pipeline tab: `t` | `pl retry all` |
 | Drop a card no longer needed, and undo it | Pipeline tab: `d`, then `z` and `u` | `pl drop <id> --reason TEXT` |
 | Hand a card to Manual, mark it done, edit its idea | Pipeline tab: `h`, `f`, `e` | `pl done <id>` |
+| Stop a card's agent so its stage starts fresh | Pipeline tab: `R` | `pl restart <id>` |
+| Hold a card (no agent starts on it), and release it | Pipeline tab: `p` | `pl hold <id> --reason TEXT`, `pl unhold <id>` |
+| Hand a manual card to the pipeline | Pipeline tab: `i` | `pl adopt <id>` |
 
 ## Your subscription
 
@@ -196,7 +199,7 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | --- | --- |
 | 0 to 9 | Dashboard, Assistant, Ideas, Pipeline, Pull requests, Loops, Alerts, Activity, Settings, Background (the console opens on the Dashboard) |
 | 1 | Assistant: a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
-| 3 | Pipeline: every card by column; a red ! marks the cards that need you (a spec or plan to review, a manual card, an agent that waits or died) and n shows only those. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, o answer a spec's questions, v move to another column, d drop (asks for an optional reason), h hand off to Manual, f mark done, e edit the card's INPUT in `$EDITOR`, z show or hide Done, u undo a drop (in the Done group). d, h, f, u and v ask first |
+| 3 | Pipeline: every card by column; a red ! marks the cards that need you (a spec or plan to review, a manual card, an agent that waits or died) and n shows only those. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, o answer a spec's questions, v move to another column, d drop (asks for an optional reason), h hand off to Manual, f mark done, e edit the card's INPUT in `$EDITOR`, z show or hide Done, u undo a drop (in the Done group), R restart the card's agent fresh, p hold or release the card, i hand a manual card to the pipeline (pl adopt). d, h, f, u, v, R, p and i ask first |
 | 6 | Alerts (k acknowledges) |
 | w | cycle the Dashboard time window |
 | s | standup summary of the last 24 hours on the Dashboard (y copies it) |
@@ -263,7 +266,11 @@ A `[harnesses.<name>]` template that already sets its own permission or sandbox 
 
 An agent that still waits at a permission prompt, with no change on its screen for 2 minutes, opens an alert: "agent waiting for permission in <window>: <the tool line>". Its card shows "waiting for permission". pl never answers the prompt. The alert clears once the prompt is gone.
 
-**Run slots.** `max_runs` run agents work at once. A run agent that is waiting does not take a slot: its screen shows a /run-plan `GATE:` line (for example `GATE: nothing-runnable` while a PR it depends on is unmerged), or its screen has not changed for 10 minutes. Waiting agents still count toward the hard cap of 2 × `max_runs` live run agents. Once a run agent has waited `release_waiting_after` minutes (default 30), pl stops it (Ctrl-C in its window, as `pl drop` does), closes the window and frees its place. This is not a failed attempt. The card is held back for 30 minutes, then 60, then 120 after each further release, and shows "blocked: <reason> · retry HH:MM" with a red `!` in the Pipeline and in `pl list`. The hold clears when the card's text or column changes, or when you run `pl retry <id>`. An agent waiting at a permission or trust prompt or on a usage limit is never released.
+**Run slots.** `max_runs` run agents work at once. A run agent that is waiting does not take a slot: its screen shows a /run-plan `GATE:` line (for example `GATE: nothing-runnable` while a PR it depends on is unmerged), or its screen has not changed for 10 minutes. Waiting agents still count toward the hard cap of 2 × `max_runs` live run agents. Once a run agent has waited `release_waiting_after` minutes (default 30), pl stops it (Ctrl-C in its window, as `pl drop` does), closes the window and frees its place. This is not a failed attempt. The card is held back for 30 minutes, then 60, then 120 after each further release, and shows "blocked: <reason> · retry HH:MM" with a red `!` in the Pipeline and in `pl list`. The hold clears when the card's text or column changes, or when you run `pl retry <id>`. An agent waiting at a gate a person must act on (`not-approved`, `before-push`, `outside-worktree`), at a permission or trust prompt, or on a usage limit is never released.
+
+**API errors.** A spec, design, plan or run agent whose screen ends with an `API Error:` line (for example "API Error: Your computer went to sleep mid-response.") and has not changed for 10 minutes has stopped working. pl stops it and its stage starts fresh. This is not a failed attempt. A card gets at most 3 of these restarts a day; after that an alert asks you to look. `pl restart <id>` (Pipeline `R`) does the same by hand for any agent.
+
+**Hold.** `pl hold <id> --reason TEXT` (Pipeline `p`) adds the `parked` tag. The dispatcher starts no agent on the card, and the Pipeline shows it as "held: <reason>". A running agent is not stopped. `pl unhold <id>` (or `p` again) removes the tag.
 
 A Claude Code agent in a folder it has never opened stops at the "Is this a project you trust?" prompt. pl shows the card as "waiting: trust the folder" and opens an alert, "agent waiting: trust the folder <path> once (open the window or run claude in it)". It does not restart the agent and never answers the prompt: open the window and trust the folder once.
 

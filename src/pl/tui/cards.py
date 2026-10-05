@@ -12,7 +12,7 @@ from pl import config as C
 from pl import move_agent, trackers
 from pl.agents import jump_to_window
 from pl.board import card, sections
-from pl.commands import done, drop, move_to, retry, undrop
+from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import show_first_heading, skip_headings
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, review_kind, start_review
@@ -291,7 +291,8 @@ class CardsView(CardActions, Horizontal):
                 Binding("v", "move_column", "move to column"), Binding("n", "only_mine", "only mine / all"),
                 Binding("o", "answer", "answer questions"), Binding("d", "drop", "drop"), Binding("h", "hand_off", "to Manual"),
                 Binding("f", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
-                Binding("u", "undrop", "undo drop")]
+                Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
+                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold / release")]
 
     def __init__(self):
         super().__init__()
@@ -456,6 +457,9 @@ class CardsView(CardActions, Horizontal):
     def review(self, what):
         """a / x / o on a spec or plan waiting for review; any other card only gets a notice."""
         r = self._row()
+        if r and r.get("col") == "Spec ready" and (r["card"].get("metadata") or {}).get("pipeline_mode") != "auto":
+            self.app.notify("this card is manual: press i to hand it to the pipeline (pl adopt)", markup=False)
+            return
         kind = review_kind(r) if r else None
         start_review(self.app, what, r, kind, [k for k, x in self._rows.items() if review_kind(x) == kind])
 
@@ -561,6 +565,49 @@ class CardsView(CardActions, Horizontal):
             return
         c = r["card"]
         self._ask_then(f"Put {self._head(c)} back to {drop_back(c)}? The drop is cleared.", lambda: undrop(c["id"]), "not put back: ")
+
+    def action_restart(self):
+        """R: confirm, then pl restart off the UI thread: its agent is stopped and the stage starts fresh."""
+        r = self._open_row("R", "restart")
+        if r is None:
+            return
+        c, stage = r["card"], (r.get("worker") or {}).get("stage")
+        if not stage:
+            self.app.notify("R restarts a card's agent; this card has none", markup=False)
+            return
+        self._ask_then(f"Restart the {stage} agent of {self._head(c)}? pl stops it (Ctrl-C in its window) and the "
+                       f"dispatcher starts the {stage} stage fresh (attempt 1).", lambda: restart(c["id"]), "not restarted: ")
+
+    def action_adopt(self):
+        """i on a manual card: confirm, then pl adopt off the UI thread."""
+        r = self._open_row("i", "hand to the pipeline")
+        if r is None:
+            return
+        c = r["card"]
+        if (c.get("metadata") or {}).get("pipeline_mode") == "auto":
+            self.app.notify(f"{short_id(c['id'])} is already in the pipeline", markup=False)
+            return
+        self._ask_then(f"Hand {self._head(c)} to the pipeline (pl adopt)? The dispatcher starts the next stage's agent on it.",
+                       lambda: adopt(c["id"]), "not adopted: ")
+
+    def action_hold(self):
+        """p: hold a card (an optional reason, then a confirm) or release a held one (a confirm); pl hold / unhold."""
+        r = self._open_row("p", "hold")
+        if r is None:
+            return
+        c, head = r["card"], self._head(r["card"])
+        if "parked" in (c.get("tags") or []):
+            self._ask_then(f"Release the hold on {head}? The dispatcher takes it again.", lambda: unhold(c["id"]), "not released: ")
+            return
+
+        def reason(text):
+            if text is None:
+                return
+            why = text.strip() or None
+            self._ask_then(f"Hold {head}? The dispatcher starts no agent on it until you press p again (pl unhold)."
+                           + (f" Reason: {why}" if why else "") + self._agent_note(r),
+                           lambda: hold(c["id"], why), "not held: ")
+        self.app.push_screen(ReasonScreen(f"Hold {head}: why does it wait? (optional)"), reason)
 
     def action_show_done(self):
         """z: show or hide the Done group, from the last refresh."""

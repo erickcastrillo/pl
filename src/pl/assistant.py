@@ -35,6 +35,7 @@ READ_ONLY = ["Bash(pl list*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl u
              "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(pl local-model*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry",
+             "restart", "hold", "unhold",
              "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
           "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",

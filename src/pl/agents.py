@@ -53,15 +53,18 @@ def _harness(w):
         return None
 
 
-HOLD = {"split": "split \u2014 see child cards", "parked": "parked"}   # card tags: the dispatcher starts no agent
+HOLD = {"split": "split \u2014 see child cards", "parked": "held"}   # card tags: the dispatcher starts no agent
 GATE_RE = re.compile(r"GATE: (nothing-runnable|not-approved|before-push|outside-worktree)")   # /run-plan's stop lines
 WAIT_IDLE = 600   # a run agent whose pane has not changed for this long is waiting, not working
 
 
 def hold_reason(c):
-    """Why the dispatcher leaves this card alone (tagged split or parked), else None."""
+    """Why the dispatcher leaves this card alone (tagged split or parked), else None. A card held with pl hold
+    shows its reason (card data: plain text only)."""
     tags = c.get("tags") or []
-    return next((v for k, v in HOLD.items() if k in tags), None)
+    why = next((v for k, v in HOLD.items() if k in tags), None)
+    reason = (c.get("metadata") or {}).get("hold_reason")
+    return f"held: {str(reason)[:60]}" if why == "held" and reason else why
 
 
 def _on_pane(rec, w):
@@ -114,6 +117,31 @@ def run_blocked(c, now=None):
     if not t or (now or time.time()) >= t or m.get("run_released_on") != release_key(c):
         return None
     return f"blocked: {m.get('run_released_why') or 'waiting'} \u00b7 retry {datetime.fromtimestamp(t):%H:%M}"
+
+
+API_ERROR_IDLE = 600   # an agent idle this long at the prompt right after an "API Error:" line is stopped, not working
+API_ERROR_RE = re.compile(r"API Error:")
+
+
+def api_error_wait(w, reg):
+    """The "API Error: ..." line (masked, short) when the agent's last screen output is an API error and its pane
+    has not changed for API_ERROR_IDLE seconds (for example "API Error: Your computer went to sleep mid-response."):
+    the harness stopped its turn and sits at the prompt. None otherwise, or while its session is busy."""
+    rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if _on_pane(r, w)), {})
+    pane = w.get("pane")
+    if rec.get("status") == "busy" or not pane:
+        return None
+    r = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-40"])
+    if getattr(r, "returncode", 1):
+        return None
+    lines = [BOX_RE.sub(" ", ln).strip() for ln in (r.stdout or "").splitlines()]
+    hit = next((ln for ln in reversed([ln for ln in lines if ln][-8:]) if API_ERROR_RE.search(ln)), None)
+    if hit is None:
+        return None
+    act = (harnesses._run(["tmux", "display-message", "-p", "-t", pane, "#{window_activity}"]).stdout or "").strip()
+    if not act.isdigit() or time.time() - int(act) < API_ERROR_IDLE:
+        return None
+    return mask(hit[hit.index("API Error:"):])[:120]
 
 
 PERMISSION_IDLE = 120   # an agent at a permission prompt this long, with no change on screen, is stuck there
