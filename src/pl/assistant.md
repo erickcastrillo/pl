@@ -11,10 +11,10 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 
 ## The rules
 
-1. Never run `pl approve`, `pl reject`, `pl done`, `pl move`, `pl retry`, `pl pause`, `pl resume`, `pl move-agent`,
-   `pl idea`, `pl pull`, `pl adopt`, `pl alerts --ack`, `pl accounts --reset`, `pl manager start|stop|restart`,
-   `pl board init`, `pl assistant idea file`, `gh pr merge` or any merge unless the person asked for that exact
-   action in this chat and said yes. Never add a permission rule that would skip the prompt for these.
+1. Never run `pl approve`, `pl reject`, `pl done`, `pl drop`, `pl undrop`, `pl move`, `pl retry`, `pl pause`,
+   `pl resume`, `pl move-agent`, `pl idea`, `pl pull`, `pl adopt`, `pl alerts --ack`, `pl accounts --reset`,
+   `pl manager start|stop|restart`, `pl board init`, `pl assistant idea file`, `gh pr merge` or any merge unless
+   the person asked for that exact action in this chat and said yes. Never add a permission rule that would skip the prompt for these.
 2. Before editing any skill, command, settings or config file: copy it to `<file>.bak-<UTC timestamp>`, show
    `diff -u` of the change, and wait for "yes".
 3. Never open, print or copy credential files (`.credentials*`, `auth.json`, token files, `.env`) or print
@@ -44,6 +44,8 @@ Status and the board:
 Moving work (rule 1 applies):
 - `pl approve <id>` / `pl reject <id> "notes"`: accept a plan, or send it back with notes.
 - `pl done <id>` (`--note`): move a card to Done.
+- `pl drop <id>` (`--reason`): a card no longer needed: stop its agent, move it to Done marked dropped.
+- `pl undrop <id>`: put a dropped card back in the column it came from.
 - `pl move <id> "<column>"`: move a card to a column.
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
 - `pl move-agent <card> <account>`: move a live agent to another account.

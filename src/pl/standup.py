@@ -23,7 +23,8 @@ PIPELINE = [("ideas added", lambda e: e["kind"] == "idea_approved"),
             ("plans written", lambda e: e["kind"] == "moved" and e.get("to") == "Plan for review"),
             ("plans approved", lambda e: e["kind"] == "approved"),
             ("sent back", lambda e: e["kind"] in ("rejected", "spec_rejected")),
-            ("cards done", lambda e: e["kind"] == "moved" and e.get("to") == "Done")]
+            ("cards done", lambda e: e["kind"] == "moved" and e.get("to") == "Done" and not e.get("dropped")),
+            ("cards dropped", lambda e: e["kind"] == "dropped")]   # pl drop: no longer needed, not finished
 
 
 def parse_since(text, now=None):
@@ -131,9 +132,9 @@ def text(snapshot, start, prs, now=None, cards=None, col=None, markdown=False, f
 
     hits = {label: [e.get("card") for e in evs if test(e)] for label, test in PIPELINE}
     counts = {label: len(h) for label, h in hits.items()}
-    touched = [cid for label, *_ in reversed(PIPELINE) for cid in hits[label]]   # bullets: cards done first
+    touched = [cid for label, *_ in reversed(PIPELINE) for cid in hits[label]]   # bullets: cards dropped and done first
     if not counts["cards done"] and cards and col:   # no moves to Done logged: the board's Done column updated in the window
-        done = [c for c in cards if col(c) == "Done" and start.timestamp() < parse_iso(c.get("updated_at") or "") <= now.timestamp()]
+        done = [c for c in cards if col(c) == "Done" and not (c.get("metadata") or {}).get("dropped_at") and start.timestamp() < parse_iso(c.get("updated_at") or "") <= now.timestamp()]
         counts["cards done"] = len(done)
         touched = [c["id"] for c in done] + touched
     out.append(head("Pipeline") + " " + ", ".join(f"{n} {label}" for label, n in counts.items()))
@@ -152,7 +153,7 @@ def text(snapshot, start, prs, now=None, cards=None, col=None, markdown=False, f
 
     from pl.tui.needs import GROUPS, needs_groups
     g = needs_groups(rows)
-    need = [r for k, *_ in GROUPS for r in g[k]]
+    need = [r for k in GROUPS for r in g[k]]
     out.append(f"{head('Needs you')} {len(need)}")
     out += bullets([(r.get("pr") or r.get("card") or {}).get("title") for r in need][:3])
 

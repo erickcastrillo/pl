@@ -464,3 +464,20 @@ def test_no_summary_flag_never_calls_the_model(monkeypatch, capsys, fake_home):
     monkeypatch.setattr(local_model, "_request", lambda *a: pytest.fail("called the model"))
     _standup_cli(monkeypatch)
     assert capsys.readouterr().err == ""
+
+
+def test_dropped_cards_are_counted_apart_from_done():
+    _write(("moved", 2, "done0001", {"from": "PR open", "to": "Done"}),
+           ("dropped", 3, "drop0001", {"from": "Inbox"}),
+           ("moved", 3, "drop0001", {"from": "Inbox", "to": "Done", "dropped": True}))
+    out = standup.text(_snap(), START, PRS, now=NOW)
+    assert "1 cards done, 1 cards dropped" in out
+
+
+def test_the_board_fallback_leaves_dropped_cards_out_of_done():
+    t = (NOW - timedelta(hours=2)).isoformat()
+    cards = [{"id": "d1", "title": "Done recently", "list_id": "Done", "updated_at": t},
+             {"id": "d2", "title": "Dropped recently", "list_id": "Done", "updated_at": t,
+              "metadata": {"dropped_at": t}}]
+    out = standup.text(_snap(), START, PRS, now=NOW, cards=cards, col=lambda c: c["list_id"])
+    assert "1 cards done" in out and "Dropped recently" not in out

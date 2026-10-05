@@ -63,10 +63,10 @@ def test_error_message_is_cut_to_200_chars():
     assert len(_lines()[0]["message"]) == 200
 
 
-def _pass(monkeypatch, col_of):
+def _pass(monkeypatch, col_of, **meta):
     """One dispatcher pass over one auto card whose column is col_of['now']; nothing real runs."""
     card = {"id": "card0001", "title": "SECRET TITLE", "description": "SECRET BODY", "list_id": "L",
-            "metadata": {"pipeline_mode": "auto"}}
+            "metadata": {"pipeline_mode": "auto", **meta}}
     monkeypatch.setattr(dispatch, "registry", lambda: {})
     monkeypatch.setattr(dispatch, "cards", lambda: [card])
     monkeypatch.setattr(dispatch, "col_name", lambda lid: col_of["now"])
@@ -208,3 +208,12 @@ def test_an_uncreatable_lock_file_still_appends_the_event():
     finally:
         os.chmod(C.STATE_DIR, 0o700)
     assert [e["card"] for e in _lines()] == ["c1", "c2"]
+
+
+def test_a_move_to_done_of_a_dropped_card_is_marked_dropped(monkeypatch):
+    col = {"now": "Inbox"}
+    _pass(monkeypatch, col)
+    col["now"] = "Done"
+    _pass(monkeypatch, col, dropped_at="2026-09-28T11:00:00+00:00")
+    moved = [e for e in _lines() if e["kind"] == "moved"]
+    assert moved[0]["to"] == "Done" and moved[0]["dropped"] is True

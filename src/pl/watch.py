@@ -110,6 +110,9 @@ def watch_snapshot():
             rows.append({"kind": kind, "card": c, "worker": w, "win": win, "col": col, "profile": profile, "failed": failed,
                          "approved": approved_label(c, col, reg) or (view if view.startswith(("run agent waiting", "limit hit")) else None),
                          "text": f"{short_id(c['id'])}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
+    # Done cards came with the same board read; they stay out of rows (and every count) for the Pipeline's z only
+    done = [{"kind": "row", "card": c, "worker": {}, "win": "", "col": "Done", "profile": (c.get("metadata") or {}).get("profile") or ""}
+            for c in sorted(by_col.get("Done", []), key=lambda c: c.get("updated_at") or "", reverse=True)]
     bad = exhausted_profiles()
     stp = profile_state()
     prof = "  ".join(f"{p}: " + (f"PARKED until {parked_until(stp[p].get('until'))}" if p in bad else "ok")
@@ -130,7 +133,7 @@ def watch_snapshot():
     summary2 = (f"CARDS: {n_auto} in the funnel, {needs['manual']} manual   |   " + " · ".join(f"{k} {v}" for k, v in cols.items())
                 + "   |   LOOPS: " + " · ".join(f"{n} {'on' if n in wins.values() else 'off'}" for n in C.SERVICES)
                 + (f"   |   PRs awaiting merge check: {pc['gate']}" if pc else ""))
-    return {"rows": rows, "prof": prof, "parked": bool(bad), "at": datetime.now().strftime("%H:%M:%S"), "summary": summary, "summary2": summary2,
+    return {"rows": rows, "done": done, "prof": prof, "parked": bool(bad), "at": datetime.now().strftime("%H:%M:%S"), "summary": summary, "summary2": summary2,
             "needs": needs, "disp": "running" if disp.startswith("python") else f"NOT RUNNING ({disp or 'no window'})"}
 
 

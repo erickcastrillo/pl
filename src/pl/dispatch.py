@@ -346,9 +346,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
+        dropped = {c["id"] for c in all_cards if (c.get("metadata") or {}).get("dropped_at")}   # pl drop: not finished
         for cid, col in now_col.items():
             if cid in last and last[cid] != col:   # first sighting records without emitting
-                events.emit("moved", cid, **{"from": last[cid], "to": col})
+                events.emit("moved", cid, **{"from": last[cid], "to": col}, **({"dropped": True} if col == "Done" and cid in dropped else {}))
         st["last_col"] = now_col
     runs_alive = 0
     runs_live = 0   # every live run agent, waiting ones included

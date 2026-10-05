@@ -65,6 +65,12 @@ ENTRIES = [
        "pl usage --github", "pl usage --github"),
     _e("2026-10-03.03", "Profiles no longer block each other: each gets its own agent share", "pl manager status",
        "pl manager status"),
+    _e("2026-10-05.01", "Needs you and Kanban are gone: the Pipeline tab lists every card, a red ! on those that need you",
+       "tab 2 Pipeline; n shows only the cards that need you; tab keys are digits 0-9 (4 Alerts, 5 Pull requests)", "pl"),
+    _e("2026-10-05.02", "Drop a card no longer needed, and undo it: it goes to Done marked dropped, its agent stopped",
+       "Pipeline: d drops (asks for a reason), z shows Done, u undoes a drop", "pl drop <id> --reason TEXT"),
+    _e("2026-10-05.03", "More Pipeline keys: hand off to Manual, mark done, edit the idea",
+       "Pipeline: h to Manual, f done (both ask first), e edits the card's INPUT in $EDITOR", "pl done <id>"),
 ]
 
 

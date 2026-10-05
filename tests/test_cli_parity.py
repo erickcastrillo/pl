@@ -49,6 +49,7 @@ def _wp2_expected(args, legacy):
         out = out.replace("{idea,list,review,approve,reject,dispatch,pull,adopt,done,board,card,profiles,",
                           "{idea,list,review,approve,reject,dispatch,pull,adopt,done,board,card,profiles,accounts,")
         out = out.replace(",adopt,done,board,", ",adopt,done,move,board,")   # WP28 adds pl move
+        out = out.replace(",adopt,done,move,", ",adopt,done,drop,undrop,move,")   # pl drop / pl undrop
         out = out.replace(",board,card,profiles,", ",board,card,retry,profiles,")   # WP42 adds pl retry
         out = out.replace(",board,card,retry,", ",board,card,section,retry,")   # pl section (read or write one card section)
         out = out.replace(",pause,resume,intent", ",pause,resume,standup,intent")   # WP46 adds pl standup

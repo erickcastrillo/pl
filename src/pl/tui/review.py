@@ -120,17 +120,22 @@ def with_answers(text, answers):
 
 
 def write_spec(card_id, loaded, new):
-    """Write new as the card's SPEC section through the tracker, refused when the card left Spec ready or its SPEC
-    is no longer the text the reader loaded. Section markers in new are neutralised. Returns the card read again."""
+    """Write new as the card's SPEC section, refused when the card left Spec ready (see write_section)."""
+    return write_section(card_id, "SPEC", loaded, new, KIND_COLUMN["spec"])
+
+
+def write_section(card_id, name, loaded, new, column=None):
+    """Write new as the card's section name through the tracker, refused when the card left column (when given) or
+    the section is no longer the text the reader loaded. Section markers in new are neutralised. Returns the card read again."""
     fresh_next()   # the check below must see the board as it is now, not a copy that may be minutes old
     c = card(card_id)
     col = col_name(c["list_id"])
-    if col != KIND_COLUMN["spec"]:
-        raise SystemExit(f"the card is now in '{col}', not '{KIND_COLUMN['spec']}': nothing written")
+    if column and col != column:
+        raise SystemExit(f"the card is now in '{col}', not '{column}': nothing written")
     parts = sections(c.get("description"))
-    if (parts.get("SPEC") or "") != loaded:
-        raise SystemExit("the spec changed on the board since you opened it: nothing written (reopen it to see the new text)")
-    parts["SPEC"] = _plain(new).strip("\n")
+    if (parts.get(name) or "") != loaded:
+        raise SystemExit(f"the {name.lower()} changed on the board since you opened it: nothing written (reopen it to see the new text)")
+    parts[name] = _plain(new).strip("\n")
     update(card_id, description=check_size(render(parts)))
     return card(card_id)
 
@@ -178,12 +183,15 @@ def checks_text(checks):
 
 
 def review_file(kind, c):
-    """The file `e` opens. Written 0600 from the card only when absent; never overwritten."""
+    """The file `e` opens (kind spec, plan, or input: the Pipeline's e). Written 0600 from the card only when absent;
+    never overwritten."""
     slug = slug_of(c)
     if not SLUG_RE.fullmatch(slug or ""):
         raise SystemExit(f"pl: card {short_id(c['id'])} has the slug {slug!r}, which is not a safe file name (a-z, 0-9 and -)")
     if kind == "spec":
         path, text = C.PLANS.parent / "specs" / f"spec-{slug}.md", sections(c.get("description")).get("SPEC") or ""
+    elif kind == "input":
+        path, text = C.PLANS.parent / "inputs" / f"input-{slug}.md", sections(c.get("description")).get("INPUT") or ""
     else:
         path, text = local_plan(c) or C.PLANS / f"{slug}.md", sections(c.get("description")).get("PLAN") or ""
     if not path.exists():
@@ -191,6 +199,12 @@ def review_file(kind, c):
         with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
             f.write(text.rstrip() + "\n")
     return path
+
+
+def open_editor(app, path):
+    """$EDITOR (vi when unset) on path, the app suspended meanwhile. Call it on the UI thread."""
+    with app.suspend():
+        _run([*shlex.split(os.environ.get("EDITOR") or "vi"), str(path)])
 
 
 def safe_link(href):
@@ -461,8 +475,7 @@ class ReviewScreen(Screen):
         except (SystemExit, Exception) as e:
             self.app.notify(str(e), severity="error", markup=False)
             return
-        with self.app.suspend():
-            _run([*shlex.split(os.environ.get("EDITOR") or "vi"), str(path)])
+        open_editor(self.app, path)
         new = path.read_text() if self.kind == "spec" and path.is_file() else before
         if new == before:
             return self.load()

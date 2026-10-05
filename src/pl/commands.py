@@ -12,7 +12,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import exhausted_profiles, machine_entry, next_profile, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, registry, worker_status, worker_view
-from pl import events, ideas, trackers
+from pl import events, ideas, move_agent, trackers
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused
@@ -279,16 +279,8 @@ def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
     hits = matches(a.id, cards())
     if hits:
-        c = card(pick(a.id, hits, "pl done")["id"])   # two matches: refused, never the first
-        update(c["id"], list_id=col_id("Done"), metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None})
-        m = c.get("metadata") or {}
-        if m.get("product_card") and intake_configured() and "Done" in product_lists():
-            try:
-                trackers.get("intake").update(m["product_card"], verify=False, list_id=product_lists()["Done"])
-                print(f"  linked Product card {short_id(m['product_card'])} moved to Done as well")
-            except SystemExit as e:   # the pipeline card is done either way
-                print(f"  linked Product card {short_id(m['product_card'])} not moved ({e}); move it by hand")
-        print(f"done {short_id(c['id'])}  {c['title']}  (pipeline board, was in {col_name(c['list_id'])})")
+        for line in done(a.id, hits):
+            print(line)
         return
     pc = product_card(a.id) if len(a.id) >= 32 else None
     if pc is None:
@@ -304,6 +296,89 @@ def cmd_done(a):
     if got.get("list_id") != product_lists()["Done"]:
         raise SystemExit(f"pl done: move did not persist for {short_id(pc['id'])}")
     print(f"done {short_id(pc['id'])}  {pc['title'][:70]}  (Product board, was in {product_col(pc['list_id'])})")
+
+
+def done(ref, cs=None):
+    """A person's call: move one Feature Pipeline card (and its linked Product card) to Done. cs: the cards to pick
+    from, default every pipeline card. A live agent is not stopped. Returns lines to show."""
+    c = card(pick(ref, cards() if cs is None else cs, "pl done")["id"])   # two matches: refused, never the first
+    update(c["id"], list_id=col_id("Done"), metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None})
+    m, out = c.get("metadata") or {}, []
+    if m.get("product_card") and intake_configured() and "Done" in product_lists():
+        try:
+            trackers.get("intake").update(m["product_card"], verify=False, list_id=product_lists()["Done"])
+            out.append(f"  linked Product card {short_id(m['product_card'])} moved to Done as well")
+        except SystemExit as e:   # the pipeline card is done either way
+            out.append(f"  linked Product card {short_id(m['product_card'])} not moved ({e}); move it by hand")
+    return out + [f"done {short_id(c['id'])}  {c['title']}  (pipeline board, was in {col_name(c['list_id'])})"]
+
+
+DROP_KEYS = ("dropped_at", "dropped_by", "drop_reason", "dropped_from")
+
+
+def drop(ref, reason=None):
+    """A card no longer needed: stop its live agent, move it to Done marked dropped (not done), and its linked
+    Product card to Done too. Refuses when the agent cannot be stopped. Returns lines to show."""
+    fresh_next()   # it writes what it read: never from a copy that may be minutes old
+    c = card(pick(ref, cards(), "pl drop")["id"])   # two matches: refused, never the first
+    m, col, head = c.get("metadata") or {}, col_name(c["list_id"]), f"{short_id(c['id'])}  {c['title'][:50]}"
+    if col == "Done":
+        raise SystemExit(f"pl drop: {head} is already in Done" + (" (dropped)" if m.get("dropped_at") else ""))
+    w, out = m.get("worker") or {}, []
+    live = bool(w) and worker_status(w, registry())[0] in ("alive", "starting")
+    if live and not move_agent.lock(c["id"]):   # the move lock also keeps the dispatcher off the card meanwhile
+        raise SystemExit(f"pl drop: {head}: an agent move of this card is in progress; not dropped, try again")
+    try:
+        if live:
+            why = move_agent.pane_refusal(c, w)
+            if why or not move_agent.stop(w["pane"], w.get("session_id")):
+                raise SystemExit(f"pl drop: {head}: its {w.get('stage')} agent could not be stopped "
+                                 f"({why or 'still running after Ctrl-C'}); not dropped. Stop it in its window, then drop again")
+            out.append(f"  stopped its {w.get('stage')} agent (Ctrl-C in its window)")
+        meta = {"dropped_at": now_iso(), "dropped_by": C.USER_EMAIL, "drop_reason": reason, "dropped_from": col, "worker": None}
+        if w.get("window"):   # the dispatcher closes a finished worker's window once its session is gone
+            meta["finished_workers"] = list(m.get("finished_workers") or []) + [w]
+        update(c["id"], list_id=col_id("Done"), metadata=meta)
+    finally:
+        if live:
+            move_agent.unlock(c["id"])
+    events.emit("dropped", c["id"], **{"from": col})   # the reason is card text: never in the event log
+    if m.get("product_card") and intake_configured() and "Done" in product_lists():
+        try:
+            trackers.get("intake").update(m["product_card"], verify=False, list_id=product_lists()["Done"])
+            out.append(f"  linked Product card {short_id(m['product_card'])} moved to Done as well")
+        except SystemExit as e:   # the pipeline card is dropped either way
+            out.append(f"  linked Product card {short_id(m['product_card'])} not moved ({e}); move it by hand")
+    return [f"dropped {head}  (moved to Done, was in {col}; pl undrop {short_id(c['id'])} puts it back)"] + out
+
+
+def undrop(ref):
+    """Put a dropped card back in the column it was dropped from (Inbox when that is unknown) and clear the drop.
+    A linked Product card stays where it is. Returns lines to show."""
+    fresh_next()
+    c = card(pick(ref, cards(), "pl undrop")["id"])   # cards() lists Done cards too
+    m, head = c.get("metadata") or {}, f"{short_id(c['id'])}  {c['title'][:50]}"
+    if not m.get("dropped_at"):
+        raise SystemExit(f"pl undrop: {head} was not dropped")
+    if col_name(c["list_id"]) != "Done":
+        raise SystemExit(f"pl undrop: {head} is not in Done any more (it is in {col_name(c['list_id'])}); move it with pl move")
+    back = m.get("dropped_from") if m.get("dropped_from") in C.COLUMNS and m.get("dropped_from") != "Done" else "Inbox"
+    update(c["id"], list_id=col_id(back), metadata=dict.fromkeys(DROP_KEYS))
+    events.emit("undropped", c["id"], to=back)
+    out = [f"undropped {head}  (back in {back})"]
+    if m.get("product_card"):
+        out.append(f"  linked Product card {short_id(m['product_card'])} stays where it is; move it by hand if needed")
+    return out
+
+
+def cmd_drop(a):
+    for line in drop(a.id, a.reason):
+        print(line)
+
+
+def cmd_undrop(a):
+    for line in undrop(a.id):
+        print(line)
 
 
 

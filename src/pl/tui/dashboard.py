@@ -14,7 +14,8 @@ from textual.widgets import DataTable, Digits, Label, Sparkline, Static
 from pl import config as C
 from pl import standup
 from pl.tui.loops import COPIERS, _copy_run
-from pl.tui.needs import NeedsView, needs_groups, waiting_total
+from pl.tui.cards import CardsView
+from pl.tui.needs import needs_groups, waiting_total
 from pl.tui.prs import pr_groups
 from pl.usage import human
 from pl.util import age, parse_iso
@@ -70,9 +71,9 @@ def tile_values(data, window):
             "ready": len(pr_groups(rows)["merge"]), "waiting": waiting_total(needs_groups(rows))}
 
 
-# row key → (tab, Needs-you group to select there, or None)
-DECIDE_TARGET = {"merge": ("prs", None), "specs": ("needs", "specs"), "plans": ("needs", "plans"),
-                 "rework": ("needs", "rework"), "decide": ("needs", "decide"), "manual": ("needs", "manual")}
+# row key → (tab, Needs-you card group to select on the Pipeline with its attention filter on, or None)
+DECIDE_TARGET = {"merge": ("prs", None), "specs": ("cards", "specs"), "plans": ("cards", "plans"),
+                 "rework": ("prs", None), "decide": ("prs", None), "manual": ("cards", "manual")}
 
 
 def decide_next(rows):
@@ -271,7 +272,7 @@ class DashboardView(Vertical):
         tab, group = DECIDE_TARGET[e.row_key.value]
         self.app.action_tab(tab)
         if group:
-            self.app.query_one(NeedsView).select_group(group)
+            self.app.query_one(CardsView).show_attention(True, group)
 
 
 class StandupScreen(ModalScreen):

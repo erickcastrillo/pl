@@ -14,13 +14,11 @@ from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
-from pl.tui.cards import CardsView, card_count
-from pl.tui.chrome import KEY_NAMES, TABS, TAB_KEYS, header_text, tabs
+from pl.tui.cards import CardsView, attention_count, card_count
+from pl.tui.chrome import TABS, TAB_KEYS, header_text, tabs
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
-from pl.tui.needs import NeedsView, needs_groups, waiting_total
-from pl.tui.pipeline import PipelineView
 from pl.tui.prs import PrsView
 from pl.tui.review import ConfirmScreen
 from pl.tui.settings import SettingsView
@@ -28,7 +26,7 @@ from pl.tui.skills import SkillsView
 from pl.tui.subagents import SubagentsView
 
 LATER = {}
-VIEWS = {"dashboard": DashboardView, "needs": NeedsView, "ideas": IdeasView, "pipeline": PipelineView, "prs": PrsView,
+VIEWS = {"dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView}
 
@@ -162,11 +160,10 @@ class DispatcherChoice(ModalScreen):
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
-    BINDINGS = [Binding(KEY_NAMES.get(TAB_KEYS[tid], TAB_KEYS[tid]), f"tab('{tid}')", "views" if i == 0 else name,
-                        show=i == 0, key_display="0-9 ! @")
+    BINDINGS = [Binding(TAB_KEYS[tid], f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="0-9")
                 for i, (tid, name) in enumerate(TABS)] + [
         Binding(f"{mod}+{TAB_KEYS[tid]}", f"tab('{tid}')", name, show=False)   # work even while the Assistant box has focus
-        for mod in ("ctrl", "alt") for tid, name in TABS if TAB_KEYS[tid].isdigit()] + [
+        for mod in ("ctrl", "alt") for tid, name in TABS] + [
         Binding("w", "cycle_window", "window"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
@@ -342,22 +339,18 @@ class PlApp(App):
             return
         rows = self.data["snapshot"]["rows"]
         self.query_one(DashboardView).show(self.data, self.window)
-        self.query_one(NeedsView).show(self.data)
         self.query_one(PrsView).show(self.data)
         self.query_one(LoopsView).show(self.data)
         self.query_one(ActivityView).show(self.data)
         self.query_one(SubagentsView).show(self.data)
         self.query_one(AlertsView).show(self.data)
         self.query_one(CardsView).show(self.data)
-        await self.query_one(PipelineView).show(self.data)
         tabs = self.query_one(TabbedContent)
         n_prs = sum(1 for r in rows if r.get("pr"))
-        n_cards = sum(1 for r in rows if r.get("card"))
-        for tid, label in (("needs", f"2 Needs you {waiting_total(needs_groups(rows))}"),
-                           ("pipeline", f"4 Kanban {n_cards}"), ("prs", f"5 Pull requests {n_prs}"),
-                           ("alerts", f"! Alerts {len(self.data.get('alerts') or [])}"),
-                           ("cards", f"@ Pipeline {card_count(self.data)}")):
-            tabs.get_tab(tid).label = label
+        mine = attention_count(self.data)
+        for tid, label in (("cards", f"Pipeline {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
+                           ("prs", f"Pull requests {n_prs}"), ("alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
+            tabs.get_tab(tid).label = f"{TAB_KEYS[tid]} {label}"
 
     @property
     def active_tab(self):
@@ -383,8 +376,6 @@ class PlApp(App):
         if self.active_tab == "assistant":
             self.query_one(AssistantView).opened()
             self.call_after_refresh(self.query_one(AssistantView).focus_box)
-        if self.active_tab == "needs":
-            self.query_one(NeedsView).opened()
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
 
@@ -402,7 +393,7 @@ class PlApp(App):
         if action == "standup":
             return self.active_tab == "dashboard" and len(self.screen_stack) == 1
         if action == "review":
-            return self.active_tab in ("needs", "cards") and len(self.screen_stack) == 1
+            return self.active_tab == "cards" and len(self.screen_stack) == 1
         if action == "dispatcher":
             return len(self.screen_stack) == 1   # never a second D while its choice or confirm dialog is open
         return True
@@ -419,7 +410,7 @@ class PlApp(App):
         self.push_screen(StandupScreen(self.data["snapshot"]))
 
     def action_review(self, what):
-        self.query_one(CardsView if self.active_tab == "cards" else NeedsView).review(what)
+        self.query_one(CardsView).review(what)
 
     def action_refresh(self):
         self.query_one(PrsView).clear_cache()

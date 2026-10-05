@@ -14,7 +14,7 @@ from textual.widgets import TabbedContent
 from pl import cli, trackers, watch
 from pl import config as C
 from pl.tui import app as tui_app
-from pl.tui import pipeline as tui_pipeline
+from pl.tui import cards as tui_cards
 from pl.tui import prs as tui_prs
 from pl.tui.app import PlApp
 
@@ -152,32 +152,6 @@ async def test_dashboard_renders_tiles_and_panels():
             assert s in text, s
 
 
-async def test_needs_you_groups_and_counts(monkeypatch):
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
-        text = screen_text(app)
-        for s in ("PLANS TO REVIEW 2", "PRS STOPPED FOR YOUR CALL 1", "NEEDS REWORK 1", "MANUAL · YOURS TO DO 1",
-                  "2 PRs ready to merge", "4a000001", "frontend#1117"):
-            assert s in text, s
-        assert "SPECS TO REVIEW" not in text          # the spec gate is off in legacy mode
-        await pilot.press("a")
-        await pilot.pause()
-        assert type(app.screen).__name__ == "ConfirmScreen" and "4a000001" in app.screen.message   # WP10: a opens the approve dialog
-
-
-async def test_needs_you_shows_specs_when_the_gate_is_on(monkeypatch):
-    monkeypatch.setattr(C, "GATES", {"spec": True})
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
-        assert "SPECS TO REVIEW 1" in screen_text(app)
-
-
 async def test_pull_requests_groups():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
@@ -188,19 +162,6 @@ async def test_pull_requests_groups():
         for s in ("NEED YOUR DECISION 1", "READY TO MERGE 2", "NEED REWORK 1", "AWAITING MERGE CHECK 1",
                   "frontend#1200  feat: merge me first", "api#1300  feat: waiting for the gate"):
             assert s in text, s
-
-
-async def test_pipeline_columns_and_cards():
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        text = screen_text(app)
-        for s in ("Inbox (0)", "Spec ready (1)", "Plan for review (2)", "Manual (1)", "PR open (1)",
-                  "4a000001", "acme2", "your review", "yours to do"):
-            assert s in text, s
-        assert "Done (" not in text
 
 
 async def test_refresh_failure_keeps_numbers_and_shows_the_error():
@@ -243,16 +204,14 @@ async def test_dashboard_bottom_row_three_equal_columns(size):
         assert min(widths) > 0 and max(widths) - min(widths) <= 1, widths
 
 
-async def test_small_terminal_every_tab_and_pipeline_scrolls_sideways():
+async def test_small_terminal_every_tab():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await settle(pilot)
-        for key in "12345678":
+        for key in "123456789":
             await pilot.press(key)
             await pilot.pause()
-        await pilot.press("4")
-        await pilot.pause()
-        assert app.query_one("#pipeline-scroll").max_scroll_x > 0
+        assert app.is_running and "render failed" not in str(app.query_one("#header").render())
 
 
 async def test_provider_only_runs_off_the_ui_thread():
@@ -266,31 +225,25 @@ async def test_provider_only_runs_off_the_ui_thread():
     assert all(t is not threading.main_thread() for t in prov.threads)
 
 
-async def test_card_markup_is_shown_as_plain_text():
+async def test_card_markup_is_shown_as_plain_text(monkeypatch):
+    _fake_card_read(monkeypatch, [])
     title = "[bold]x[/bold] [link=https://evil.example]y[/link]"
     pr_title = "[red]pr[/red] [link=https://evil.example]z[/link]"
     app = PlApp(snapshot_provider=Provider(fake_data(title=title, pr_title=pr_title)))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
+        await _open_cards(pilot, app, "4a000001aaaa")
         table_line = next(l for l in screen_text(app).splitlines() if "4a000001 " in l)
         assert "[bold]x[/bold]" in table_line.split("││")[0]      # the list, not only the detail pane
-        assert "[bold]x[/bold]" in str(app.query_one("#needs-detail").render())        # card detail pane
-        app.query_one("#needs-table").move_cursor(row=4)                                 # the PR row
-        await pilot.pause()
-        assert "[red]pr[/red]" in str(app.query_one("#needs-detail").render())         # PR detail pane
+        assert "[bold]x[/bold]" in str(app.query_one("#cards-detail").render())        # card detail pane
         await pilot.press("5")
         await pilot.pause()
         assert "[red]pr[/red] [link=https://evil.example]z[/link]" in screen_text(app)
-        await pilot.press("4")
-        await pilot.pause()
-        assert "[bold]x[/bold]" in screen_text(app)
 
 
 async def test_pipeline_keys_jump_and_open_off_the_ui_thread(monkeypatch):
     calls = []
-    monkeypatch.setattr(tui_pipeline, "jump_to_window", lambda win: calls.append(("jump", win, threading.current_thread())) or "ok")
+    monkeypatch.setattr(tui_cards, "jump_to_window", lambda win: calls.append(("jump", win, threading.current_thread())) or "ok")
+    _fake_card_read(monkeypatch, [])
     opened = []
     monkeypatch.setattr(C, "TRACKER", {"type": "mcp", "board_id": "b-1", "server": {"command": "none"},
                                        "card_url": "https://boards.example/{board_id}?cardId={item_id}"})
@@ -298,11 +251,7 @@ async def test_pipeline_keys_jump_and_open_off_the_ui_thread(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "4a000001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "4a000001aaaa")
         await pilot.press("w")
         await pilot.press("c")
         await settle(pilot)
@@ -314,7 +263,8 @@ async def test_c_opens_only_web_links(monkeypatch):
     class T:
         url = staticmethod(lambda cid: urls.pop(0))
     urls = ["file:///etc/passwd", "HTTPS://example.com/card/1"]
-    monkeypatch.setattr(tui_pipeline.trackers, "get", lambda kind: T)
+    monkeypatch.setattr(tui_cards.trackers, "get", lambda kind: T)
+    _fake_card_read(monkeypatch, [])
     opened = []
     monkeypatch.setattr(C, "TRACKER", {"type": "mcp", "board_id": "b-1", "server": {"command": "none"},
                                        "card_url": "https://boards.example/{board_id}?cardId={item_id}"})
@@ -322,11 +272,7 @@ async def test_c_opens_only_web_links(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "4a000001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "4a000001aaaa")
         await pilot.press("c")
         await settle(pilot)
         assert opened == [] and any("no web link" in str(n.message) for n in app._notifications)
@@ -389,20 +335,18 @@ async def test_odd_card_ids_none_titles_duplicates_and_render_errors_do_not_kill
     objtags = _card("objtags-card", "objtags card", "Plan for review", kind="review")
     objtags["card"]["tags"] = [{"name": "bug"}]
     data["snapshot"]["rows"] += [epoch, objtags]
+    _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         assert app.is_running and "render failed" not in str(app.query_one("#header").render())
-        table = app.query_one("#needs-table")
+        await _open_cards(pilot, app)
+        table = app.query_one("#cards-table")
         for i in range(table.row_count):
             table.move_cursor(row=i)
             await pilot.pause()
         assert app.is_running and "render failed" not in str(app.query_one("#header").render())
-        await pilot.press("2")
-        await pilot.pause()
         assert "epoch card" in screen_text(app)
-        await pilot.press("4")
-        await pilot.pause()
         assert "repo#12" in screen_text(app) and "repo#13" in screen_text(app)   # GitHub ids show as repo#n
         monkeypatch.setattr(type(app.query_one("#tabs").parent.query_one("PrsView")), "show",
                             lambda self, d: (_ for _ in ()).throw(ValueError("boom")))
@@ -432,14 +376,13 @@ async def test_real_sparkline_series_still_draws_bars():
 
 
 async def test_other_views_skip_the_redraw_when_their_data_is_unchanged(monkeypatch):
-    """WP24: identical data on the next pass leaves the tables and the pipeline columns alone."""
+    """WP24: identical data on the next pass leaves the tables alone."""
     import copy
     prov = Provider()
     app = PlApp(snapshot_provider=lambda: copy.deepcopy(prov()))
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        cols = list(app.query_one("#pipeline-scroll").children)
-        clears = {tid: [] for tid in ("waits", "loops-table", "activity-table")}
+        clears = {tid: [] for tid in ("waits", "loops-table", "activity-table", "cards-table")}
         for tid, calls in clears.items():
             t = app.query_one(f"#{tid}")
             real = t.clear
@@ -447,37 +390,38 @@ async def test_other_views_skip_the_redraw_when_their_data_is_unchanged(monkeypa
         app.refresh_data()
         await settle(pilot)
         assert {k: len(v) for k, v in clears.items()} == {k: 0 for k in clears}
-        assert list(app.query_one("#pipeline-scroll").children) == cols
-        prov.data = fake_data(title="A new title")
-        app.refresh_data()
-        await settle(pilot)
-        assert list(app.query_one("#pipeline-scroll").children) != cols
 
 
-@pytest.mark.parametrize("row,tab,selected", [(0, "prs", None), (1, "needs", "spec0001aaaa"), (2, "needs", "4a000001aaaa"),
-                                              (3, "needs", "pr:api#1576"), (4, "needs", "pr:frontend#1117"),
-                                              (5, "needs", "c0000003aaaa")])
+@pytest.mark.parametrize("row,tab,selected", [(0, "prs", None), (1, "cards", "spec0001aaaa"), (2, "cards", "4a000001aaaa"),
+                                              (3, "prs", None), (4, "prs", None), (5, "cards", "c0000003aaaa")])
 async def test_decide_next_rows_are_selectable(monkeypatch, row, tab, selected):
+    """Card groups open the Pipeline with only the cards that need you, on the group's first card; PR groups open
+    Pull requests."""
     monkeypatch.setattr(C, "GATES", {"spec": True})
+    _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         app.query_one("#decide").focus()
         await pilot.press(*["down"] * row, "enter")
-        await pilot.pause()
+        await settle(pilot)
         assert app.active_tab == tab
+        view = app.query_one(tui_cards.CardsView)
+        assert view.only_mine == (tab == "cards")
         if selected:
-            assert app.query_one("NeedsView")._current()[0] == selected
+            assert view._current()[0] == selected
+            assert "d0000004aaaa" not in view._rows   # PR open needs nobody: filtered out
 
 
-async def test_decide_next_row_with_zero_count_still_navigates():
+async def test_decide_next_row_with_zero_count_still_navigates(monkeypatch):
+    _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider())   # spec gate off: no specs waiting
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         app.query_one("#decide").focus()
         await pilot.press("down", "enter")
-        await pilot.pause()
-        assert app.active_tab == "needs"
+        await settle(pilot)
+        assert app.active_tab == "cards" and app.query_one(tui_cards.CardsView).only_mine
 
 
 async def _open_pr(pilot, app, url="https://github.com/o/frontend/pull/1200"):
@@ -697,27 +641,22 @@ async def test_squash_fallback_on_a_forced_merge_says_press_M(monkeypatch):
 
 async def test_t_on_a_failed_card_asks_then_retries_it_off_the_ui_thread(monkeypatch):
     got = []
-    monkeypatch.setattr(tui_pipeline, "retry", lambda cid: got.append((cid, threading.current_thread())) or [f"{cid[:8]}: reset"])
+    monkeypatch.setattr(tui_cards, "retry", lambda cid: got.append((cid, threading.current_thread())) or [f"{cid[:8]}: reset"])
+    _fake_card_read(monkeypatch, [])
     data = fake_data()
     data["snapshot"]["rows"].append({**_card("dead0001aaaa", "A card whose spec agent died", "Inbox", kind="needs"), "failed": True})
     data["snapshot"]["rows"].append(_card("wait0001aaaa", "An agent waiting on a person", "Inbox", kind="needs"))
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "spec0001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "spec0001aaaa")
         await pilot.press("t")          # not a failed card: nothing to retry, no dialog
         await settle(pilot)
         assert got == [] and len(app.screen_stack) == 1
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "wait0001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "wait0001aaaa")
         await pilot.press("t")          # needs you, but waiting on a person: its agent did not fail
         await settle(pilot)
         assert got == [] and len(app.screen_stack) == 1
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "dead0001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "dead0001aaaa")
         await pilot.press("t")
         await pilot.pause()
         assert len(app.screen_stack) == 2   # the confirm line
@@ -739,18 +678,14 @@ async def test_m_on_a_live_agent_asks_then_moves_it_off_the_ui_thread(monkeypatc
     live = _card("live0001aaaa", "A card with a live agent", "Inbox", kind="working")
     live["worker"] = {"window": "@3", "pane": "%3", "profile": "acme", "session_id": "s"}
     data["snapshot"]["rows"].append(live)
+    _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "spec0001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "spec0001aaaa")
         await pilot.press("m")          # no agent window: nothing to move, no dialog
         await settle(pilot)
         assert got == [] and len(app.screen_stack) == 1
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == "live0001aaaa").focus()
-        await pilot.pause()
+        await _open_cards(pilot, app, "live0001aaaa")
         await pilot.press("m")
         await pilot.pause()
         assert len(app.screen_stack) == 2   # the confirm line
@@ -791,14 +726,13 @@ async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
     data = fake_data()
     data["alerts"] = [{"key": "stage_failed:abcd1234:spec", "severity": "high", "title": "Card abcd1234: the spec agent died 3 times",
                        "fix": "pl retry abcd1234", "first_seen": NOW.timestamp() - 7200, "last_seen": NOW.timestamp(), "count": 4}]
+    _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
-        assert "ALERTS" not in screen_text(app)   # Needs you lists only work for you; alerts live on their own tab
-        assert "! Alerts 1" in screen_text(app)
-        await pilot.press("exclamation_mark")
+        await _open_cards(pilot, app)
+        assert "ALERTS" not in screen_text(app)   # the Pipeline lists only cards; alerts live on their own tab
+        assert "4 Alerts 1" in screen_text(app)
+        await pilot.press("4")
         await pilot.pause()
         assert app.active_tab == "alerts"
         text = screen_text(app)
@@ -811,7 +745,7 @@ async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
         data["alerts"] = []                       # resolved: the dispatcher's next read leaves it out
         app.refresh_data()
         await settle(pilot)
-        assert "none open" in screen_text(app) and "! Alerts 0" in screen_text(app)
+        assert "none open" in screen_text(app) and "4 Alerts 0" in screen_text(app)
 
 
 def test_an_old_alert_title_with_a_cut_github_id_shows_repo_and_number():
@@ -830,20 +764,21 @@ def _cells(a, mod):
     return " ".join(t.plain for t in mod.cells(a))
 
 
-async def test_needs_you_with_nothing_waiting_says_so_and_keys_only_notify():
+async def test_pipeline_filter_with_nothing_waiting_says_so_and_keys_only_notify(monkeypatch):
+    _fake_card_read(monkeypatch, [])
     data = fake_data()
     data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"]
                                 if r.get("card") and r.get("col") not in ("Spec ready", "Plan for review", "Manual")]
     assert data["snapshot"]["rows"]   # cards remain, none needs a person
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        await pilot.press("n")
         await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
         text = screen_text(app)
-        assert "Nothing needs you." in text and "2 Needs you 0" in text and "select a row" in text
-        for s in ("SPECS TO REVIEW", "PLANS TO REVIEW", "PRS STOPPED", "NEEDS REWORK", "MANUAL", "ready to merge"):
-            assert s not in text, s
+        assert "Nothing needs you." in text and "select a row" in text
+        assert str(app.query_one(TabbedContent).get_tab("cards").label) == "2 Pipeline 1"   # no "need you" part
+        assert "PR OPEN" not in text
         for key in ("a", "x", "o", "enter", "down", "up"):
             await pilot.press(key)
             await pilot.pause()
@@ -865,7 +800,7 @@ def _fake_card_read(monkeypatch, reads):
 async def _open_cards(pilot, app, cid=None):
     from pl.tui import cards as tui_cards
     await settle(pilot)
-    await pilot.press("at")
+    await pilot.press("2")
     await settle(pilot)
     if cid is not None:
         t = app.query_one("#cards-table")
@@ -882,7 +817,7 @@ async def test_pipeline_lists_every_card_by_column_with_its_text(monkeypatch):
         view = await _open_cards(pilot, app, "4a000001aaaa")
         assert app.active_tab == "cards"
         text = screen_text(app)
-        assert "@ Pipeline 5" in text and "4 Kanban" in text
+        assert "2 Pipeline 5 · 3 need you" in text and "Kanban" not in text and "Needs you" not in text
         heads = ["SPEC READY 1", "PLAN FOR REVIEW 2", "MANUAL 1", "PR OPEN 1"]
         for s in heads + ["4a000001", "60000002", "c0000003", "d0000004", "spec0001"]:
             assert s in text, s
@@ -947,11 +882,10 @@ async def test_pipeline_v_moves_a_card_to_another_column_after_asking(monkeypatc
     assert [m[:2] for m in moved] == [("c0000003aaaa", "Spec ready")] and moved[0][2] is not threading.main_thread()
 
 
-async def test_pipeline_shares_kanbans_card_keys(monkeypatch):
-    from pl.tui import pipeline as P
+async def test_pipeline_t_retries_and_enter_opens_the_whole_card(monkeypatch):
     _fake_card_read(monkeypatch, [])
     got = []
-    monkeypatch.setattr(tui_pipeline, "retry", lambda cid: got.append(cid) or ["reset"])
+    monkeypatch.setattr(tui_cards, "retry", lambda cid: got.append(cid) or ["reset"])
     data = fake_data()
     data["snapshot"]["rows"].append({**_card("dead0001aaaa", "A card whose spec agent died", "Inbox", kind="needs"), "failed": True})
     app = PlApp(snapshot_provider=Provider(data))
@@ -964,7 +898,260 @@ async def test_pipeline_shares_kanbans_card_keys(monkeypatch):
         assert got == ["dead0001aaaa"]
         await pilot.press("enter")
         await pilot.pause()
-        assert isinstance(app.screen, P.CardScreen)
+        assert isinstance(app.screen, tui_cards.CardScreen)
+
+
+# ---------- the Pipeline's attention marker and filter ----------
+
+def test_needs_me_reuses_the_needs_you_rules(monkeypatch):
+    from pl.tui.needs import needs_me
+    monkeypatch.setattr(C, "GATES", {"spec": True})
+    rows = {r["card"]["id"]: r for r in fake_data()["snapshot"]["rows"] if r.get("card")}
+    assert {cid for cid, r in rows.items() if needs_me(r)} == {"spec0001aaaa", "4a000001aaaa", "60000002aaaa", "c0000003aaaa"}
+    assert needs_me({**_card("dead0001aaaa", "died", "Inbox"), "failed": True})
+    assert needs_me(_card("wait0001aaaa", "an agent waits on a person", "Inbox", kind="needs"))
+    assert not needs_me(_card("busy0001aaaa", "working", "Inbox", kind="working"))
+    assert not needs_me(_pr("frontend", 1117, "a PR", "decide"))   # PRs live on the Pull requests tab
+    monkeypatch.setattr(C, "GATES", {})
+    assert not needs_me(rows["spec0001aaaa"])   # spec gate off: the planner takes the spec, nobody waits
+
+
+def _attention_data():
+    data = fake_data()
+    data["snapshot"]["rows"].append({**_card("dead0001aaaa", "A card whose spec agent died", "Inbox", kind="needs"), "failed": True})
+    return data
+
+
+MINE = {"dead0001aaaa", "4a000001aaaa", "60000002aaaa", "c0000003aaaa"}   # spec gate off: the spec waits on nobody
+
+
+async def test_pipeline_marks_the_cards_that_need_you_and_counts_them_on_the_tab(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_attention_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        t = app.query_one("#cards-table")
+        marked = {cid for cid in view._rows if t.get_row(cid)[2].plain.startswith("! ")}
+        assert marked == MINE
+        assert any("red" in str(sp.style) for sp in t.get_row("c0000003aaaa")[2].spans)
+        assert "2 Pipeline 6 · 4 need you" in screen_text(app)
+        assert "4 need you" in t.border_title and "n only those" in t.border_title
+
+
+async def test_n_shows_only_the_cards_that_need_you_and_n_again_shows_all(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_attention_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app, "60000002aaaa")
+        t = app.query_one("#cards-table")
+        await pilot.press("n")
+        await settle(pilot)
+        assert set(view._rows) == MINE and view._current()[0] == "60000002aaaa"   # the selected card stays selected
+        assert "needs you only" in t.border_title and "4 of 6 cards" in t.border_title
+        text = screen_text(app)
+        assert "PR OPEN" not in text and "SPEC READY" not in text and "INBOX 1" in text
+        app.refresh_data()
+        await settle(pilot)
+        assert set(view._rows) == MINE   # the filter stays on across refreshes
+        await pilot.press("n")
+        await settle(pilot)
+        assert len(view._rows) == 6 and "needs you only" not in t.border_title
+
+
+# ---------- the Pipeline's drop, hand off, done, show Done and undo drop keys ----------
+
+def _called(monkeypatch, name, out):
+    """Replace a backend function in the cards module: record its arguments and thread, answer out."""
+    got = []
+    monkeypatch.setattr(tui_cards, name, lambda *a: got.append((a, threading.current_thread())) or out)
+    return got
+
+
+def _done_row(cid, title, **meta):
+    r = _card(cid, title, "Done")
+    r["card"]["metadata"].update(meta)
+    return r
+
+
+def _with_done():
+    data = fake_data()
+    data["snapshot"]["done"] = [_done_row("f0000001aaaa", "A shipped card", done_at=_iso(1)),
+                                _done_row("f0000002aaaa", "A card nobody needs", dropped_at=_iso(2),
+                                          drop_reason="[red]customer cancelled[/red]", dropped_from="Spec ready")]
+    return data
+
+
+def test_the_pipeline_keys_do_not_clash_with_the_console_keys():
+    app_keys = {b.key for b in PlApp.BINDINGS}
+    view_keys = [b.key for b in tui_cards.CardsView.BINDINGS]
+    assert len(view_keys) == len(set(view_keys))
+    assert not ({"d", "h", "f", "z", "u", "e"} & app_keys) and {"d", "h", "f", "z", "u", "e"} <= set(view_keys)
+    assert "D" in app_keys and "D" not in view_keys   # D stays the dispatcher's key
+
+
+async def test_d_asks_for_a_reason_then_confirms_then_drops_off_the_ui_thread(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "drop", ["dropped c0000003"])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "c0000003aaaa")
+        await pilot.press("d")
+        await pilot.pause()
+        assert isinstance(app.screen, tui_cards.ReasonScreen)
+        await pilot.press("escape")      # esc: nothing dropped, no confirm
+        await pilot.pause()
+        assert len(app.screen_stack) == 1 and got == []
+        await pilot.press("d")
+        await pilot.pause()
+        for ch in "not needed":
+            await pilot.press("space" if ch == " " else ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Drop c0000003" in app.screen.message
+        assert "not needed" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("enter")       # no reason given: None
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in got] == [("c0000003aaaa", "not needed"), ("c0000003aaaa", None)]
+    assert all(g[1] is not threading.main_thread() for g in got)
+    assert any("dropped c0000003" in str(n.message) for n in app._notifications)
+
+
+async def test_d_shows_a_refusal_and_the_console_runs_on(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+
+    def refuse(*a):
+        raise SystemExit("pl drop: its run agent could not be stopped")
+    monkeypatch.setattr(tui_cards, "drop", refuse)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "c0000003aaaa")
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(pilot)
+        assert app.is_running and any("not dropped: pl drop: its run agent" in str(n.message) for n in app._notifications)
+
+
+async def test_h_hands_a_card_to_manual_after_asking_and_refuses_one_already_there(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "move_to", "spec0001aaaa")
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "c0000003aaaa")   # already in Manual
+        await pilot.press("h")
+        await settle(pilot)
+        assert len(app.screen_stack) == 1 and got == []
+        assert any("already in Manual" in str(n.message) for n in app._notifications)
+        await _open_cards(pilot, app, "spec0001aaaa")
+        await pilot.press("h")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "from Spec ready to Manual" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in got] == [("spec0001aaaa", "Manual")] and got[0][1] is not threading.main_thread()
+
+
+async def test_f_marks_a_card_done_after_asking(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "done", ["done d0000004"])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "d0000004aaaa")
+        await pilot.press("f")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "done" in app.screen.message.lower()
+        await pilot.press("n")
+        await settle(pilot)
+        assert got == []
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in got] == [("d0000004aaaa",)] and got[0][1] is not threading.main_thread()
+    assert any("done d0000004" in str(n.message) for n in app._notifications)
+
+
+async def test_z_shows_done_and_dropped_cards_without_a_new_refresh(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    provider = Provider(_with_done())
+    app = PlApp(snapshot_provider=provider)
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        assert "DONE" not in screen_text(app) and "f0000001aaaa" not in view._rows
+        calls = len(provider.threads)
+        await pilot.press("z")
+        await settle(pilot)
+        assert len(provider.threads) == calls   # no extra board call: the last refresh already has them
+        t = app.query_one("#cards-table")
+        text = screen_text(app)
+        assert "DONE 2" in text
+        assert t.get_row("f0000001aaaa")[2].plain.strip() == "done"
+        assert t.get_row("f0000002aaaa")[2].plain.strip() == "dropped"
+        assert "[red]customer cancelled[/red]" in t.get_row("f0000002aaaa")[3].plain   # card text is data
+        assert "2 Pipeline 5 · 3 need you" in text   # the tab count leaves Done out
+        assert "z hides Done" in t.border_title
+        await _open_cards(pilot, app, "f0000002aaaa")
+        assert "from Spec ready: [red]customer cancelled[/red]" in screen_text(app)   # the detail pane says why
+        await pilot.press("z")
+        await settle(pilot)
+        assert "f0000001aaaa" not in view._rows and "Done is hidden" in t.border_title
+
+
+async def test_u_undoes_a_drop_only_on_a_dropped_card(monkeypatch):
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "undrop", ["undropped f0000002"])
+    app = PlApp(snapshot_provider=Provider(_with_done()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        await pilot.press("z")
+        await settle(pilot)
+        for cid in ("spec0001aaaa", "f0000001aaaa"):   # not dropped: a notice, no dialog
+            await _open_cards(pilot, app, cid)
+            await pilot.press("u")
+            await settle(pilot)
+            assert len(app.screen_stack) == 1
+        await _open_cards(pilot, app, "f0000002aaaa")
+        await pilot.press("u")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "back to Spec ready" in app.screen.message
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0] for g in got] == [("f0000002aaaa",)] and got[0][1] is not threading.main_thread()
+
+
+async def test_drop_hand_off_and_done_refuse_a_card_already_in_done(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    got = [_called(monkeypatch, n, ["x"]) for n in ("drop", "done", "move_to")]
+    app = PlApp(snapshot_provider=Provider(_with_done()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        await pilot.press("z")
+        await settle(pilot)
+        await _open_cards(pilot, app, "f0000001aaaa")
+        for key in ("d", "f", "h"):
+            await pilot.press(key)
+            await settle(pilot)
+            assert len(app.screen_stack) == 1, key
+    assert got == [[], [], []]
+
+
+async def test_the_tab_keys_are_digits_in_strip_order():
+    from pl.tui.chrome import TAB_KEYS, TABS
+    assert [(TAB_KEYS[tid], name) for tid, name in TABS] == [
+        ("0", "Assistant"), ("1", "Dashboard"), ("2", "Pipeline"), ("3", "Ideas"), ("4", "Alerts"),
+        ("5", "Pull requests"), ("6", "Loops"), ("7", "Activity"), ("8", "Settings"), ("9", "Background")]
 
 
 def _github_data():
@@ -981,49 +1168,14 @@ async def test_github_card_ids_show_as_repo_and_number_on_every_list(monkeypatch
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(_github_data()))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
-        text = screen_text(app)
-        assert all(f"your-repo#{n}" in text for n in (42, 43, 44)) and "your-org" not in text.split("card     ")[0]
-        await pilot.press("4")
-        await pilot.pause()
-        text = screen_text(app)
-        assert all(f"your-repo#{n}" in text for n in (41, 42, 43, 44, 45)) and "your-org" not in text
         await _open_cards(pilot, app)
         text = screen_text(app)
-        assert all(f"your-repo#{n}" in text for n in (41, 42, 43, 44, 45))
+        assert all(f"your-repo#{n}" in text for n in (41, 42, 43, 44, 45)) and "your-org" not in text.split("card     ")[0]
 
 
 def _cursor(app, table):
     t = app.query_one(table)
     return t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
-
-
-async def test_needs_you_down_and_up_skip_the_group_headings(monkeypatch):
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await settle(pilot)
-        assert _cursor(app, "#needs-table") == "4a000001aaaa"   # the first row selected is a card
-        await pilot.press("down")
-        await settle(pilot)
-        assert _cursor(app, "#needs-table") == "60000002aaaa"
-        await pilot.press("down")   # onto PRS STOPPED FOR YOUR CALL: the group's first row instead
-        await settle(pilot)
-        assert _cursor(app, "#needs-table") == "pr:frontend#1117"
-        assert "frontend#1117   needs your decision" in screen_text(app)
-        await pilot.press("up")     # onto the heading again: the previous group's last card
-        await settle(pilot)
-        assert _cursor(app, "#needs-table") == "60000002aaaa"
-        text = screen_text(app)
-        assert "card     60000002aaaa" in text and "select a row" not in text
-        app.query_one("#needs-table").move_cursor(row=app.query_one("#needs-table").get_row_index("c0000003aaaa"))
-        await settle(pilot)
-        await pilot.press("down")   # "2 PRs ready to merge" is a pointer to tab 5, not a row to act on
-        await settle(pilot)
-        assert _cursor(app, "#needs-table") == "c0000003aaaa"
 
 
 async def test_pipeline_down_and_up_skip_the_column_headings(monkeypatch):
@@ -1560,13 +1712,13 @@ async def test_a_slow_read_says_still_reading_and_lets_a_new_read_start(monkeypa
 # ---------- list tabs: the first heading on screen; long titles never hide state and now ----------
 
 def _many_cards_data():
-    """Enough cards on Needs you and the Pipeline tab that each list scrolls."""
+    """Enough cards on the Pipeline tab that its list scrolls."""
     data = fake_data()
     data["snapshot"]["rows"] += [_card(f"b{i:07d}aaaa", f"another plan {i}", "Plan for review", kind="review") for i in range(80)]
     return data
 
 
-@pytest.mark.parametrize("key,table,heading", [("2", "#needs-table", "PLANS TO REVIEW"), ("at", "#cards-table", "SPEC READY 1"),
+@pytest.mark.parametrize("key,table,heading", [("2", "#cards-table", "SPEC READY 1"),
                                                 ("5", "#prs-table", "NEED YOUR DECISION")])
 async def test_list_tabs_open_with_the_first_heading_on_screen(monkeypatch, key, table, heading):
     _fake_card_read(monkeypatch, [])
@@ -1606,7 +1758,7 @@ async def test_long_titles_leave_state_and_now_on_screen(monkeypatch, size):
         await _open_cards(pilot, app)
         line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
         assert "writing the plan" in line and "…" in line
-        await pilot.press("2")
+        await pilot.press("n")      # the filtered list: the same columns
         await settle(pilot)
         line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
         assert "writing the plan" in line and "…" in line

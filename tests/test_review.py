@@ -4,7 +4,6 @@ import copy
 import io
 import json
 import os
-import re
 import subprocess
 from contextlib import redirect_stdout
 
@@ -427,17 +426,15 @@ async def test_review_screen_link_click_opens_only_http(board, monkeypatch):
         assert opened == ["https://example.test/doc"]
 
 
-async def test_needs_you_keeps_the_selected_card_after_rows_reorder(board):
+async def test_pipeline_keeps_the_selected_card_after_rows_reorder(board):
     a = mk(A_ID, "First plan", "Plan for review", body(PLAN=PLAN))
     b = mk(B_ID, "Second plan", "Plan for review", body(PLAN=PLAN))
     board.items.update({A_ID: a, B_ID: b})
     prov = Provider(app_data([row(a), row(b)]))
     app = PlApp(snapshot_provider=prov, interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
-        t = app.query_one("#needs-table")
+        await open_pipeline(pilot)
+        t = app.query_one("#cards-table")
         t.move_cursor(row=t.get_row_index(B_ID))
         await pilot.pause()
         prov.data = app_data([row(b), row(a)])      # B moves up; row position 2 is now A
@@ -450,22 +447,6 @@ async def test_needs_you_keeps_the_selected_card_after_rows_reorder(board):
         await settle(pilot)
         assert board.items[B_ID]["list_id"] == "col-Approved"
         assert board.items[A_ID]["list_id"] == "col-Plan for review"
-
-
-async def test_needs_you_enter_opens_the_review_screen(board):
-    board.items[A_ID] = mk(A_ID, "First plan", "Plan for review", body(PLAN=PLAN))
-    app = PlApp(snapshot_provider=Provider(app_data([row(board.items[A_ID])])), interval=3600)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("2")
-        await pilot.pause()
-        await pilot.press("enter")
-        await settle(pilot)
-        assert isinstance(app.screen, ReviewScreen) and app.screen.card_id == A_ID
-        await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, ReviewScreen)
-
 
 
 # ---------- fix round 1 ----------
@@ -565,7 +546,7 @@ async def test_edit_survives_a_dangling_symlink(board, tmp_path, monkeypatch):
         assert not (tmp_path / "victim").exists()
 
 
-# ---------- WP23: read and decide in the Needs-you pane ----------
+# ---------- WP23: read and decide in the Pipeline pane ----------
 
 def lean(c):
     """The snapshot copy of a card: no description, so the pane must read the card itself."""
@@ -589,17 +570,17 @@ def counting(monkeypatch):
     return fake
 
 
-async def open_needs(pilot):
+async def open_pipeline(pilot):
     await settle(pilot)
-    await pilot.press("2")
+    await pilot.press("2")   # the Pipeline tab: the first card is selected
     await settle(pilot)
 
 
-async def test_needs_pane_shows_the_plan_under_the_metadata(counting):
+async def test_pipeline_pane_shows_the_plan_under_the_metadata(counting):
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(INPUT="idea", PLAN=PLAN))
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
+        await open_pipeline(pilot)
         lines = screen_text(app).splitlines()
         at = {s: next((i for i, line in enumerate(lines) if s in line), None)
               for s in ("column   Plan for review", "Plan: add a thing", "Deliberately not doing")}
@@ -607,24 +588,14 @@ async def test_needs_pane_shows_the_plan_under_the_metadata(counting):
         assert at["column   Plan for review"] < at["Plan: add a thing"] < at["Deliberately not doing"]
 
 
-async def test_needs_pane_shows_the_spec_for_a_spec_row(counting, monkeypatch):
-    monkeypatch.setattr(C, "GATES", {"spec": True})
-    counting.items[A_ID] = mk(A_ID, "Add a thing", "Spec ready", body(INPUT="idea", SPEC=SPEC, PLAN=PLAN))
-    app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]), "Spec ready")])), interval=3600)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        text = screen_text(app)
-        assert "AC-2 Negative" in text and "Plan: add a thing" not in text
-
-
-async def test_needs_pane_reads_each_card_once_per_refresh(counting):
+async def test_pipeline_pane_reads_each_card_once_per_refresh(counting):
     a = mk(A_ID, "First plan", "Plan for review", body(PLAN=PLAN))
     b = mk(B_ID, "Second plan", "Plan for review", body(PLAN=PLAN))
     counting.items.update({A_ID: a, B_ID: b})
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(a)), row(lean(b))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        t = app.query_one("#needs-table")
+        await open_pipeline(pilot)
+        t = app.query_one("#cards-table")
         for cid in (B_ID, A_ID, B_ID, A_ID):
             t.move_cursor(row=t.get_row_index(cid))
             await settle(pilot)
@@ -639,26 +610,26 @@ async def test_needs_pane_reads_each_card_once_per_refresh(counting):
         assert counting.reads.count(A_ID) == 2        # a changed card is
 
 
-async def test_needs_pane_renders_card_markup_literally(counting):
+async def test_pipeline_pane_renders_card_markup_literally(counting):
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(PLAN=PLAN + "\nnote [bold]x[/bold] [red]y[/red]\n"))
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
+        await open_pipeline(pilot)
         assert "[bold]x[/bold] [red]y[/red]" in screen_text(app)
 
 
-async def test_needs_pane_shows_the_rate_limit_message(counting, monkeypatch):
+async def test_pipeline_pane_shows_the_rate_limit_message(counting, monkeypatch):
     from pl.trackers.github import RateLimited
     err = RateLimited(2_000_000_000)
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(PLAN=PLAN))
     monkeypatch.setattr(counting, "card", lambda item_id: (_ for _ in ()).throw(err))
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
+        await open_pipeline(pilot)
         assert err.note in screen_text(app) and app.is_running
 
 
-async def test_needs_a_and_x_use_the_review_screen_paths(counting, monkeypatch):
+async def test_pipeline_a_and_x_use_the_review_screen_paths(counting, monkeypatch):
     from pl.tui import review
     calls = []
     real = review.run_command
@@ -670,7 +641,7 @@ async def test_needs_a_and_x_use_the_review_screen_paths(counting, monkeypatch):
     prov = Provider(app_data([row(lean(a)), row(lean(b))]))
     app = PlApp(snapshot_provider=prov, interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
+        await open_pipeline(pilot)
         await pilot.press("a")
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen)
@@ -681,7 +652,7 @@ async def test_needs_a_and_x_use_the_review_screen_paths(counting, monkeypatch):
         prov.data = app_data([row(lean(b))])          # the next refresh drops the approved card
         app.refresh_data()
         await settle(pilot)
-        assert "Second plan" in str(app.query_one("#needs-detail").render())
+        assert "Second plan" in str(app.query_one("#cards-detail").render())
         await pilot.press("x")
         await settle(pilot)
         assert isinstance(app.screen, ReviewScreen) and app.screen.card_id == B_ID
@@ -690,18 +661,6 @@ async def test_needs_a_and_x_use_the_review_screen_paths(counting, monkeypatch):
         await settle(pilot)
         assert calls[-1] == (commands.cmd_reject, "plan", {"id": B_ID, "notes": "split WP2"})
         assert counting.items[B_ID]["list_id"] == "col-Spec ready"
-
-
-async def test_needs_pane_for_a_pr_row_is_unchanged(counting):
-    from pl.tui.needs import detail
-    pr = {"repo": "frontend", "number": 7, "title": "a pr", "state": "decide", "url": "https://example.test/pr/7"}
-    r = {"kind": "review", "card": None, "pr": pr, "col": "PRs", "worker": {}, "win": "", "text": ""}
-    app = PlApp(snapshot_provider=Provider(app_data([r])), interval=3600)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        assert str(app.query_one("#needs-detail").render()) == str(detail(r))
-        assert counting.reads == []
-        assert "loading" not in screen_text(app)
 
 
 # ---------- WP24: a refresh does not redraw what has not changed ----------
@@ -720,18 +679,18 @@ def spy(monkeypatch, widget, name="update"):
     return calls
 
 
-async def test_needs_pane_is_left_alone_when_nothing_changed(counting, monkeypatch):
+async def test_pipeline_pane_is_left_alone_when_nothing_changed(counting, monkeypatch):
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(PLAN=LONG))
     app = PlApp(snapshot_provider=CopyProvider(app_data([row(lean(counting.items[A_ID]))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        scroller = app.query_one("#needs-body")
+        await open_pipeline(pilot)
+        scroller = app.query_one("#cards-body")
         scroller.scroll_to(y=10, animate=False)
         await settle(pilot)
         assert scroller.scroll_y == 10
-        md = spy(monkeypatch, app.query_one("#needs-md"))
-        det = spy(monkeypatch, app.query_one("#needs-detail"))
-        clears = spy(monkeypatch, app.query_one("#needs-table"), "clear")
+        md = spy(monkeypatch, app.query_one("#cards-md"))
+        det = spy(monkeypatch, app.query_one("#cards-detail"))
+        clears = spy(monkeypatch, app.query_one("#cards-table"), "clear")
         for _ in range(2):
             app.refresh_data()
             await settle(pilot)
@@ -740,32 +699,7 @@ async def test_needs_pane_is_left_alone_when_nothing_changed(counting, monkeypat
         assert counting.reads == [A_ID]
 
 
-async def test_needs_pane_changed_plan_updates_once_keeps_scroll_and_says_so(counting, monkeypatch):
-    counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(PLAN=LONG))
-    prov = CopyProvider(app_data([row(lean(counting.items[A_ID]))]))
-    app = PlApp(snapshot_provider=prov, interval=3600)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        scroller = app.query_one("#needs-body")
-        scroller.scroll_to(y=10, animate=False)
-        await settle(pilot)
-        md = spy(monkeypatch, app.query_one("#needs-md"))
-        assert not re.search(r"updated \d\d:\d\d", str(app.query_one("#needs-detail").render()))
-        counting.items[A_ID].update(description=body(PLAN=LONG + "- one more item\n"), updated_at="2030-01-01T00:00:00+00:00")
-        prov.data = app_data([row(lean(counting.items[A_ID]))])
-        app.refresh_data()
-        await settle(pilot)
-        assert len(md) == 1 and "one more item" in md[0][0]
-        assert scroller.scroll_y == 10
-        assert re.search(r"updated \d\d:\d\d", str(app.query_one("#needs-detail").render()))
-        counting.items[A_ID].update(description=body(PLAN="# Plan: short\n"), updated_at="2030-01-02T00:00:00+00:00")
-        prov.data = app_data([row(lean(counting.items[A_ID]))])
-        app.refresh_data()
-        await settle(pilot)
-        assert len(md) == 2 and scroller.scroll_y == scroller.max_scroll_y < 10    # clamped to the new height
-
-
-async def test_needs_list_keeps_the_selected_card_when_a_row_is_inserted_above(counting):
+async def test_pipeline_list_keeps_the_selected_card_when_a_row_is_inserted_above(counting):
     a = mk(A_ID, "First plan", "Plan for review", body(PLAN=PLAN))
     b = mk(B_ID, "Second plan", "Plan for review", body(PLAN=PLAN))
     n_id = "cccccccc-3333-4333-8333-333333333333"
@@ -774,15 +708,15 @@ async def test_needs_list_keeps_the_selected_card_when_a_row_is_inserted_above(c
     prov = CopyProvider(app_data([row(lean(a)), row(lean(b))]))
     app = PlApp(snapshot_provider=prov, interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        t = app.query_one("#needs-table")
+        await open_pipeline(pilot)
+        t = app.query_one("#cards-table")
         t.move_cursor(row=t.get_row_index(B_ID))
         await settle(pilot)
         prov.data = app_data([row(lean(n)), row(lean(a)), row(lean(b))])
         app.refresh_data()
         await settle(pilot)
         assert t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value == B_ID
-        assert "Second plan" in str(app.query_one("#needs-detail").render())
+        assert "Second plan" in str(app.query_one("#cards-detail").render())
 
 
 # ---------- WP25: answer a spec's open questions, edit the spec ----------
@@ -1055,14 +989,87 @@ async def test_external_editor_refuses_a_card_that_moved_and_keeps_the_file(boar
     assert any("now in 'Plan for review'" in m and str(path) in m for m in said)
 
 
-async def test_needs_you_o_opens_the_spec_with_the_first_answer_box_focused(counting, monkeypatch):
+async def pipeline_edit(board, tmp_path, monkeypatch, new_text, before_edit=None):
+    """e on the Pipeline's first card with a fake $EDITOR; returns the notices."""
+    app = spec_app(board)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await open_pipeline(pilot)
+        fake_editor(tmp_path, monkeypatch, app, new_text)
+        if before_edit:
+            before_edit()
+        await pilot.press("e")
+        await settle(pilot)
+        return [str(n.message) for n in app._notifications]
+
+
+INPUT_FILE = ("inputs", "input-add-a-thing.md")
+
+
+async def test_pipeline_e_edits_the_input_in_the_editor_and_writes_it_back(board, tmp_path, monkeypatch):
+    spec_card(board)
+    modes = []
+    real = os.open
+    monkeypatch.setattr(os, "open", lambda p, flags, mode=0o777, **kw: modes.append((str(p), mode)) or real(p, flags, mode, **kw))
+    said = await pipeline_edit(board, tmp_path, monkeypatch, "the idea, made clearer\n# PIPELINE: SPEC\nnot a section\n")
+    parts = sections(board.items[A_ID]["description"])
+    assert parts["INPUT"] == "the idea, made clearer\n # PIPELINE: SPEC\nnot a section"   # a marker line is neutralised
+    assert parts["SPEC"] == SPEC_OQ.strip() and parts["PLAN"] == "old plan"
+    path = C.PLANS.parent.joinpath(*INPUT_FILE)
+    assert (str(path), 0o600) in modes and not path.exists()   # written 0600; removed once saved
+    assert any("saved INPUT" in m for m in said)
+
+
+async def test_pipeline_e_without_changes_writes_nothing(board, tmp_path, monkeypatch):
+    spec_card(board)
+    desc = board.items[A_ID]["description"]
+    said = await pipeline_edit(board, tmp_path, monkeypatch, None)
+    assert board.items[A_ID]["description"] == desc and not any("saved" in m for m in said)
+
+
+async def test_pipeline_e_refuses_an_input_changed_meanwhile_and_keeps_the_file(board, tmp_path, monkeypatch):
+    spec_card(board)
+
+    def change():   # someone sends the spec back meanwhile: their notes land in INPUT
+        board.items[A_ID]["description"] = body(INPUT="the idea\n\nnotes", SPEC=SPEC_OQ, PLAN="old plan")
+    import pl.tui.review as review_mod
+    real = review_mod._run
+
+    def editor(argv):
+        change()
+        return real(argv)
+    monkeypatch.setattr(review_mod, "_run", editor)
+    said = await pipeline_edit(board, tmp_path, monkeypatch, "my edit\n")
+    path = C.PLANS.parent.joinpath(*INPUT_FILE)
+    assert sections(board.items[A_ID]["description"])["INPUT"] == "the idea\n\nnotes"
+    assert path.read_text() == "my edit\n" and any("changed on the board" in m and str(path) in m for m in said)
+
+
+def test_watch_keeps_done_cards_apart_with_one_board_read(board, monkeypatch):
+    from pl import watch
+    board.items[A_ID] = mk(A_ID, "Shipped", "Done", done_at=OLD)
+    board.items[B_ID] = mk(B_ID, "Open", "Inbox")
+    reads = []
+    real = watch.cards
+    monkeypatch.setattr(watch, "cards", lambda: reads.append(1) or real())
+    monkeypatch.setattr(watch, "registry", lambda: {})
+    monkeypatch.setattr(watch.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(watch, "pr_counts", lambda: None)
+    monkeypatch.setattr(watch, "paused", lambda: None)
+    monkeypatch.setattr(watch, "pane_tail", lambda *a: [])
+    snap = watch.watch_snapshot()
+    assert reads == [1]
+    assert [r["card"]["id"] for r in snap["rows"] if r.get("card")] == [B_ID]   # every other view sees no Done card
+    assert [(r["card"]["id"], r["col"]) for r in snap["done"]] == [(A_ID, "Done")]
+    assert "Shipped" not in watch.render_watch(snap) and "Done" not in snap["summary2"]
+
+
+async def test_pipeline_o_opens_the_spec_with_the_first_answer_box_focused(counting, monkeypatch):
     from textual.widgets import Input
     monkeypatch.setattr(C, "GATES", {"spec": True})
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Spec ready", body(INPUT="idea", SPEC=SPEC_OQ))
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]), "Spec ready")])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        assert "4 open" in screen_text(app)
+        await open_pipeline(pilot)
         await pilot.press("o")
         await settle(pilot)
         assert isinstance(app.screen, ReviewScreen) and app.screen.kind == "spec"
@@ -1200,20 +1207,19 @@ def test_size_line_is_dim_then_warning_at_80_percent_then_error_when_over():
     assert size_text("x" * 31_198).plain == "size 31,200 / 40,000"
 
 
-async def test_review_screen_and_needs_pane_show_the_card_size(counting):
+async def test_review_screen_shows_the_card_size(counting):
     desc = body(INPUT="idea", PLAN=PLAN)
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", desc)
     want = f"size {B.card_size(desc):,} / 40,000"
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        assert want in screen_text(app)
+        await settle(pilot)
         await app.push_screen(ReviewScreen("plan", A_ID))
         await settle(pilot)
         assert want in screen_text(app)
 
 
-async def test_needs_pane_shows_the_cut_message_for_a_card_the_board_cut(monkeypatch, tmp_path):
+async def test_pipeline_pane_shows_the_cut_message_for_a_card_the_board_cut(monkeypatch, tmp_path):
     from test_tracker_mcp import SERVER, stdio_cfg, tools
     from pl.trackers import mcp as M
     script = tmp_path / "fake_board_server.py"
@@ -1225,7 +1231,7 @@ async def test_needs_pane_shows_the_cut_message_for_a_card_the_board_cut(monkeyp
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(c))])), interval=3600)
     try:
         async with app.run_test(size=(176, 48)) as pilot:
-            await open_needs(pilot)
+            await open_pipeline(pilot)
             text = screen_text(app)
             assert "the board server cut this card off at 48,000 characters" in text, text
             assert "non-JSON" not in text
@@ -1239,7 +1245,7 @@ async def test_needs_pane_shows_the_cut_message_for_a_card_the_board_cut(monkeyp
 async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch):
     import threading
 
-    from pl.tui import pipeline as P
+    from pl.tui import cards as P
     desc = "intro line\n" + body(INPUT="the idea", SPEC=SPEC, DESIGN="the design", PLAN=PLAN,
                                  **{"REVIEW NOTES": "fix the budget", "RUN LEDGER": "WP1 done"})
     board.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", desc, tags=("frontend", "api"))
@@ -1253,10 +1259,7 @@ async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch)
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
     monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
     async with app.run_test(size=(176, 80)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        next(iter(app.query(P.CardBox))).focus()
+        await open_pipeline(pilot)
         await pilot.press("enter")
         await settle(pilot)
         assert isinstance(app.screen, P.CardScreen)
@@ -1276,7 +1279,6 @@ async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch)
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, P.CardScreen)
-        next(iter(app.query(P.CardBox))).focus()
         await pilot.press("enter")
         await settle(pilot)
         await pilot.press("q")
@@ -1285,7 +1287,7 @@ async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch)
 
 
 async def test_a_card_that_cannot_be_read_shows_the_trackers_error(board, monkeypatch):
-    from pl.tui import pipeline as P
+    from pl.tui import cards as P
     board.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(PLAN=PLAN))
 
     def boom(cid):
@@ -1311,8 +1313,8 @@ async def test_ctrl_x_in_the_notes_box_sends_back_and_says_where_it_went(countin
     counting.items[A_ID] = mk(A_ID, "Add a thing", "Plan for review", body(INPUT="idea", PLAN=PLAN))
     app = PlApp(snapshot_provider=Provider(app_data([row(lean(counting.items[A_ID]))])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await open_needs(pilot)
-        await pilot.press("ctrl+x")                   # Needs pane: opens the review screen on the notes box
+        await open_pipeline(pilot)
+        await pilot.press("ctrl+x")                   # Pipeline pane: opens the review screen on the notes box
         await settle(pilot)
         assert isinstance(app.screen, ReviewScreen)
         assert isinstance(app.screen.focused, TextArea) and app.screen.focused.id == "review-notes"
@@ -1397,18 +1399,15 @@ async def test_approve_says_where_the_card_went(board):
 
 
 async def test_pipeline_card_and_card_screen_show_the_approved_label(monkeypatch):
-    from pl.tui.pipeline import CardBox
     monkeypatch.setattr(C, "GATES", {"spec": True})
     r = row(approved_card(), col="Spec ready")
     r["approved"] = "spec approved \u2014 planning (agent running)"
     app = PlApp(snapshot_provider=Provider(app_data([r])), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("4")
-        await settle(pilot)
-        box = app.query_one(CardBox)
-        assert "spec approved \u2014 planning (agent running)" in str(box.render())
-    from pl.tui.pipeline import card_head
+        await open_pipeline(pilot)
+        t = app.query_one("#cards-table")
+        assert "spec approved \u2014 planning (agent running)" in t.get_row(r["card"]["id"])[2].plain
+    from pl.tui.cards import card_head
     assert "spec approved" in card_head(approved_card(), "Spec ready", None, r["approved"]).plain
 
 

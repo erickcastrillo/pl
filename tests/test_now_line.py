@@ -6,7 +6,7 @@ import time
 import pytest
 
 from pl import config as C
-from pl.tui import pipeline as tui_pipeline
+from pl.tui import cards as tui_cards
 from pl.tui import subagents as sa
 from pl.tui.app import PlApp
 from test_tui_views import Provider, fake_data, screen_text, settle
@@ -151,25 +151,24 @@ def test_stale_transcript_shows_nothing(fake_home):
     assert sa.now_lines([live_row()]) == {}
 
 
-async def test_pipeline_card_and_needs_row_show_the_line_and_todos(fake_home, monkeypatch):
-    monkeypatch.setattr(tui_pipeline, "card", lambda cid: {"id": cid, "title": "T", "description": "body text"})
-    monkeypatch.setattr(tui_pipeline.trackers, "get", lambda name: type("T", (), {"url": lambda self, i: None})())
+async def test_pipeline_row_pane_and_card_show_the_line_and_todos(fake_home, monkeypatch):
+    monkeypatch.setattr(tui_cards, "card", lambda cid: {"id": cid, "title": "T", "description": "body text"})
+    monkeypatch.setattr(tui_cards.trackers, "get", lambda name: type("T", (), {"url": lambda self, i: None})())
     transcript(fake_home, [todo(*TODOS), use("Edit", {"file_path": "/w/app/models/x.rb"})])
     data = fake_data()
     data["now"] = sa.now_lines([live_row()])
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("4")
-        await pilot.pause()
-        text = screen_text(app)   # the card is 25 columns wide, so the line wraps
-        assert "app/models/x.rb ·" in text and "todo 3/4" in text
         await pilot.press("2")
-        await pilot.pause()
-        assert "Edit app/models/x.rb" in screen_text(app)
-        app.action_tab("pipeline")
-        await pilot.pause()
-        next(b for b in app.query(tui_pipeline.CardBox) if b.row["card"]["id"] == CARD).focus()
+        await settle(pilot)
+        t = app.query_one("#cards-table")
+        t.move_cursor(row=t.get_row_index(CARD))
+        await settle(pilot)
+        line = next(x for x in screen_text(app).splitlines() if "4a000001 " in x)
+        assert "Edit app/models/x.rb" in line.split("││")[0]       # the list's now column
+        pane = str(app.query_one("#cards-detail").render())
+        assert "now      Edit app/models/x.rb" in pane and "[>] write the migration" in pane
         await pilot.press("enter")
         await settle(pilot)
         text = screen_text(app)

@@ -5,12 +5,11 @@ from rich.text import Text
 
 from pl import config as C
 
-TABS = [("assistant", "Assistant"), ("dashboard", "Dashboard"), ("needs", "Needs you"), ("ideas", "Ideas"), ("pipeline", "Kanban"),
+TABS = [("assistant", "Assistant"), ("dashboard", "Dashboard"), ("cards", "Pipeline"), ("ideas", "Ideas"), ("alerts", "Alerts"),
         ("prs", "Pull requests"), ("loops", "Loops"), ("activity", "Activity"), ("settings", "Settings"),
-        ("subagents", "Background"), ("alerts", "Alerts"), ("cards", "Pipeline")]
-# tab key = position in this list: 0 Assistant, 1 Dashboard, ... 9 Background; the digits run out, so Alerts is ! and Pipeline @
-TAB_KEYS = {tid: str(i) for i, (tid, _) in enumerate(TABS[:10])} | {"alerts": "!", "cards": "@"}
-KEY_NAMES = {"!": "exclamation_mark", "@": "at"}   # Textual's names for the keys
+        ("subagents", "Background")]
+# tab key = position in this list: 0 Assistant, 1 Dashboard, 2 Pipeline, ... 9 Background
+TAB_KEYS = {tid: str(i) for i, (tid, _) in enumerate(TABS)}
 
 
 def skip_headings(t, is_item, last=None):

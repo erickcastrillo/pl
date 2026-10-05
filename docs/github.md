@@ -121,7 +121,7 @@ Which to pick:
 
 ## 5. Pull requests
 
-pl does not open pull requests. The run-stage agent does, from your prompt. pl reads open pull requests assigned to you with `gh search prs` and shows them on the Pull requests and Needs you tabs. It sorts them by labels that your review tools set:
+pl does not open pull requests. The run-stage agent does, from your prompt. pl reads open pull requests assigned to you with `gh search prs` and shows them on the Pull requests tab. It sorts them by labels that your review tools set:
 
 ```toml
 [code_host]
@@ -195,7 +195,7 @@ In the console:
    ```
 
    Each waiting card gets an agent in the tmux session `pl-work`.
-3. When a spec or plan is ready, press `2` for Needs you and `enter` to review it. `a` approves (confirm with `y`). `x` sends it back with what you wrote in the notes box. `e` opens it in `$EDITOR`.
+3. When a spec or plan is ready, press `2` for the Pipeline (`n` shows only the cards that need you) and select it. `a` approves (confirm with `y`). `x` opens the review screen and sends it back with what you wrote in the notes box. `e` opens it in `$EDITOR`.
 
 From the shell, `pl --profile work approve <id>` and `pl --profile work reject <id> "notes"` do the same.
 

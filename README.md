@@ -17,15 +17,17 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Standup panel with Slack copy | Dashboard: `s`, then `y` | `pl standup --slack` |
 | Token spend per card, account, model and loop | Dashboard Health; Loops tab | `pl usage --by card` |
 | Loop context care: an idle loop over 80% context restarts fresh | Loops tab: context | `pl usage --by loop` |
-| Alerts that open, remind and clear themselves | Alerts tab (!) | `pl alerts --all` |
-| Every card in a list by column, with its full text | Pipeline tab (@) | `pl list` |
-| A "doing now" line for each live agent | Needs you and Kanban | `pl watch` |
+| Alerts that open, remind and clear themselves | Alerts tab (4) | `pl alerts --all` |
+| Every card in a list by column, with its full text; a red ! on the cards that need you | Pipeline tab (2); `n` shows only those | `pl list` |
+| A "doing now" line for each live agent | Pipeline tab | `pl watch` |
 | Move a live agent to another account in place | on a usage limit; Activity tab | `pl move-agent <card> <account>` |
 | One machine manager for every profile's dispatcher | Dashboard: machine line; `D` | `pl manager status` |
 | Claude's weekly limit detected; the account parks until its reset | header: accounts | `pl accounts` |
 | Memory guard: low memory holds new agents; a runaway agent is stopped | Dashboard: memory line | `pl manager status` |
 | One dispatcher per profile | Activity tab | `pl profiles` |
-| Start a failed agent fresh | Needs you | `pl retry all` |
+| Start a failed agent fresh | Pipeline tab: `t` | `pl retry all` |
+| Drop a card no longer needed, and undo it | Pipeline tab: `d`, then `z` and `u` | `pl drop <id> --reason TEXT` |
+| Hand a card to Manual, mark it done, edit its idea | Pipeline tab: `h`, `f`, `e` | `pl done <id>` |
 
 ## Your subscription
 
@@ -188,13 +190,13 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | Key | Action |
 | --- | --- |
 | 0 | Assistant (the leftmost tab): a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
-| 1 to 9 | Dashboard, Needs you, Ideas, Kanban, Pull requests, Loops, Activity, Settings, Background |
-| ! | Alerts (k acknowledges) |
-| @ | Pipeline: every card by column. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, v move to another column (asks first) |
+| 1 to 9 | Dashboard, Pipeline, Ideas, Alerts, Pull requests, Loops, Activity, Settings, Background |
+| 2 | Pipeline: every card by column; a red ! marks the cards that need you (a spec or plan to review, a manual card, an agent that waits or died) and n shows only those. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, o answer a spec's questions, v move to another column, d drop (asks for an optional reason), h hand off to Manual, f mark done, e edit the card's INPUT in `$EDITOR`, z show or hide Done, u undo a drop (in the Done group). d, h, f, u and v ask first |
+| 4 | Alerts (k acknowledges) |
 | w | cycle the Dashboard time window |
 | s | standup summary of the last 24 hours on the Dashboard (y copies it) |
 | a / x | approve / send back the selected card |
-| enter | open review on Needs you |
+| enter | open the whole card on the Pipeline |
 | e | open in `$EDITOR` (review screen) |
 | D | start or stop this profile's dispatcher (through the manager when it runs it; `pl manager stop` stops the manager) |
 | r | refresh |
