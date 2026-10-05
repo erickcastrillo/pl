@@ -164,7 +164,7 @@ A profile whose `[tracker]` is `github-project` with a `repo` gets two things wi
 - Labels in `[intake] skip_tags` win over `pl:start`: a skipped issue never joins.
 - `pl setup` creates the `pl:start` label.
 
-**Auto-review loop.** When `[code_host] labels` has `review` and `ready`, the dispatcher keeps an `auto-review` loop running on the profile's first account. If that account is parked at its usage limit, the loop waits until it is back. Its prompt names the repo and your labels. The agent reviews open PRs labelled `review` and always removes `review`. A clean review adds `ready`. Findings go in one PR comment and add both `ready` and `rework`, so pl lists the PR as needing rework. A review that cannot run adds `failed`; you decide, then add `review` back. It never merges.
+**Auto-review loop.** When `[code_host] labels` has `review` and `ready`, the dispatcher keeps an `auto-review` loop running on the profile's first account. If that account is parked at its usage limit, the loop runs on another account of the same harness until its own is back (README: Parked accounts). Its prompt names the repo and your labels. The agent reviews open PRs labelled `review` and always removes `review`. A clean review adds `ready`. Findings go in one PR comment and add both `ready` and `rework`, so pl lists the PR as needing rework. A review that cannot run adds `failed`; you decide, then add `review` back. It never merges.
 
 Turn either off, or replace it:
 

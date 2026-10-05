@@ -268,19 +268,65 @@ def test_agent_windows_add_nothing_when_gh_config_dir_is_unset(fake_home, fake_t
     assert "GH_CONFIG_DIR" not in env and "GH_CONFIG_DIR" not in os.environ
 
 
-def test_a_loop_pinned_to_a_parked_account_waits_instead_of_moving(fake_home, fake_tmux, monkeypatch, capsys):
+def test_a_loop_pinned_to_a_parked_account_runs_on_another_of_its_harness(fake_home, fake_tmux, monkeypatch, capsys):
     sent, _ = fake_tmux
-    monkeypatch.setattr(dispatch, "healthy_profile", lambda pref, cards: "acme2")   # acme parked, acme2 has credits
-    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme": {"until": "2026-09-29T20:00:00+00:00"}})
+    asked, seen = [], []
+    monkeypatch.setattr(dispatch, "healthy_profile",
+                        lambda pref, cards, harness=None, skip=None: asked.append((pref, harness, skip)) or "acme2")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    monkeypatch.setattr(dispatch.events, "emit", lambda kind, card=None, **f: seen.append((kind, f)))
     C.SERVICES = {"call-ingest": {"prompt": "/loop 15m /call-ingest", "profile": "acme"}}
+    st = {"services": {}}
+    dispatch.ensure_services(st, [], {}, False, None)
+    assert asked == [(None, "claude", "acme")]
+    assert [shlex.split(s)[0] for s in sent] == [f"CLAUDE_CONFIG_DIR={fake_home / '.claude-acme2'}"]
+    assert "call-ingest loop: its account acme is parked; running under acme2" in capsys.readouterr().out
+    assert st["services"]["call-ingest"]["profile"] == "acme2" and st["services"]["call-ingest"]["fallback_from"] == "acme"
+    assert ("loop_fallback", {"loop": "call-ingest", "account": "acme2", "parked": "acme"}) in seen
+
+
+def test_a_loop_on_a_fallback_account_goes_back_at_its_next_start(fake_home, fake_tmux, monkeypatch):
+    sent, _ = fake_tmux
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())          # acme is back
+    monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)
+    C.SERVICES = {"call-ingest": {"prompt": "/loop 15m /call-ingest", "profile": "acme"}}
+    st = {"services": {"call-ingest": {"profile": "acme2", "fallback_from": "acme"}}}
+    out = {"text": "@7 %9 claude call-ingest\n"}                               # a working loop: left alone
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: types.SimpleNamespace(returncode=0, stdout=out["text"], stderr=""))
+    dispatch.ensure_services(st, [], {}, False, None)
+    assert sent == [] and st["services"]["call-ingest"]["profile"] == "acme2"
+    out["text"] = ""                                                            # it exited: the next start is on acme
+    dispatch.ensure_services(st, [], {}, False, None)
+    assert [shlex.split(s)[0] for s in sent] == [f"CLAUDE_CONFIG_DIR={fake_home / '.claude-acme'}"]
+    assert st["services"]["call-ingest"]["profile"] == "acme" and "fallback_from" not in st["services"]["call-ingest"]
+
+
+def test_a_loop_with_fallback_false_waits_for_its_account(fake_home, fake_tmux, monkeypatch, capsys):
+    sent, _ = fake_tmux
+    monkeypatch.setattr(dispatch, "healthy_profile", lambda *a, **k: "acme2")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    _profile(fake_home, '[accounts.acme]\nconfig_dir = "~/.claude-acme"\n[accounts.acme2]\nconfig_dir = "~/.claude-acme2"\n'
+                        '[loops.call-ingest]\nprompt = "/loop 15m /call-ingest"\naccount = "acme"\nfallback = false\n')
     st = {"services": {"call-ingest": {"profile": "acme2"}}}   # a stale fallover record must not win either
     dispatch.ensure_services(st, [], {}, False, None)
     assert sent == []
     assert "call-ingest loop waits: its account acme is parked" in capsys.readouterr().out
-    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {})
+    assert st["services"]["call-ingest"]["waits"].startswith("its account acme is parked")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
     dispatch.ensure_services(st, [], {}, False, None)
     assert [shlex.split(s)[0] for s in sent] == [f"CLAUDE_CONFIG_DIR={fake_home / '.claude-acme'}"]
-    assert st["services"]["call-ingest"]["profile"] == "acme"
+    assert st["services"]["call-ingest"]["profile"] == "acme" and "waits" not in st["services"]["call-ingest"]
+    import tomlkit
+    assert any("fallback" in e for e in C.validate(tomlkit.parse('[loops.x]\nprompt = "p"\nfallback = "no"\n')))
+
+
+def test_a_pinned_loop_waits_when_no_other_account_of_its_harness_is_free(fake_home, fake_tmux, monkeypatch, capsys):
+    sent, _ = fake_tmux
+    monkeypatch.setattr(dispatch, "healthy_profile", lambda *a, **k: None)
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    C.SERVICES = {"call-ingest": {"prompt": "/loop 15m /call-ingest", "profile": "acme"}}
+    dispatch.ensure_services({}, [], {}, False, None)
+    assert sent == [] and "call-ingest loop waits: its account acme is parked" in capsys.readouterr().out
 
 
 # ---------- WP42: long launch commands, pl retry, never-started agents ----------

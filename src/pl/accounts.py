@@ -1,15 +1,18 @@
 """Profile failover: a profile that ran out of usage credits is parked, cards move to the other."""
+import contextlib
+import hashlib
 import json
 import os
+import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import harnesses
+from pl import alerts, events, harnesses
 from pl.agents import pane_exists
 from pl.board import lists
-from pl.util import now_iso, parse_iso
+from pl.util import notify, now_iso, parse_iso
 
 
 def profile_state():
@@ -121,13 +124,180 @@ def mark_exhausted(profile, screen):
         os.close(os.open(f, os.O_WRONLY | os.O_CREAT, 0o600))
         f.write_text(screen)
     hit = C.LIMIT_RE.search(screen) or m
+    iv = check_intervals()
+    first = None if t or not iv else _iso(time.time() + iv[0])   # a printed reset time is trusted: no check before it
     rec = {"exhausted_at": now_iso(), "reason": hit.group(0) if hit else "usage limit",
-           "until": datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds")}
+           "until": _iso(until), "next_check": first, "checks": 0}
     _update(C.PROFILE_STATE, lambda st: st.__setitem__(profile, rec))
     if profile in C.PROFILES:
-        entry = {"until": rec["until"], "reason": rec["reason"], "by_profile": C.PROFILE_NAME}
+        entry = {"until": rec["until"], "reason": rec["reason"], "by_profile": C.PROFILE_NAME, "next_check": first, "checks": 0}
         _update_machine(lambda data: data.__setitem__(_folder(profile), entry))
     return rec["until"]
+
+
+def _iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
+
+
+def parking(name):
+    """This account's parking record: the profile's own, with the machine-wide entry's fields over it (the
+    machine entry carries the shared health check)."""
+    return {**(profile_state().get(name) or {}), **machine_entry(name)}
+
+
+# ---------- health checks of parked accounts ----------
+
+CHECK_PROMPT = "Reply with the word ok."
+CHECK_TIMEOUT = 60      # seconds the check call may take
+CHECK_SLACK = 300       # a limited account stays parked this long past its next check, so the check comes first
+DEFAULT_CHECKS = [10, 30, 60]   # minutes; [dispatch] account_checks; the last one repeats
+# The one cheap non-interactive call per harness that tells a working account from a limited one ({bin}: the
+# harness's own program). claude 2.1.289: print mode, no tools, no skills, no saved session. codex 0.150.1: exec in a
+# read-only sandbox, no session file. Antigravity prints no limit message pl knows, so it keeps the plain timer.
+CHECKS = {"claude": ["{bin}", "-p", "{prompt}", "--no-session-persistence", "--disable-slash-commands", "--tools", ""],
+          "codex": ["{bin}", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "{prompt}"]}
+
+
+def check_intervals():
+    """Seconds between checks of a parked account: [dispatch] account_checks (minutes), else 10, 30, 60. [] is off."""
+    v = C.DISPATCH.get("account_checks", DEFAULT_CHECKS)
+    if not (isinstance(v, list) and all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 for x in v)):
+        v = DEFAULT_CHECKS
+    return [int(x * 60) for x in v]
+
+
+def checkable(name):
+    """True when pl can check this account by itself: checks are on and its harness has a check call."""
+    return bool(check_intervals()) and harnesses.account_harness(name).name in CHECKS
+
+
+def _due(rec, now):
+    if "next_check" not in rec:
+        return True       # parked before checks existed: check it now
+    return bool(rec["next_check"]) and parse_iso(rec["next_check"]) <= now
+
+
+def _check_lock_path(name):
+    from pl.manager import machine_dir
+    return machine_dir() / "checks" / (hashlib.sha256(_folder(name).encode()).hexdigest()[:16] + ".lock")
+
+
+@contextlib.contextmanager
+def _check_lock(name):
+    """One check per account folder on the machine: yields False when another process is checking it."""
+    import fcntl
+    f = _check_lock_path(name)
+    f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
+def _probe(argv, env, timeout, cwd):
+    """The check call, through this module's runner (harnesses._run). No shell; nothing typed into a terminal."""
+    return harnesses._run(argv, env=env, timeout=timeout, cwd=cwd, stdin=subprocess.DEVNULL)
+
+
+def _call(name, h):
+    """Run the check: ("ok" | "limited" | "error", short result text, reset datetime or None). The output itself
+    is never stored."""
+    argv = [t.replace("{bin}", h.bin).replace("{prompt}", CHECK_PROMPT) for t in CHECKS[h.name]]
+    env = dict(os.environ)
+    if h.env_var:
+        env[h.env_var] = str(C.PROFILES[name])
+    try:
+        r = _probe(argv, env, CHECK_TIMEOUT, str(C.STATE_DIR))
+    except subprocess.TimeoutExpired:
+        return "error", f"error: no answer in {CHECK_TIMEOUT} s", None
+    except OSError as e:
+        return "error", f"error: cannot run {h.bin} ({e.strerror or e})"[:120], None
+    out = f"{r.stdout or ''}\n{r.stderr or ''}"
+    if harnesses.limit_hit(h, out) or C.LIMIT_RE.search(out):
+        t = reset_at(out, datetime.now())
+        return "limited", f"still limited, resets {_iso(t.timestamp())[:16].replace('T', ' ')} UTC" if t else "still limited", t
+    if r.returncode == 0:
+        return "ok", "ok", None
+    return "error", f"error: exit {r.returncode}", None
+
+
+def _record(name, fields):
+    """Write the check fields into the machine entry and this profile's own record (when it has one)."""
+    folder = _folder(name)
+
+    def machine(data):
+        e = data.get(folder) or {"reason": "usage limit", "by_profile": C.PROFILE_NAME}
+        data[folder] = {**e, **fields}
+    _update_machine(machine)
+    if name in profile_state():
+        _update(C.PROFILE_STATE, lambda st: st.__setitem__(name, {**st[name], **fields}) if name in st else None)
+
+
+def check_note(name):
+    """One line on this parked account's checks: the last one and its result, and when the next comes."""
+    if not checkable(name):
+        return "not checked: it waits for its timer"
+    r = parking(name)
+    last = f"last check {r['checked_at'][11:16]} UTC: {r.get('check_result', '?')}" if r.get("checked_at") else "not checked yet"
+    if "next_check" not in r:
+        nxt = "next check on the next pass"
+    elif r["next_check"]:
+        nxt = f"{'next' if r.get('checked_at') else 'first'} check {r['next_check'][11:16]} UTC"
+    else:
+        nxt = "no check before its reset time"
+    return f"{last}; {nxt}"
+
+
+def check_parked():
+    """The dispatcher's health check: for each parked account of this profile whose next check is due, one cheap
+    call through its harness. Works: un-parked everywhere. Still limited: parked to the printed reset, else to the
+    next check (10, 30, then every 60 min). An error leaves the timer as it was and tries again at the next interval.
+    Returns [(account, "ok" | "limited" | "error")] for the checks it ran."""
+    out = []
+    for name in sorted(exhausted_profiles()):
+        if name not in C.PROFILES or not checkable(name) or not _due(parking(name), time.time()):
+            continue
+        with _check_lock(name) as mine:
+            if not mine or name not in exhausted_profiles() or not _due(parking(name), time.time()):
+                continue   # another profile's dispatcher is checking it, or just did
+            out.append((name, _check(name)))
+    return out
+
+
+def _check(name):
+    h = harnesses.account_harness(name)
+    kind, result, reset = _call(name, h)
+    now, rec = time.time(), parking(name)
+    events.emit("account_check", None, account=name, result=kind)
+    if kind == "ok":
+        unpark_machine([name])
+        _update(C.PROFILE_STATE, lambda st: st.pop(name, None))
+        alerts.resolve(f"account_parked:{name}")
+        print(f"account {name} works again: un-parked")
+        return kind
+    iv = check_intervals()
+    n = int(rec.get("checks") or 0) + 1
+    fields = {"checked_at": _iso(now), "check_result": result, "checks": n}
+    if reset:
+        fields.update(until=_iso(reset.timestamp() + 60), next_check=None)
+    else:
+        nxt = now + iv[min(n, len(iv) - 1)]
+        fields["next_check"] = _iso(nxt)
+        if kind == "limited":
+            fields["until"] = _iso(max(parse_iso(rec.get("until") or ""), nxt + CHECK_SLACK))
+    _record(name, fields)
+    until = parking(name).get("until") or ""
+    fix = f"parked until {until[11:16]} UTC; {check_note(name)}; pl accounts --reset {name} un-parks it"
+    print(f"account {name} checked: {result}")
+    if why := alerts.open(f"account_parked:{name}", "warn", f"Account {name} is parked: usage limit", fix):
+        notify(alerts.headline(why, f"Account {name} is still parked"), check_note(name))
+    return kind
 
 
 def healthy_profile(preferred, all_cards, harness=None, skip=None):

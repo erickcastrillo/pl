@@ -19,7 +19,7 @@ from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
 from pl.trackers.github import OverBudget, RateLimited, limited
-from pl.util import cmd_id, load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
+from pl.util import age, cmd_id, load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
 
 
 def has_design(c):
@@ -173,6 +173,10 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         sid = (rec or {}).get("sessionId")
         if sid and sid not in (seen := svc_state.setdefault(name, {}).setdefault("sessions", [])):
             seen[:] = (seen + [sid])[-20:]   # the loop registry: which sessions were this loop's, for pl usage
+        if w and w["cmd"] not in harnesses.SHELLS:   # its window runs: the loop_stale alert counts from here
+            s = svc_state.setdefault(name, {})
+            s["ran_at"] = now_iso()
+            s.pop("waits", None)
         if pause:
             if w and (not rec or rec.get("status") == "idle"):
                 print(f"paused: closing idle {name} loop")
@@ -181,10 +185,10 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
             continue
         if hold:
             if not w:
-                print(f"{name} loop waits: {hold}")
+                _loop_waits(svc_state, name, hold)
             continue
-        pin = svc["profile"]   # a loop with an explicit account never runs under another one
-        prof = pin or svc_state.get(name, {}).get("profile")
+        pin = svc["profile"]   # a loop's own account; while it is parked the loop runs on another (unless fallback = false)
+        prof = svc_state.get(name, {}).get("profile") or pin   # the account its window runs under now
         if w:
             screen = None if w["cmd"] in harnesses.SHELLS else screen_hit_limit(w["pane"], harnesses.account_harness(prof))
             if screen and "continuing automatically" in screen:
@@ -209,12 +213,20 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
             print(f"restarting {name} loop: {why}")
             if not dry:
                 tmux("kill-window", "-t", w["window"], check=False)
+        use, moved = pin, None
         if pin and pin in accounts.exhausted_profiles():
-            print(f"{name} loop waits: its account {pin} is parked")
-            continue
-        use = pin or healthy_profile(prof, all_cards)
+            alt = None if svc.get("pinned_only") else \
+                healthy_profile(None, all_cards, harness=harnesses.account_harness(pin).name, skip=pin)
+            if alt is None:
+                _loop_waits(svc_state, name, f"its account {pin} is parked ({accounts.check_note(pin)})"
+                            + ("; fallback = false" if svc.get("pinned_only") else "; no other account of its harness is free"))
+                continue
+            print(f"{name} loop: its account {pin} is parked; running under {alt} until {pin} is back")
+            use, moved = alt, pin
+        elif not pin:
+            use = healthy_profile(prof, all_cards)
         if use is None:
-            print(f"{name} loop waits: every profile is out of credits")
+            _loop_waits(svc_state, name, "every account is out of credits")
             continue
         prompt = loop_prompt(svc)
         print(f"starting {name} loop under {use}: {prompt}")
@@ -229,8 +241,19 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         _launch(pane, name, harnesses.launch_script(harnesses.unattended(harnesses.account_harness(use)), use, prompt,
                                                     None, name))
         old = svc_state.get(name, {})
-        svc_state[name] = {"profile": use, "started_at": now_iso(), "sessions": old.get("sessions", []),
-                           **({"context_restarts": old["context_restarts"]} if old.get("context_restarts") else {})}
+        svc_state[name] = {"profile": use, "started_at": now_iso(), "ran_at": now_iso(), "sessions": old.get("sessions", []),
+                           **({"context_restarts": old["context_restarts"]} if old.get("context_restarts") else {}),
+                           **({"fallback_from": moved} if moved else {})}
+        if moved:
+            events.emit("loop_fallback", None, loop=name, account=use, parked=moved)
+
+
+def _loop_waits(svc_state, name, why):
+    """A loop that cannot start: say why, keep the reason for the loop_stale alert, and start its clock."""
+    print(f"{name} loop waits: {why}")
+    s = svc_state.setdefault(name, {})
+    s["waits"] = why
+    s.setdefault("ran_at", now_iso())
 
 
 def _context_restart(name, svc, sid, s, ust, dry):
@@ -408,7 +431,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                          else f"{f'not moved ({why}); ' if why else ''}restarting under {alt} (agent was {int(age // 60)} min old)" if switch
                          else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
                 if why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
-                                      f"parked until {until[11:16]} UTC; pl accounts --reset {prof} un-parks it"):
+                                      f"parked until {until[11:16]} UTC; {accounts.check_note(prof)}; "
+                                      f"pl accounts --reset {prof} un-parks it"):
                     notify(alerts.headline(why, f"Profile {prof} hit its usage limit"), f"parked until {until[11:16]} UTC; "
                            + (f"moved and resumed its agent under {to}" if moved
                               else f"young agents move to {alt}" if alt else "no other profile has credits"))
@@ -534,6 +558,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     low = memory.check_starts(st) if not dry else None
     if not dry:
         board._save(C.STATE_DIR / "agent-waits.json", {"at": time.time(), "windows": waiting})
+    if not dry and not paused():
+        try:   # parked accounts whose next check is due: one cheap call each; a working one is un-parked now
+            accounts.check_parked()
+        except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
+            print(f"account check failed: {e}", file=sys.stderr)
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
     room = manager.room_for(ms, C.PROFILE_NAME)   # new agents this profile's share of the machine has room for
@@ -626,7 +655,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 st["notified"][key] = time.time()
                 notify("Pipeline drained", "no agent is working; safe to shut down (pl resume after restart)")
     if not dry:
-        check_alerts(all_cards, failed)
+        check_alerts(all_cards, failed, st)
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
@@ -635,9 +664,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
 PR_WAIT = 86400   # seconds a card may sit in the PR column before its PR raises an alert
 
 
-def check_alerts(all_cards, failed):
+def check_alerts(all_cards, failed, st=None):
     """End of a pass: resolve the alerts whose condition cleared, escalate the rest, and run the pass-end checks
-    (a dead loop, a PR waiting over PR_WAIT). failed: the stage_failed keys this pass saw."""
+    (a dead loop, a loop that has not run for 2 of its intervals, a PR waiting over PR_WAIT). failed: the
+    stage_failed keys this pass saw. st: the dispatcher state (its loop records)."""
     parked = accounts.exhausted_profiles()
     alerts.sweep("account_parked:", {f"account_parked:{p}" for p in parked}, notify)
     out = bool(C.PROFILES) and set(C.PROFILES) <= set(parked)
@@ -654,6 +684,18 @@ def check_alerts(all_cards, failed):
             if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
                 notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {cmd_id(c['id'])}")
     alerts.sweep("pr_waiting:", waiting, notify)
+    stale = set()
+    for name, svc in C.SERVICES.items() if st is not None and not paused() else ():
+        s = (st.get("services") or {}).get(name) or {}
+        every, ran = usage.loop_every(svc["prompt"]), parse_iso(s.get("ran_at") or "")
+        if not (every and ran and now - ran > 2 * every):
+            continue
+        key = f"loop_stale:{name}"
+        stale.add(key)
+        if why := alerts.open(key, "warn", f"Loop {name} has not run for {age(ran)} (it fires every {every // 60} min)",
+                              s.get("waits") or "its window is gone; the dispatcher starts it again on its next pass"):
+            notify(alerts.headline(why, f"Loop {name} has not run for {age(ran)}"), s.get("waits") or "see the Loops tab")
+    alerts.sweep("loop_stale:", stale, notify)
     if not C.SERVICES:
         return
     try:

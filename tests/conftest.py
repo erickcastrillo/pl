@@ -30,11 +30,17 @@ def temp_home(monkeypatch, tmp_path_factory):
     def no_model(url, payload, timeout):
         raise OSError("tests never reach a local model")
     monkeypatch.setattr(local_model, "_request", no_model)   # a test that needs answers fakes _request itself
+    from pl import accounts
+
+    def no_probe(argv, env, timeout, cwd):
+        raise OSError("tests never run a harness CLI")
+    monkeypatch.setattr(accounts, "_probe", no_probe)        # a parked account's health check; tests fake it
 
 
 PY = re.compile(r"python[\d.]*$")
 WRAPPERS = ("env", "nohup", "exec", "command")
 SHELLS = ("sh", "bash", "zsh", "dash")
+HARNESS_BINS = ("claude", "codex", "agy", "gemini")   # the harness CLIs: a test never runs the real one
 # pl manager / pl dispatch in a shell string: the console script, or python -m pl
 PL_SHELL = re.compile(r"(?:(?:^|[\s/;&|(`])pl|-m\s+pl(?:\.cli)?)\s+(?:--profile[=\s]\S+\s+)?(?:manager|dispatch)\b")
 
@@ -113,6 +119,10 @@ def no_real_tmux(monkeypatch, tmp_path_factory):
                 real_pl(a)
             if re.search(r"\btmux\b", cmd):
                 real(a)
+        if a and os.path.basename(a[0]) in HARNESS_BINS:
+            found = shutil.which(a[0], path=(kw.get("env") or os.environ).get("PATH"))
+            if not (found and os.path.realpath(found).startswith(fakes + os.sep)):
+                raise AssertionError(f"a test ran a real harness CLI: {a!r}")
         if not a or os.path.basename(a[0]) != "tmux":
             return
         path = (kw.get("env") or os.environ).get("PATH")

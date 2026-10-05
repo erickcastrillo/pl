@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl.accounts import exhausted_profiles, machine_entry, next_profile, profile_state, unpark_machine
+from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, registry, worker_status, worker_view
 from pl import events, ideas, move_agent, trackers
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
@@ -70,8 +70,8 @@ def cmd_idea(a):
 def cmd_list(a):
     bad = exhausted_profiles()
     if bad:
-        stp = profile_state()
-        print("PROFILES parked (out of usage credits): " + ", ".join(f"{p} until {stp[p]['until'][11:16]} UTC" for p in sorted(bad)) + "   (pl profiles)")
+        print("PROFILES parked (out of usage credits): " + ", ".join(f"{p} until {(parking(p).get('until') or '')[11:16]} UTC"
+                                                                 for p in sorted(bad)) + "   (pl accounts)")
     if paused():
         n = busy_agents(registry())
         print(f"DISPATCHER PAUSED since {paused().get('since', '?')[:16]} UTC: no new agents start   (pl resume)   "
@@ -424,9 +424,11 @@ def cmd_profiles(a):
         print(f"un-parked {a.reset}")
     bad = exhausted_profiles()
     for p in C.PROFILES:
-        r = st.get(p) or machine_entry(p)   # parked by another profile that shares the folder
+        r = parking(p)   # with the machine-wide entry: parked by another profile that shares the folder, and its checks
         state = f"PARKED until {r.get('until', '')[11:16]} UTC ({r.get('reason', '')}, seen {r.get('exhausted_at', '')[:16]})" if p in bad else "ok"
         print(f"  {p:<6} {state:<70} {C.PROFILES[p]}")
+        if p in bad:
+            print(f"         {check_note(p)}")
 
 
 def cmd_card(a):

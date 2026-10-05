@@ -142,7 +142,8 @@ def _doc(v, tracker, intake):
         "stages": {**{s: dict(x) for s, x in (v.get("STAGES") or {}).items()},
                    **{s: {**(v.get("STAGES") or {}).get(s, {}), **x} for s, x in stages.items()}},
         "loops": {n: {"prompt": s["prompt"], **({"account": s["profile"]} if s.get("profile") else {}),
-                      **({"max_context": s["max_context"]} if "max_context" in s else {})} for n, s in v["SERVICES"].items()
+                      **({"max_context": s["max_context"]} if "max_context" in s else {}),
+                      **({"fallback": False} if s.get("pinned_only") else {})} for n, s in v["SERVICES"].items()
                   if not s.get("builtin")} | {n: dict(x) for n, x in (v.get("LOOPS_OFF") or {}).items()},
         "usage": dict(v.get("USAGE") or {}) or None,
     })

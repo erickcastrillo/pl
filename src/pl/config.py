@@ -63,7 +63,10 @@ def _defaults():
     STAGES = {}
     # memory: agents start only while min_free_memory is free; a window past max_agent_processes/_memory is stopped
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
-    DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, **MEMORY_DEFAULTS}  # autostart: the console starts the dispatcher
+    # autostart: the console starts the dispatcher. account_checks: minutes between health checks of a parked account
+    # (the last repeats; [] is off)
+    DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
+                **MEMORY_DEFAULTS}
     GATES = {"spec": False}
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
@@ -135,7 +138,8 @@ def _apply(g, t):
     g["PROMPTS"] = {**g["PROMPTS"], **{s: v["prompt"] for s, v in g["STAGES"].items() if "prompt" in v}}
     if "loops" in t:
         g["SERVICES"] = {n: {"prompt": v["prompt"], "profile": v.get("account"),
-                             **({"max_context": v["max_context"]} if "max_context" in v else {})} for n, v in t["loops"].items()
+                             **({"max_context": v["max_context"]} if "max_context" in v else {}),
+                             **({"pinned_only": True} if v.get("fallback") is False else {})} for n, v in t["loops"].items()
                          if v.get("enabled", True) is not False}
         g["LOOPS_OFF"] = {n: dict(v) for n, v in t["loops"].items() if v.get("enabled", True) is False}
     ch = t.get("code_host", {})
@@ -234,6 +238,10 @@ def validate(doc) -> list[str]:
     for key in ("autostart", "kill_runaway"):
         if not isinstance(doc.get("dispatch", {}).get(key, True), bool):
             errs.append(f"dispatch.{key} must be true or false")
+    ac = doc.get("dispatch", {}).get("account_checks")
+    if ac is not None and not (isinstance(ac, list) and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                                                            and x > 0 for x in ac)):
+        errs.append("dispatch.account_checks must be a list of minutes above 0, like [10, 30, 60] ([] turns checks off)")
     from pl.memory import parse_size
     for key in ("min_free_memory", "max_agent_memory"):
         v = doc.get("dispatch", {}).get(key)
@@ -291,6 +299,8 @@ def validate(doc) -> list[str]:
             mc = v.get("max_context") if table == "loops" else None
             if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or not 0 <= mc <= 100):
                 errs.append(f"loops.{name}: max_context must be a whole percent from 0 (off) to 100")
+            if table == "loops" and not isinstance(v.get("fallback", True), bool):
+                errs.append(f"loops.{name}: fallback must be true or false")
             if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or "").strip():
                 errs.append(f"loops.{name}: prompt is required")
             if accounts and v.get("account") and v["account"] not in accounts:

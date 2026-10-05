@@ -71,6 +71,9 @@ ENTRIES = [
        "Pipeline: d drops (asks for a reason), z shows Done, u undoes a drop", "pl drop <id> --reason TEXT"),
     _e("2026-10-05.03", "More Pipeline keys: hand off to Manual, mark done, edit the idea",
        "Pipeline: h to Manual, f done (both ask first), e edits the card's INPUT in $EDITOR", "pl done <id>"),
+    _e("2026-10-05.04", "A parked account is checked and comes back as soon as it works; its loops run elsewhere",
+       "pl accounts: last check and next check; header: checked; alert when a loop misses 2 of its fires; "
+       "[dispatch] account_checks, [loops.<name>] fallback = false", "pl accounts"),
 ]
 
 

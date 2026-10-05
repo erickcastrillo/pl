@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from pl import config as C
-from pl.accounts import exhausted_profiles, profile_state
+from pl.accounts import exhausted_profiles, parking
 from pl.agents import hold_reason, pane_tail, registry, worker_status, worker_view
 from pl.board import cards, col_name, sections
 from pl.commands import plan_path
@@ -114,8 +114,8 @@ def watch_snapshot():
     done = [{"kind": "row", "card": c, "worker": {}, "win": "", "col": "Done", "profile": (c.get("metadata") or {}).get("profile") or ""}
             for c in sorted(by_col.get("Done", []), key=lambda c: c.get("updated_at") or "", reverse=True)]
     bad = exhausted_profiles()
-    stp = profile_state()
-    prof = "  ".join(f"{p}: " + (f"PARKED until {parked_until(stp[p].get('until'))}" if p in bad else "ok")
+    pk = {p: parking(p) for p in bad}   # the machine-wide entry too: another profile may have parked it
+    prof = "  ".join(f"{p}: " + (f"PARKED until {parked_until(pk[p].get('until'))}" + _checked(pk[p]) if p in bad else "ok")
                      + f" ({per_prof[p]['agents']} running, {per_prof[p]['queued']} queued)" for p in C.PROFILES)
     disp = subprocess.run(["tmux", "list-panes", "-t", f"{C.TMUX_SESSION}:dispatch", "-F", "#{pane_current_command}"],
                           capture_output=True, text=True).stdout.strip()
@@ -135,6 +135,11 @@ def watch_snapshot():
                 + (f"   |   PRs awaiting merge check: {pc['gate']}" if pc else ""))
     return {"rows": rows, "done": done, "prof": prof, "parked": bool(bad), "at": datetime.now().strftime("%H:%M:%S"), "summary": summary, "summary2": summary2,
             "needs": needs, "disp": "running" if disp.startswith("python") else f"NOT RUNNING ({disp or 'no window'})"}
+
+
+def _checked(r):
+    """", checked 20:10 UTC: still limited" for the header, or "" before the first check."""
+    return f", checked {r['checked_at'][11:16]} UTC: {r.get('check_result', '?')}" if r.get("checked_at") else ""
 
 
 def parked_until(iso, now=None):

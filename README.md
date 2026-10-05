@@ -102,6 +102,7 @@ prompt = "Write the spec for card {id}."   # optional per stage: harness, accoun
 [loops.review]                  # long-lived agents kept alive in their own tmux window
 prompt = "..."
 account = "main"
+fallback = true                 # while main is parked, run on another account of its harness; false: wait for main
 
 [gates]
 spec = true                     # a person approves the spec before the plan starts
@@ -111,6 +112,7 @@ max_runs = 3
 max_prep = 2
 interval = 120
 autostart = true                # the console starts this dispatcher in tmux; D starts or stops it by hand
+account_checks = [10, 30, 60]   # minutes between health checks of a parked account; the last repeats; [] turns them off
 
 [code_host]                     # PR labels pl reads (set by your review tools)
 owner = "your-org"
@@ -130,6 +132,8 @@ check = true                    # once a day, read pl's release tags on GitHub; 
 ```
 
 **Updates.** Once a day the console and the dispatcher read pl's release tags from https://github.com/erickcastrillo/pl with `git ls-remote`. Nothing is sent and no sign-in is used. When a newer release exists, the console says so and `U` shows the update commands; `pl update` prints them. pl never installs an update by itself. After you install one, pl restarts itself: within seconds the manager starts again on the new version, and each dispatcher does the same at the end of its pass (running agents and loops keep running; a dispatcher you stopped stays stopped). A new install that does not import is reported once and the old version keeps running. The first time, from a pl older than this feature, open a new console once (or run `pl manager stop`, then `pl manager start`); after that nothing to press.
+
+**Parked accounts.** An account that hits its usage limit is parked: no new agent or loop starts on it. When the limit message names a reset time, it stays parked until then. When it does not (for example "You're out of usage credits"), the dispatcher checks the account 10 minutes later with one tiny call: `claude -p "Reply with the word ok." --no-session-persistence --disable-slash-commands --tools ""` (Codex: `codex exec --skip-git-repo-check --ephemeral --sandbox read-only "Reply with the word ok."`), with the account's own config folder and a 60 s limit. If it answers, the account is un-parked at once. If it is still limited, the next check comes 30 minutes later, then every 60 minutes (`[dispatch] account_checks`). An error or a timeout is recorded and tried again at the next interval. Antigravity accounts have no check and wait for their 1 h timer. A check runs once per account folder on the machine, even when several profiles share it. `pl accounts` shows each parked account's last check, its result and the next one. A loop whose account is parked runs on another account of the same harness and goes back to its own account at its next restart; `[loops.<name>] fallback = false` makes it wait instead. A loop that has not run for 2 of its intervals opens an alert.
 
 Every key can also be edited in the console's Settings tab. Custom harnesses go under `[harnesses.<name>]` with `bin`, `interactive` and `headless`.
 

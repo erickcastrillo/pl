@@ -190,6 +190,50 @@ def test_a_dead_loop_opens_and_resolves(monkeypatch):
     assert not _open("loop_dead:merge-check")
 
 
+def _ago(seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - seconds))
+
+
+def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatch):
+    notes = []
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append((t, m)))
+    monkeypatch.setattr(dispatch, "paused", lambda: None)
+    monkeypatch.setattr(usage, "scan", lambda save=True: {})
+    monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
+    C.SERVICES = {"review": {"prompt": "/loop 30m /pl-review", "profile": "acme"},
+                  "plain": {"prompt": "/check things", "profile": "acme"}}       # no /loop interval: never alerted
+    st = {"services": {"review": {"ran_at": _ago(59 * 60), "waits": "its account acme is parked"},
+                       "plain": {"ran_at": _ago(10 * 86400)}}}
+    dispatch.check_alerts([], set(), st)
+    assert not _open("loop_stale:review") and notes == []                       # under 2 intervals: fine
+    st["services"]["review"]["ran_at"] = _ago(61 * 60)
+    dispatch.check_alerts([], set(), st)
+    a = alerts.get("loop_stale:review")
+    assert _open("loop_stale:review") and "its account acme is parked" in a["fix"] and len(notes) == 1
+    assert not _open("loop_stale:plain")
+    st["services"]["review"]["ran_at"] = _ago(0)                                # it ran again
+    dispatch.check_alerts([], set(), st)
+    assert not _open("loop_stale:review")
+
+
+def test_a_stale_loop_is_not_alerted_while_paused(monkeypatch):
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
+    monkeypatch.setattr(dispatch, "paused", lambda: {"since": "x"})
+    monkeypatch.setattr(usage, "scan", lambda save=True: {})
+    monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
+    C.SERVICES = {"review": {"prompt": "/loop 30m /pl-review", "profile": "acme"}}
+    dispatch.check_alerts([], set(), {"services": {"review": {"ran_at": _ago(86400)}}})
+    assert not _open("loop_stale:review")
+
+
+def test_the_parked_alert_says_when_the_first_check_comes(monkeypatch):
+    w = {"stage": "spec", "session_id": "s", "pane": "%1", "window": "@1", "started_at": "2020-01-01T00:00:00+00:00"}
+    monkeypatch.setattr(accounts, "check_parked", lambda: [])   # the check itself: tests/test_account_check.py
+    _pass(monkeypatch, [_card("card0001aaaa", "Inbox", worker=w)], status="alive", screen="You've hit your limit",
+          parked={"acme"}, healthy="acme2")
+    assert "not checked yet" in alerts.get("account_parked:acme")["fix"]
+
+
 def test_a_pr_waiting_over_24_hours_opens_and_resolves(monkeypatch):
     c = _card("card0001aaaa", "PR open")
     _pass(monkeypatch, [c])
