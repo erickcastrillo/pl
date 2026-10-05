@@ -31,7 +31,7 @@ def col_name(list_id):
 
 
 _clock = time.time   # tests fake the clock
-REUSE_MAX = 120      # seconds a reader reuses a save at most, however long the dispatcher waits
+REUSE_MAX = 330      # seconds a reader reuses a save at most: an idle dispatcher's longest wait (300) + 30
 FRESH_FOR = 5        # seconds after fresh_next that no thread reuses or seeds from the save
 _SHARE = {}          # this process's part in the shared board read: mode, hold, fresh until, and the state folder it is for
 

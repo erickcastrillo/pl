@@ -240,7 +240,7 @@ This covers `gh` only. SSH keys and host aliases only decide who `git push` and 
 - after a reset that ended a wait, each process makes its first call a random few seconds late (up to 30 s for commands and agents, 2 minutes for the dispatcher and console), so they do not all call in the same second;
 - the points left come from GraphQL itself (the `rateLimit` field, or the headers of a refused GraphQL call), never from REST `/rate_limit`, which can show 5,000 left while GraphQL refuses every call.
 
-A pass that waits prints `pass waits: GitHub budget: ...` once, not a failure. `pl usage --github` shows the points left, the reset, and what each profile and caller spent; `pl manager status` shows each profile's part. PR search is cached for 5 minutes.
+A pass that waits prints `pass waits: GitHub budget: ...` once, not a failure. `pl usage --github` shows the points left, the reset, and what each profile and caller spent; `pl manager status` shows each profile's part. The console reuses the dispatcher's board read for up to 5.5 minutes (any write through pl ends that sooner). The open PR search is cached for 5 minutes and the 14-day PR activity for 30 minutes. `r` in the console reads the board and both searches again.
 
 ## Not supported yet
 
