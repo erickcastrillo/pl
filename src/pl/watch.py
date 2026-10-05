@@ -202,14 +202,26 @@ def detail_for(r, full_card, full_pr):
 
 _pr_cache = {"at": 0, "counts": None}
 PR_TTL = 300   # PR searches are reused this long, across the profile's processes (4 searches cost 4 of 30 a minute)
+ACTIVITY_TTL = 1800   # PR activity is 14 days of history: reused for 30 minutes
+_FORCED = {}   # PR search name -> the r press (board.fresh_next) it already asked GitHub again for
 
 
-def _pr_saved(name):
+def _forced(name):
+    """r in the console (board.fresh_next) skips the PR caches: True once per press for each PR search."""
+    from pl import board
+    until = board._SHARE.get("fresh_until", 0)
+    if board._fresh() and _FORCED.get(name) != until:
+        _FORCED[name] = until
+        return True
+    return False
+
+
+def _pr_saved(name, ttl=PR_TTL):
     """(saved at, value) another process of this profile saved for a PR search while it is young, else (0, None)."""
     from pl import board
     got = board._load(C.STATE_DIR / f"{name}.json") if C.STATE_DIR else {}
     at = got.get("at")
-    return (at, got.get("value")) if isinstance(at, (int, float)) and 0 <= github._clock() - at < PR_TTL else (0, None)
+    return (at, got.get("value")) if isinstance(at, (int, float)) and 0 <= github._clock() - at < ttl else (0, None)
 
 
 def _pr_save(name, value):
@@ -234,12 +246,13 @@ def pr_counts():
     lab = _labels()
     if not lab.get("ready"):
         return None
-    if github._clock() - _pr_cache["at"] < PR_TTL and _pr_cache["counts"] is not None:
-        return _pr_cache["counts"]
-    at, saved = _pr_saved("pr-counts")
-    if saved is not None:
-        _pr_cache.update(at=at, counts=saved)
-        return saved
+    if not _forced("pr-counts"):
+        if github._clock() - _pr_cache["at"] < PR_TTL and _pr_cache["counts"] is not None:
+            return _pr_cache["counts"]
+        at, saved = _pr_saved("pr-counts")
+        if saved is not None:
+            _pr_cache.update(at=at, counts=saved)
+            return saved
     if github.limited("search"):
         return _pr_cache["counts"]
     search = ["gh", "search", "prs", *_owner_args(), "--state", "open", "--label"]
@@ -339,8 +352,8 @@ def _gh(args):
 
 def pr_activity(days=14):
     """PR open and merge times (ISO strings) for the last `days` days, for the Dashboard. None when gh fails.
-    Cached PR_TTL s and shared through the state folder."""
-    if (saved := _pr_saved("pr-activity")[1]) is not None:
+    Cached ACTIVITY_TTL s and shared through the state folder; r in the console asks again."""
+    if not _forced("pr-activity") and (saved := _pr_saved("pr-activity", ACTIVITY_TTL)[1]) is not None:
         return saved
     since = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
     base = ["search", "prs", *_owner_args(), "--assignee", "@me", "--limit", "300"]

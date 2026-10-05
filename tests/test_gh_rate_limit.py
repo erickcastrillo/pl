@@ -712,8 +712,8 @@ class _Proc:
         return False
 
 
-def _hour(monkeypatch, console_every):
-    """One hour: a dispatcher pass every 120 s, a console refresh every console_every s, on a fake clock."""
+def _hour(monkeypatch, console_every, pass_every=120):
+    """One hour: a dispatcher pass every pass_every s, a console refresh every console_every s, on a fake clock."""
     import types
     for m, n in _Proc.NAMES:
         monkeypatch.setattr(m, n, getattr(m, n, {}), raising=False)
@@ -723,7 +723,7 @@ def _hour(monkeypatch, console_every):
     monkeypatch.setattr(watch, "time", types.SimpleNamespace(time=lambda: now[0], sleep=time.sleep))
     disp, cons, start = _Proc(), _Proc(), now[0]
     for s in range(0, 3600, console_every):
-        if s % 120 == 0:
+        if s % pass_every == 0:
             now[0] = start + s
             with disp:
                 _pass()
@@ -743,6 +743,42 @@ def test_an_hour_of_dispatcher_and_console_stays_inside_a_300_point_budget(gh, m
     print(by)
     assert gh.points() < 300                     # was about 1,400 with gh project item-list (1 point per item)
     assert gh.count("issue", "list") <= 12      # the default issue intake searches at most every 5 minutes
+
+
+def test_an_hour_with_an_idle_dispatcher_the_console_reads_no_board_and_28_searches_or_fewer(gh, monkeypatch):
+    """Measured before: a pass every 300 s (an idle board) and a console refresh every 60 s made 36 board reads
+    (24 by the console: it reused a save for 120 s only) and 48 PR searches (4 every 5 minutes)."""
+    C.DISPATCH["interval"] = 300                          # the dispatcher's wait on an idle board
+    _hour(monkeypatch, 60, pass_every=300)
+    assert reads(gh) == 12                                # the dispatcher's own reads; the console reuses every one
+    assert gh.count("search", "prs") <= 28                # open PRs 2 every 5 minutes, PR activity 2 every 30
+
+
+def test_a_console_refresh_on_young_saves_makes_no_gh_call(gh, monkeypatch):
+    """Pins the cost of one refresh: with the dispatcher's board read and the PR searches young, nothing."""
+    _pass()
+    trackers.reset()
+    tui_app.default_provider()
+    gh.clear()
+    later = time.time() + 60
+    monkeypatch.setattr(board, "_clock", lambda: later)
+    monkeypatch.setattr(github, "_clock", lambda: later)
+    tui_app.default_provider()                            # the same console process, one interval later
+    assert gh.calls() == []
+
+
+def test_r_asks_github_again_for_the_board_and_each_pr_search_once(gh):
+    _pass()
+    trackers.reset()
+    tui_app.default_provider()
+    gh.clear()
+    board.fresh_next()                                    # r in the console
+    tui_app.default_provider()
+    assert reads(gh) == 1
+    assert gh.count("search", "prs") == 4                 # open PRs 2, PR activity 2: once, though the frame asks twice
+    gh.clear()
+    tui_app.default_provider()                            # a refresh still inside r's few fresh seconds
+    assert gh.count("search", "prs") == 0
 
 
 @pytest.fixture
@@ -838,14 +874,19 @@ def test_a_second_read_in_one_pass_after_another_process_write_is_fresh(gh):
     assert _col(board.cards(), "acme/app#3") == "Approved"
 
 
-def test_readers_reuse_a_save_for_at_most_120_seconds_however_long_the_dispatcher_waits(gh, monkeypatch):
-    _pass()                                               # holds its save 270 s (next wait 240 + 30)
+def test_readers_reuse_a_save_for_at_most_330_seconds_however_long_the_dispatcher_waits(gh, monkeypatch):
+    board.share("write", hold=900)                        # a dispatcher that waits longer than an idle one
+    board.cards()
     trackers.reset()
-    later = time.time() + 121
-    monkeypatch.setattr(board, "_clock", lambda: later)
-    monkeypatch.setattr(github, "_clock", lambda: later)
+    now = [time.time() + 329]
+    monkeypatch.setattr(board, "_clock", lambda: now[0])
+    monkeypatch.setattr(github, "_clock", lambda: now[0])
     board.share("read")
     gh.clear()
+    board.cards()
+    assert reads(gh) == 0
+    now[0] += 2                                           # 331 s: past an idle dispatcher's longest wait (300) + 30
+    trackers.reset()
     board.cards()
     assert reads(gh) == 1
 
@@ -1007,7 +1048,7 @@ def test_expired_save_reseeded_copy_is_not_saved_as_fresh(gh, monkeypatch):
     board.cards()                                         # its copy (15 s old) answers and is saved again
     trackers.reset()
     board.share("read")
-    _at(monkeypatch, t0 + 125)                            # 125 s after the board was really read
+    _at(monkeypatch, t0 + 155)                            # past the hold, 155 s after the board was really read
     assert _col(board.cards(), "acme/app#3") == "Approved"   # pl list must not get the t0 listing
 
 
@@ -1030,17 +1071,17 @@ def test_a_refresh_seeding_between_fresh_next_and_the_write_does_not_feed_it_an_
     assert board.col_name(board.card("acme/app#3")["list_id"]) == "Done"
 
 
-def test_a_seeded_copy_never_outlives_the_120_second_cap(gh, monkeypatch):
+def test_a_seeded_copy_never_outlives_the_saves_hold(gh, monkeypatch):
     t0 = time.time()
     _at(monkeypatch, t0)
-    _pass()                                               # the dispatcher's save at t0
+    _pass()                                               # the dispatcher's save at t0, held 270 s
     trackers.reset()
     board.share("read")
-    _at(monkeypatch, t0 + 110)
-    board.cards()                                         # the console seeds its tracker from the 110 s old save
+    _at(monkeypatch, t0 + 260)
+    board.cards()                                         # the console seeds its tracker from the 260 s old save
     gh.set(status={"3": "Done"})                          # moved on GitHub, outside pl
-    _at(monkeypatch, t0 + 125)
-    assert board.col_name(board.card("acme/app#3")["list_id"]) == "Done"   # the t0 copy is 125 s old
+    _at(monkeypatch, t0 + 275)
+    assert board.col_name(board.card("acme/app#3")["list_id"]) == "Done"   # the t0 copy is 275 s old
 
 
 # ---------- WP40: a search limit pauses only the searches; the raw error is kept ----------
@@ -1098,7 +1139,21 @@ def test_pr_searches_are_cached_5_minutes_and_shared_through_the_state_folder(gh
     now[0] += 20
     watch.pr_counts()
     watch.pr_activity()
-    assert gh.count("search", "prs") == 4
+    assert gh.count("search", "prs") == 2                 # open PRs again; PR activity (14 days) waits 30 minutes
+
+
+def test_pr_activity_is_reused_for_30_minutes_across_processes(gh, monkeypatch):
+    now = [time.time()]
+    monkeypatch.setattr(github, "_clock", lambda: now[0])
+    first = watch.pr_activity()
+    assert first is not None and gh.count("search", "prs") == 2
+    gh.clear()
+    now[0] += 29 * 60
+    assert watch.pr_activity() == first
+    assert gh.count("search") == 0
+    now[0] += 2 * 60
+    watch.pr_activity()
+    assert gh.count("search", "prs") == 2
 
 
 # ---------- the GitHub budget shared by profiles of one GitHub user (ghquota) ----------
