@@ -321,7 +321,7 @@ async def test_pilot_typing_an_answer_shows_the_fake_question(harness):
     harness.out.append(reply("Which channel should reply first?", {"problem": "Leads wait"}))
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
+        await pilot.press("2")
         box = app.query_one("#idea-input", TextArea)
         box.focus()
         await pilot.pause()
@@ -342,7 +342,7 @@ async def test_pilot_failed_approve_reloads_the_idea_from_disk(harness, board):
     board.create = lambda *a, **k: (_ for _ in ()).throw(SystemExit("pl: tracker down"))
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
+        await pilot.press("2")
         app.query_one("#idea-input", TextArea).focus()
         await pilot.pause()
         for ch in "hi":
@@ -362,7 +362,7 @@ async def test_pilot_failed_approve_reloads_the_idea_from_disk(harness, board):
 async def test_pilot_failed_approve_does_not_reenable_input_mid_turn(harness, board):
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
+        await pilot.press("2")
         view = app.query_one("IdeasView")
         box = app.query_one("#idea-input", TextArea)
         view.busy, box.disabled = True, True            # a turn is running
@@ -377,7 +377,7 @@ async def test_pilot_failed_approve_does_not_reenable_input_mid_turn(harness, bo
 async def test_pilot_border_title_treats_the_harness_name_as_plain_text(harness):
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
+        await pilot.press("2")
         view = app.query_one("IdeasView")
         view.current = {**ideas.new_idea("x"), "harness": "[/oops]"}
         view._redraw()
@@ -388,7 +388,7 @@ async def test_pilot_border_title_treats_the_harness_name_as_plain_text(harness)
 async def test_pilot_an_approve_held_by_another_console_shows_no_success_message(harness):
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
+        await pilot.press("2")
         view = app.query_one("IdeasView")
         shown = []
         app.notify = lambda msg, **kw: shown.append(msg)

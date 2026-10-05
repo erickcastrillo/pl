@@ -572,7 +572,7 @@ def counting(monkeypatch):
 
 async def open_pipeline(pilot):
     await settle(pilot)
-    await pilot.press("2")   # the Pipeline tab: the first card is selected
+    await pilot.press("3")   # the Pipeline tab: the first card is selected
     await settle(pilot)
 
 

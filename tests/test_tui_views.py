@@ -156,7 +156,7 @@ async def test_pull_requests_groups():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("5")
+        await pilot.press("4")
         await pilot.pause()
         text = screen_text(app)
         for s in ("NEED YOUR DECISION 1", "READY TO MERGE 2", "NEED REWORK 1", "AWAITING MERGE CHECK 1",
@@ -235,7 +235,7 @@ async def test_card_markup_is_shown_as_plain_text(monkeypatch):
         table_line = next(l for l in screen_text(app).splitlines() if "4a000001 " in l)
         assert "[bold]x[/bold]" in table_line.split("││")[0]      # the list, not only the detail pane
         assert "[bold]x[/bold]" in str(app.query_one("#cards-detail").render())        # card detail pane
-        await pilot.press("5")
+        await pilot.press("4")
         await pilot.pause()
         assert "[red]pr[/red] [link=https://evil.example]z[/link]" in screen_text(app)
 
@@ -426,7 +426,7 @@ async def test_decide_next_row_with_zero_count_still_navigates(monkeypatch):
 
 async def _open_pr(pilot, app, url="https://github.com/o/frontend/pull/1200"):
     await settle(pilot)
-    await pilot.press("5")
+    await pilot.press("4")
     await settle(pilot)
     t = app.query_one("#prs-table")
     t.move_cursor(row=t.get_row_index(url))
@@ -731,8 +731,8 @@ async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app)
         assert "ALERTS" not in screen_text(app)   # the Pipeline lists only cards; alerts live on their own tab
-        assert "4 Alerts 1" in screen_text(app)
-        await pilot.press("4")
+        assert "6 Alerts 1" in screen_text(app)
+        await pilot.press("6")
         await pilot.pause()
         assert app.active_tab == "alerts"
         text = screen_text(app)
@@ -745,7 +745,7 @@ async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
         data["alerts"] = []                       # resolved: the dispatcher's next read leaves it out
         app.refresh_data()
         await settle(pilot)
-        assert "none open" in screen_text(app) and "4 Alerts 0" in screen_text(app)
+        assert "none open" in screen_text(app) and "6 Alerts 0" in screen_text(app)
 
 
 def test_an_old_alert_title_with_a_cut_github_id_shows_repo_and_number():
@@ -777,7 +777,7 @@ async def test_pipeline_filter_with_nothing_waiting_says_so_and_keys_only_notify
         await settle(pilot)
         text = screen_text(app)
         assert "Nothing needs you." in text and "select a row" in text
-        assert str(app.query_one(TabbedContent).get_tab("cards").label) == "2 Pipeline 1"   # no "need you" part
+        assert str(app.query_one(TabbedContent).get_tab("cards").label) == "3 Pipeline 1"   # no "need you" part
         assert "PR OPEN" not in text
         for key in ("a", "x", "o", "enter", "down", "up"):
             await pilot.press(key)
@@ -800,7 +800,7 @@ def _fake_card_read(monkeypatch, reads):
 async def _open_cards(pilot, app, cid=None):
     from pl.tui import cards as tui_cards
     await settle(pilot)
-    await pilot.press("2")
+    await pilot.press("3")
     await settle(pilot)
     if cid is not None:
         t = app.query_one("#cards-table")
@@ -817,7 +817,7 @@ async def test_pipeline_lists_every_card_by_column_with_its_text(monkeypatch):
         view = await _open_cards(pilot, app, "4a000001aaaa")
         assert app.active_tab == "cards"
         text = screen_text(app)
-        assert "2 Pipeline 5 · 3 need you" in text and "Kanban" not in text and "Needs you" not in text
+        assert "3 Pipeline 5 · 3 need you" in text and "Kanban" not in text and "Needs you" not in text
         heads = ["SPEC READY 1", "PLAN FOR REVIEW 2", "MANUAL 1", "PR OPEN 1"]
         for s in heads + ["4a000001", "60000002", "c0000003", "d0000004", "spec0001"]:
             assert s in text, s
@@ -934,7 +934,7 @@ async def test_pipeline_marks_the_cards_that_need_you_and_counts_them_on_the_tab
         marked = {cid for cid in view._rows if t.get_row(cid)[2].plain.startswith("! ")}
         assert marked == MINE
         assert any("red" in str(sp.style) for sp in t.get_row("c0000003aaaa")[2].spans)
-        assert "2 Pipeline 6 · 4 need you" in screen_text(app)
+        assert "3 Pipeline 6 · 4 need you" in screen_text(app)
         assert "4 need you" in t.border_title and "n only those" in t.border_title
 
 
@@ -1099,7 +1099,7 @@ async def test_z_shows_done_and_dropped_cards_without_a_new_refresh(monkeypatch)
         assert t.get_row("f0000001aaaa")[2].plain.strip() == "done"
         assert t.get_row("f0000002aaaa")[2].plain.strip() == "dropped"
         assert "[red]customer cancelled[/red]" in t.get_row("f0000002aaaa")[3].plain   # card text is data
-        assert "2 Pipeline 5 · 3 need you" in text   # the tab count leaves Done out
+        assert "3 Pipeline 5 · 3 need you" in text   # the tab count leaves Done out
         assert "z hides Done" in t.border_title
         await _open_cards(pilot, app, "f0000002aaaa")
         assert "from Spec ready: [red]customer cancelled[/red]" in screen_text(app)   # the detail pane says why
@@ -1150,8 +1150,9 @@ async def test_drop_hand_off_and_done_refuse_a_card_already_in_done(monkeypatch)
 async def test_the_tab_keys_are_digits_in_strip_order():
     from pl.tui.chrome import TAB_KEYS, TABS
     assert [(TAB_KEYS[tid], name) for tid, name in TABS] == [
-        ("0", "Assistant"), ("1", "Dashboard"), ("2", "Pipeline"), ("3", "Ideas"), ("4", "Alerts"),
-        ("5", "Pull requests"), ("6", "Loops"), ("7", "Activity"), ("8", "Settings"), ("9", "Background")]
+        ("0", "Dashboard"), ("1", "Assistant"), ("2", "Ideas"), ("3", "Pipeline"), ("4", "Pull requests"),
+        ("5", "Loops"), ("6", "Alerts"), ("7", "Activity"), ("8", "Settings"), ("9", "Background")]
+    assert dict(TABS)["cards"] == "Pipeline" and dict(TABS)["subagents"] == "Background"
 
 
 def _github_data():
@@ -1202,7 +1203,7 @@ async def test_pull_requests_down_skips_headings_and_none_rows(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("5")
+        await pilot.press("4")
         await settle(pilot)
         t = app.query_one("#prs-table")
         first = _cursor(app, "#prs-table")
@@ -1261,17 +1262,17 @@ class FakeAssistant:
 
 async def _open_assistant(pilot):
     await settle(pilot)
-    await pilot.press("0")
+    await pilot.press("1")
     await settle(pilot)
 
 
-async def test_the_assistant_tab_is_on_by_default_and_0_opens_it(monkeypatch):
+async def test_the_assistant_tab_is_on_by_default_and_1_opens_it(monkeypatch):
     fa = FakeAssistant(monkeypatch)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
         assert app.active_tab == "assistant" and fa.ensured == 1
-        assert "0 Assistant" in screen_text(app)
+        assert "1 Assistant" in screen_text(app)
         assert "waits for your review" in str(app.query_one("#assistant-screen").render())
 
 
@@ -1449,22 +1450,38 @@ async def test_an_allow_rule_warning_shows_in_the_tab(monkeypatch):
         assert "Bash(gh pr *)" in str(app.query_one("#assistant-warning").render())
 
 
-async def test_the_tab_strip_starts_with_0_assistant_then_1_dashboard(monkeypatch):
+async def test_the_tab_strip_starts_with_0_dashboard_then_1_assistant(monkeypatch):
     FakeAssistant(monkeypatch)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         labels = [str(t.label) for t in app.query_one(TabbedContent).query("Tab")]
-        assert labels[0] == "0 Assistant" and labels[1] == "1 Dashboard"
+        assert labels[:3] == ["0 Dashboard", "1 Assistant", "2 Ideas"] and labels[3].startswith("3 Pipeline ")
         assert app.active_tab == "dashboard"
-        await pilot.press("2")
+        await pilot.press("3")
         await settle(pilot)
+        await pilot.press("0")
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+        await pilot.press("1")
+        await settle(pilot)
+        assert app.active_tab == "assistant"
+
+
+async def test_without_the_assistant_the_keys_stay_put(monkeypatch):
+    FakeAssistant(monkeypatch)
+    monkeypatch.setattr(C, "ASSISTANT", {"enabled": False})
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        labels = [str(t.label) for t in app.query_one(TabbedContent).query("Tab")]
+        assert labels[:2] == ["0 Dashboard", "2 Ideas"] and app.active_tab == "dashboard"
         await pilot.press("1")
         await settle(pilot)
         assert app.active_tab == "dashboard"
-        await pilot.press("0")
+        await pilot.press("3")
         await settle(pilot)
-        assert app.active_tab == "assistant"
+        assert app.active_tab == "cards"
 
 
 async def test_esc_leaves_the_assistant_box_and_then_a_digit_switches_tab(monkeypatch):
@@ -1475,13 +1492,13 @@ async def test_esc_leaves_the_assistant_box_and_then_a_digit_switches_tab(monkey
         await pilot.press("h", "i")
         await settle(pilot)
         assert app.active_tab == "assistant"
-        assert "esc then 1-9" in str(app.query_one("#assistant-keys").render())
-        await pilot.press("escape", "1")
+        assert "esc then 0-9" in str(app.query_one("#assistant-keys").render())
+        await pilot.press("escape", "0")
         await settle(pilot)
         assert app.active_tab == "dashboard"
-        await pilot.press("0")
+        await pilot.press("1")
         await settle(pilot)
-        await pilot.press("alt+1")
+        await pilot.press("alt+0")
         await settle(pilot)
         assert app.active_tab == "dashboard"
 
@@ -1718,8 +1735,8 @@ def _many_cards_data():
     return data
 
 
-@pytest.mark.parametrize("key,table,heading", [("2", "#cards-table", "SPEC READY 1"),
-                                                ("5", "#prs-table", "NEED YOUR DECISION")])
+@pytest.mark.parametrize("key,table,heading", [("3", "#cards-table", "SPEC READY 1"),
+                                                ("4", "#prs-table", "NEED YOUR DECISION")])
 async def test_list_tabs_open_with_the_first_heading_on_screen(monkeypatch, key, table, heading):
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(_many_cards_data()))

@@ -189,10 +189,10 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 
 | Key | Action |
 | --- | --- |
-| 0 | Assistant (the leftmost tab): a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
-| 1 to 9 | Dashboard, Pipeline, Ideas, Alerts, Pull requests, Loops, Activity, Settings, Background |
-| 2 | Pipeline: every card by column; a red ! marks the cards that need you (a spec or plan to review, a manual card, an agent that waits or died) and n shows only those. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, o answer a spec's questions, v move to another column, d drop (asks for an optional reason), h hand off to Manual, f mark done, e edit the card's INPUT in `$EDITOR`, z show or hide Done, u undo a drop (in the Done group). d, h, f, u and v ask first |
-| 4 | Alerts (k acknowledges) |
+| 0 to 9 | Dashboard, Assistant, Ideas, Pipeline, Pull requests, Loops, Alerts, Activity, Settings, Background (the console opens on the Dashboard) |
+| 1 | Assistant: a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
+| 3 | Pipeline: every card by column; a red ! marks the cards that need you (a spec or plan to review, a manual card, an agent that waits or died) and n shows only those. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, o answer a spec's questions, v move to another column, d drop (asks for an optional reason), h hand off to Manual, f mark done, e edit the card's INPUT in `$EDITOR`, z show or hide Done, u undo a drop (in the Done group). d, h, f, u and v ask first |
+| 6 | Alerts (k acknowledges) |
 | w | cycle the Dashboard time window |
 | s | standup summary of the last 24 hours on the Dashboard (y copies it) |
 | a / x | approve / send back the selected card |
@@ -262,7 +262,7 @@ A Claude Code agent in a folder it has never opened stops at the "Is this a proj
 
 ## Assistant
 
-Tab `0` is a side chat that runs pl for you: "what is stuck?", "retry that card", "install this plugin", "change the review skill". It is a real, interactive harness session in the tmux window `assistant` of this profile's session, started the first time you open the tab. The tab shows its screen and types what you enter; a lone digit answers the harness's numbered permission menu. The window outlives the console, so reopening the console reattaches to the same conversation; if tmux lost the window, pl resumes the saved Claude conversation.
+Tab `1` is a side chat that runs pl for you: "what is stuck?", "retry that card", "install this plugin", "change the review skill". It is a real, interactive harness session in the tmux window `assistant` of this profile's session, started the first time you open the tab. The tab shows its screen and types what you enter; a lone digit answers the harness's numbered permission menu. The window outlives the console, so reopening the console reattaches to the same conversation; if tmux lost the window, pl resumes the saved Claude conversation.
 
 It uses `[assistant] account`, else the first account not parked, and its usage counts on that account. It starts in the profile's `work_dir`, where the code lives (the profile folder when that folder is missing). pl always starts it in the harness's ask-first mode, whatever the account's own default mode is: Claude with `--permission-mode manual`, Codex with `--ask-for-approval on-request --sandbox read-only`. Claude also gets `--add-dir` for the account's config folder, the profile folder and the folder of pl's guide (never HOME), and permission rules through `--settings`. Claude Code checks deny, then ask, then allow:
 

@@ -186,7 +186,7 @@ pl --profile work                      # open the console
 
 In the console:
 
-1. Press `3` for Ideas and `n` for a new idea. The harness asks questions until the brief is clear. `A` approves it and creates a card in Inbox.
+1. Press `2` for Ideas and `n` for a new idea. The harness asks questions until the brief is clear. `A` approves it and creates a card in Inbox.
 2. Start the dispatcher in another terminal. Try a dry run first:
 
    ```
@@ -195,7 +195,7 @@ In the console:
    ```
 
    Each waiting card gets an agent in the tmux session `pl-work`.
-3. When a spec or plan is ready, press `2` for the Pipeline (`n` shows only the cards that need you) and select it. `a` approves (confirm with `y`). `x` opens the review screen and sends it back with what you wrote in the notes box. `e` opens it in `$EDITOR`.
+3. When a spec or plan is ready, press `3` for the Pipeline (`n` shows only the cards that need you) and select it. `a` approves (confirm with `y`). `x` opens the review screen and sends it back with what you wrote in the notes box. `e` opens it in `$EDITOR`.
 
 From the shell, `pl --profile work approve <id>` and `pl --profile work reject <id> "notes"` do the same.
 

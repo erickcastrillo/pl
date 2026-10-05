@@ -26,7 +26,7 @@ SLOW = 5           # seconds: a screen read running this long shows "still readi
 CHANGED = "the question changed; look again"
 KEYS = ("enter send · a number answers the card · ctrl+t chat/idea mode · "
         "ctrl+o open its window (arrows, Esc) · ctrl+r start over · ctrl+f file a ready idea · "
-        "esc then 1-9 · switch tab")
+        "esc then 0-9 · switch tab")
 HINT = {"chat": "chat mode: ask pl to do things (it asks before acting)",
         "idea": "idea mode: drafting an idea brief with you; it files the card only after your yes"}
 

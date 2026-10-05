@@ -119,7 +119,7 @@ async def test_alerts_tab_with_no_alerts_says_so():
     app = PlApp(snapshot_provider=Provider({**fake_data(), "alerts": []}))
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("4")
+        await pilot.press("6")
         await pilot.pause()
         assert "Alerts: none open (pl alerts --all for history)" in screen_text(app)
 
@@ -135,7 +135,7 @@ async def test_the_loops_table_explains_n_a(profile):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("6")
+        await pilot.press("5")
         await pilot.pause()
         assert loops.HINT in screen_text(app) and "max_context" in loops.HINT and "80" in loops.HINT
 

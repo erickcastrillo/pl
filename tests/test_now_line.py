@@ -160,7 +160,7 @@ async def test_pipeline_row_pane_and_card_show_the_line_and_todos(fake_home, mon
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("2")
+        await pilot.press("3")
         await settle(pilot)
         t = app.query_one("#cards-table")
         t.move_cursor(row=t.get_row_index(CARD))

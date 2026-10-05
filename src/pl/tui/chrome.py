@@ -5,10 +5,11 @@ from rich.text import Text
 
 from pl import config as C
 
-TABS = [("assistant", "Assistant"), ("dashboard", "Dashboard"), ("cards", "Pipeline"), ("ideas", "Ideas"), ("alerts", "Alerts"),
-        ("prs", "Pull requests"), ("loops", "Loops"), ("activity", "Activity"), ("settings", "Settings"),
-        ("subagents", "Background")]
-# tab key = position in this list: 0 Assistant, 1 Dashboard, 2 Pipeline, ... 9 Background
+TABS = [("dashboard", "Dashboard"), ("assistant", "Assistant"), ("ideas", "Ideas"), ("cards", "Pipeline"),
+        ("prs", "Pull requests"), ("loops", "Loops"), ("alerts", "Alerts"), ("activity", "Activity"),
+        ("settings", "Settings"), ("subagents", "Background")]
+# tab key = position in this list: 0 Dashboard, 1 Assistant, 2 Ideas, 3 Pipeline, ... 9 Background.
+# Keys stay fixed when tabs() hides the Assistant.
 TAB_KEYS = {tid: str(i) for i, (tid, _) in enumerate(TABS)}
 
 
