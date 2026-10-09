@@ -1,0 +1,77 @@
+name: Auto-merge gate
+
+# pull_request_target runs this file and the check script from the base branch,
+# so a pull request cannot change the rules that judge it.
+# Never check out or run the pull request's head code here.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  # Queue runs in order so a later run never cancels one that removes a stale review label.
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      ACTION: ${{ github.event.action }}
+      MODE: ${{ vars.AUTO_MERGE_MODE || 'shadow' }}
+      LABEL: ${{ vars.AUTO_MERGE_LABEL || 'pl:merge-ready' }}
+      AUTO_MERGE_LABEL: ${{ vars.AUTO_MERGE_LABEL || 'pl:merge-ready' }}
+      AUTO_MERGE_AUTHORS: ${{ vars.AUTO_MERGE_AUTHORS || github.repository_owner }}
+    steps:
+      # Base branch only. No ref input, so the pull request's code is never fetched.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: check
+        run: |
+          python3 .github/scripts/auto_merge_check.py "$REPO" "$PR" "$ACTION" > verdict.txt
+          head -n 1 verdict.txt >> "$GITHUB_OUTPUT"
+          {
+            echo "## Auto-merge gate ($MODE mode)"
+            echo '```'
+            cat verdict.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Make sure the gate labels exist
+        run: |
+          gh label create pl:would-auto-merge -R "$REPO" --color c5def5 \
+            --description "Shadow mode: the gate would auto-merge this" || true
+          gh label create pl:auto-merge -R "$REPO" --color 0e8a16 \
+            --description "The gate turned on auto-merge" || true
+
+      - name: Eligible
+        if: steps.check.outputs.eligible == 'true'
+        run: |
+          if [ "$MODE" = "live" ]; then
+            gh pr edit "$PR" -R "$REPO" --remove-label pl:would-auto-merge || true
+            gh pr edit "$PR" -R "$REPO" --add-label pl:auto-merge
+            gh pr merge "$PR" -R "$REPO" --auto --squash
+          else
+            gh pr edit "$PR" -R "$REPO" --add-label pl:would-auto-merge
+          fi
+
+      - name: Not eligible
+        # always() so a failed check still turns auto-merge off.
+        if: always() && steps.check.outputs.eligible != 'true'
+        run: |
+          gh pr edit "$PR" -R "$REPO" --remove-label pl:would-auto-merge || true
+          gh pr edit "$PR" -R "$REPO" --remove-label pl:auto-merge || true
+          gh pr merge "$PR" -R "$REPO" --disable-auto || true
+          # New commits need a fresh review.
+          if [ "$ACTION" = "synchronize" ]; then
+            gh pr edit "$PR" -R "$REPO" --remove-label "$LABEL" || true
+          fi

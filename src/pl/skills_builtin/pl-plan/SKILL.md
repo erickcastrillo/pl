@@ -1,7 +1,7 @@
 ---
 name: pl-plan
 description: Turn a pl card's approved SPEC (and DESIGN, if any) into a plan of small work packages with tests first and a minimum-change budget, write it as the card's PLAN section, and move the card to Plan for review. Use as the plan stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 1
+pl-builtin-version: 2
 ---
 
 # pl-plan: write the implementation plan for one card
@@ -12,6 +12,9 @@ record each decision you had to make in the plan, with the option you picked.
 ## Input
 
 - The card id is the first argument (the text after the skill name, or under "Arguments" below).
+- `max_lines=N max_files=M target_lines=A target_files=B` set the pull request size. When missing, use
+  300, 10, 150 and 6. Lines count added plus deleted lines outside `tests/`; files count every changed file.
+  A pull request over the max fails CI. One at or under the target may merge by itself.
 - `pl` already acts on the right profile. Run it from this folder.
 
 ## Steps
@@ -33,6 +36,13 @@ record each decision you had to make in the plan, with the option you picked.
 
 3. Size the change first. Ask: what is the fewest files and lines that meet every acceptance criterion?
    Prefer editing existing files and extending existing tests over new files, helpers or abstractions.
+   Aim the budget at `target_lines` and `target_files`. It must never exceed `max_lines` or `max_files`.
+   If the whole change cannot fit the max, this card builds slice 1 only. List the rest under "Later
+   slices", preferring slices that each fit the target, and file each one yourself:
+
+   ```
+   pl idea "Slice <k> of <card title> (after <id>): <what this slice builds>"
+   ```
 
 4. Write the plan to a temporary file outside the repository, using the format below.
 
@@ -69,6 +79,9 @@ Why this is the smallest change that meets the spec, in one or two sentences.
 - Acceptance criteria: which AC-n from the spec this package proves, and how to check it.
 
 ### WP2: ...
+
+## Later slices
+Only when the change is split: one line per later slice, with what it builds. Leave out otherwise.
 
 ## Decisions
 - Each choice you made that a person may want to change, with the option you picked.

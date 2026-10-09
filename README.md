@@ -336,6 +336,21 @@ Only a loopback url is accepted. Any other host is refused, so the text stays on
 
 What uses it today: `pl standup --summary`.
 
+## Auto-merge
+
+This repo has a gate that lets small, reviewed, low-risk pull requests merge without a person. A pull request qualifies when it targets main from this repo, is not a draft, has an allowed author and the review label `pl:merge-ready`, changes at most 6 files and 150 lines, touches no sensitive path such as CI, dependencies or setup, adds no risky line such as `subprocess` or `eval`, and changes tests when it changes code under `src/`. New commits remove the review label, so they need a fresh review. The rules live in `.github/scripts/auto_merge_check.py`.
+
+The `AUTO_MERGE_MODE` repo variable picks the mode:
+
+- `shadow` (the default) only adds the label `pl:would-auto-merge`. Nothing merges.
+- `live` adds `pl:auto-merge` and turns on GitHub auto-merge with squash.
+
+CI also fails any pull request over 300 changed lines outside `tests/` or over 10 changed files.
+
+Turn on live mode only after branch protection on main requires the `test` and `size` checks and auto-merge is enabled in the repo settings. Otherwise `--auto` merges at once, before CI finishes.
+
+`AUTO_MERGE_LABEL` and `AUTO_MERGE_AUTHORS` (a comma list, default the repo owner) are optional repo variables.
+
 ## License
 
 MIT.

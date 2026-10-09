@@ -7,6 +7,7 @@ only when it points at another configured account's own folder; each folder is r
 by account from each account's sessions/*.json (a session no account names is counted under "<a>+<b>")."""
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,7 @@ BIG_WINDOW = 1_000_000        # a session that went past DEFAULT_WINDOW runs a 1
 LOCK_WAIT = 5                 # seconds to wait for the other scanner, then skip this scan
 META_BYTES = 64 * 1024        # sessions/*.json larger than this are not read
 UNIT = {"m": 60, "h": 3600, "d": 86400}
+HEAD_BYTES = 256              # a file whose first bytes changed was replaced, even with the same inode
 MAX_CONTEXT = 80              # a loop's max_context when it sets none; its own max_context = 0 turns context care off
 
 
@@ -144,8 +146,15 @@ def _files(projects, roots, now):
             yield p, st, sub
 
 
+def _head(f, offset):
+    """A hash of the file's first bytes that were already read, at most HEAD_BYTES of them."""
+    f.seek(0)
+    return hashlib.blake2b(f.read(min(offset, HEAD_BYTES)), digest_size=8).hexdigest()
+
+
 def _read_new(p, st, rec, cap):
-    """Whole new lines since rec's offset, at most cap bytes; rec is updated in place. A replaced or shorter file starts over."""
+    """Whole new lines since rec's offset, at most cap bytes; rec is updated in place. A replaced or shorter file
+    starts over; a file whose first bytes changed counts as replaced, since Linux often gives a new file the old inode."""
     ident = [st.st_dev, st.st_ino]
     if rec.get("ident") != ident or st.st_size < rec.get("offset", 0):
         rec.clear()
@@ -155,17 +164,24 @@ def _read_new(p, st, rec, cap):
             fst = os.fstat(f.fileno())
             if [fst.st_dev, fst.st_ino] != ident:
                 return []
+            head = _head(f, rec["offset"])
+            if rec.get("head", head) != head:
+                rec.clear()
+                rec.update(ident=ident, offset=0)
             f.seek(rec["offset"])
             data = f.read(cap)
+            end = data.rfind(b"\n")
+            head = _head(f, rec["offset"] + (end + 1 if end >= 0 else len(data)))
     except OSError:
         return []
-    end = data.rfind(b"\n")
     if end < 0:
         if len(data) == CHUNK:   # one line longer than a whole read: skip it
             rec["offset"] += len(data)
             rec["skip"] = True
+            rec["head"] = head
         return []
     rec["offset"] += end + 1
+    rec["head"] = head
     lines = data[:end].split(b"\n")
     if rec.pop("skip", False):
         lines = lines[1:]
