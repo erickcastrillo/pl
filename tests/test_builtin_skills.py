@@ -547,7 +547,7 @@ def _start(monkeypatch, tmp_path, prompt="/pl-run {id}", cfg="rel/profile"):
     monkeypatch.setattr(C, "ATTENTION", None, raising=False)
     monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (h, "a"))
     monkeypatch.setattr(dispatch.harnesses, "unattended", lambda h: h)
-    monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label: seen.append(("prompt", p)) or "")
+    monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: seen.append(("prompt", p)) or "")
     monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: argparse.Namespace(returncode=0))
     monkeypatch.setattr(dispatch, "tmux", lambda *a: seen.append(a) or "%1")
     monkeypatch.setattr(dispatch, "_launch", lambda pane, name, script, p=None: tmp_path / "l.sh")

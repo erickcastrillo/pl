@@ -8,6 +8,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +86,81 @@ TRUST_PATTERNS = {"claude": [r"Accessing workspace", r"Yes, I trust this folder"
 # A template token that already chooses a permission or sandbox mode (the Assistant refuses such a template too).
 PERMISSION_FLAG_RE = re.compile(r"dangerously|bypass|yolo|full-auto|approve-for-me|permission|approval|sandbox|dontask"
                                 r"|acceptedits|accept-edits|allowed-?tools|settings|^-[as]$|^--mode(?:=|$)", re.I)
+
+
+# Model and reasoning effort, from each CLI's --help: claude 2.1.295 (--model takes an alias such as 'fable', 'opus'
+# or 'sonnet', or a full name; --effort low..max), agy 1.3.1 (--model, --effort low..max; `agy models` lists them),
+# codex 0.150.1 (-c model=..., -c model_reasoning_effort=...; `codex debug models --bundled` prints its catalog as JSON
+# without a network call). A harness missing from MODEL_FLAGS or EFFORT_FLAGS takes no model or no effort.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_FLAGS = {"claude": ["--model", "{model}"], "antigravity": ["--model", "{model}"], "codex": ["-c", 'model="{model}"']}
+EFFORT_FLAGS = {"claude": ["--effort", "{effort}"], "antigravity": ["--effort", "{effort}"],
+                "codex": ["-c", 'model_reasoning_effort="{effort}"']}
+EFFORT_LEVELS = {"claude": EFFORTS, "antigravity": EFFORTS, "codex": EFFORTS}
+CLAUDE_MODELS = ["opus", "sonnet", "haiku", "fable", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+                 "claude-fable-5-1"]
+MODEL_LIST_ARGV = {"antigravity": ["agy", "models"], "codex": ["codex", "debug", "models", "--bundled"]}
+MODEL_LIST_TIMEOUT = 20
+MODEL_TTL = 600          # seconds a model list read from a CLI is kept
+_MODELS = {}             # harness name -> (monotonic time, [model ids])
+# a template token that already chooses the model or the effort (then pl adds none)
+MODEL_FLAG_RE = re.compile(r"^(?:--model|-m)(?:=|$)|^model=", re.I)
+EFFORT_FLAG_RE = re.compile(r"^--effort(?:=|$)|reasoning_effort=", re.I)
+# a model id pl passes: no whitespace, quote or backslash, and no leading dash (it is never read as a flag)
+MODEL_RE = re.compile(r"[^\s\"'\\-][^\s\"'\\]*")
+
+
+def shared_levels(names):
+    """The effort levels every one of these harnesses takes, in order (all of EFFORTS for none)."""
+    return [x for x in EFFORTS if all(x in EFFORT_LEVELS.get(n, ()) for n in names)]
+
+
+def _parse_models(name, out):
+    if name == "codex":
+        return [m["slug"] for m in json.loads(out)["models"] if m.get("visibility") == "list" and m.get("slug")]
+    return [ln.split("\t")[0].strip() for ln in out.splitlines() if "\t" in ln and ln.split("\t")[0].strip()]
+
+
+def models(name):
+    """The model ids an account of this harness can pick: claude's built-in list; agy's and codex's from their CLI,
+    kept MODEL_TTL seconds; [] when the list cannot be read (the person types one)."""
+    if name == "claude":
+        return list(CLAUDE_MODELS)
+    if name not in MODEL_LIST_ARGV:
+        return []
+    hit = _MODELS.get(name)
+    if hit and time.monotonic() - hit[0] < MODEL_TTL:
+        return list(hit[1])
+    try:
+        r = _run(MODEL_LIST_ARGV[name], timeout=MODEL_LIST_TIMEOUT)
+        out = _parse_models(name, r.stdout) if r.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
+        out = []
+    if out:
+        _MODELS[name] = (time.monotonic(), out)
+    return list(out)
+
+
+def model_effort(h, account, stage=None):
+    """(model, effort) a launch of h under account passes, None for each that is unset or that h does not take.
+    The model is the account's, only when h is the account's own harness; the effort is the stage's, else the account's."""
+    a = C.ACCOUNTS.get(account) or {}
+    model = a.get("model") if (a.get("harness") or "claude") == h.name and h.name in MODEL_FLAGS else None
+    model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
+    effort = (C.STAGES.get(stage) or {}).get("effort") if stage else None
+    effort = effort or a.get("effort")
+    return model, (effort if effort in EFFORT_LEVELS.get(h.name, ()) else None)
+
+
+def _with_model(template, h, account, stage):
+    """(template, values): the model and effort flags after the program name, unless the template sets that flag."""
+    model, effort = model_effort(h, account, stage)
+    add = []
+    if model and not any(MODEL_FLAG_RE.search(t) for t in template):
+        add += MODEL_FLAGS[h.name]
+    if effort and not any(EFFORT_FLAG_RE.search(t) for t in template):
+        add += EFFORT_FLAGS[h.name]
+    return [*template[:1], *add, *template[1:]], {"model": model, "effort": effort}
 
 
 def unattended(h):
@@ -202,16 +278,17 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
-    plugin: false keeps pl's skills library plugin out of this launch."""
+    plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins."""
     from pl import skills
     pdir = skills.launch_plugin(h, plugin)
     prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
-    argv = skills.with_plugin(_argv(h.resume if resume else h.interactive,
-                                    {"prompt": prompt, "session_id": session_id, "label": label}), pdir)
+    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage)
+    argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
+                              pdir)
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
     if h.env_var and d:
@@ -220,7 +297,7 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
     return "\n".join(lines) + "\n"
 
 
-def headless_argv(h, account, prompt):
+def headless_argv(h, account, prompt, stage=None):
     """(argv, env) for a one-shot run; no shell."""
     env = dict(os.environ)
     d = C.PROFILES.get(account)
@@ -230,7 +307,9 @@ def headless_argv(h, account, prompt):
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
     from pl import skills
     pdir = skills.launch_plugin(h)
-    return skills.with_plugin(_argv(h.headless, {"prompt": skills.library_prompt(h, account, prompt, pdir)}), pdir), env
+    template, values = _with_model(h.headless, h, account, stage)
+    return skills.with_plugin(_argv(template, {**values, "prompt": skills.library_prompt(h, account, prompt, pdir)}),
+                              pdir), env
 
 
 def available(h):

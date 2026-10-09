@@ -33,6 +33,7 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Hand a manual card to the pipeline | Pipeline tab: `i` | `pl adopt <id>` |
 | Spread a stage over several accounts, of any harness | Settings: `<stage> accounts` | `[stages.run] accounts = ["main", "agy"]` |
 | Antigravity's quota parks its account until "Resets in"; finished Antigravity prep windows close | `pl list`: limit hit | `pl accounts` |
+| Pick the model and reasoning effort per account, and the effort per stage | Settings: Models and effort, `<stage> effort` | `[accounts.main] model = "opus"` |
 
 ## Your subscription
 
@@ -101,9 +102,11 @@ tmux_session = "pl-work"
 
 [accounts.main]                 # a harness account: its config folder
 config_dir = "~/.claude-main"   # harness = "claude" (default), "codex" or "agy"
+model = "opus"                  # optional: the model its agents use (unset: the harness's default)
+effort = "high"                 # optional: low, medium, high, xhigh or max
 
 [stages.spec]                   # spec, design, plan, run
-prompt = "Write the spec for card {id}."   # optional per stage: harness, account
+prompt = "Write the spec for card {id}."   # optional per stage: harness, account, effort
 [stages.run]
 accounts = ["main", "agy"]      # instead of account: each new agent goes to the least busy account not parked
 [loops.review]                  # long-lived agents kept alive in their own tmux window
@@ -144,6 +147,8 @@ check = true                    # once a day, read pl's release tags on GitHub; 
 **Parked accounts.** An account that hits its usage limit is parked: no new agent or loop starts on it. When the limit message names a reset time, it stays parked until then. When it does not (for example "You're out of usage credits"), the dispatcher checks the account 10 minutes later with one tiny call: `claude -p "Reply with the word ok." --no-session-persistence --disable-slash-commands --tools ""` (Codex: `codex exec --skip-git-repo-check --ephemeral --sandbox read-only "Reply with the word ok."`), with the account's own config folder and a 60 s limit. If it answers, the account is un-parked at once. If it is still limited, the next check comes 30 minutes later, then every 60 minutes (`[dispatch] account_checks`). An error or a timeout is recorded and tried again at the next interval. Antigravity accounts have no check. Their limit message ("Individual quota reached ... Resets in 4h9m46s") parks the account for that long from when pl first sees it, and for 1 h when it names no time. Once the account is free again, an Antigravity agent still sitting on its old limit screen is restarted (agy does not resume by itself). A check runs once per account folder on the machine, even when several profiles share it. `pl accounts` shows each parked account's last check, its result and the next one. A loop whose account is parked runs on another account of the same harness and goes back to its own account at its next restart; `[loops.<name>] fallback = false` makes it wait instead. A loop that has not run for 2 of its intervals opens an alert.
 
 **Account pools.** `[stages.<stage>] accounts = ["main", "agy"]` spreads a stage over several accounts, which may use different harnesses, so you use the credits of each subscription. Each new agent of that stage starts on the pool account with the fewest open auto cards (the card's own account is ignored), skipping parked ones. Each pick counts the picks before it, so cards started in the same pass spread over the pool. Each account's own harness is used, so the stage sets no `harness` that differs from theirs, and no `account`. A running agent keeps its account; an agent that hits its usage limit moves or restarts only inside the pool. When every pool account is parked, the card waits.
+
+**Model and effort.** `[accounts.<name>] model` and `effort` set the model and the reasoning effort of every agent, loop, idea chat and Assistant session pl starts on that account. `[stages.<stage>] effort` overrides the account's effort for that stage's agents. A stage has no `model`, because a pool may mix harnesses; each account sets its own. Unset means the harness's own default. pl passes them after the program name: Claude Code and Antigravity get `--model` and `--effort`, Codex gets `-c model="..."` and `-c model_reasoning_effort="..."`. Effort levels are low, medium, high, xhigh and max for all three. A `[harnesses.<name>]` template that already sets its own model or effort flag is left as it is. A custom harness takes neither, and validation says so. In Settings, the Models and effort panel offers each account only its harness's models: Claude's aliases (`opus`, `sonnet`, `haiku`, `fable`) and full ids, Antigravity's from `agy models`, Codex's from `codex debug models --bundled`, plus "custom…" to type any id. When a list cannot be read, type the id. Change an account's model when you change its harness: a model belongs to one harness.
 
 Every key can also be edited in the console's Settings tab. Custom harnesses go under `[harnesses.<name>]` with `bin`, `interactive` and `headless`.
 

@@ -17,6 +17,7 @@ from pl.tui.skills import SkillsView
 SUBSCRIPTION_LINE = ("pl runs the harness CLIs you already have installed and signed in, on your own subscription. "
                      "It never asks for or stores an API key.")
 LEGACY_HINT = "no profile loaded: settings are read-only. Create a profile to edit them: pl profiles new <name>"
+CUSTOM = "custom…"     # the model Select's choice that asks for a model id by hand
 
 
 def create_project(owner, title):
@@ -45,6 +46,16 @@ def _set(doc, path, value):
             t[k] = tomlkit.table()
         t = t[k]
     t[path[-1]] = value
+
+
+def _model_options(models, current):
+    """A model Select's choices: the harness's models, the account's own model when the list lacks it, then custom…."""
+    return [*models, *([current] if isinstance(current, str) and current and current not in models else []), CUSTOM]
+
+
+def _stage_levels(stage):
+    """The effort levels a stage can take: those every harness it may run on takes."""
+    return harnesses.shared_levels(C.stage_harnesses(C.STAGES.get(stage) or {}, C.ACCOUNTS))
 
 
 def _gh_summary():
@@ -78,6 +89,31 @@ class ProjectScreen(ModalScreen):
         self.dismiss(None)
 
 
+class ModelScreen(ModalScreen):
+    """Asks for a model id the account's harness list does not show."""
+    DEFAULT_CSS = """
+    ModelScreen { align: center middle; }
+    ModelScreen > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, account, harness):
+        super().__init__()
+        self.account, self.harness = account, harness
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"Model id for account {self.account} ({self.harness}), as its CLI's --model takes it"))
+            yield Input(placeholder="model id", id="model-id")
+            yield Static(Text("enter use it · esc cancel", style="dim"))
+
+    def on_input_submitted(self, _):
+        self.dismiss(self.query_one("#model-id", Input).value.strip() or None)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class SettingsView(Widget):
     DEFAULT_CSS = """
     SettingsView { height: 1fr; }
@@ -93,10 +129,12 @@ class SettingsView(Widget):
     def __init__(self):
         super().__init__()
         self.fields = {}      # widget id -> (toml path, initial value, kind)
+        self.models = {}      # model Select id -> (account, harness name)
+        self.picked = {}      # model Select id -> its value before custom… was chosen
 
     # ---------- building the screen ----------
 
-    def _field(self, label, path, value, kind="str", options=None):
+    def _field(self, label, path, value, kind="str", options=None, prompt="Select"):
         wid = f"set-{len(self.fields)}"
         if options is not None and value not in options:
             value = None    # shown blank, so only a real pick counts as a change
@@ -106,7 +144,7 @@ class SettingsView(Widget):
             yield Label(label)
             if options is not None:
                 yield Select([(o, o) for o in options], value=Select.NULL if value is None else value,
-                             allow_blank=True, compact=True, id=wid, disabled=ro)
+                             allow_blank=True, compact=True, id=wid, disabled=ro, prompt=prompt)
             else:
                 yield Input(value="" if value is None else str(value), compact=True, id=wid, disabled=ro)
 
@@ -140,6 +178,18 @@ class SettingsView(Widget):
                 if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
                     yield Button("Create project", id="create-project", compact=True)
                 yield Static(Text("code host  gh: checking…", style="dim"), id="codehost")
+            with self._panel("Models and effort (blank = the harness's default)"):
+                for name, a in C.ACCOUNTS.items():
+                    hname = a.get("harness") or "claude"
+                    if hname in harnesses.MODEL_FLAGS:
+                        model = a.get("model")
+                        opts = _model_options(harnesses.models("claude") if hname == "claude" else [], model)
+                        self.models[f"set-{len(self.fields)}"] = (name, hname)
+                        yield from self._field(f"{name} model ({hname})", ("accounts", name, "model"), model,
+                                               options=opts, prompt="default")
+                    if hname in harnesses.EFFORT_LEVELS:
+                        yield from self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
+                                               options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
             with self._panel("Stages and harnesses"):
                 names = list(harnesses.BUILTINS)
                 for stage in C.PROMPTS:
@@ -153,6 +203,10 @@ class SettingsView(Widget):
                                                options=names)
                         yield from self._field(f"{stage} account", ("stages", stage, "account"), st.get("account"),
                                                options=accounts)
+                    levels = _stage_levels(stage)
+                    if levels:
+                        yield from self._field(f"{stage} effort", ("stages", stage, "effort"), st.get("effort"),
+                                               options=levels, prompt="account's")
                     yield from self._field(f"{stage} prompt", ("stages", stage, "prompt"), C.PROMPTS[stage])
                     warn = Static("", classes="stage-warning", id=f"warn-{stage}")
                     warn.display = False
@@ -184,7 +238,8 @@ class SettingsView(Widget):
                     ("  may wait at permission prompts (README: Permissions)" if harnesses.still_asks(h.name) else "")
             except SystemExit:
                 ok, exp = "unknown harness", ""
-            t.append(f"account  {name:<12} {hname:<12} {a.get('config_dir', '')}  {ok}{exp}\n")
+            me = "".join(f"  {k} {a[k]}" for k in ("model", "effort") if a.get(k))
+            t.append(f"account  {name:<12} {hname:<12} {a.get('config_dir', '')}  {ok}{exp}{me}\n")
         return t
 
     def on_mount(self):
@@ -208,6 +263,47 @@ class SettingsView(Widget):
                     text = Text(f"  /{name} is not a skill or command of account {account}", style="bold #e0a040")
                     self.app.call_from_thread(self._warn, stage, text)
         self.run_worker(warn, thread=True, group="settings-skills")
+
+        def models():   # agy models and codex's catalog run a CLI: off the UI thread
+            for hname in sorted({h for _, h in self.models.values() if h in harnesses.MODEL_LIST_ARGV}):
+                try:
+                    found = harnesses.models(hname)
+                except Exception:  # noqa: BLE001 - a worker that raises kills the app
+                    found = []
+                self.app.call_from_thread(self._set_models, hname, found)
+        if self.models:
+            self.run_worker(models, thread=True, group="settings-models")
+
+    def _set_models(self, hname, found):
+        """Fill the model Selects of this harness's accounts, keeping each one's value."""
+        for wid, (_, h) in self.models.items():
+            if h != hname:
+                continue
+            sel = self.query_one(f"#{wid}", Select)
+            cur = None if sel.value is Select.NULL else sel.value
+            sel.set_options([(o, o) for o in _model_options(found, cur)])
+            if cur is not None:
+                sel.value = cur
+
+    def on_select_changed(self, m):
+        wid = m.select.id
+        if wid not in self.models:
+            return
+        if m.value != CUSTOM:
+            self.picked[wid] = m.value
+            return
+        account, hname = self.models[wid]
+
+        def typed(model):
+            sel = self.query_one(f"#{wid}", Select)
+            before = self.picked.get(wid, self.fields[wid][1])
+            if not model:
+                sel.value = Select.NULL if before is None else before
+                return
+            opts = [v for _, v in sel._options if v is not Select.NULL and v != CUSTOM]
+            sel.set_options([(o, o) for o in _model_options(opts, model)])
+            sel.value = model
+        self.app.push_screen(ModelScreen(account, hname), typed)
 
     def _warn(self, stage, text):
         w = self.query_one(f"#warn-{stage}", Static)
