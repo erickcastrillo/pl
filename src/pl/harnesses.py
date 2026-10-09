@@ -52,7 +52,11 @@ BUILTINS = {
         [r"You've hit your usage limit\.", r"You've reached your (?:usage|workspace credit) limit",
          r"Your workspace is out of credits"]),   # Codex's own wording (strings of codex 0.150.1)
     "antigravity": Harness(
-        "antigravity", "agy", None, ["agy", "-i", "{prompt}"], ["agy", "-p", "{prompt}"], [], experimental=True,
+        "antigravity", "agy", None, ["agy", "-i", "{prompt}"], ["agy", "-p", "{prompt}"],
+        # agy 1.3.1 shows the server's wording (not in its binary), wrapped at any width: "⚠ Individual quota reached.
+        # Please upgrade your subscription to increase your limits. Resets in 4h9m46s." (C.RESET_IN_RE reads the time)
+        [r"Individual\s+quota\s+reached", r"quota\s+reached\.\s+Please\s+upgrade\s+your\s+subscription"],
+        experimental=True,
         note="agy reads an interactive prompt only from -i (--prompt-interactive): a bare prompt argument is refused; "
              "headless (-p) cannot prompt for tool permissions, so allow the tools in agy's own settings (pl never adds "
              "--dangerously-skip-permissions)"),

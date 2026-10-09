@@ -87,7 +87,11 @@ def exhausted_profiles():
 
 
 def reset_at(screen, now):
-    """The local datetime the screen says the limit resets: the next time that date and time come round, or None."""
+    """The local datetime the screen says the limit resets: now plus a duration ("Resets in 4h9m46s"), else the next
+    time that date and time come round, or None."""
+    if (r := C.RESET_IN_RE.search(screen)) and any(r.groupdict().values()):
+        d, h, m, s = (int(v or 0) for v in r.group("d", "h", "m", "s"))
+        return now + timedelta(days=d, hours=h, minutes=m, seconds=s)
     m = C.RESET_RE.search(screen)
     if not m:
         return None

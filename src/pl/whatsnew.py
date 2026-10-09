@@ -84,6 +84,8 @@ ENTRIES = [
        "Pipeline: <stage> agent died 3x with its last error line; t or pl retry starts it fresh", "pl list"),
     _e("2026-10-07.01", "Spread a stage over several accounts, of any harness, to use each subscription",
        "[stages.<stage>] accounts = [\"main\", \"agy\"]; Settings shows the pool", "pl accounts"),
+    _e("2026-10-08.01", "Antigravity's quota is detected: the account parks until \"Resets in\" and its slots free up",
+       "pl list: limit hit; finished Antigravity spec/design/plan windows close by themselves", "pl accounts"),
 ]
 
 

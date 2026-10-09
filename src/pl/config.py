@@ -44,6 +44,9 @@ def _defaults():
                           rf"(?:(?:(?P<mon>{_MON})\s+(?P<day>\d{{1,2}})|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MON}))\s*,?\s*(?:at\s+)?)?"
                           r"(?:(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>[ap]m)\b|(?P<h24>\d{1,2}):(?P<m24>\d{2}))", re.I)
     del _MON
+    # a reset given as a time from now (Antigravity: "Resets in 4h9m46s", "Resets in 9m", "Resets in 2h")
+    RESET_IN_RE = re.compile(r"resets?\s+in\s+(?=\d)(?:(?P<d>\d+)\s*d\s*)?(?:(?P<h>\d+)\s*h\s*)?(?:(?P<m>\d+)\s*m(?!s)\s*)?"
+                             r"(?:(?P<s>\d+)\s*s\b)?", re.I)
     LIMIT_COOLDOWN = int(os.environ.get("PL_LIMIT_COOLDOWN", "3600"))  # seconds, when the screen names no reset time
     LIMIT_RESTART_WINDOW = int(os.environ.get("PL_LIMIT_RESTART_WINDOW", "600"))  # an agent younger than this is restarted on the other account; older ones auto-resume
 
