@@ -697,9 +697,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if line:
             print(line)
     ensure_services(st, all_cards, reg, dry, paused(), low)   # loops are not held by the machine: they are not agents
-    # order: runs first (they are the long pole), then plans, designs, specs; oldest first
+    # order: runs first (they are the long pole), In progress ones (a restart) before Approved ones that have not
+    # started, then plans, designs, specs; oldest first
     rank = {"run": 0, "plan": 1, "design": 2, "spec": 3}
-    todo.sort(key=lambda t: (rank[t[1]], t[0].get("updated_at") or ""))
+    todo.sort(key=lambda t: (rank[t[1]], t[3] != "In progress", t[0].get("updated_at") or ""))
     pause = paused()
     held = 0
     for c, stage, attempts, col in todo:

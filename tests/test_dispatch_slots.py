@@ -230,3 +230,31 @@ def test_agents_waiting_at_a_prompt_are_reported_to_the_manager(monkeypatch):
     _pass(monkeypatch, [_card(1, profile="claude", worker=w), _card(2)])
     got = json.loads((C.STATE_DIR / "agent-waits.json").read_text())
     assert got["windows"] == ["@7"] and got["at"] > 0
+
+
+# ---------- in-progress cards get run slots before approved ones ----------
+
+def test_an_in_progress_card_needing_a_restart_gets_the_run_slot_before_older_approved_cards(monkeypatch, capsys):
+    C.PROMPTS = {**C.PROMPTS, "run": "/pl-run {id}"}
+    approved = [{**_card(n, profile="claude"), "list_id": "Approved"} for n in (1, 2)]   # older: updated first
+    restart = {**_card(9, profile="claude"), "list_id": "In progress"}                    # its agent was stopped
+    started, _ = _pass(monkeypatch, [*approved, restart])
+    assert [c["id"] for c in started] == ["o/r#9"]
+    assert "r#1  run waits (1/1 in flight)" in capsys.readouterr().out
+
+
+def test_in_progress_cards_go_oldest_first_then_approved_ones(monkeypatch):
+    C.PROMPTS = {**C.PROMPTS, "run": "/pl-run {id}"}
+    cs = [{**_card(n, profile="claude"), "list_id": col} for n, col in
+          ((1, "Approved"), (5, "In progress"), (3, "In progress"))]
+    monkeypatch.setattr(dispatch, "LIVE_RUN_CAP", 9)
+    started = []
+    monkeypatch.setattr(dispatch, "registry", lambda: {})
+    monkeypatch.setattr(dispatch, "cards", lambda: cs)
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: None)
+    monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: started.append(c["id"]))
+    for name in ("mirror_to_product", "ensure_services", "sweep_untracked"):
+        monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+    dispatch.dispatch_once(3, False, pull=False)
+    assert started == ["o/r#3", "o/r#5", "o/r#1"]
