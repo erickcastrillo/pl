@@ -35,6 +35,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     def no_probe(argv, env, timeout, cwd):
         raise OSError("tests never run a harness CLI")
     monkeypatch.setattr(accounts, "_probe", no_probe)        # a parked account's health check; tests fake it
+    from pl import harnesses
+    monkeypatch.setattr(harnesses, "MODEL_LIST_ARGV", {})    # agy models / codex's catalog: test_model_effort fakes them
+    harnesses._MODELS.clear()
 
 
 PY = re.compile(r"python[\d.]*$")
