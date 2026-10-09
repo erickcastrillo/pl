@@ -82,6 +82,8 @@ ENTRIES = [
        "pl restart <id>, pl hold <id> --reason TEXT"),
     _e("2026-10-05.07", "Antigravity agents start again; a card whose agent died says why",
        "Pipeline: <stage> agent died 3x with its last error line; t or pl retry starts it fresh", "pl list"),
+    _e("2026-10-07.01", "Spread a stage over several accounts, of any harness, to use each subscription",
+       "[stages.<stage>] accounts = [\"main\", \"agy\"]; Settings shows the pool", "pl accounts"),
 ]
 
 

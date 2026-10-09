@@ -990,6 +990,20 @@ def test_an_existing_profile_keeps_its_prompts_until_use_builtin_stages(fake_hom
     assert len(list((fake_home / ".pl-work-acme").glob("config.toml.bak-*"))) == len(baks)
 
 
+def test_a_rerun_keeps_a_stage_accounts_pool(fake_home, monkeypatch):
+    import tomlkit
+    _pl(monkeypatch, *BASE, "--tracker", "github-issues", "--repo", "acme/app")
+    p = fake_home / ".pl-work-acme" / "config.toml"
+    doc = tomlkit.parse(p.read_text())
+    del doc["stages"]["run"]["account"]
+    doc["stages"]["run"]["accounts"] = ["claude"]
+    p.write_text(tomlkit.dumps(doc))
+    _pl(monkeypatch, "--yes", "--slug", "work-acme")
+    t = _cfg(fake_home, "work-acme")
+    assert t["stages"]["run"]["accounts"] == ["claude"] and "account" not in t["stages"]["run"]
+    assert t["stages"]["spec"]["account"] == "claude"
+
+
 def test_use_builtin_stages_needs_an_existing_profile(fake_home, monkeypatch):
     with pytest.raises(SystemExit, match="no profile"):
         _pl(monkeypatch, "--use-builtin-stages", "--slug", "nope", "--yes")

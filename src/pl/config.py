@@ -309,6 +309,24 @@ def validate(doc) -> list[str]:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
                 errs.append(f"{table}.{name}: unknown harness {v['harness']!r}; known: {', '.join(known)}")
+            if table == "stages" and "accounts" in v:
+                errs += _pool_errors(name, v, accounts)
+    return errs
+
+
+def _pool_errors(name, v, accounts) -> list[str]:
+    """[stages.<name>] accounts: a list of known account names, without account, and no harness that differs from theirs."""
+    pool = v["accounts"]
+    if not (isinstance(pool, list) and pool and all(isinstance(a, str) for a in pool)):
+        return [f"stages.{name}: accounts must be a list of account names, like [\"main\", \"agy\"]"]
+    errs = [f"stages.{name}: account {a!r} in accounts is not one of {', '.join(accounts) or 'no accounts'}"
+            for a in pool if a not in accounts]
+    if v.get("account"):
+        errs.append(f"stages.{name}: set account or accounts, not both; remove account")
+    off = [a for a in pool if a in accounts and v.get("harness") and (accounts[a].get("harness") or "claude") != v["harness"]]
+    if off:
+        errs.append(f"stages.{name}: harness {v['harness']!r} differs from the harness of {', '.join(off)}; "
+                    "remove harness (each account uses its own)")
     return errs
 
 

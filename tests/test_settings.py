@@ -211,6 +211,19 @@ async def test_settings_screen_saves_only_the_edited_field(work, gh_signed_in):
     assert after["dispatch"]["max_runs"] == 6 and C.DISPATCH["max_runs"] == 6
     assert "loops" not in after and "stages" not in after and 'token = "${TOKEN}"' in work.read_text()
 
+async def test_a_stage_with_an_accounts_pool_shows_the_pool_instead_of_one_account(work, gh_signed_in):
+    C.STAGES = {"run": {"accounts": ["main", "agy"]}}
+    app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        view = app.query_one(settings.SettingsView)
+        paths = [p for p, _, _ in view.fields.values()]
+        assert ("stages", "run", "account") not in paths and ("stages", "spec", "account") in paths
+        assert "main, agy" in str(app.query_one("#pool-run").content)
+
+
 async def test_loops_tab_shows_the_selected_loops_screen(monkeypatch):
     monkeypatch.setattr(C, "SERVICES", {"merge-check": {"prompt": "/loop 30m /merge-check", "profile": "acme"},
                                         "call-ingest": {"prompt": "/loop 15m /call-ingest", "profile": "acme"}})

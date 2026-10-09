@@ -31,6 +31,7 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Stop a card's agent so its stage starts fresh | Pipeline tab: `R` | `pl restart <id>` |
 | Hold a card (no agent starts on it), and release it | Pipeline tab: `p` | `pl hold <id> --reason TEXT`, `pl unhold <id>` |
 | Hand a manual card to the pipeline | Pipeline tab: `i` | `pl adopt <id>` |
+| Spread a stage over several accounts, of any harness | Settings: `<stage> accounts` | `[stages.run] accounts = ["main", "agy"]` |
 
 ## Your subscription
 
@@ -102,6 +103,8 @@ config_dir = "~/.claude-main"   # harness = "claude" (default), "codex" or "agy"
 
 [stages.spec]                   # spec, design, plan, run
 prompt = "Write the spec for card {id}."   # optional per stage: harness, account
+[stages.run]
+accounts = ["main", "agy"]      # instead of account: each new agent goes to the least busy account not parked
 [loops.review]                  # long-lived agents kept alive in their own tmux window
 prompt = "..."
 account = "main"
@@ -138,6 +141,8 @@ check = true                    # once a day, read pl's release tags on GitHub; 
 **Updates.** Once a day the console and the dispatcher read pl's release tags from https://github.com/erickcastrillo/pl with `git ls-remote`. Nothing is sent and no sign-in is used. When a newer release exists, the console says so and `U` shows the update commands; `pl update` prints them. pl never installs an update by itself. After you install one, pl restarts itself: within seconds the manager starts again on the new version, and each dispatcher does the same at the end of its pass (running agents and loops keep running; a dispatcher you stopped stays stopped). A new install that does not import is reported once and the old version keeps running. The first time, from a pl older than this feature, open a new console once (or run `pl manager stop`, then `pl manager start`); after that nothing to press.
 
 **Parked accounts.** An account that hits its usage limit is parked: no new agent or loop starts on it. When the limit message names a reset time, it stays parked until then. When it does not (for example "You're out of usage credits"), the dispatcher checks the account 10 minutes later with one tiny call: `claude -p "Reply with the word ok." --no-session-persistence --disable-slash-commands --tools ""` (Codex: `codex exec --skip-git-repo-check --ephemeral --sandbox read-only "Reply with the word ok."`), with the account's own config folder and a 60 s limit. If it answers, the account is un-parked at once. If it is still limited, the next check comes 30 minutes later, then every 60 minutes (`[dispatch] account_checks`). An error or a timeout is recorded and tried again at the next interval. Antigravity accounts have no check and wait for their 1 h timer. A check runs once per account folder on the machine, even when several profiles share it. `pl accounts` shows each parked account's last check, its result and the next one. A loop whose account is parked runs on another account of the same harness and goes back to its own account at its next restart; `[loops.<name>] fallback = false` makes it wait instead. A loop that has not run for 2 of its intervals opens an alert.
+
+**Account pools.** `[stages.<stage>] accounts = ["main", "agy"]` spreads a stage over several accounts, which may use different harnesses, so you use the credits of each subscription. Each new agent of that stage starts on the pool account with the fewest open auto cards (the card's own account is ignored), skipping parked ones. Each pick counts the picks before it, so cards started in the same pass spread over the pool. Each account's own harness is used, so the stage sets no `harness` that differs from theirs, and no `account`. A running agent keeps its account; an agent that hits its usage limit moves or restarts only inside the pool. When every pool account is parked, the card waits.
 
 Every key can also be edited in the console's Settings tab. Custom harnesses go under `[harnesses.<name>]` with `bin`, `interactive` and `headless`.
 

@@ -154,13 +154,24 @@ def account_harness(account):
     return get((C.ACCOUNTS.get(account) or {}).get("harness") or "claude")
 
 
+def stage_pool(stage):
+    """The [stages.<stage>] accounts list the stage spreads its agents over, or None."""
+    return (C.STAGES.get(stage) or {}).get("accounts") or None
+
+
 def harness_for(stage, c=None):
-    """(Harness, account) for a stage: [stages.<stage>] harness/account, else the card's account and its harness."""
+    """(Harness, account) for a stage: [stages.<stage>] harness/account, else the card's account and its harness.
+    A stage with an accounts pool takes the card's account when it is in the pool (dispatch wrote it), else the first."""
     st = C.STAGES.get(stage) or {}
     want = ((c or {}).get("metadata") or {}).get("profile")
-    if st.get("account") and st["account"] not in C.PROFILES:
-        raise SystemExit(f"pl: [stages.{stage}] account {st['account']!r} is not an account; known: {', '.join(C.PROFILES)}")
-    account = st.get("account") or (want if want in C.PROFILES else default_account())
+    pool = stage_pool(stage)
+    for a in [st.get("account")] + (pool or []):
+        if a and a not in C.PROFILES:
+            raise SystemExit(f"pl: [stages.{stage}] account {a!r} is not an account; known: {', '.join(C.PROFILES)}")
+    if pool:
+        account = want if want in pool else pool[0]
+    else:
+        account = st.get("account") or (want if want in C.PROFILES else default_account())
     if account is None:
         raise SystemExit(f"pl: no harness accounts: add one under [accounts.<name>] in {C.path() or 'config.toml'}")
     return (get(st["harness"]) if st.get("harness") else account_harness(account)), account

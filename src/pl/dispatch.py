@@ -506,12 +506,13 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 prof = w.get("profile") or m.get("profile")
                 until = mark_exhausted(prof, screen) if not dry else "(dry run)"
                 prep = w.get("stage") in ("spec", "design", "plan")   # a prep agent always moves; a run agent only while young
-                alt = healthy_profile(None, all_cards, harness=wh.name) if prep else healthy_profile(None, all_cards)
+                pool = harnesses.stage_pool(w.get("stage"))   # a pooled stage never leaves its pool, of any harness
+                alt = healthy_profile(None, all_cards, harness=wh.name if prep and not pool else None, pool=pool)
                 age = time.time() - parse_iso(w.get("started_at") or "")
                 auto_resumes = "continuing automatically" in screen
                 moved, why, changed, to = False, None, False, None   # changed: the move left a new worker on the card
                 if not prep:   # a run agent of any age first tries to keep its session on another Claude account
-                    to = healthy_profile(None, all_cards, harness="claude")
+                    to = healthy_profile(None, all_cards, harness="claude", pool=pool)
                     if to and to != prof:
                         moved, why, changed = move_agent.move(c, to, "usage limit", dry, held=True)
                 switch = not changed and bool(alt) and alt != prof and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
@@ -717,18 +718,24 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         elif prep_alive >= max_prep:
             print(f"{short_id(c['id'])}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
             continue
-        # one account for the log, the card and the launch: the stage's own account when it sets one, else the
-        # card's, else the least loaded; start_worker's harness_for then picks the same one
+        # one account for the log, the card and the launch: the stage's own account when it sets one; with an
+        # accounts pool, the least loaded of the pool not parked (this card not counted); else the card's, else the
+        # least loaded. The pick is written to the card, so the next pick counts it and start_worker's harness_for
+        # picks the same one
         pinned = (C.STAGES.get(stage) or {}).get("account")
         pinned = pinned if pinned in C.PROFILES else None
-        want = pinned or (c.get("metadata") or {}).get("profile")
+        pool = None if pinned else harnesses.stage_pool(stage)
+        want = pinned or (None if pool else (c.get("metadata") or {}).get("profile"))
         if pinned:
             prof = None if pinned in accounts.exhausted_profiles() else pinned
+        elif pool:
+            prof = healthy_profile(None, [x for x in all_cards if x is not c], pool=pool)
         else:
             prof = healthy_profile(want, all_cards)
         if prof is None:
-            if pinned:
-                print(f"{short_id(c['id'])}  {stage} waits: its account {pinned} is parked (pl accounts)")
+            if pinned or pool:
+                print(f"{short_id(c['id'])}  {stage} waits: " + (f"its account {pinned} is parked" if pinned else
+                      f"its accounts {', '.join(pool)} are parked") + " (pl accounts)")
                 continue
             if why := alerts.open("accounts_all_out", "high", "Every account is out of credits",
                                   "cards wait for the first reset; pl accounts shows when"):

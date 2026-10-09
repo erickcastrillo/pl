@@ -300,12 +300,14 @@ def _check(name):
     return kind
 
 
-def healthy_profile(preferred, all_cards, harness=None, skip=None):
+def healthy_profile(preferred, all_cards, harness=None, skip=None, pool=None):
     """The card's own profile if it is not parked, else the least-loaded profile that is not parked, else None.
-    With harness, only accounts that run that harness count; skip is never picked."""
+    With harness, only accounts that run that harness count; with pool, only those accounts; skip is never picked."""
     bad = exhausted_profiles() | {skip}
     if harness:
         bad = bad | {p for p in C.PROFILES if harnesses.account_harness(p).name != harness}
+    if pool is not None:
+        bad = bad | {p for p in C.PROFILES if p not in pool}
     if preferred in C.PROFILES and preferred not in bad:
         return preferred
     ok = [p for p in C.PROFILES if p not in bad]

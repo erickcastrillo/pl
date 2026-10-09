@@ -542,12 +542,13 @@ def merged_doc(a):
     A tracker of another type replaces the old [tracker] table (its keys belong to the old type)."""
     doc = tomlkit.parse(a["old_bytes"].decode())
     t = {k: x for k, x in a["tracker"].items() if k != "_create"}
+    pools = {s for s, v in doc.get("stages", {}).items() if isinstance(v, MutableMapping) and "accounts" in v}
     if doc.get("tracker", {}).get("type") != t["type"]:
         doc["tracker"] = t
         t = {}
     new = profiles._clean({"name": a["name"], "user": a["user"], "paths": {"work_dir": a["work_dir"], "attention_cmd": a["attention"]},
                            "tracker": t, "accounts": a["accounts"],
-                           "stages": {s: {"account": a["default_account"]} for s in STAGES},
+                           "stages": {s: {"account": a["default_account"]} for s in STAGES if s not in pools},   # a pool stays
                            "code_host": {"owner": a["owner"], "gh_config_dir": a["gh_config_dir"], "labels": a["labels"]},
                            "local_model": a.get("local_model")})
 
