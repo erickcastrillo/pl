@@ -283,3 +283,109 @@ def test_build_id_of_reads_the_version_from_the_files_under_root(tmp_path):
     assert update.build_id_of(tmp_path).startswith("9.8.7-") and update.__version__ != "9.8.7"
     (tmp_path / "__init__.py").write_text("")   # no readable version: the running one stands in
     assert update.build_id_of(tmp_path).startswith(f"{update.__version__}-")
+
+
+@pytest.fixture
+def exits(monkeypatch):
+    """PlApp.exit recorded instead of run: the test console stays up to be looked at."""
+    from pl.tui.app import PlApp
+    calls = []
+    monkeypatch.setattr(PlApp, "exit", lambda self, *a, **k: calls.append(1))
+    return calls
+
+
+async def test_the_console_restarts_itself_on_a_new_build_when_nothing_is_open(monkeypatch, exits):
+    from pl.tui.app import PlApp
+    monkeypatch.setattr(update, "restart_build", lambda asked=False, warn=print: "b9")
+    app = PlApp(snapshot_provider=Provider(), restarts=True)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.build_job()
+        await settle(pilot)
+        assert app.restart_into == "b9" and exits == [1]
+
+
+async def test_the_console_reads_its_own_build_at_start(monkeypatch):
+    from pl.tui.app import PlApp
+    monkeypatch.setattr(update, "_BUILD", {})
+    monkeypatch.setattr(update, "build_id_of", lambda root: "b0")
+    async with PlApp(snapshot_provider=Provider(), restarts=True).run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+    assert update._BUILD == {"id": "b0"}
+
+
+async def test_a_draft_or_an_open_dialog_waits_and_N_restarts_by_hand(monkeypatch, exits):
+    from pl.tui.app import PlApp, WhatsNewScreen
+    from pl.tui.assistant import AssistantInput
+    monkeypatch.setattr(update, "restart_build", lambda asked=False, warn=print: "b9")
+    app = PlApp(snapshot_provider=Provider(), restarts=True)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.query_one(AssistantInput).value = "half a question"
+        app.build_job()
+        await settle(pilot)
+        assert exits == [] and app.restart_into is None
+        notes = [n.message for n in app._notifications if "pl was updated" in n.message]
+        assert len(notes) == 1 and "press N" in notes[0]
+        app.build_job()   # still busy: told once
+        await settle(pilot)
+        assert len([n for n in app._notifications if "pl was updated" in n.message]) == 1
+        app.query_one(AssistantInput).value = ""
+        app.push_screen(WhatsNewScreen([]))
+        await settle(pilot)
+        app.build_job()
+        await settle(pilot)
+        assert exits == []
+        await pilot.press("escape")
+        await pilot.press("N")
+        await settle(pilot)
+        assert app.restart_into == "b9" and exits == [1]
+
+
+async def test_a_build_that_does_not_import_is_told_and_the_console_keeps_running(monkeypatch, exits):
+    from pl.tui.app import PlApp
+
+    def broken(asked=False, warn=print):
+        warn("pl build b9 is installed but does not import; keeping the running version until the next install")
+    monkeypatch.setattr(update, "restart_build", broken)
+    app = PlApp(snapshot_provider=Provider(), restarts=True)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.build_job()
+        await settle(pilot)
+        assert exits == [] and app.restart_into is None
+        assert any("does not import" in n.message for n in app._notifications)
+
+
+async def test_test_consoles_do_not_restart(monkeypatch, exits):
+    from pl.tui.app import PlApp
+    app = PlApp(snapshot_provider=Provider())
+    assert app.check_build is False
+
+
+def test_the_console_execs_the_same_command_after_a_restart(monkeypatch):
+    import argparse
+    import os
+    from pl import watch
+    from pl.tui import app as tui_app
+    runs, execs = [], []
+
+    class FakeApp:
+        def __init__(self, interval=None):
+            self.restart_into = None
+
+        def run(self):
+            runs.append(1)
+            self.restart_into = "b9" if len(runs) == 1 else None
+
+    def fail(path, argv):
+        execs.append((path, argv))
+        raise OSError("no such file")
+    monkeypatch.setattr(tui_app, "PlApp", FakeApp)
+    monkeypatch.setattr(os, "execv", fail)
+    monkeypatch.setattr(sys, "orig_argv", [sys.executable, "/bin/pl", "--profile", "work"])
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(update, "_BAD", set())
+    watch.cmd_watch(argparse.Namespace(interval=None, once=False, plain=False))
+    assert execs == [(sys.executable, [sys.executable, "/bin/pl", "--profile", "work"])]
+    assert runs == [1, 1] and update._BAD == {"b9"}   # a failed exec opens this version's console again

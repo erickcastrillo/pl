@@ -88,6 +88,8 @@ ENTRIES = [
        "pl list: limit hit; finished Antigravity spec/design/plan windows close by themselves", "pl accounts"),
     _e("2026-10-08.02", "Pick the model and reasoning effort per account, and the effort per stage",
        "Settings: Models and effort, and <stage> effort", "[accounts.main] model = \"opus\", effort = \"high\""),
+    _e("2026-10-09.01", "The console restarts itself on a new pl install, like the dispatchers",
+       "a notice and N when a dialog or unsent text is open", "pl"),
 ]
 
 
