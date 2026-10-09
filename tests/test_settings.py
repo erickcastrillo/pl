@@ -221,6 +221,7 @@ async def test_a_stage_with_an_accounts_pool_shows_the_pool_instead_of_one_accou
         view = app.query_one(settings.SettingsView)
         paths = [p for p, _, _ in view.fields.values()]
         assert ("stages", "run", "account") not in paths and ("stages", "spec", "account") in paths
+        assert ("stages", "run", "harness") not in paths and ("stages", "spec", "harness") in paths
         assert "main, agy" in str(app.query_one("#pool-run").content)
 
 

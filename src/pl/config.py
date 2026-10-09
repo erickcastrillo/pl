@@ -314,7 +314,23 @@ def validate(doc) -> list[str]:
                 errs.append(f"{table}.{name}: unknown harness {v['harness']!r}; known: {', '.join(known)}")
             if table == "stages" and "accounts" in v:
                 errs += _pool_errors(name, v, accounts)
+            elif table == "stages" and accounts and v.get("harness") in known:
+                errs += _stage_harness_errors(name, v, accounts)
     return errs
+
+
+def _stage_harness_errors(name, v, accounts) -> list[str]:
+    """[stages.<name>] harness without a pool: it must match its pinned account's harness, or, unpinned, some account's
+    (else pl would launch that CLI under an account signed in to another one)."""
+    h, a = v["harness"], v.get("account")
+    if a and a in accounts:
+        ah = accounts[a].get("harness") or "claude"
+        return [] if ah == h else [f"stages.{name}: harness {h!r} differs from account {a}'s harness {ah!r}; "
+                                   "remove the stage's harness line (the account sets it)"]
+    if a or any((x.get("harness") or "claude") == h for x in accounts.values()):
+        return []
+    return [f"stages.{name}: no account uses harness {h!r} (accounts: {', '.join(accounts)}); "
+            "remove the stage's harness line or add an account of that harness"]
 
 
 def _pool_errors(name, v, accounts) -> list[str]:

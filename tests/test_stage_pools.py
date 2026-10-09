@@ -72,6 +72,11 @@ def _errs(stage_toml):
     ('[stages.run]\naccount = "claude"\naccounts = ["claude", "agy"]\n', "remove account"),
     ('[stages.run]\nharness = "claude"\naccounts = ["claude", "agy"]\n', "agy"),
     ('[stages.run]\nharness = "claude"\naccounts = ["claude"]\n', None),
+    ('[stages.run]\nharness = "claude"\naccount = "agy"\n',
+     "stages.run: harness 'claude' differs from account agy's harness 'antigravity'; remove the stage's harness line"),
+    ('[stages.run]\nharness = "antigravity"\naccount = "agy"\n', None),
+    ('[stages.run]\nharness = "antigravity"\n', None),               # agy runs antigravity
+    ('[stages.run]\nharness = "codex"\n', "no account uses harness 'codex'"),
 ])
 def test_stage_accounts_are_validated(toml, want):
     errs = _errs(toml)
