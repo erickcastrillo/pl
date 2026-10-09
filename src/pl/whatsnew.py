@@ -94,6 +94,8 @@ ENTRIES = [
        "pl list: run agent waiting (idle N min); the next card starts", "pl list"),
     _e("2026-10-09.03", "An Antigravity run window closes once its card reaches PR open and its screen goes quiet",
        "the dispatcher window: closing finished run agent window", "pl list"),
+    _e("2026-10-09.04", "In progress cards whose agent must start again get run slots before Approved cards",
+       "the dispatcher window: In progress -> run agent", "pl list"),
 ]
 
 
