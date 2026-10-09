@@ -14,7 +14,8 @@ permissions:
 
 concurrency:
   group: auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Queue runs in order so a later run never cancels one that removes a stale review label.
+  cancel-in-progress: false
 
 jobs:
   gate:
@@ -56,6 +57,7 @@ jobs:
         if: steps.check.outputs.eligible == 'true'
         run: |
           if [ "$MODE" = "live" ]; then
+            gh pr edit "$PR" -R "$REPO" --remove-label pl:would-auto-merge || true
             gh pr edit "$PR" -R "$REPO" --add-label pl:auto-merge
             gh pr merge "$PR" -R "$REPO" --auto --squash
           else
@@ -63,7 +65,8 @@ jobs:
           fi
 
       - name: Not eligible
-        if: steps.check.outputs.eligible != 'true'
+        # always() so a failed check still turns auto-merge off.
+        if: always() && steps.check.outputs.eligible != 'true'
         run: |
           gh pr edit "$PR" -R "$REPO" --remove-label pl:would-auto-merge || true
           gh pr edit "$PR" -R "$REPO" --remove-label pl:auto-merge || true
