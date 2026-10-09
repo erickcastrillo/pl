@@ -102,6 +102,8 @@ ENTRIES = [
        "plans aim at the auto-merge size and split work over the PR limit, and an oversized run goes to Manual "
        "instead of opening a PR; [code_host] pr_max_lines (300), pr_max_files (10), pr_auto_merge_lines (150), "
        "pr_auto_merge_files (6)", "pl section <id> PLAN"),
+    _e("2026-10-09.08", "Claude's read outside the working directories prompt opens an alert",
+       "Alerts tab: agent waiting for permission in <window>: Read(<path>)", "pl alerts"),
 ]
 
 

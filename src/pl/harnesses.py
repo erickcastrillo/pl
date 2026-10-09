@@ -74,9 +74,12 @@ UNATTENDED = {"claude": ["--permission-mode", "auto"],
               "gemini": ["--approval-mode", "auto_edit"]}
 STILL_ASKS = {"antigravity": "allow the commands in agy's own settings",
               "gemini": "allow the commands with a gemini policy file (--policy)"}
-# A permission prompt on screen (strings of each CLI's binary at the versions above).
+# A permission prompt on screen (strings of each CLI's binary at the versions above; claude's read-outside prompt from
+# claude 2.1.295: "Allow this read outside the working directories?" / "1. Yes, and keep allowing any reads outside
+# the working directories"). Each pattern matches one screen line, so it stays short enough not to wrap.
 PERMISSION_PATTERNS = {
-    "claude": [r"Do you want to (?:proceed|make this edit to|create|allow)", r"Yes, and don't ask again for"],
+    "claude": [r"Do you want to (?:proceed|make this edit to|create|allow)", r"Yes, and don't ask again for",
+               r"Allow\s+this\s+read\s+outside", r"Yes,\s+and\s+keep\s+allowing"],
     "codex": [r"Would you like to (?:run the following command|make the following edits|grant)"],
     "antigravity": [r"Allow (?:access to this|calling this tool|creation of this file|administrator elevation)",
                     r"Approve this action\?", r"Run this command\?", r"Do you want to proceed\?"],
