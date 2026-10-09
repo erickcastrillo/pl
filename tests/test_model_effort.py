@@ -14,6 +14,7 @@ from pl.trackers import github
 from pl.tui import settings
 
 SID = "11111111-2222-3333-4444-555555555555"
+REAL_LISTS = dict(harnesses.MODEL_LIST_ARGV)   # conftest empties it for every test; these tests fake _run instead
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +25,7 @@ def fake_home(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(github, "_gh", lambda args: "github.com\n  ✓ Logged in to github.com account octo (keyring)\n")
     monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: pytest.fail(f"unexpected subprocess {argv}"))
+    monkeypatch.setattr(harnesses, "MODEL_LIST_ARGV", REAL_LISTS)
     harnesses._MODELS.clear()
     C.load()
     yield tmp_path
