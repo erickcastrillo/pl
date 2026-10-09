@@ -63,6 +63,7 @@ def _defaults():
     ACCOUNTS = {}
     CODE_HOST = {"owner": None, "labels": {}}  # [code_host] owner, labels = {review, ready, merge_ready, rework, failed}
     GH_CONFIG_DIR = None                       # [code_host] gh_config_dir: this profile's own gh sign-in folder
+    PR_LIMITS = {"pr_max_lines": 300, "pr_max_files": 10, "pr_auto_merge_lines": 150, "pr_auto_merge_files": 6}
     STAGES = {}
     # memory: agents start only while min_free_memory is free; a window past max_agent_processes/_memory is stopped
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
@@ -149,6 +150,7 @@ def _apply(g, t):
     ch = t.get("code_host", {})
     repos = [r for r in (ch.get("repos") if isinstance(ch.get("repos"), list) else []) if isinstance(r, str) and r]
     g["CODE_HOST"] = {"owner": ch.get("owner") or None, "labels": dict(ch.get("labels") or {}), **({"repos": repos} if repos else {})}
+    g["PR_LIMITS"] = {k: ch.get(k, v) for k, v in g["PR_LIMITS"].items()}
     if tr.get("type") == "github-project" and tr.get("repo"):   # both defaults; [intake] enabled / [loops.auto-review] enabled = false turn one off
         if not it.get("type") and it.get("enabled", True) is not False:
             g["ISSUE_INTAKE"] = {"repo": tr["repo"], "start_label": START_LABEL}
@@ -219,6 +221,17 @@ def path() -> Path | None:
 READ_ONLY = "pl: no profile loaded, so settings are read-only: create one with pl profiles new <name>"
 
 
+def _pr_limit_errors(ch) -> list[str]:
+    def whole(v):
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+    errs = [f"code_host.{k} must be a whole number of at least 1" for k in _defaults()["PR_LIMITS"] if not whole(ch[k])]
+    for kind in ("lines", "files"):
+        top, auto = ch[f"pr_max_{kind}"], ch[f"pr_auto_merge_{kind}"]
+        if whole(top) and whole(auto) and auto > top:
+            errs.append(f"code_host.pr_auto_merge_{kind} must not be above code_host.pr_max_{kind}")
+    return errs
+
+
 def validate(doc) -> list[str]:
     """Problems that stop a save (empty = fine). Values are checked as written; ${VAR} references are never expanded."""
     from pl import harnesses
@@ -233,6 +246,7 @@ def validate(doc) -> list[str]:
     gd = doc.get("code_host", {}).get("gh_config_dir")
     if gd is not None and not isinstance(gd, str):
         errs.append("code_host.gh_config_dir must be a folder path (text)")
+    errs += _pr_limit_errors({**_defaults()["PR_LIMITS"], **doc.get("code_host", {})})
     for key, low in (("max_runs", 0), ("max_prep", 0), ("interval", 1), ("max_agent_processes", 1),
                      ("release_waiting_after", 0)):
         v = doc.get("dispatch", {}).get(key)

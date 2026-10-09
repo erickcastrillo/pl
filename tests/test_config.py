@@ -266,3 +266,23 @@ def test_builtin_review_prompt_keeps_every_outcome_visible_to_pl(fake_home):
             "add both `<ready>` and `<rework>` |") in rules
     assert ("| Review cannot run | comment why, remove `<review>`, add `<failed>`; "
             "a person decides, then adds `<review>` back |") in rules
+
+
+def test_pr_size_limits_default_and_load_from_code_host(fake_home):
+    C.load()
+    assert C.PR_LIMITS == {"pr_max_lines": 300, "pr_max_files": 10, "pr_auto_merge_lines": 150, "pr_auto_merge_files": 6}
+    _write(fake_home, "work", "[code_host]\npr_max_lines = 400\npr_auto_merge_files = 3\n")
+    C.load("work")
+    assert C.PR_LIMITS == {"pr_max_lines": 400, "pr_max_files": 10, "pr_auto_merge_lines": 150, "pr_auto_merge_files": 3}
+
+
+def test_validate_pr_size_limits_are_whole_numbers_and_auto_merge_fits_the_max():
+    import tomlkit
+    for bad in ("0", "true", '"300"', "-5"):
+        errs = C.validate(tomlkit.parse(f"[code_host]\npr_max_lines = {bad}\n"))
+        assert any("code_host.pr_max_lines" in e for e in errs), bad
+    errs = C.validate(tomlkit.parse("[code_host]\npr_max_files = 5\n"))
+    assert any("code_host.pr_auto_merge_files" in e for e in errs)
+    errs = C.validate(tomlkit.parse("[code_host]\npr_auto_merge_lines = 301\n"))
+    assert any("code_host.pr_auto_merge_lines" in e for e in errs)
+    assert C.validate(tomlkit.parse("[code_host]\npr_max_lines = 150\npr_auto_merge_files = 10\n")) == []
