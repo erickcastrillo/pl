@@ -108,8 +108,8 @@ def test_an_edited_copy_is_never_overwritten(lib, shipped):
     assert skills.install_builtins() == ["built-in pl-spec has an update; your edited copy was kept"]
     assert (lib / "pl-spec" / "SKILL.md").read_text() == mine
     assert skills.install_builtins() == []                       # said once per new version, not on every start
-    _bump(shipped, "pl-plan")
-    assert skills.install_builtins() == ["updated built-in pl-plan to version 2"]
+    _bump(shipped, "pl-design")
+    assert skills.install_builtins() == ["updated built-in pl-design to version 2"]
     assert (lib / "pl-spec" / "SKILL.md").read_text() == mine
 
 
@@ -535,14 +535,14 @@ def test_review_loop_quotes_labels_with_spaces():
     assert "quote" in (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
 
 
-def _start(monkeypatch, tmp_path, prompt="/pl-run {id}", cfg="rel/profile"):
+def _start(monkeypatch, tmp_path, prompt=None, cfg="rel/profile", stage="run"):
     from pl import dispatch
     monkeypatch.setattr(C, "CONFIG_DIR", None, raising=False)
     seen, h = [], harnesses.get("claude")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(C, "CONFIG_DIR", Path(cfg), raising=False)
     monkeypatch.setattr(C, "GH_CONFIG_DIR", None, raising=False)
-    monkeypatch.setattr(C, "PROMPTS", {**C.PROMPTS, "run": prompt}, raising=False)
+    monkeypatch.setattr(C, "PROMPTS", {**C.PROMPTS, stage: prompt or C.BUILTIN_PROMPTS[stage]}, raising=False)
     monkeypatch.setattr(C, "CODE_HOST", {"owner": "o", "labels": {"review": "pl:auto review"}}, raising=False)
     monkeypatch.setattr(C, "ATTENTION", None, raising=False)
     monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (h, "a"))
@@ -553,7 +553,7 @@ def _start(monkeypatch, tmp_path, prompt="/pl-run {id}", cfg="rel/profile"):
     monkeypatch.setattr(dispatch, "_launch", lambda pane, name, script, p=None: tmp_path / "l.sh")
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
-    dispatch.start_worker({"id": "c" * 36, "title": "T", "description": ""}, "run", 0, False)
+    dispatch.start_worker({"id": "c" * 36, "title": "T", "description": ""}, stage, 0, False)
     return seen
 
 
@@ -564,11 +564,41 @@ def test_agent_windows_get_an_absolute_pl_config_dir(monkeypatch, tmp_path):
     assert nw[i - 1] == "-e"
 
 
-def test_the_builtin_run_stage_gets_the_review_label(monkeypatch, tmp_path):
+LIMITS = " max_lines=300 max_files=10 target_lines=150 target_files=6"
+
+
+def test_the_builtin_run_stage_gets_the_review_label_and_pr_limits(monkeypatch, tmp_path):
     seen = _start(monkeypatch, tmp_path)
-    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'") in seen
+    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS}") in seen
     seen = _start(monkeypatch, tmp_path, prompt="/my-run {id}")
     assert ("prompt", f"/my-run {'c' * 36}") in seen
+
+
+def test_the_builtin_plan_stage_gets_the_pr_limits(monkeypatch, tmp_path):
+    seen = _start(monkeypatch, tmp_path, stage="plan")
+    assert ("prompt", f"/pl-plan {'c' * 36}{LIMITS}") in seen
+    seen = _start(monkeypatch, tmp_path, prompt="/my-plan {id}", stage="plan")
+    assert ("prompt", f"/my-plan {'c' * 36}") in seen
+
+
+def test_the_pr_limits_follow_the_profile_settings(monkeypatch, tmp_path):
+    monkeypatch.setattr(C, "PR_LIMITS", {"pr_max_lines": 200, "pr_max_files": 8, "pr_auto_merge_lines": 100,
+                                         "pr_auto_merge_files": 4}, raising=False)
+    seen = _start(monkeypatch, tmp_path, stage="plan")
+    assert ("prompt", f"/pl-plan {'c' * 36} max_lines=200 max_files=8 target_lines=100 target_files=4") in seen
+
+
+def test_skills_keep_pull_requests_small():
+    run = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    plan = (skills.BUILTIN_DIR / "pl-plan" / "SKILL.md").read_text()
+    review = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    for word in ("Manual", "--numstat", "tests/", "max_lines", "Write no comment that restates what the code does. "
+                 "Make the code explain itself with clear names and small functions. Add a comment only for a reason "
+                 "the code cannot show, such as a non-obvious constraint or a workaround, in one line."):
+        assert word in run, word
+    for word in ("pl idea", "Later slices", "target_lines", "max_lines"):
+        assert word in plan, word
+    assert "restate" in review
 
 
 def test_a_bare_loop_prompt_of_a_library_skill_gets_the_plugin_name(lib, monkeypatch):

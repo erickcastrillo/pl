@@ -192,6 +192,12 @@ def _own_launch(w):
     return p if w.get("launch") and p.parent == C.STATE_DIR / "launch" else None
 
 
+def pr_limit_args():
+    lim = C.PR_LIMITS
+    return (f" max_lines={lim['pr_max_lines']} max_files={lim['pr_max_files']}"
+            f" target_lines={lim['pr_auto_merge_lines']} target_files={lim['pr_auto_merge_files']}")
+
+
 def start_worker(c, stage, attempts, dry):
     h, profile = harnesses.harness_for(stage, c)
     name = f"{stage}-{slug_of(c)[:28]}"      # tmux window name: no colon, so "pipeline:<name>" targets stay unambiguous
@@ -202,6 +208,8 @@ def start_worker(c, stage, attempts, dry):
     review = (C.CODE_HOST.get("labels") or {}).get("review")
     if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"] and review:
         prompt += f" review={shlex.quote(review)}"   # pl-run labels its pull request with it
+    if stage in ("plan", "run") and C.PROMPTS[stage] == C.BUILTIN_PROMPTS[stage]:
+        prompt += pr_limit_args()
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return

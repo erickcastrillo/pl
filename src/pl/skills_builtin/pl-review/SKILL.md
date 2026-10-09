@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed. Never merges. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 1
+pl-builtin-version: 2
 ---
 
 # pl-review: review labelled pull requests
@@ -43,7 +43,9 @@ the label. Use exactly those labels. Never create, rename or edit a label.
       - bugs: wrong logic, missing error handling, edge cases the spec names but the code skips;
       - security: unchecked input, secrets in code or logs, missing permission checks, unsafe shell or SQL;
       - scope: files or features the description does not explain;
-      - tests: changed behaviour with no test that would fail without the change.
+      - tests: changed behaviour with no test that would fail without the change;
+      - comments that restate what the code does. List these only when the review already finds other
+        problems. A comment alone never makes a pull request need rework.
    4. Run the repository's tests in the worktree.
    5. Apply exactly one outcome:
 
