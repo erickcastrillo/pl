@@ -252,3 +252,49 @@ def test_an_idle_agy_run_agent_frees_its_run_slot_for_the_next_card(monkeypatch,
     started = _pass(monkeypatch, [idle, new], set(), [], kills, st_screen=None, waiting=agents.run_waiting)
     assert started == ["o/r#2"] and "run agent waiting (idle 10 min); its slot is free" in capsys.readouterr().out
     assert not [k for k in kills if k[0] == "kill-window"] and idle["metadata"]["worker"]   # its window stays
+
+
+# ---------- D: an agy run window closes once its card reaches PR open ----------
+
+@pytest.mark.parametrize("col", ["PR open", "Done"])
+def test_an_agy_run_window_closes_once_its_card_is_past_pr_open_and_its_screen_stays_the_same(monkeypatch, col):
+    from pl.util import load_state, save_state
+    c = _card(12, col=col, worker=_run_worker())
+    kills = []
+    _run_screen(monkeypatch, AGY_IDLE)
+    _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
+    assert c["metadata"].get("worker") and not [k for k in kills if k[0] == "kill-window"]   # first sight
+    st = load_state()
+    st["screens"]["%1"]["since"] -= 301                               # the same grace as a finished Claude agent
+    save_state(st)
+    _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
+    assert ("kill-window", "-t", "@1") in kills and "worker" not in c["metadata"]
+
+
+@pytest.mark.parametrize("col", ["In progress", "Approved"])
+def test_an_agy_run_window_of_a_card_still_being_built_is_never_closed(monkeypatch, col):
+    from pl.util import load_state, save_state
+    C.DISPATCH = {**C.DISPATCH, "release_waiting_after": 0}
+    c = _card(13, col=col, worker=_run_worker())
+    kills = []
+    _run_screen(monkeypatch, AGY_IDLE)
+    _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
+    st = load_state()
+    st.setdefault("screens", {}).setdefault("%1", {"hash": "", "since": 0})["since"] = 0   # unchanged for hours
+    save_state(st)
+    _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
+    assert not [k for k in kills if k[0] == "kill-window"] and c["metadata"]["worker"]
+
+
+def test_a_working_agy_run_agent_past_pr_open_keeps_its_window(monkeypatch):
+    from pl.util import load_state, save_state
+    c = _card(14, col="PR open", worker=_run_worker())
+    kills = []
+    _run_screen(monkeypatch, AGY_IDLE)
+    _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
+    st = load_state()
+    st["screens"]["%1"]["since"] -= 301
+    save_state(st)
+    _run_screen(monkeypatch, AGY_IDLE + "answering a review comment…")   # still working: its screen changed
+    _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
+    assert not [k for k in kills if k[0] == "kill-window"] and c["metadata"]["worker"]

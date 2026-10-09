@@ -592,7 +592,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if w and w.get("stage") != stage and stage_complete(c, col, w["stage"]) and status == "alive":
             rec = reg.get(sid) or {}
             idle_for = time.time() - (rec.get("statusUpdatedAt", 0) / 1000) if rec.get("status") == "idle" else 0
-            if not wh.session_registry and w["stage"] != "run" and w.get("pane"):   # no registry: an unchanged screen
+            if not wh.session_registry and w.get("pane"):   # no registry (agy): an unchanged screen
                 idle_for = screen_quiet(st, w["pane"])
             if idle_for > 300 and w.get("window"):
                 print(f"{short_id(c['id'])}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
