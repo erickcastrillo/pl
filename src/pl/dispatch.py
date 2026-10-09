@@ -223,7 +223,8 @@ def start_worker(c, stage, attempts, dry):
     except BaseException:   # a rate limit or a failed write: no record, so no window and no agent
         tmux("kill-window", "-t", win, check=False)
         raise
-    _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label), script)
+    _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
+                                                         stage=stage), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)

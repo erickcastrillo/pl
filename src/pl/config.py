@@ -278,6 +278,7 @@ def validate(doc) -> list[str]:
             errs.append(f"account {name}: config_dir {a.get('config_dir', f'~/.claude-{name}')} does not exist")
         if (a.get("harness") or "claude") not in known:
             errs.append(f"account {name}: unknown harness {a.get('harness')!r}; known: {', '.join(known)}")
+        errs += _model_errors(name, a)
     for key in ("prices", "windows"):
         for model, n in (doc.get("usage", {}).get(key) or {}).items():
             if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
@@ -312,10 +313,63 @@ def validate(doc) -> list[str]:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
                 errs.append(f"{table}.{name}: unknown harness {v['harness']!r}; known: {', '.join(known)}")
+            if table == "stages":
+                errs += _stage_effort_errors(name, v, accounts)
             if table == "stages" and "accounts" in v:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    return errs
+
+
+def _model_errors(name, a) -> list[str]:
+    """[accounts.<name>] model and effort: a model id and a level the account's harness takes. Offline: agy's and
+    codex's model lists are never read here, so any id passes for them (new models appear)."""
+    from pl import harnesses
+    h, errs = a.get("harness") or "claude", []
+    if "model" in a:
+        m = a["model"]
+        if h not in harnesses.MODEL_FLAGS:
+            errs.append(f"accounts.{name}: harness {h} takes no model; remove model")
+        elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
+            errs.append(f"accounts.{name}: model must be a model id like \"opus\" (no spaces or quotes, not starting "
+                        "with -), or remove it to use the harness's default")
+        elif h != "claude" and m in harnesses.CLAUDE_MODELS:
+            errs.append(f"accounts.{name}: model {m!r} is a claude model but the account uses harness {h}; a model "
+                        "belongs to its account's harness, so change or remove it when the harness changes")
+    if "effort" in a:
+        levels = harnesses.EFFORT_LEVELS.get(h)
+        if not levels:
+            errs.append(f"accounts.{name}: harness {h} takes no effort; remove effort")
+        elif a["effort"] not in levels:
+            errs.append(f"accounts.{name}: effort {a['effort']!r} is not one of {', '.join(levels)}")
+    return errs
+
+
+def stage_harnesses(v, accounts) -> set[str]:
+    """The harness names a [stages.<name>] table can run on: its harness, else its pool's or its account's, else
+    every account's (an unpinned stage runs on the card's account)."""
+    if v.get("harness"):
+        return {v["harness"]}
+    pool = v.get("accounts") if isinstance(v.get("accounts"), list) else [v["account"]] if v.get("account") else accounts
+    return {(accounts.get(a) or {}).get("harness") or "claude" for a in pool if a in accounts}
+
+
+def _stage_effort_errors(name, v, accounts) -> list[str]:
+    """[stages.<name>] effort: a level every harness the stage can run on takes. No model: that belongs to accounts."""
+    from pl import harnesses
+    errs = []
+    if "model" in v:
+        errs.append(f"stages.{name}: model is not a stage setting; set model on each account ([accounts.<name>] "
+                    "model), because a stage may pool accounts of different harnesses")
+    if "effort" not in v:
+        return errs
+    hs = stage_harnesses(v, accounts)
+    levels = harnesses.shared_levels(hs)
+    if v["effort"] not in levels:
+        errs.append(f"stages.{name}: effort {v['effort']!r} is not a level its harness{'es' if len(hs) > 1 else ''} "
+                    f"({', '.join(sorted(hs)) or 'any'}) take{'' if len(hs) > 1 else 's'}: "
+                    f"{', '.join(levels) or 'none'}")
     return errs
 
 
