@@ -96,6 +96,8 @@ ENTRIES = [
        "the dispatcher window: closing finished run agent window", "pl list"),
     _e("2026-10-09.04", "In progress cards whose agent must start again get run slots before Approved cards",
        "the dispatcher window: In progress -> run agent", "pl list"),
+    _e("2026-10-09.05", "A refused agent move names the agent's real harness (Antigravity, Codex)",
+       "Activity tab: agent_move_refused", "pl move-agent <card> <account>"),
 ]
 
 

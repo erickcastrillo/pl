@@ -250,6 +250,21 @@ def test_refuses_codex(fake_home, pane):
     assert "Claude" in move_agent.refusal(_card()["metadata"]["worker"], "acme2")
 
 
+@pytest.mark.parametrize("harness, named", [("antigravity", "Antigravity"), ("codex", "Codex")])
+def test_the_refusal_names_the_agent_s_own_harness(fake_home, pane, harness, named):
+    _transcript(fake_home)
+    why = move_agent.refusal(_card(harness=harness)["metadata"]["worker"], "acme2")
+    assert why == f"only a Claude agent moves in place (this is a {named} agent)"
+
+
+def test_the_refusal_names_the_target_account_s_harness(fake_home, pane):
+    _transcript(fake_home)
+    C.ACCOUNTS["acme2"] = {"harness": "antigravity", "config_dir": str(C.PROFILES["acme2"])}
+    why = move_agent.refusal(_card()["metadata"]["worker"], "acme2")
+    assert why == "only a Claude agent moves in place (account acme2 runs Antigravity)"
+    assert "Codex" not in why
+
+
 def test_refuses_an_unknown_account(fake_home, pane):
     _transcript(fake_home)
     assert "account" in move_agent.refusal(_card()["metadata"]["worker"], "nope")
