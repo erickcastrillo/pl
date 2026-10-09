@@ -178,18 +178,6 @@ class SettingsView(Widget):
                 if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
                     yield Button("Create project", id="create-project", compact=True)
                 yield Static(Text("code host  gh: checking…", style="dim"), id="codehost")
-            with self._panel("Models and effort (blank = the harness's default)"):
-                for name, a in C.ACCOUNTS.items():
-                    hname = a.get("harness") or "claude"
-                    if hname in harnesses.MODEL_FLAGS:
-                        model = a.get("model")
-                        opts = _model_options(harnesses.models("claude") if hname == "claude" else [], model)
-                        self.models[f"set-{len(self.fields)}"] = (name, hname)
-                        yield from self._field(f"{name} model ({hname})", ("accounts", name, "model"), model,
-                                               options=opts, prompt="default")
-                    if hname in harnesses.EFFORT_LEVELS:
-                        yield from self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
-                                               options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
             with self._panel("Stages and harnesses"):
                 names = list(harnesses.BUILTINS)
                 for stage in C.PROMPTS:
@@ -211,6 +199,18 @@ class SettingsView(Widget):
                     warn = Static("", classes="stage-warning", id=f"warn-{stage}")
                     warn.display = False
                     yield warn
+            with self._panel("Models and effort (blank = the harness's default)"):
+                for name, a in C.ACCOUNTS.items():
+                    hname = a.get("harness") or "claude"
+                    if hname in harnesses.MODEL_FLAGS:
+                        model = a.get("model")
+                        opts = _model_options(harnesses.models("claude") if hname == "claude" else [], model)
+                        self.models[f"set-{len(self.fields)}"] = (name, hname)
+                        yield from self._field(f"{name} model ({hname})", ("accounts", name, "model"), model,
+                                               options=opts, prompt="default")
+                    if hname in harnesses.EFFORT_LEVELS:
+                        yield from self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
+                                               options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
             with self._panel("Skills, agents and commands (every account; ctrl+p Skills jumps here)"):
                 yield SkillsView()
             with self._panel("Extensions"):
