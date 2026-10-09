@@ -1,5 +1,6 @@
 """pl watch: the data behind the console, the plain-text frame, and PR activity from GitHub."""
 import json
+import os
 import re
 import subprocess
 import sys
@@ -347,8 +348,18 @@ def cmd_watch(a):
                 time.sleep(a.interval or default_interval())
             except KeyboardInterrupt:
                 return
-    from pl.tui.app import PlApp
-    PlApp(interval=a.interval).run()
+    from pl import update
+    from pl.tui import app as tui
+    while True:   # a console that left for a new pl build execs the same command line; a failed exec opens this one again
+        app = tui.PlApp(interval=a.interval)
+        app.run()
+        if not app.restart_into:
+            return
+        try:
+            os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+        except OSError as e:
+            update._BAD.add(app.restart_into)
+            print(f"pl: restart failed ({e}); keeping this version", flush=True)
 
 
 

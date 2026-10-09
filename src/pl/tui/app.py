@@ -6,7 +6,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Static, Tabs, TabbedContent, TabPane
+from textual.widgets import Footer, Input, Static, Tabs, TabbedContent, TabPane, TextArea
 from textual.css.query import NoMatches
 
 from pl import board, dispatch, manager, update, whatsnew
@@ -32,6 +32,8 @@ VIEWS = {"dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
 
 
 REFRESH, GITHUB_REFRESH = 15, 60   # seconds between board refreshes; GitHub's GraphQL budget needs the slower one
+BUILD_CHECK = 30   # seconds between checks for a newly installed pl build
+DRAFTS = ("#assistant-input", "#idea-input")   # boxes whose text is lost on a restart, focused or not
 
 
 def default_interval():
@@ -169,14 +171,18 @@ class PlApp(App):
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
         Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
+        Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
 
-    def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None):
+    def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None,
+                 restarts=None):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
         self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
         self.check_updates = snapshot_provider is None if updates is None else updates   # real console: daily tag check
+        self.check_build = snapshot_provider is None if restarts is None else restarts   # real console: restart on a new install
         self.dispatcher_note = self.update_note = None
+        self.restart_into = self.pending_build = None   # restart_into: the build to exec after run() returns
         self.snapshot_provider = snapshot_provider or default_provider
         self.interval = interval or default_interval()
         self.data, self.error, self.window = None, None, 1   # window: index into WINDOWS, 24 hours first
@@ -204,6 +210,48 @@ class PlApp(App):
             self.push_screen(WhatsNewScreen(new))
         if self.check_updates and update.enabled():
             self.update_job()
+        if self.check_build:
+            update.build_id()   # this console's build, read now: a later install is a new build
+            self.set_interval(BUILD_CHECK, self.build_job)
+
+    @work(thread=True, exclusive=True, group="build")
+    def build_job(self):
+        """Off the UI thread: a newly installed pl build that imports (one that does not is told once and kept out)."""
+        try:
+            b = self.pending_build or update.restart_build(
+                warn=lambda m: self.call_from_thread(self.notify, m, timeout=30, markup=False))
+        except Exception:  # noqa: BLE001 - a worker that raises kills the app
+            return
+        if b:
+            self.call_from_thread(self.new_build, b)
+
+    def new_build(self, b):
+        """Restart now when nothing would be lost; else say so once and try again at the next check."""
+        if self.idle_safe():
+            self.restart_now(b)
+        elif self.pending_build != b:
+            self.pending_build = b
+            self.notify("pl was updated: press N to restart the console on the new pl now (it restarts by itself once no dialog "
+                        "or unsent text is open)", timeout=30, markup=False)
+
+    def idle_safe(self):
+        """No dialog open, and no unsent text: in the focused box or in the Assistant's or Ideas' box."""
+        if len(self.screen_stack) > 1:
+            return False
+        boxes = [self.focused, *(w for sel in DRAFTS for w in self.query(sel))]
+        return not any((getattr(w, "value", None) or getattr(w, "text", None) or "").strip()
+                       for w in boxes if isinstance(w, (Input, TextArea)))
+
+    def restart_now(self, b):
+        """Leave the app (the terminal is restored); pl watch then execs the same command line on the new build."""
+        self.restart_into = b
+        self.exit()
+
+    def action_restart_console(self):
+        if self.pending_build:
+            self.restart_now(self.pending_build)
+        else:
+            self.notify("no new pl build installed: nothing to restart", markup=False)
 
     @work(thread=True, group="update")
     def update_job(self):
