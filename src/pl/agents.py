@@ -72,17 +72,35 @@ def _on_pane(rec, w):
     return bool(w.get("pane")) and rec.get("tmux") == f"{C.TMUX_SESSION}:{w.get('window')}.{w['pane']}"
 
 
-def run_waiting(w, reg):
+def screen_quiet(st, pane):
+    """Seconds this pane's screen text has stayed the same across dispatcher passes (0 when new or changed), kept in
+    the dispatcher state. A harness with no session registry (agy) redraws its screen every second, so tmux's
+    window_activity never ages: its idle time is read from the screen instead."""
+    text = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane]).stdout or ""
+    digest, now = hashlib.sha256(text.encode()).hexdigest(), time.time()
+    rec = st.setdefault("screens", {}).get(pane) or {}
+    if rec.get("hash") != digest or not isinstance(rec.get("since"), (int, float)):
+        rec = {"hash": digest, "since": now}
+    st["screens"][pane] = {**rec, "seen": now}
+    return now - rec["since"]
+
+
+def run_waiting(w, reg, st=None):
     """'waiting (<why>)' when a live run agent is not working: its session is not busy and its screen shows a
-    /run-plan GATE line or its pane has been idle WAIT_IDLE seconds. Such an agent does not hold a run slot."""
+    /run-plan GATE line or its pane has been idle WAIT_IDLE seconds. Such an agent does not hold a run slot.
+    With the dispatcher state st, a harness with no session registry (agy) is idle by an unchanged screen."""
     rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if _on_pane(r, w)), {})
     if rec.get("status") == "busy" or not pane_exists(w.get("pane")):
         return None
     gates = GATE_RE.findall(harnesses._run(["tmux", "capture-pane", "-p", "-t", w["pane"], "-S", "-60"]).stdout or "")
     if gates:
         return f"waiting ({gates[-1]})"
-    act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
-    idle = time.time() - int(act) if act.isdigit() else 0
+    h = _harness(w)
+    if st is not None and h is not None and not h.session_registry:
+        idle = screen_quiet(st, w["pane"])
+    else:
+        act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
+        idle = time.time() - int(act) if act.isdigit() else 0
     return f"waiting (idle {int(idle // 60)} min)" if idle >= WAIT_IDLE else None
 
 

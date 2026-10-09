@@ -139,8 +139,8 @@ def test_a_live_agent_keeps_its_account(monkeypatch):
                                         "session_id": "s", "started_at": "2026-10-07T00:00:00+00:00"})
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", "s"))
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda *a: None)
-    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: None)
-    monkeypatch.setattr(dispatch, "api_error_wait", lambda w, reg: None)
+    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg, st=None: None)
+    monkeypatch.setattr(dispatch, "api_error_wait", lambda w, reg, st=None: None)
     for name in ("trust_wait", "permission_wait"):
         monkeypatch.setattr(dispatch, name, lambda *a: None)
     started, writes = _pass(monkeypatch, [c, _card(2, profile="claude")])

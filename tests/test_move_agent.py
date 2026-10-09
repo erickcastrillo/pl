@@ -264,7 +264,7 @@ def _dispatch(monkeypatch, c, screen, others=(), started=None, pick=lambda harne
     monkeypatch.setattr(dispatch, "col_name", lambda lid: "Approved")
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w.get("session_id")))
     monkeypatch.setattr(dispatch, "healthy_profile", lambda want, cs, harness=None, pool=None: pick(harness))
-    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: None)
+    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg, st=None: None)
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: None)
     monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: None)
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: screen)

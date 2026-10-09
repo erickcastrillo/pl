@@ -92,7 +92,7 @@ def _run_worker(**extra):
             "session_id": "s", "started_at": "2026-10-07T22:41:40+00:00", **extra}
 
 
-def _pass(monkeypatch, cs, parked, marks, kills, max_runs=1, st_screen=AGY_QUOTA):
+def _pass(monkeypatch, cs, parked, marks, kills, max_runs=1, st_screen=AGY_QUOTA, waiting=None):
     started = []
 
     def update(cid, **f):
@@ -110,7 +110,7 @@ def _pass(monkeypatch, cs, parked, marks, kills, max_runs=1, st_screen=AGY_QUOTA
                         or "2026-10-08T14:10:00+00:00")
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: kills.append(a) or "")
     monkeypatch.setattr(dispatch, "notify", lambda *a, **k: None)
-    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: None)   # agy redraws: its window never looks idle
+    monkeypatch.setattr(dispatch, "run_waiting", waiting or (lambda w, reg, st=None: None))
     monkeypatch.setattr(dispatch, "api_error_wait", lambda w, reg: None)
     for name in ("trust_wait", "permission_wait"):
         monkeypatch.setattr(dispatch, name, lambda *a: None)
@@ -202,3 +202,53 @@ def test_a_finished_agy_plan_worker_is_closed_once_its_screen_stays_the_same(mon
     save_state(st)
     _pass(monkeypatch, [c], set(), [], kills, st_screen=None)
     assert ("kill-window", "-t", "@36") in kills and "worker" not in c["metadata"]
+
+
+# ---------- C: an idle agy run agent frees its run slot ----------
+
+def _run_screen(monkeypatch, text):
+    """The run agent's pane: its screen text, and a window_activity of now (agy redraws every second)."""
+    from pl import agents
+    monkeypatch.setattr(agents, "pane_exists", lambda p: True)
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: types.SimpleNamespace(
+        returncode=0, stdout=str(int(time.time())) if "display-message" in argv else text))
+
+
+def test_an_agy_run_agent_is_waiting_once_its_screen_stays_the_same_for_ten_minutes(monkeypatch):
+    from pl import agents
+    _run_screen(monkeypatch, AGY_IDLE)
+    st, w = {}, _run_worker()
+    assert agents.run_waiting(w, {}, st) is None                      # first sight: it may be working
+    st["screens"]["%1"]["since"] -= agents.WAIT_IDLE - 30
+    assert agents.run_waiting(w, {}, st) is None                      # 9.5 minutes: not yet
+    st["screens"]["%1"]["since"] -= 60
+    assert agents.run_waiting(w, {}, st) == "waiting (idle 10 min)"
+    _run_screen(monkeypatch, AGY_IDLE + "working…")
+    assert agents.run_waiting(w, {}, st) is None                      # the screen changed: working again
+    assert agents.run_waiting(w, {}) is None                          # no dispatcher state: window_activity only
+
+
+def test_a_claude_run_agent_still_reads_its_window_activity(monkeypatch):
+    from pl import agents
+    _run_screen(monkeypatch, "working on WP2")
+    w = {**_run_worker(), "harness": "claude", "profile": "claude"}
+    st = {"screens": {"%1": {"hash": "x", "since": 0}}}
+    assert agents.run_waiting(w, {"s": {"status": "idle"}}, st) is None   # its window is active now
+    assert st == {"screens": {"%1": {"hash": "x", "since": 0}}}          # and its screen is not hashed
+
+
+def test_an_idle_agy_run_agent_frees_its_run_slot_for_the_next_card(monkeypatch, capsys):
+    from pl import agents
+    from pl.util import load_state, save_state
+    C.DISPATCH = {**C.DISPATCH, "release_waiting_after": 0}           # waits but is never stopped
+    _run_screen(monkeypatch, AGY_IDLE)
+    idle, new = _card(1, worker=_run_worker()), _card(2, col="Approved")
+    started = _pass(monkeypatch, [idle, new], set(), [], [], st_screen=None, waiting=agents.run_waiting)
+    assert started == []                                              # first sight: it holds the only slot
+    st = load_state()
+    st["screens"]["%1"]["since"] -= agents.WAIT_IDLE + 1
+    save_state(st)
+    kills = []
+    started = _pass(monkeypatch, [idle, new], set(), [], kills, st_screen=None, waiting=agents.run_waiting)
+    assert started == ["o/r#2"] and "run agent waiting (idle 10 min); its slot is free" in capsys.readouterr().out
+    assert not [k for k in kills if k[0] == "kill-window"] and idle["metadata"]["worker"]   # its window stays

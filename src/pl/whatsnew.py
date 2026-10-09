@@ -90,6 +90,8 @@ ENTRIES = [
        "Settings: Models and effort, and <stage> effort", "[accounts.main] model = \"opus\", effort = \"high\""),
     _e("2026-10-09.01", "The console restarts itself on a new pl install, like the dispatchers",
        "a notice and N when a dialog or unsent text is open", "pl"),
+    _e("2026-10-09.02", "An idle Antigravity run agent frees its run slot, like Claude's",
+       "pl list: run agent waiting (idle N min); the next card starts", "pl list"),
 ]
 
 

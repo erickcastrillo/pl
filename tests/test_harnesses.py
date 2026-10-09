@@ -543,7 +543,7 @@ def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None):
     monkeypatch.setattr(dispatch, "cards", lambda: cs)
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w.get("session_id")))
-    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: waiting)
+    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg, st=None: waiting)
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)   # no real tmux
     monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: started.append((c["id"], stage)))
     for name in ("sweep_untracked", "ensure_services", "mirror_to_product", "screen_hit_limit", "notify"):

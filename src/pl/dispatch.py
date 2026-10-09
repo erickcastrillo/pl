@@ -1,5 +1,4 @@
 """The dispatcher: start the right agent for every waiting card."""
-import hashlib
 import os
 import json
 import re
@@ -17,7 +16,7 @@ from pl import config as C
 from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
-                       run_blocked, run_waiting, trust_wait, worker_status)
+                       run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
@@ -370,19 +369,6 @@ def _context_restart(name, svc, sid, s, ust, dry):
     return f"its context is {pct}%, over max_context {limit}%"
 
 
-def screen_quiet(st, pane):
-    """Seconds this pane's screen text has stayed the same across dispatcher passes (0 when new or changed), kept in
-    the dispatcher state. A harness with no session registry (agy) redraws its screen every second, so tmux's
-    window_activity never ages: its idle time is read from the screen instead."""
-    text = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane]).stdout or ""
-    digest, now = hashlib.sha256(text.encode()).hexdigest(), time.time()
-    rec = st.setdefault("screens", {}).get(pane) or {}
-    if rec.get("hash") != digest or not isinstance(rec.get("since"), (int, float)):
-        rec = {"hash": digest, "since": now}
-    st["screens"][pane] = {**rec, "seen": now}
-    return now - rec["since"]
-
-
 def sweep_untracked(all_cards, reg, dry, st=None):
     """Close spec/design/plan agent windows that no card tracks any more (a same-stage restart, pl approve or a lost
     finished_workers write leaves them behind), once idle: a registered session idle for 5 minutes, else no window
@@ -652,7 +638,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         same_stage = w.get("stage") == stage
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
-                why = ("waiting (usage limit)" if w.get("limit_hit") else run_waiting(w, reg)) if status == "alive" else None
+                why = ("waiting (usage limit)" if w.get("limit_hit") else run_waiting(w, reg, st)) if status == "alive" else None
                 if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
