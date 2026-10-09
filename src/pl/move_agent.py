@@ -145,11 +145,22 @@ def find_transcript(account, sid):
     return None
 
 
+HARNESS_NAMES = {"claude": "Claude", "codex": "Codex", "antigravity": "Antigravity", "gemini": "Gemini"}
+
+
+def _harness_name(name):
+    """A harness as people call it: Antigravity, not antigravity (an unknown one as written)."""
+    return HARNESS_NAMES.get(name, str(name))
+
+
 def refusal(w, target):
     """Why this worker cannot move to target in place, or None."""
     src, sid = w.get("profile"), w.get("session_id")
-    if (w.get("harness") or "claude") != "claude" or (target in C.PROFILES and harnesses.account_harness(target).name != "claude"):
-        return "only a Claude agent moves in place (Codex is not supported yet)"
+    own = w.get("harness") or "claude"
+    if own != "claude":
+        return f"only a Claude agent moves in place (this is a {_harness_name(own)} agent)"
+    if target in C.PROFILES and (to := harnesses.account_harness(target).name) != "claude":
+        return f"only a Claude agent moves in place (account {target} runs {_harness_name(to)})"
     if target not in C.PROFILES:
         return f"{target!r} is not an account"
     if src not in C.PROFILES:
