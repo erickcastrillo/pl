@@ -406,6 +406,19 @@ def test_a_shorter_or_replaced_file_is_read_from_the_start(fake_home):
     assert total(usage.scan()) == {"main": 226}
 
 
+def test_a_replaced_longer_file_with_a_reused_inode_is_read_from_the_start(fake_home):
+    f = transcript(fake_home)
+    write(f, [turn("m1", inp=100, out=0)])
+    assert total(usage.scan()) == {"main": 100}
+    f.unlink()
+    write(f, [turn("m2", inp=7, out=0), turn("m3", inp=7, out=0)])
+    st = json.loads(usage._path().read_text())
+    new = f.stat()
+    st["files"][str(f)]["ident"] = [new.st_dev, new.st_ino]   # as on Linux, where the new file gets the old inode
+    usage._path().write_text(json.dumps(st))
+    assert total(usage.scan()) == {"main": 114}
+
+
 def test_a_line_longer_than_one_read_is_skipped(fake_home, monkeypatch):
     monkeypatch.setattr(usage, "CHUNK", 600)
     f = transcript(fake_home)
