@@ -17,7 +17,7 @@ def pr(**kw):
     base = {"draft": False, "user": {"login": "owner"}, "labels": [{"name": LABEL}],
             "additions": 10, "deletions": 2, "changed_files": 2,
             "base": {"ref": "main", "repo": {"full_name": "owner/pl"}},
-            "head": {"repo": {"full_name": "owner/pl"}}}
+            "head": {"sha": "abc123", "repo": {"full_name": "owner/pl"}}}
     base.update(kw)
     return base
 
@@ -29,8 +29,13 @@ def f(name, patch="@@ -1 +1 @@\n-a = 1\n+a = 2", **kw):
 GOOD_FILES = [f("src/pl/watch.py"), f("tests/test_watch.py")]
 
 
-def check(p=None, files=None, action="labeled"):
-    return amc.check(p or pr(), GOOD_FILES if files is None else files, action, LABEL, {"owner"})
+COMMITTED = "2026-10-09T10:00:00Z"
+LABELED = "2026-10-09T11:00:00Z"
+
+
+def check(p=None, files=None, action="labeled", labeled_at=LABELED, committed_at=COMMITTED):
+    return amc.check(p or pr(), GOOD_FILES if files is None else files, action, LABEL, {"owner"},
+                     labeled_at=labeled_at, committed_at=committed_at)
 
 
 def test_small_reviewed_change_with_tests_passes():
@@ -111,31 +116,93 @@ def test_docs_only_change_needs_no_tests():
     assert check(p=pr(changed_files=1), files=[f("README.md")]) == []
 
 
+def test_review_label_added_after_the_last_commit_passes():
+    assert check(labeled_at="2026-10-09T10:00:01Z") == []
+
+
+def test_review_label_added_before_the_last_commit_blocks():
+    reasons = check(labeled_at="2026-10-09T09:59:59Z")
+    assert reasons and any("before the last commit" in r for r in reasons)
+
+
+def test_review_label_at_the_same_time_as_the_commit_blocks():
+    assert any("before the last commit" in r for r in check(labeled_at=COMMITTED))
+
+
+def test_missing_label_event_blocks():
+    assert any("no record of when" in r for r in check(labeled_at=None))
+
+
+def test_missing_commit_time_blocks():
+    assert any("no record of when" in r for r in check(committed_at=None))
+
+
+def events(*rows):
+    return [{"event": e, "label": {"name": n}, "created_at": t} for e, n, t in rows]
+
+
+def test_label_time_is_the_newest_labeled_event_for_that_label():
+    evs = [events(("labeled", LABEL, "2026-10-09T08:00:00Z"), ("unlabeled", LABEL, "2026-10-09T08:30:00Z")),
+           events(("labeled", "other", "2026-10-09T12:00:00Z"), ("labeled", LABEL, "2026-10-09T09:00:00Z")),
+           [{"event": "assigned", "created_at": "2026-10-09T13:00:00Z"}]]
+    assert amc.labeled_at(evs, LABEL) == "2026-10-09T09:00:00Z"
+    assert amc.labeled_at([events(("labeled", "other", LABEL))], LABEL) is None
+
+
+def fake_gh(p=None, evs=None, commit_date=COMMITTED, calls=None):
+    def run(args):
+        if calls is not None:
+            calls.append(args)
+        url = args[-1]
+        if "/events" in url:
+            return json.dumps([events(("labeled", LABEL, LABELED))] if evs is None else evs)
+        if "/commits/" in url:
+            return json.dumps({"commit": {"committer": {"date": commit_date}}})
+        if "/files" in url:
+            return json.dumps(GOOD_FILES)
+        return json.dumps(p or pr())
+    return run
+
+
 def test_main_prints_the_verdict_and_reasons(monkeypatch, capsys):
     calls = []
-
-    def fake_gh(args):
-        calls.append(args)
-        return json.dumps(GOOD_FILES if "files" in args[-1] else pr())
-    monkeypatch.setattr(amc, "_gh", fake_gh)
+    monkeypatch.setattr(amc, "_gh", fake_gh(calls=calls))
     monkeypatch.setenv("AUTO_MERGE_LABEL", LABEL)
     monkeypatch.setenv("AUTO_MERGE_AUTHORS", "owner")
     assert amc.main(["owner/pl", "12", "labeled"]) == 0
     assert capsys.readouterr().out.splitlines()[0] == "eligible=true"
-    assert calls[0] == ["api", "repos/owner/pl/pulls/12"]
-    assert calls[1] == ["api", "repos/owner/pl/pulls/12/files?per_page=100"]
+    assert calls == [["api", "repos/owner/pl/pulls/12"],
+                     ["api", "repos/owner/pl/pulls/12/files?per_page=100"],
+                     ["api", "--paginate", "--slurp", "repos/owner/pl/issues/12/events?per_page=100"],
+                     ["api", "repos/owner/pl/commits/abc123"]]
 
 
 def test_main_says_not_eligible_with_reasons(monkeypatch, capsys):
-    monkeypatch.setattr(amc, "_gh", lambda args: json.dumps(GOOD_FILES if "files" in args[-1] else pr(draft=True)))
+    monkeypatch.setattr(amc, "_gh", fake_gh(p=pr(draft=True)))
     monkeypatch.setenv("AUTO_MERGE_AUTHORS", "owner")
     amc.main(["owner/pl", "12", "labeled"])
     out = capsys.readouterr().out
     assert out.startswith("eligible=false") and "draft" in out
 
 
+def test_main_blocks_a_label_older_than_the_last_commit(monkeypatch, capsys):
+    monkeypatch.setattr(amc, "_gh", fake_gh(commit_date="2026-10-09T12:00:00Z"))
+    monkeypatch.setenv("AUTO_MERGE_AUTHORS", "owner")
+    amc.main(["owner/pl", "12", "labeled"])
+    out = capsys.readouterr().out
+    assert out.startswith("eligible=false") and "before the last commit" in out
+
+
+def test_main_blocks_when_there_is_no_label_event(monkeypatch, capsys):
+    monkeypatch.setattr(amc, "_gh", fake_gh(evs=[[]]))
+    monkeypatch.setenv("AUTO_MERGE_AUTHORS", "owner")
+    amc.main(["owner/pl", "12", "labeled"])
+    out = capsys.readouterr().out
+    assert out.startswith("eligible=false") and "no record of when" in out
+
+
 def test_main_with_no_allowed_authors_blocks_everyone(monkeypatch, capsys):
-    monkeypatch.setattr(amc, "_gh", lambda args: json.dumps(GOOD_FILES if "files" in args[-1] else pr()))
+    monkeypatch.setattr(amc, "_gh", fake_gh())
     monkeypatch.delenv("AUTO_MERGE_AUTHORS", raising=False)
     amc.main(["owner/pl", "12", "labeled"])
     assert capsys.readouterr().out.startswith("eligible=false")
