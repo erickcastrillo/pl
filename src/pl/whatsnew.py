@@ -92,6 +92,8 @@ ENTRIES = [
        "a notice and N when a dialog or unsent text is open", "pl"),
     _e("2026-10-09.02", "An idle Antigravity run agent frees its run slot, like Claude's",
        "pl list: run agent waiting (idle N min); the next card starts", "pl list"),
+    _e("2026-10-09.03", "An Antigravity run window closes once its card reaches PR open and its screen goes quiet",
+       "the dispatcher window: closing finished run agent window", "pl list"),
 ]
 
 
