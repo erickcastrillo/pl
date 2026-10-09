@@ -51,7 +51,9 @@ def check(pr, files, action, label, authors):
         why.append("it comes from a fork")
     if pr["base"]["ref"] != BASE_BRANCH:
         why.append(f"it targets {pr['base']['ref']}, not {BASE_BRANCH}")
-    lines = pr["additions"] + pr["deletions"]
+    # Lines under tests/ do not count; tests are cheap to review.
+    lines = sum(fl.get("additions", 0) + fl.get("deletions", 0) for fl in files
+                if not fl["filename"].startswith("tests/"))
     if lines > MAX_LINES:
         why.append(f"{lines} changed lines is over the {MAX_LINES} limit")
     if pr["changed_files"] > MAX_FILES:

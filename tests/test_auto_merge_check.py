@@ -44,12 +44,21 @@ def test_small_reviewed_change_with_tests_passes():
     (pr(head={"repo": {"full_name": "fork/pl"}}), "fork"),
     (pr(head={"repo": None}), "fork"),
     (pr(base={"ref": "dev", "repo": {"full_name": "owner/pl"}}), "main"),
-    (pr(additions=140, deletions=20), "lines"),
     (pr(changed_files=7), "files"),
 ])
 def test_pull_request_level_rules_block(p, why):
     reasons = check(p)
     assert reasons and any(why in r for r in reasons)
+
+
+def test_over_150_non_test_lines_blocks():
+    files = [f("src/pl/watch.py", additions=140, deletions=11), f("tests/test_watch.py")]
+    assert any("151 changed lines" in r for r in check(files=files))
+
+
+def test_lines_under_tests_do_not_count_toward_the_limit():
+    files = [f("src/pl/watch.py", additions=100, deletions=50), f("tests/test_watch.py", additions=900, deletions=5)]
+    assert check(p=pr(additions=1055, deletions=55), files=files) == []
 
 
 def test_new_commits_after_the_review_block():

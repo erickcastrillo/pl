@@ -345,7 +345,9 @@ The `AUTO_MERGE_MODE` repo variable picks the mode:
 - `shadow` (the default) only adds the label `pl:would-auto-merge`. Nothing merges.
 - `live` adds `pl:auto-merge` and turns on GitHub auto-merge with squash.
 
-Turn on live mode only after branch protection on main requires the `test` check and auto-merge is enabled in the repo settings. Otherwise `--auto` merges at once, before CI finishes.
+CI also fails any pull request over 300 changed lines outside `tests/` or over 10 changed files.
+
+Turn on live mode only after branch protection on main requires the `test` and `size` checks and auto-merge is enabled in the repo settings. Otherwise `--auto` merges at once, before CI finishes.
 
 `AUTO_MERGE_LABEL` and `AUTO_MERGE_AUTHORS` (a comma list, default the repo owner) are optional repo variables.
 
