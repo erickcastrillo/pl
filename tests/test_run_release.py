@@ -152,6 +152,25 @@ def test_an_agent_waiting_for_a_person_is_never_released(fake, prompt):
     assert fake.stops == []
 
 
+def test_an_agent_at_claudes_read_outside_prompt_alerts_and_is_never_released(fake, monkeypatch):
+    """The real screen check on Claude Code's "Allow this read outside the working directories?" prompt."""
+    from pl import alerts
+    from test_harnesses import CLAUDE_READ_OUTSIDE
+    monkeypatch.setattr(dispatch, "permission_wait", agents.permission_wait)
+
+    def run(argv, **kw):   # the agent pane: the prompt, unchanged for 40 minutes
+        out = str(int(time.time() - 40 * 60)) if "display-message" in argv else CLAUDE_READ_OUTSIDE
+        return types.SimpleNamespace(returncode=0, stdout=out + "\n", stderr="")
+    monkeypatch.setattr(harnesses, "_run", run)
+    fake.waiting = "waiting (idle 40 min)"
+    _seed_wait("aaaa0001", 3 * 3600)
+    fake.run([_auto("aaaa0001", "In progress", spec_slug="w4-import", worker=dict(RUN_W))])
+    assert fake.stops == []
+    a = alerts.get("permission_wait:aaaa0001")
+    assert a and "Read(/Users/me/code/your-repo-pl-w4-bulk-import/" in a["title"]
+    assert _meta_write(fake, "aaaa0001")["worker"]["permission_wait"].startswith("Read(")
+
+
 @pytest.mark.parametrize("refusal, ok", [("its pane %1 is not in window @1", True), (None, False)])
 def test_an_agent_that_cannot_be_stopped_keeps_its_record_and_its_place(fake, refusal, ok):
     fake.waiting, fake.refusal, fake.stop_ok = "waiting (nothing-runnable)", refusal, ok

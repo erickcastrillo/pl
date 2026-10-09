@@ -98,6 +98,8 @@ ENTRIES = [
        "the dispatcher window: In progress -> run agent", "pl list"),
     _e("2026-10-09.05", "A refused agent move names the agent's real harness (Antigravity, Codex)",
        "Activity tab: agent_move_refused", "pl move-agent <card> <account>"),
+    _e("2026-10-09.06", "Claude's read outside the working directories prompt opens an alert",
+       "Alerts tab: agent waiting for permission in <window>: Read(<path>)", "pl alerts"),
 ]
 
 

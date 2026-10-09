@@ -193,6 +193,7 @@ def api_error_wait(w, reg):
 PERMISSION_IDLE = 120   # an agent at a permission prompt this long, with no change on screen, is stuck there
 BOX_RE = re.compile(r"[│┃|╭╮╰╯─━]+")
 OPTION_RE = re.compile(r"^\s*(?:[❯›>]\s*)?([1-9])[.)]\s+(.*?)\s*$")   # a numbered option; groups: digit, label
+TOOL_LINE_RE = re.compile(r"^[A-Z][A-Za-z]*\(")   # a prompt's tool line, like "Read(/path/file)"; may wrap once
 
 
 def permission_wait(h, pane):
@@ -210,6 +211,10 @@ def permission_wait(h, pane):
     act = (harnesses._run(["tmux", "display-message", "-p", "-t", pane, "#{window_activity}"]).stdout or "").strip()
     if not act.isdigit() or time.time() - int(act) < PERMISSION_IDLE:
         return None
+    tool = next((i for i in range(at - 1, max(-1, at - 17), -1) if TOOL_LINE_RE.match(lines[i])), None)
+    if tool is not None:   # the prompt names its tool call above a block of help text: show the call
+        more = lines[tool + 1] if tool + 1 < at and not lines[tool + 1].startswith("\u254c") else ""
+        return mask(lines[tool] + more)[:120]
     near = [ln for ln in lines[max(0, at - 3):at] + lines[at + 1:at + 3]
             if not OPTION_RE.match(ln) and not any(re.search(p, ln, re.I) for p in pats)]
     return mask(" · ".join(near) or lines[at])[:120]

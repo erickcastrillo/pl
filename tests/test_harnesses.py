@@ -698,10 +698,49 @@ CODEX_ASK = """Would you like to run the following command?
   $ npm test --token=ghp_abcdefghijklmnopqrstuvwxyz0123456789
 › 1. Yes, proceed
   2. No, and tell Codex what to do differently"""
+# Claude Code 2.1.295 asks before a file tool reads outside the working directories (captured from a run window at
+# 80 columns; the path is a neutral placeholder)
+CLAUDE_READ_OUTSIDE = """your-repo ➤
+
+
+────────────────────────────────────────────────────────────────────────────────
+ Read outside the working directories
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Read(/Users/me/code/your-repo-pl-w4-bulk-import/App.Services/ImportService/Imp
+ ortService.cs · lines 1-3)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Auto mode and the sandbox read outside the working directories without asking.
+ Yes or No answers for this read; the rest is for later reads. Block: the file
+ tools refuse reads outside the working directories in every project.
+ Sandboxed commands are not changed on this machine (the sandbox is off, its
+ filesystem rules are relaxed, a managed read-path lock is on, or the working
+ directory name has glob characters). To undo, remove
+ permissions.blockReadsOutsideWorkingDirectories from your user settings; file
+ tools follow next session, sandboxed commands at once.
+
+ Allow this read outside the working directories?
+ ❯ 1. Yes, and keep allowing any reads outside the working directories
+   2. No, and block reads outside the working directories from now on
+   3. No, and ask again next time
+   4. Yes, but ask again next time
+
+ Esc to cancel · Tab to amend"""
+# the same prompt in a narrow pane: its question and first option wrap
+CLAUDE_READ_OUTSIDE_NARROW = """ Read(/tmp/x/notes.md)
+
+ Allow this read outside the
+ working directories?
+ ❯ 1. Yes, and keep allowing
+ any reads outside the working
+ directories
+   2. No, and block reads"""
 
 
 @pytest.mark.parametrize("harness, text, idle, want", [
     ("claude", CLAUDE_ASK, 130, "git push origin feat/x"),
+    ("claude", CLAUDE_READ_OUTSIDE, 130, "Read(/Users/me/code/your-repo-pl-w4-bulk-import/App.Services/ImportService/Imp"),
+    ("claude", CLAUDE_READ_OUTSIDE_NARROW, 130, "Read(/tmp/x/notes.md)"),
+    ("claude", CLAUDE_READ_OUTSIDE, 60, None),
     ("codex", CODEX_ASK, 300, "npm test"),
     ("claude", CLAUDE_ASK, 60, None),                       # at the prompt for under 2 minutes: maybe a person is on it
     ("claude", "", 600, None),                              # an empty screen
