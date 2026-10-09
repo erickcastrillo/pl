@@ -44,6 +44,9 @@ def _defaults():
                           rf"(?:(?:(?P<mon>{_MON})\s+(?P<day>\d{{1,2}})|(?P<day2>\d{{1,2}})\s+(?P<mon2>{_MON}))\s*,?\s*(?:at\s+)?)?"
                           r"(?:(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>[ap]m)\b|(?P<h24>\d{1,2}):(?P<m24>\d{2}))", re.I)
     del _MON
+    # a reset given as a time from now (Antigravity: "Resets in 4h9m46s", "Resets in 9m", "Resets in 2h")
+    RESET_IN_RE = re.compile(r"resets?\s+in\s+(?=\d)(?:(?P<d>\d+)\s*d\s*)?(?:(?P<h>\d+)\s*h\s*)?(?:(?P<m>\d+)\s*m(?!s)\s*)?"
+                             r"(?:(?P<s>\d+)\s*s\b)?", re.I)
     LIMIT_COOLDOWN = int(os.environ.get("PL_LIMIT_COOLDOWN", "3600"))  # seconds, when the screen names no reset time
     LIMIT_RESTART_WINDOW = int(os.environ.get("PL_LIMIT_RESTART_WINDOW", "600"))  # an agent younger than this is restarted on the other account; older ones auto-resume
 
@@ -311,7 +314,23 @@ def validate(doc) -> list[str]:
                 errs.append(f"{table}.{name}: unknown harness {v['harness']!r}; known: {', '.join(known)}")
             if table == "stages" and "accounts" in v:
                 errs += _pool_errors(name, v, accounts)
+            elif table == "stages" and accounts and v.get("harness") in known:
+                errs += _stage_harness_errors(name, v, accounts)
     return errs
+
+
+def _stage_harness_errors(name, v, accounts) -> list[str]:
+    """[stages.<name>] harness without a pool: it must match its pinned account's harness, or, unpinned, some account's
+    (else pl would launch that CLI under an account signed in to another one)."""
+    h, a = v["harness"], v.get("account")
+    if a and a in accounts:
+        ah = accounts[a].get("harness") or "claude"
+        return [] if ah == h else [f"stages.{name}: harness {h!r} differs from account {a}'s harness {ah!r}; "
+                                   "remove the stage's harness line (the account sets it)"]
+    if a or any((x.get("harness") or "claude") == h for x in accounts.values()):
+        return []
+    return [f"stages.{name}: no account uses harness {h!r} (accounts: {', '.join(accounts)}); "
+            "remove the stage's harness line or add an account of that harness"]
 
 
 def _pool_errors(name, v, accounts) -> list[str]:

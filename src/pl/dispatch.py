@@ -1,4 +1,5 @@
 """The dispatcher: start the right agent for every waiting card."""
+import hashlib
 import os
 import json
 import re
@@ -368,11 +369,25 @@ def _context_restart(name, svc, sid, s, ust, dry):
     return f"its context is {pct}%, over max_context {limit}%"
 
 
-def sweep_untracked(all_cards, reg, dry):
-    """Close spec/design/plan agent windows that no card tracks any more (a same-stage restart or a lost
-    finished_workers write leaves them behind), once idle for 5 minutes. Run windows are never touched:
-    an idle run agent may be waiting at a human gate. Returns how many untracked prep windows with a live
-    process it left open: they still hold a prep slot."""
+def screen_quiet(st, pane):
+    """Seconds this pane's screen text has stayed the same across dispatcher passes (0 when new or changed), kept in
+    the dispatcher state. A harness with no session registry (agy) redraws its screen every second, so tmux's
+    window_activity never ages: its idle time is read from the screen instead."""
+    text = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane]).stdout or ""
+    digest, now = hashlib.sha256(text.encode()).hexdigest(), time.time()
+    rec = st.setdefault("screens", {}).get(pane) or {}
+    if rec.get("hash") != digest or not isinstance(rec.get("since"), (int, float)):
+        rec = {"hash": digest, "since": now}
+    st["screens"][pane] = {**rec, "seen": now}
+    return now - rec["since"]
+
+
+def sweep_untracked(all_cards, reg, dry, st=None):
+    """Close spec/design/plan agent windows that no card tracks any more (a same-stage restart, pl approve or a lost
+    finished_workers write leaves them behind), once idle: a registered session idle for 5 minutes, else no window
+    activity or (st given) no change on screen for 10 minutes. Run windows are never touched: an idle run agent may
+    be waiting at a human gate. Returns how many untracked prep windows with a live process it left open: they
+    still hold a prep slot."""
     tracked = set()
     for c in all_cards:
         m = c.get("metadata") or {}
@@ -395,7 +410,7 @@ def sweep_untracked(all_cards, reg, dry):
             if rec.get("status") != "idle" or time.time() - rec.get("statusUpdatedAt", 0) / 1000 <= 300:
                 live += 1   # a session is registered on it: really running
                 continue
-        elif time.time() - int(activity or 0) <= 600:
+        elif time.time() - int(activity or 0) <= 600 and (cmd in harnesses.SHELLS or st is None or screen_quiet(st, pane) <= 600):
             live += cmd not in harnesses.SHELLS
             continue
         print(f"closing untracked {name} agent window {wid}")
@@ -504,7 +519,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if screen:
             try:
                 prof = w.get("profile") or m.get("profile")
-                until = mark_exhausted(prof, screen) if not dry else "(dry run)"
+                lim = w.get("limit_hit") if isinstance(w.get("limit_hit"), dict) else {}
+                known = lim.get("account") == prof and bool(lim.get("until"))   # this screen parked prof on an earlier pass:
+                # parse it again and "Resets in 4h" would move the reset on every pass
+                until = lim["until"] if known else mark_exhausted(prof, screen) if not dry else "(dry run)"
+                back = known and prof not in accounts.exhausted_profiles()   # the reset came, or pl accounts --reset
                 prep = w.get("stage") in ("spec", "design", "plan")   # a prep agent always moves; a run agent only while young
                 pool = harnesses.stage_pool(w.get("stage"))   # a pooled stage never leaves its pool, of any harness
                 alt = healthy_profile(None, all_cards, harness=wh.name if prep and not pool else None, pool=pool)
@@ -515,14 +534,16 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     to = healthy_profile(None, all_cards, harness="claude", pool=pool)
                     if to and to != prof:
                         moved, why, changed = move_agent.move(c, to, "usage limit", dry, held=True)
-                switch = not changed and bool(alt) and alt != prof and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
-                print(f"{short_id(c['id'])}  {w.get('stage')} agent under {prof} hit the usage limit; {prof} parked until {until}; "
+                switch = not changed and bool(alt) and (alt != prof or back) and (prep or age < C.LIMIT_RESTART_WINDOW or not auto_resumes)
+                print(f"{short_id(c['id'])}  {w.get('stage')} agent under {prof} "
+                      + (f"is still on its old limit screen; {prof} is no longer parked; " if back else
+                         f"hit the usage limit; {prof} parked until {until}; ")
                       + (f"moved under {to}, same session" if moved else f"not moved: {why}" if changed
                          else f"{f'not moved ({why}); ' if why else ''}restarting under {alt} (agent was {int(age // 60)} min old)" if switch
                          else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
-                if why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
+                if not back and (why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
                                       f"parked until {until[11:16]} UTC; {accounts.check_note(prof)}; "
-                                      f"pl accounts --reset {prof} un-parks it"):
+                                      f"pl accounts --reset {prof} un-parks it")):
                     notify(alerts.headline(why, f"Profile {prof} hit its usage limit"), f"parked until {until[11:16]} UTC; "
                            + (f"moved and resumed its agent under {to}" if moved
                               else f"young agents move to {alt}" if alt else "no other profile has credits"))
@@ -534,7 +555,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     if not dry:
                         tmux("kill-window", "-t", w["window"], check=False)
                         meta = {"worker": None, "profile": alt, "profile_switches": (m.get("profile_switches") or [])
-                                + [{"at": now_iso(), "from": prof, "to": alt, "stage": w.get("stage"), "reason": "usage limit"}]}
+                                + [{"at": now_iso(), "from": prof, "to": alt, "stage": w.get("stage"),
+                                                                         "reason": "limit reset" if back else "usage limit"}]}
                         update(c["id"], metadata=meta)
                         m = {**m, **meta}
                         c["metadata"] = m
@@ -582,8 +604,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         # a worker for an earlier stage that finished its job: clean its window once it has gone idle
         if w and w.get("stage") != stage and stage_complete(c, col, w["stage"]) and status == "alive":
             rec = reg.get(sid) or {}
-            idle_for = time.time() - (rec.get("statusUpdatedAt", 0) / 1000)
-            if rec.get("status") == "idle" and idle_for > 300 and w.get("window"):
+            idle_for = time.time() - (rec.get("statusUpdatedAt", 0) / 1000) if rec.get("status") == "idle" else 0
+            if not wh.session_registry and w["stage"] != "run" and w.get("pane"):   # no registry: an unchanged screen
+                idle_for = screen_quiet(st, w["pane"])
+            if idle_for > 300 and w.get("window"):
                 print(f"{short_id(c['id'])}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
                 if not dry:
                     tmux("kill-window", "-t", w["window"], check=False)
@@ -627,7 +651,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         same_stage = w.get("stage") == stage
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
-                why = run_waiting(w, reg) if status == "alive" else None
+                why = ("waiting (usage limit)" if w.get("limit_hit") else run_waiting(w, reg)) if status == "alive" else None
                 if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
@@ -637,7 +661,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 else:
                     runs_alive += 1
             else:
-                prep_alive += 1
+                prep_alive += not w.get("limit_hit")   # an agent on a limit screen waits for its reset: no slot
             continue
         if stage == "run" and (blocked := run_blocked(c)):   # released: held back, no slot, not live
             print(f"{short_id(c['id'])}  run {blocked}")
@@ -667,7 +691,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             st["notified"].pop(f"{c['id']}:{stage}_failed", None)   # a fresh start (pl retry): a new failure notifies again
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
-    prep_alive += sweep_untracked(all_cards, reg, dry) or 0   # a live window no card tracks (a restart left it) holds a slot too
+    prep_alive += sweep_untracked(all_cards, reg, dry, st) or 0
+    st["screens"] = {p: r for p, r in (st.get("screens") or {}).items() if time.time() - r.get("seen", 0) < 3600}   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
     if not dry:

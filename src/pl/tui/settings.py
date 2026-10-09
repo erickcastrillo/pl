@@ -144,12 +144,13 @@ class SettingsView(Widget):
                 names = list(harnesses.BUILTINS)
                 for stage in C.PROMPTS:
                     st = C.STAGES.get(stage) or {}
-                    yield from self._field(f"{stage} harness", ("stages", stage, "harness"), st.get("harness"), options=names)
-                    if st.get("accounts"):   # a pool: shown here, edited in config.toml
+                    if st.get("accounts"):   # a pool: shown here, edited in config.toml; each account sets its harness
                         with Horizontal(classes="field"):
                             yield Label(f"{stage} accounts")
                             yield Static(Text(", ".join(st["accounts"]) + "  (config.toml)"), id=f"pool-{stage}")
                     else:
+                        yield from self._field(f"{stage} harness", ("stages", stage, "harness"), st.get("harness"),
+                                               options=names)
                         yield from self._field(f"{stage} account", ("stages", stage, "account"), st.get("account"),
                                                options=accounts)
                     yield from self._field(f"{stage} prompt", ("stages", stage, "prompt"), C.PROMPTS[stage])
