@@ -50,7 +50,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(dispatch, "registry", lambda: {"s1": {"status": "idle"}})
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w.get("session_id")))
-    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg: ns.waiting)
+    monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg, st=None: ns.waiting)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda w, reg: ns.api_error)
     monkeypatch.setattr(dispatch, "pane_exists", lambda pane: False)   # a stopped agent's window is gone
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "")
