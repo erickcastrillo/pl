@@ -624,7 +624,8 @@ def _launched(fake_home, fake_tmux, harness, toml=""):
     dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "spec", 1, False)
     C.SERVICES = {"rev": {"prompt": "/loop 30m /rev", "profile": "a"}}
     dispatch.ensure_services({}, [], {}, False, None)
-    return [[t for t in shlex.split(s) if "=" not in t or t.startswith("-")] for s in sent]
+    return [[t for t in shlex.split(s) if ("=" not in t or t.startswith("-")) and not t.startswith("--add-dir=")]
+            for s in sent]   # the worktrees folder flag has its own tests (test_worktrees_dir.py)
 
 
 @pytest.mark.parametrize("harness", sorted(UNATTENDED_WANT))

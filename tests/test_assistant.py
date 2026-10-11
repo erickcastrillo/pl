@@ -121,6 +121,7 @@ def test_a_first_ensure_starts_the_assistant_window_with_the_guide(tmux):
     assert "--session-id" in script and str(GUIDE) in script and "dangerously" not in script
     assert "exec claude --add-dir " in script and " --permission-mode manual " in script    # ask the person, whatever the account's default mode
     assert "CLAUDE_CONFIG_DIR=" in script and ".claude-acme" in script
+    assert "pl-worktrees" not in script and "PL_WORKTREES_DIR" not in script   # it never makes worktrees
     st = json.loads((C.STATE_DIR / "assistant.json").read_text())
     assert st["account"] == "acme" and st["window"] == "@10" and st["pane"] == "%10" and st["session_id"]
     assert status and "assistant" in status

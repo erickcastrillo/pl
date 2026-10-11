@@ -26,6 +26,7 @@ def _defaults():
     PROFILES = {}
     USER_EMAIL = USER_NAME = USER_UUID = USER_LOGIN = None
     WORK_DIR = HOME
+    WORKTREES_DIR = None                      # [paths] worktrees_dir; a profile defaults to <work_dir>-pl-worktrees
     TMUX_SESSION = "pl"
     ATTENTION = None                          # [paths] attention_cmd; unset = no notifications
     HOST = socket.gethostname()
@@ -131,6 +132,8 @@ def _apply(g, t):
     for key, name in (("work_dir", "WORK_DIR"), ("plans_dir", "PLANS"), ("attention_cmd", "ATTENTION")):
         if key in pa:
             g[name] = x(pa[key]) if pa[key] else None
+    g["WORKTREES_DIR"] = x(pa["worktrees_dir"]) if isinstance(pa.get("worktrees_dir"), str) and pa["worktrees_dir"] \
+        else default_worktrees(g["WORK_DIR"]) if g["WORK_DIR"] else None
     if "accounts" in t:
         g["ACCOUNTS"] = dict(t["accounts"])
         g["PROFILES"] = {n: x(a.get("config_dir", f"~/.claude-{n}")) for n, a in t["accounts"].items()}
@@ -170,6 +173,28 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+
+
+def default_worktrees(work_dir) -> Path:
+    """The agents' worktrees folder when [paths] worktrees_dir is unset: a sibling of the work folder."""
+    work_dir = Path(work_dir)
+    return work_dir.parent / f"{work_dir.name}-pl-worktrees"
+
+
+def _worktrees_errors(paths) -> list[str]:
+    """[paths] worktrees_dir: a folder of its own, outside the work folder and not above it (nor / or HOME)."""
+    v = paths.get("worktrees_dir")
+    if v is None or v == "":
+        return []
+    if not isinstance(v, str):
+        return ["paths.worktrees_dir must be a folder path (text)"]
+    wt = Path(v).expanduser().resolve()
+    work = Path(str(paths.get("work_dir") or Path.home())).expanduser().resolve()
+    if wt == Path(wt.anchor) or wt == Path.home().resolve() or wt == work or wt.is_relative_to(work) \
+            or work.is_relative_to(wt):
+        return [f"paths.worktrees_dir {v} must be a folder of its own outside the work folder {work}: not the work "
+                "folder, a folder inside it or above it, / or your home folder"]
+    return []
 
 
 def load(profile: str | None = None, config_dir: str | None = None) -> None:
@@ -275,6 +300,7 @@ def validate(doc) -> list[str]:
         v = doc.get("paths", {}).get(key)
         if v is not None and not x(v).is_dir():
             errs.append(f"paths.{key} {v} does not exist")
+    errs += _worktrees_errors(doc.get("paths", {}))
     ac = doc.get("paths", {}).get("attention_cmd")
     if ac and not (x(ac).is_file() and os.access(x(ac), os.X_OK)):
         errs.append(f"paths.attention_cmd {ac} is not an executable file")

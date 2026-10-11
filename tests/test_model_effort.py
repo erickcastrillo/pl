@@ -104,8 +104,8 @@ def test_a_user_agy_template_gets_the_flags_after_the_program_name_once(fake_hom
     toml = ('[harnesses.antigravity]\ninteractive = ["agy", "--dangerously-skip-permissions", "-i", "{prompt}"]\n'
             'headless = ["agy", "--dangerously-skip-permissions", "-p", "{prompt}"]\n')
     for argv in _launch(fake_home, fake_tmux, "antigravity", 'model = "gemini-3.1-pro-high"\neffort = "xhigh"', toml):
-        assert argv[:6] == ["agy", "--model", "gemini-3.1-pro-high", "--effort", "xhigh",
-                            "--dangerously-skip-permissions"], argv
+        assert argv[:7] == ["agy", "--model", "gemini-3.1-pro-high", "--effort", "xhigh",
+                            f"--add-dir={C.WORKTREES_DIR}", "--dangerously-skip-permissions"], argv
         assert argv.count("--model") == 1 and argv.count("--effort") == 1
 
 
@@ -126,7 +126,7 @@ def test_a_resumed_agent_keeps_its_model(fake_home):
     _profile(fake_home, '[accounts.a]\nharness = "claude"\nconfig_dir = "~"\nmodel = "sonnet"\n')
     script = harnesses.launch_script(harnesses.get("claude"), "a", "go", SID, "l", resume=True, plugin=False)
     argv = shlex.split(script.splitlines()[-1][len("exec "):])
-    assert argv[:4] == ["claude", "--model", "sonnet", "--resume"]
+    assert argv[:5] == ["claude", "--model", "sonnet", f"--add-dir={C.WORKTREES_DIR}", "--resume"]
 
 
 def test_a_stage_harness_other_than_the_accounts_takes_no_model(fake_home):
