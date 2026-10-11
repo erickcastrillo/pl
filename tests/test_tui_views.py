@@ -1567,6 +1567,25 @@ async def test_errors_show_in_red(monkeypatch):
         assert "red" in str(span.style)
 
 
+async def test_a_screen_read_that_lands_while_the_view_is_removed_does_not_crash(monkeypatch):
+    """Live in a loaded test run: the 1 s poll's read came back while the console was closing, and the card it drew
+    was already gone (NoMatches killed the app)."""
+    fa = FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view, go = app.query_one("#assistant-view"), threading.Event()
+        real = fa.screen
+        monkeypatch.setattr(fa, "screen", lambda n: go.wait(10) and real(n))
+        from pl import assistant
+        monkeypatch.setattr(assistant, "screen", fa.screen)
+        view.tick()
+        await app.query_one("#assistant-menu").remove()
+        go.set()
+        await settle(pilot)
+        assert app.is_running
+
+
 async def test_an_unchanged_transcript_is_not_redrawn(monkeypatch):
     fa = FakeAssistant(monkeypatch)
     p = _chat(fa, [_user("hi"), _said({"type": "text", "text": "hello"})])
