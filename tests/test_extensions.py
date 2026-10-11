@@ -522,7 +522,7 @@ async def test_settings_mounts_the_section_and_warns_about_a_missing_skill(accou
     data = {"snapshot": snap, "metrics_by_window": {k: m for k in ("1h", "24h", "7d")},
             "daily": {"specs": [0] * 14, "plans": [0] * 14}, "pr_activity": {"opened": [], "merged": []}}
     app = PlApp(snapshot_provider=lambda: data, interval=3600)
-    async with app.run_test(size=(176, 48)) as pilot:
+    async with app.run_test(size=(176, 100)) as pilot:   # tall: long temporary paths wrap the account lines above
         await settle(pilot)
         app.action_tab("settings")
         await settle(pilot)

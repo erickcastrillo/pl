@@ -38,13 +38,21 @@ keep_me = "yes"
 """
 
 
+def _only_auth_status(args):
+    """Every console mounts Settings, whose worker asks gh who is signed in: that one call is answered. Any other gh
+    call fails the test (a failure raised in that worker only showed when the worker outlived the test's wait)."""
+    if args[:2] == ["auth", "status"]:
+        return "github.com\n  ✓ Logged in to github.com account octo (keyring)\n"
+    pytest.fail(f"unexpected gh call {args}")
+
+
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
     saved = {k: v for k, v in vars(C).items() if k.isupper()}
     monkeypatch.setenv("HOME", str(tmp_path))
     for var in ("PL_CONFIG_DIR", "PL_TMUX_SESSION"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(github, "_gh", lambda args: pytest.fail(f"unexpected gh call {args}"))
+    monkeypatch.setattr(github, "_gh", _only_auth_status)
     C.load()
     yield tmp_path
     harnesses._CACHE.clear()

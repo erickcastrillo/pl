@@ -1665,8 +1665,10 @@ async def test_an_update_restart_is_told_in_the_chat(monkeypatch):
 
 
 async def test_a_digit_is_not_sent_when_the_question_changed_under_the_card(monkeypatch):
+    from pl.tui.assistant import AssistantView
     fa = FakeAssistant(monkeypatch)
     fa.lines = MENU
+    monkeypatch.setattr(AssistantView, "_poll", lambda self: None)   # the 1 s poll would draw the new question first
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
