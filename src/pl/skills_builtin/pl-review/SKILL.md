@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed. Never merges. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 2
+pl-builtin-version: 3
 ---
 
 # pl-review: review labelled pull requests
@@ -30,11 +30,12 @@ the label. Use exactly those labels. Never create, rename or edit a label.
    None: stop until the next run.
 
 2. For each pull request, one at a time:
-   1. Check out its branch in a separate git worktree, never in this checkout:
+   1. Check out its branch in a separate git worktree, never in this checkout. Put it in the profile's
+      worktrees folder, `$PL_WORKTREES_DIR`, or in `..` when that variable is empty:
 
       ```
       git fetch origin <headRefName>
-      git worktree add --detach ../review-<number> origin/<headRefName>
+      git worktree add --detach "${PL_WORKTREES_DIR:-..}/review-<number>" origin/<headRefName>
       ```
 
    2. Read what it was meant to do. When the description names a pl card, run `pl intent <url>` to see the
@@ -60,7 +61,7 @@ the label. Use exactly those labels. Never create, rename or edit a label.
       gh pr comment <number> --repo <repo> --body-file <file>
       ```
 
-   6. Remove the worktree (`git worktree remove ../review-<number>`).
+   6. Remove the worktree (`git worktree remove "${PL_WORKTREES_DIR:-..}/review-<number>"`).
 
 3. Stop until the next run.
 

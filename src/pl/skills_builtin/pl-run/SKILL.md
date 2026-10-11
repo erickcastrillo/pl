@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 2
+pl-builtin-version: 3
 ---
 
 # pl-run: build the approved plan for one card
@@ -34,14 +34,17 @@ such choice in the pull request description.
    pl move <id> "In progress"
    ```
 
-2. Make a worktree on a new branch from the up-to-date default branch. Never work in this checkout itself:
+2. Make a worktree on a new branch from the up-to-date default branch. Never work in this checkout itself.
+   Put it in the profile's worktrees folder, `$PL_WORKTREES_DIR` (pl made it and gave you access to it).
+   When that variable is empty, use `..`:
 
    ```
    git fetch origin
-   git worktree add -b pl/<short-name> ../<repo>-pl-<short-name> origin/<default branch>
+   git worktree add -b pl/<short-name> "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" origin/<default branch>
    ```
 
-   If the branch or worktree already exists from an earlier attempt, reuse it and continue where it stopped.
+   If the branch or worktree already exists from an earlier attempt, reuse it where it is and continue where
+   it stopped. `git worktree list` shows where it is; an older one may be at `../<repo>-pl-<short-name>`.
    Run every later command inside the worktree.
 
 3. For each work package, in order:

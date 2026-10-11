@@ -165,6 +165,7 @@ class SettingsView(Widget):
                 yield from self._field("tmux session", ("tmux_session",), C.TMUX_SESSION)
                 yield from self._field("work dir", ("paths", "work_dir"), str(C.WORK_DIR))
                 yield from self._field("plans dir", ("paths", "plans_dir"), str(C.PLANS))
+                yield from self._field("worktrees dir", ("paths", "worktrees_dir"), str(C.WORKTREES_DIR or ""))
             with self._panel("Connections"):
                 yield Static(Text(SUBSCRIPTION_LINE, style="bold"))
                 yield Static(self._accounts_text())

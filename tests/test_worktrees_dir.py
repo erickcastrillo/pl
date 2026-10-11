@@ -162,3 +162,65 @@ def test_a_folder_that_cannot_be_made_is_left_out(fake_home, fake_tmux):
     C.load(config_dir=str(d))
     script = harnesses.launch_script(harnesses.get("claude"), "a", "go", SID, "l", plugin=False)
     assert "--add-dir" not in script and "PL_WORKTREES_DIR" not in script
+
+
+# ---------- prompts, skills and Settings ----------
+
+def test_a_stage_prompt_can_name_the_folder(fake_home, fake_tmux):
+    _launch(fake_home, fake_tmux, "claude")
+    fake_tmux.clear()
+    C.PROMPTS = {"run": "/my-run {id} worktrees={worktrees_dir}"}
+    dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "run", 1, False)
+    assert _exec(fake_tmux[0])[-1] == f"/my-run abc worktrees={fake_home / 'Code' / 'app-pl-worktrees'}"
+
+
+def test_the_builtin_run_prompt_is_unchanged_and_its_agent_sees_the_folder(fake_home, fake_tmux):
+    _launch(fake_home, fake_tmux, "claude")
+    fake_tmux.clear()
+    C.PROMPTS = {"run": C.BUILTIN_PROMPTS["run"]}
+    dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "run", 1, False)
+    assert "worktrees" not in _exec(fake_tmux[0])[-1]
+    assert "export PL_WORKTREES_DIR=" in fake_tmux[0]
+
+
+@pytest.mark.parametrize("name,line", [
+    ("pl-run", 'git worktree add -b pl/<short-name> "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>"'),
+    ("pl-review", 'git worktree add --detach "${PL_WORKTREES_DIR:-..}/review-<number>"')])
+def test_the_builtin_skills_make_worktrees_in_the_folder(name, line):
+    from pl import skills
+    text = (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+    assert line in text and "pl-builtin-version: 3" in text
+    assert "git worktree add -b pl/<short-name> ../" not in text and "--detach ../" not in text
+
+
+def test_pl_run_reuses_an_earlier_worktree_where_it_is():
+    from pl import skills
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    assert "git worktree list" in text and "../<repo>-pl-<short-name>" in text
+
+
+async def test_settings_shows_the_folder_and_saves_an_edit(fake_home, monkeypatch):
+    from textual.widgets import Input
+
+    from pl.trackers import github
+    from pl.tui import settings
+    from pl.tui.app import PlApp
+    from test_settings import app_data, settle
+    monkeypatch.setattr(github, "_gh", lambda args: "github.com\n  ✓ Logged in to github.com account octo (keyring)\n")
+    (fake_home / ".claude-a").mkdir()
+    _profile(fake_home, '[accounts.a]\nconfig_dir = "~/.claude-a"\n')
+    cfg = fake_home / ".pl-t" / "config.toml"
+    app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        view = app.query_one(settings.SettingsView)
+        wid = next(w for w, (p, _, _) in view.fields.items() if p == ("paths", "worktrees_dir"))
+        box = app.query_one(f"#{wid}", Input)
+        assert box.value == str(fake_home / "Code" / "app-pl-worktrees")
+        box.value = str(fake_home / "trees")
+        view.action_save()
+        await settle(pilot)
+    assert tomlkit.parse(cfg.read_text())["paths"]["worktrees_dir"] == str(fake_home / "trees")
+    assert C.WORKTREES_DIR == fake_home / "trees"

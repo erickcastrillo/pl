@@ -204,7 +204,7 @@ def start_worker(c, stage, attempts, dry):
     label = f"{stage}:{slug_of(c)[:28]}"     # Claude session display name
     if not C.PROMPTS.get(stage):
         raise SystemExit(f"pl: set [stages.{stage}] prompt in {C.path() or 'config.toml'}")
-    prompt = C.PROMPTS[stage].format(id=c["id"])
+    prompt = C.PROMPTS[stage].format(id=c["id"], worktrees_dir=C.WORKTREES_DIR or "")
     review = (C.CODE_HOST.get("labels") or {}).get("review")
     if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"] and review:
         prompt += f" review={shlex.quote(review)}"   # pl-run labels its pull request with it

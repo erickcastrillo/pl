@@ -104,6 +104,9 @@ ENTRIES = [
        "pr_auto_merge_files (6)", "pl section <id> PLAN"),
     _e("2026-10-09.08", "Claude's read outside the working directories prompt opens an alert",
        "Alerts tab: agent waiting for permission in <window>: Read(<path>)", "pl alerts"),
+    _e("2026-10-11.01", "One worktrees folder per profile: agents read and write their worktrees without asking",
+       "Settings, General: worktrees dir; [paths] worktrees_dir (default <work_dir>-pl-worktrees); "
+       "{worktrees_dir} in a stage prompt", "pl"),
 ]
 
 
