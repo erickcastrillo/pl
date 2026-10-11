@@ -229,7 +229,7 @@ def _ensure():
     _tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
     pane_ = _tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
     dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
-                                                           resume=resume, plugin=False))
+                                                           resume=resume, plugin=False, worktrees=False))
     _save({"session_id": sid, "account": acct, "harness": h.name, "window": win, "pane": pane_,
            "started_at": now_iso(), "mode": st.get("mode") if resume else "chat", "build": update.build_id()})
     events.emit("assistant_started", None, account=acct, harness=h.name, resumed=resume)

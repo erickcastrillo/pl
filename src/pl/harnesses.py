@@ -109,6 +109,12 @@ _MODELS = {}             # harness name -> (monotonic time, [model ids])
 # a template token that already chooses the model or the effort (then pl adds none)
 MODEL_FLAG_RE = re.compile(r"^(?:--model|-m)(?:=|$)|^model=", re.I)
 EFFORT_FLAG_RE = re.compile(r"^--effort(?:=|$)|reasoning_effort=", re.I)
+# The folder agents make their git worktrees in ([paths] worktrees_dir), added to the workspace so reading and writing
+# there never asks. Each CLI's --help: claude 2.1.296 (--add-dir <directories...>: the = form keeps it to one value),
+# codex 0.150.1 (writable alongside the workspace), agy 1.3.2 (added to the workspace).
+ADD_DIR_FLAGS = {h: ["--add-dir={worktrees_dir}"] for h in ("claude", "codex", "antigravity")}
+ADD_DIR_RE = re.compile(r"^--add-dir(?:=|$)")
+WORKTREES_ENV = "PL_WORKTREES_DIR"   # the same folder for the agent's shell commands (the built-in skills use it)
 # a model id pl passes: no whitespace, quote or backslash, and no leading dash (it is never read as a flag)
 MODEL_RE = re.compile(r"[^\s\"'\\-][^\s\"'\\]*")
 
@@ -155,15 +161,30 @@ def model_effort(h, account, stage=None):
     return model, (effort if effort in EFFORT_LEVELS.get(h.name, ()) else None)
 
 
-def _with_model(template, h, account, stage):
-    """(template, values): the model and effort flags after the program name, unless the template sets that flag."""
+def worktrees_dir():
+    """The profile's worktrees folder, made (0700) when missing; None when unset or it cannot be made."""
+    d = C.WORKTREES_DIR
+    if not d:
+        return None
+    try:
+        Path(d).mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        return None
+    return Path(d)
+
+
+def _with_model(template, h, account, stage, worktrees=None):
+    """(template, values): the model, effort and worktrees folder flags after the program name, unless the template
+    sets that flag."""
     model, effort = model_effort(h, account, stage)
     add = []
     if model and not any(MODEL_FLAG_RE.search(t) for t in template):
         add += MODEL_FLAGS[h.name]
     if effort and not any(EFFORT_FLAG_RE.search(t) for t in template):
         add += EFFORT_FLAGS[h.name]
-    return [*template[:1], *add, *template[1:]], {"model": model, "effort": effort}
+    if worktrees and h.name in ADD_DIR_FLAGS and not any(ADD_DIR_RE.search(t) for t in template):
+        add += ADD_DIR_FLAGS[h.name]
+    return [*template[:1], *add, *template[1:]], {"model": model, "effort": effort, "worktrees_dir": worktrees}
 
 
 def unattended(h):
@@ -281,21 +302,25 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
-    plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins."""
+    plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins.
+    worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant)."""
     from pl import skills
     pdir = skills.launch_plugin(h, plugin)
     prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
-    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage)
+    wt = worktrees_dir() if worktrees else None
+    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
                               pdir)
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
     if h.env_var and d:
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
+    if wt:
+        lines.append(f"export {WORKTREES_ENV}={shlex.quote(_typeable(wt))}")
     lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in argv))
     return "\n".join(lines) + "\n"
 

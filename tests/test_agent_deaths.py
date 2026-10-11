@@ -22,6 +22,7 @@ def fake_home(tmp_path, monkeypatch):
     d.mkdir()
     (d / "config.toml").write_text("")
     C.load("t")
+    C.WORKTREES_DIR = None   # the launch lines below leave out the worktrees flag (test_worktrees_dir.py)
     C.PROFILES = {"agy": tmp_path / "agy"}
     C.ACCOUNTS = {"agy": {"harness": "antigravity"}}
     yield tmp_path
