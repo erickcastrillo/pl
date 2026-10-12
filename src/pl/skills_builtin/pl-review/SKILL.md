@@ -48,12 +48,19 @@ the label. Use exactly those labels. Never create, rename or edit a label.
       - comments that restate what the code does. List these only when the review already finds other
         problems. A comment alone never makes a pull request need rework.
    4. Run the repository's tests in the worktree.
-   5. Apply exactly one outcome:
+   5. Apply the review outcome:
 
-      | Outcome | Labels |
+      Check for high-impact sensitivity:
+      - **Database migrations**: files in `Migrations/`, `*.Designer.cs`, `.sql`, or schema modifications.
+      - **Data changes**: data backfill routines, bulk data operations, seed scripts, or purge jobs.
+      - **Security sensitivity**: auth controllers/handlers, token validation, password/key handling, or role authorization rules.
+      - **Size**: changes over 150 lines outside tests or over 6 files.
+
+      | Outcome | Action |
       | --- | --- |
-      | Review passes | remove `<review>`, add `<ready>` |
-      | Review finds problems | post them as one PR comment in plain words, remove `<review>`, add both `<ready>` and `<rework>` |
+      | Review passes & Safe for Auto-Merge (Small change, no migrations, no data changes, no security risks) | remove `<review>`, add `<ready>` and `pl:merge-ready`. Run `gh pr merge <number> --repo <repo> --auto --squash` |
+      | Review passes & Requires Human Review (Contains migrations, data changes, security sensitivity, or exceeds auto-merge size) | remove `<review>`, add `<ready>`, comment why manual approval is required before merging |
+      | Review finds problems | post problems as one PR comment in plain words, remove `<review>`, add both `<ready>` and `<rework>` |
       | Review cannot run | comment why, remove `<review>`, add `<failed>`; a person decides, then adds `<review>` back |
 
       ```
