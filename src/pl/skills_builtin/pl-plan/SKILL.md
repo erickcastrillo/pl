@@ -34,15 +34,19 @@ record each decision you had to make in the plan, with the option you picked.
 2. Read the code the change touches. Find the files, functions and existing tests by name. Do not change any
    file in the repository.
 
-3. Size the change first. Ask: what is the fewest files and lines that meet every acceptance criterion?
-   Prefer editing existing files and extending existing tests over new files, helpers or abstractions.
-   Aim the budget at `target_lines` and `target_files`. It must never exceed `max_lines` or `max_files`.
-   If the whole change cannot fit the max, this card builds slice 1 only. List the rest under "Later
-   slices", preferring slices that each fit the target, and file each one yourself:
+3. Size the change into small, auto-mergeable chunks. Ask: what is the fewest files and lines that meet the criteria?
+   - Aim the budget strictly at `target_lines` (<= 150 lines outside tests) and `target_files` (<= 6 files) so the resulting pull request qualifies for automated merge.
+   - If the spec cannot fit the target budget, do NOT build an oversized multi-package plan. This card builds Slice 1 only. List subsequent slices under "Later slices" and file each one yourself:
 
    ```
    pl idea "Slice <k> of <card title> (after <id>): <what this slice builds>"
    ```
+
+   - **Isolate high-impact changes into dedicated slices**:
+     - **Database Migrations / Schema**: Place EF Core migrations and SQL schema changes in their own dedicated slice. Tag it in the plan header: `Sensitivity: Migration (Requires Human Review)`. Never mix schema migrations with large business logic.
+     - **Data Mutations / Backfills**: Isolate data migrations, backfill jobs, or destructive purge routines in their own slice. Tag it: `Sensitivity: Data Changes (Requires Human Review)`.
+     - **Security / Auth**: Isolate authentication, tokens, cryptographic routines, or authorization role changes in their own slice. Tag it: `Sensitivity: Security (Requires Human Review)`.
+     - Routine implementation slices (endpoints, services, UI components, tests, bug fixes) that do NOT touch migrations, data changes, or security should be kept small so they can be merged automatically.
 
 4. Write the plan to a temporary file outside the repository, using the format below.
 

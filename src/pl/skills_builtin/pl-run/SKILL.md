@@ -65,15 +65,9 @@ such choice in the pull request description.
    git diff --name-only origin/<default branch>...HEAD
    ```
 
-   Over `max_lines` or `max_files`: do not push or open a pull request. Write the counts and a suggested
-   split into smaller pull requests to a file, then:
-
-   ```
-   pl section <id> "REVIEW NOTES" --from <file>
-   pl move <id> Manual
-   ```
-
-   Then stop.
+   Note the diff metrics. If the change is within target_lines and target_files, note that it qualifies
+   for auto-merge. If larger, note the metrics in the pull request description for standard review. Always
+   proceed to step 6 to push and open the pull request so downstream automated review and CI can run.
 
 6. Push and open the pull request:
 
