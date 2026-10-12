@@ -442,9 +442,10 @@ def test_failing_model_leaves_the_standup_unchanged_with_one_note(monkeypatch, c
             raise reply
         return reply
     monkeypatch.setattr(local_model, "_request", fake)
-    _standup_cli(monkeypatch)
+    since = ("--since", "2026-10-01T09:00")   # a fixed start: two runs across a minute boundary print one title
+    _standup_cli(monkeypatch, *since)
     plain = capsys.readouterr().out
-    _standup_cli(monkeypatch, "--summary")
+    _standup_cli(monkeypatch, "--summary", *since)
     got = capsys.readouterr()
     assert got.out == plain
     assert got.err.startswith("pl standup: no summary (") and got.err.count("\n") == 1

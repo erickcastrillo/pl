@@ -107,6 +107,8 @@ ENTRIES = [
     _e("2026-10-11.01", "One worktrees folder per profile: agents read and write their worktrees without asking",
        "Settings, General: worktrees dir; [paths] worktrees_dir (default <work_dir>-pl-worktrees); "
        "{worktrees_dir} in a stage prompt", "pl"),
+    _e("2026-10-11.02", "Closing the console while the Assistant tab reads its screen no longer ends in a crash",
+       "Assistant tab", "pl"),
 ]
 
 

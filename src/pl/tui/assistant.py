@@ -7,6 +7,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, Static
@@ -188,11 +189,19 @@ class AssistantView(Widget):
             except (SystemExit, Exception) as e:  # noqa: BLE001
                 self.app.call_from_thread(self.app.notify, f"assistant: {e}", severity="error", markup=False)
                 if failed:
-                    self.app.call_from_thread(failed)
+                    self.app.call_from_thread(self._ui, failed)
                 return
             if done:
-                self.app.call_from_thread(done, out)
+                self.app.call_from_thread(self._ui, done, out)
         self.run_worker(run, thread=True, group=group, exclusive=exclusive)
+
+    def _ui(self, fn, *args):
+        """A worker's result, drawn on the UI thread. The console may be closing meanwhile: a widget already gone
+        means there is nothing left to draw, not an error."""
+        try:
+            fn(*args)
+        except NoMatches:
+            pass
 
     def _active(self):
         return self.app.active_tab == "assistant"

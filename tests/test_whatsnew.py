@@ -120,7 +120,7 @@ async def test_alerts_tab_with_no_alerts_says_so():
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         await pilot.press("6")
-        await pilot.pause()
+        await settle(pilot)
         assert "Alerts: none open (pl alerts --all for history)" in screen_text(app)
 
 
@@ -136,7 +136,7 @@ async def test_the_loops_table_explains_n_a(profile):
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         await pilot.press("5")
-        await pilot.pause()
+        await settle(pilot)
         assert loops.HINT in screen_text(app) and "max_context" in loops.HINT and "80" in loops.HINT
 
 

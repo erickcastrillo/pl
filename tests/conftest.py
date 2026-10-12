@@ -1,9 +1,12 @@
+import asyncio
 import os
 import re
 import shutil
 import subprocess
 
 import pytest
+from textual.worker import WorkerCancelled
+from textual.worker_manager import WorkerManager
 
 from pl import memory
 
@@ -43,7 +46,7 @@ def temp_home(monkeypatch, tmp_path_factory):
 PY = re.compile(r"python[\d.]*$")
 WRAPPERS = ("env", "nohup", "exec", "command")
 SHELLS = ("sh", "bash", "zsh", "dash")
-HARNESS_BINS = ("claude", "codex", "agy", "gemini")   # the harness CLIs: a test never runs the real one
+HARNESS_BINS = ("claude", "codex", "agy", "gemini", "gh")   # the harness CLIs and gh: a test never runs the real one
 # pl manager / pl dispatch in a shell string: the console script, or python -m pl
 PL_SHELL = re.compile(r"(?:(?:^|[\s/;&|(`])pl|-m\s+pl(?:\.cli)?)\s+(?:--profile[=\s]\S+\s+)?(?:manager|dispatch)\b")
 
@@ -125,7 +128,7 @@ def no_real_tmux(monkeypatch, tmp_path_factory):
         if a and os.path.basename(a[0]) in HARNESS_BINS:
             found = shutil.which(a[0], path=(kw.get("env") or os.environ).get("PATH"))
             if not (found and os.path.realpath(found).startswith(fakes + os.sep)):
-                raise AssertionError(f"a test ran a real harness CLI: {a!r}")
+                raise AssertionError(f"a test ran a real harness or gh CLI: {a!r}")
         if not a or os.path.basename(a[0]) != "tmux":
             return
         path = (kw.get("env") or os.environ).get("PATH")
@@ -170,6 +173,27 @@ def no_real_tmux(monkeypatch, tmp_path_factory):
         if hasattr(os, name):
             monkeypatch.setattr(os, name, argv_guard(getattr(os, name), 2, name.startswith("spawnv"),
                                                      name in ("spawnle", "spawnlpe")))
+
+
+async def _wait_for_workers(self, workers=None):
+    """Textual's wait_for_complete, made steady under load: a worker cancelled by a newer exclusive one (a fast
+    cursor move) counts as done instead of raising WorkerCancelled, and workers started meanwhile by the ones it
+    waited for (a scan that fills a table starts the preview) are waited for too. A worker that failed still raises."""
+    for _ in range(20):
+        pending = [w for w in (workers if workers is not None else list(self)) if not w.is_finished]
+        if not pending:
+            return
+        for got in await asyncio.gather(*[w.wait() for w in pending], return_exceptions=True):
+            if isinstance(got, BaseException) and not isinstance(got, (WorkerCancelled, asyncio.CancelledError)):
+                raise got
+        if workers is not None:
+            return
+
+
+@pytest.fixture(autouse=True)
+def steady_worker_waits(monkeypatch):
+    """Every test's app.workers.wait_for_complete() uses _wait_for_workers."""
+    monkeypatch.setattr(WorkerManager, "wait_for_complete", _wait_for_workers)
 
 
 @pytest.fixture(autouse=True)

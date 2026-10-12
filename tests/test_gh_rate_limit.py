@@ -875,12 +875,13 @@ def test_a_second_read_in_one_pass_after_another_process_write_is_fresh(gh):
 
 
 def test_readers_reuse_a_save_for_at_most_330_seconds_however_long_the_dispatcher_waits(gh, monkeypatch):
+    now = [time.time()]                                   # one fake clock from the save on: a slow fake gh adds no age
+    monkeypatch.setattr(board, "_clock", lambda: now[0])
+    monkeypatch.setattr(github, "_clock", lambda: now[0])
     board.share("write", hold=900)                        # a dispatcher that waits longer than an idle one
     board.cards()
     trackers.reset()
-    now = [time.time() + 329]
-    monkeypatch.setattr(board, "_clock", lambda: now[0])
-    monkeypatch.setattr(github, "_clock", lambda: now[0])
+    now[0] += 329
     board.share("read")
     gh.clear()
     board.cards()

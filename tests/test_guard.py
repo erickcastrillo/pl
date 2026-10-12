@@ -62,3 +62,14 @@ def test_home_is_a_temp_dir(tmp_path_factory):
 def test_a_test_can_still_set_its_own_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert Path.home() == tmp_path
+
+
+def test_the_real_gh_is_refused_and_a_fake_one_runs(tmp_path, monkeypatch):
+    """Every console mounts Settings, whose worker ran the real gh auth status in each Textual test: refused now."""
+    with pytest.raises(AssertionError, match="real harness or gh CLI"):
+        subprocess.run(["gh", "auth", "status"], capture_output=True)
+    fake = tmp_path / "gh"
+    fake.write_text("#!/bin/sh\necho fake gh\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    assert subprocess.run(["gh", "auth", "status"], capture_output=True, text=True).stdout == "fake gh\n"
