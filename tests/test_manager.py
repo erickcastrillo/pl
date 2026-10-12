@@ -1237,3 +1237,28 @@ def test_shared_state_is_per_profile_except_what_is_really_shared(machine):
     C.GH_CONFIG_DIR = machine["home"] / "gh-a"
     ghquota.learn("same-user")
     assert ghquota.account() == b == "same-user@github.com"               # two folders, one GitHub user: one budget
+
+
+# ---------- a window that only runs a shell, or one pl did not start, is not a live agent ----------
+
+def test_windows_whose_pane_is_only_a_shell_never_count(machine, monkeypatch):
+    """Live after a reboot: tmux-resurrect brought back ~24 run-/plan- windows holding only zsh; they filled the share."""
+    limits(machine, "[limits]\nmax_live_agents = 8\n")                     # work and home: 4 each
+    shells = "".join(f"pl-work @s{i} {3000 + i} run-w{i}\t-\t0\t{sh}\n" for i, sh in enumerate(("zsh", "bash", "sh", "fish") * 3))
+    fake_machine(monkeypatch, shells + "pl-work @a 4000 run-agent\t-\t0\tagy\n", "1 0 5000 /sbin/launchd\n")
+    st = manager.tick({})
+    assert st["live_agents"] == 1 and manager.room_for(st, "work") == 3
+
+
+def test_in_a_session_pl_marks_only_its_own_agent_windows_count(machine, monkeypatch):
+    """The dispatcher marks the agent windows it starts and then the session; a restored `claude --resume` picker
+    in a run- window (its command shows the claude version) has no mark and is not one of pl's agents."""
+    limits(machine, "[limits]\nmax_live_agents = 8\n")
+    panes = ("pl-work @1 100 run-a\tpl\t1\tagy\n"           # pl's run agent
+             "pl-work @2 101 run-b\t-\t1\t2.1.296\n"        # the restored resume picker
+             "pl-work @3 102 plan-c\tpl\t1\tzsh\n"          # pl's window whose agent exited
+             "pl-home @4 103 plan-d\t-\t0\t2.1.296\n")      # home's dispatcher has not marked yet: counted as before
+    fake_machine(monkeypatch, panes, "1 0 5000 /sbin/launchd\n")
+    st = manager.tick({})
+    rows = {p["name"]: p["agents"]["used"] for p in st["profiles"]}
+    assert st["live_agents"] == 2 and rows == {"work": 1, "home": 1}
