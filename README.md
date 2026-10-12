@@ -179,6 +179,8 @@ min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
 ```
 
+Only pl's own agents count toward these limits. pl marks every agent window it starts. A window whose pane runs only a shell (`zsh`, `bash`, `sh`, `fish`) never counts, so windows that tmux-resurrect restores after a reboot do not fill the cap. The dispatcher closes a `spec-`, `design-`, `plan-` or `run-` window that no card tracks once it has held only a shell for 10 minutes. A window with such a name that runs something pl did not start (for example a restored `claude --resume` picker) is not counted and not closed, since it may be yours; pl opens one alert for it so you can close it.
+
 A usage limit hit by one profile parks that account folder for every profile that uses it. A hold stops new agents only: crashed agents and loops are still restarted. To go back to one dispatcher per console, run `pl manager stop`, then set `[manager] enabled = false` in `machine.toml`.
 
 ## Guides

@@ -64,8 +64,8 @@ def test_untracked_live_prep_windows_hold_slots(monkeypatch):
 
 def test_sweep_untracked_counts_live_untracked_prep_windows_it_leaves_open(monkeypatch):
     now = int(time.time())
-    out = (f"@1 %1 {now} spec-busy node\n@2 %2 {now} spec-empty zsh\n@3 %3 {now - 5000} spec-old zsh\n"
-           f"@4 %4 {now} run-x node\n@5 %5 {now} dispatch python3.12\n")
+    out = (f"@1 %1 {now} pl 0 spec-busy node\n@2 %2 {now} pl 0 spec-empty zsh\n@3 %3 {now - 5000} pl 0 spec-old zsh\n"
+           f"@4 %4 {now} pl 0 run-x node\n@5 %5 {now} - 0 dispatch python3.12\n")
     calls = []
 
     def run(argv, *a, **kw):
@@ -85,11 +85,80 @@ def test_a_card_with_a_running_window_its_record_lacks_gets_no_second_agent(monk
 
 
 def test_live_agent_window_ignores_shells_other_names_and_the_cards_own_window(monkeypatch):
-    out = "@1 zsh spec-card-1\n@2 node spec-card-2\n@3 node spec-card-1\n"
+    out = "@1 pl zsh spec-card-1\n@2 pl node spec-card-2\n@3 pl node spec-card-1\n@4 - 2.1.296 spec-card-9\n"
     monkeypatch.setattr(subprocess, "run", lambda argv, *a, **kw: subprocess.CompletedProcess(argv, 0, out, ""))
     assert REAL_LIVE_WINDOW("spec-card-1") is True
     assert REAL_LIVE_WINDOW("spec-card-1", own="@3") is False
     assert REAL_LIVE_WINDOW("spec-card-9") is False
+
+
+def _sweep_tmux(monkeypatch, out):
+    """tmux list-panes answers out; every other tmux call is logged."""
+    calls = []
+
+    def run(argv, *a, **kw):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, out if "list-panes" in argv else "", "")
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: calls.append(["tmux", *a]))
+    return calls
+
+
+def test_untracked_stage_windows_holding_only_a_shell_are_closed_and_never_counted(monkeypatch):
+    """Live after a reboot: tmux-resurrect restored run-/plan- windows with only zsh in them."""
+    now = int(time.time())
+    w = {"stage": "run", "window": "@5", "pane": "%5", "started_at": "2026-10-11T00:00:00+00:00"}
+    out = (f"@1 %1 {now - 5000} - 0 run-restored zsh\n@2 %2 {now - 5000} - 0 plan-restored bash\n"
+           f"@3 %3 {now} - 0 run-fresh zsh\n@5 %5 {now - 5000} pl 0 run-tracked zsh\n")
+    calls = _sweep_tmux(monkeypatch, out)
+    assert dispatch.sweep_untracked([_card(1, worker=w)], {}, False, {}) == 0
+    kills = [c for c in calls if c[:2] == ["tmux", "kill-window"]]
+    assert kills == [["tmux", "kill-window", "-t", "@1"], ["tmux", "kill-window", "-t", "@2"]]   # never a tracked one
+
+
+def test_an_untracked_window_running_what_pl_did_not_start_is_not_counted_closed_or_reported_twice(monkeypatch):
+    """A restored `claude --resume` picker in a run- or plan- window: maybe yours, so pl leaves it and tells you once."""
+    old = int(time.time()) - 5000
+    out = f"@1 %1 {old} - 0 run-restored 2.1.296\n@2 %2 {old} - 0 plan-restored 2.1.296\n@3 %3 {old} pl 0 run-mine agy\n"
+    calls = _sweep_tmux(monkeypatch, out)
+    st = {}
+    assert dispatch.sweep_untracked([], {}, False, st) == 0
+    assert dispatch.sweep_untracked([], {}, False, st) == 0
+    assert not [c for c in calls if c[:2] == ["tmux", "kill-window"]]
+    open_ = [k for k, a in alerts._load().items() if k.startswith("foreign_window:") and not a.get("resolved_at")]
+    assert sorted(open_) == ["foreign_window:@1", "foreign_window:@2"]
+    assert all(a["count"] == 1 for a in alerts._load().values())             # told once, no reminders
+    calls[:] = []
+    _sweep_tmux(monkeypatch, out.split("\n", 1)[1])                        # you closed @1
+    dispatch.sweep_untracked([], {}, False, st)
+    assert alerts._load()["foreign_window:@1"].get("resolved_at")
+
+
+def test_a_tracked_agent_window_gets_pls_mark_and_the_session_is_marked(monkeypatch):
+    """Agents started before marks existed: the card's own window and pane, started in this tmux server."""
+    start = int(time.time()) - 3600
+    w = {"stage": "run", "window": "@5", "pane": "%5", "started_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}
+    old = {"stage": "plan", "window": "@6", "pane": "%6", "started_at": "2020-01-01T00:00:00+00:00"}   # before the server
+    now = int(time.time())
+    out = f"@5 %5 {now} - {start} run-card-1 agy\n@6 %6 {now} - {start} plan-card-2 2.1.296\n"
+    calls = _sweep_tmux(monkeypatch, out)
+    dispatch.sweep_untracked([_card(1, worker=w), _card(2, worker=old)], {}, False, {})
+    sets = [c for c in calls if c[:2] == ["tmux", "set-option"]]
+    assert sets == [["tmux", "set-option", "-w", "-t", "@5", "@pl_agent", "1"],
+                    ["tmux", "set-option", "-t", "=pl-t", "@pl_marks", "1"]]
+
+
+def test_start_worker_marks_its_window_as_pls(monkeypatch):
+    calls = []
+
+    def tmux(*args, check=True):
+        calls.append(args)
+        return {"new-window": "@7", "list-panes": "%9"}.get(args[0], "")
+    monkeypatch.setattr(dispatch, "tmux", tmux)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: None)
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    dispatch.start_worker(_card(1, profile="claude"), "spec", 1, False)
+    assert ("set-option", "-w", "-t", "@7", "@pl_agent", "1") in calls
 
 
 def test_a_failed_record_write_closes_the_new_window_and_starts_no_agent(monkeypatch):

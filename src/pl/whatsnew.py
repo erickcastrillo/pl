@@ -109,6 +109,9 @@ ENTRIES = [
        "{worktrees_dir} in a stage prompt", "pl"),
     _e("2026-10-11.02", "Closing the console while the Assistant tab reads its screen no longer ends in a crash",
        "Assistant tab", "pl"),
+    _e("2026-10-11.03", "A window that only runs a shell, or one pl did not start, is not counted as an agent",
+       "pl closes its stage windows left holding a shell; a restored window running something else (a resume picker) "
+       "is left open and opens one alert", "pl manager status"),
 ]
 
 
