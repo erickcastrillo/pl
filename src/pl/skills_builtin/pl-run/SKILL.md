@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 3
+pl-builtin-version: 4
 ---
 
 # pl-run: build the approved plan for one card
@@ -17,6 +17,9 @@ such choice in the pull request description.
   single quotes; the quotes are not part of it.
 - `max_lines=N max_files=M` are the pull request size limits CI enforces. When missing, use 300 and 10.
 - `pl` already acts on the right profile. Run it from this folder, which is the repository to change.
+- A `rework=N` argument means the plan is already built and its pull request is open, but the automated review
+  asked for changes: follow "Rework mode" below instead of the steps. `rework_label=<label>` and `ready=<label>`
+  come with it.
 
 ## Steps
 
@@ -87,6 +90,39 @@ such choice in the pull request description.
    ```
 
    Moving the card is what tells the dispatcher the run is done. Then stop.
+
+## Rework mode
+
+Only with a `rework=N` argument. The work is the review's findings, not the plan.
+
+1. Read the card (`pl card <id>`). `metadata.rework.prs` lists the pull requests to fix; `metadata.pr_urls`
+   lists every pull request of the card. Read the plan and spec only as background.
+2. For each pull request to fix, read the newest review: the last comments, where the review's findings are.
+
+   ```
+   gh pr view <url> --json number,headRefName,baseRefName,labels
+   gh api 'repos/<owner>/<repo>/issues/<number>/comments?per_page=100' --jq '.[-3:][]|"\(.created_at) \(.body)"'
+   ```
+
+   Every problem it lists as still open is the work. Findings it says are fixed need nothing.
+3. Do not make a new branch or a new pull request. Reuse the branch's worktree (`git worktree list`), or add
+   one from `origin/<branch>` in `$PL_WORKTREES_DIR`. `git fetch origin`, then merge the pull request's base
+   branch into it (a merge, never a rebase or force-push) and resolve conflicts, so it stays mergeable.
+4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.
+   Where a finding is marked unsure or is a product call, pick the safer behaviour and say so. When a finding
+   is caused by code on the default branch that another card is fixing, leave it and name that card.
+5. Run the project's usual test and lint commands, then push to the same branch (no force-push).
+6. Post one comment on each pull request you fixed that starts with "Rework round N" and lists each finding
+   and what you changed for it, or why you did not.
+7. Send each fixed pull request back to review: remove the `rework_label` and `ready` labels and add the
+   `review` label. `gh pr edit --add-label/--remove-label` works; when it fails, use the REST API
+   (`gh api -X DELETE repos/<owner>/<repo>/issues/<number>/labels/<label>`, and
+   `gh api -X POST repos/<owner>/<repo>/issues/<number>/labels -f 'labels[]=<label>'`).
+8. Move the card back: `pl move <id> "PR open"` (no `--pr`: the pull requests are recorded). Then stop.
+
+When the card has a stack of pull requests (each one's base is the branch of the one before), work bottom-up:
+fix each finding on the lowest branch whose code it names, merge that branch into the next one up and so on
+to the top, then push every branch. Merge the default branch only into the bottom branch.
 
 ## When the plan is wrong
 

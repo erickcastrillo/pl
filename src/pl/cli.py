@@ -33,6 +33,9 @@
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
                           or SPEC needs --force
+  pl rework [--dry-run]    send cards in PR open whose pull request the review labeled for rework back to a run
+                          agent now (the dispatcher does this every 10 min); after [dispatch] rework_rounds rounds
+                          (3) the PR gets the failed label for a person
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
@@ -108,7 +111,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, profiles, setup, skills
+from pl import alerts, assistant, config, events, profiles, rework, setup, skills
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -192,6 +195,7 @@ def main():
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
     p.add_argument("--summary", action="store_true", help="add a 2-3 sentence summary from the local model ([local_model])")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
+    p = sub.add_parser("rework"); p.add_argument("--dry-run", action="store_true", help="say what would be sent back")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
@@ -226,7 +230,7 @@ def main():
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
-     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent,
+     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),

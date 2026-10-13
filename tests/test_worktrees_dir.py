@@ -1,4 +1,5 @@
 """One worktrees folder per profile ([paths] worktrees_dir): config, validation, and the --add-dir launch flag."""
+import re
 import shlex
 import subprocess
 import types
@@ -189,7 +190,7 @@ def test_the_builtin_run_prompt_is_unchanged_and_its_agent_sees_the_folder(fake_
 def test_the_builtin_skills_make_worktrees_in_the_folder(name, line):
     from pl import skills
     text = (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
-    assert line in text and "pl-builtin-version: 3" in text
+    assert line in text and int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 3
     assert "git worktree add -b pl/<short-name> ../" not in text and "--detach ../" not in text
 
 

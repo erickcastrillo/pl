@@ -1,0 +1,143 @@
+"""Auto-rework: a PR the review labeled for rework sends its card back to a run agent; after rework_rounds rounds
+the PR gets the failed label for a person. The run agent of such a card is told so in its prompt."""
+import json
+import types
+
+import pytest
+
+from pl import commands, dispatch, rework
+from pl import config as C
+
+URL = "https://github.com/acme/app/pull/{}"
+
+
+@pytest.fixture(autouse=True)
+def fake_home(tmp_path, monkeypatch):
+    saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PL_CONFIG_DIR", raising=False)
+    d = tmp_path / ".pl-t"
+    d.mkdir()
+    (d / "config.toml").write_text('[code_host.labels]\nreview = "pl:auto-review"\nready = "pl:ready"\n')
+    C.load("t")
+    rework._LAST["at"] = None
+    yield tmp_path
+    for k, v in saved.items():
+        setattr(C, k, v)
+
+
+@pytest.fixture
+def gh(monkeypatch):
+    """GitHub, the board and the tracker faked. ns.flagged: {repo: [(number, labels)]} the rework search returns."""
+    ns = types.SimpleNamespace(flagged={}, calls=[], writes=[], moves=[], events=[])
+
+    def fake_gh(args):
+        ns.calls.append(args)
+        if args[:1] == ["api"] and len(args) == 2:   # the GET of labeled issues
+            repo = args[1].split("/issues")[0].removeprefix("repos/")
+            return json.dumps([{"number": n, "pull_request": {"url": "u"}, "labels": [{"name": x} for x in labs]}
+                               for n, labs in ns.flagged.get(repo, [])])
+        return "{}"
+    monkeypatch.setattr(rework.github, "_gh", fake_gh)
+    monkeypatch.setattr(rework, "col_name", lambda lid: lid)
+    monkeypatch.setattr(rework, "update", lambda cid, **kw: ns.writes.append((cid, kw)))
+    monkeypatch.setattr(commands, "move_to", lambda ref, col, cid=None: ns.moves.append((ref, col)))
+    monkeypatch.setattr(rework.events, "emit", lambda kind, cid=None, **d: ns.events.append((kind, cid, d)))
+    return ns
+
+
+def _card(cid, col="PR open", prs=(1,), **meta):
+    return {"id": cid, "title": f"card {cid}", "list_id": col, "tags": [],
+            "metadata": {"pipeline_mode": "auto", "pr_urls": [URL.format(n) for n in prs], **meta}}
+
+
+def test_a_card_whose_pr_needs_rework_goes_back_to_in_progress_as_round_1(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework", "pl:ready"])]}
+    c = _card("c1")
+    assert rework.sweep([c], dry=False) == ["c1"]
+    assert gh.moves == [("c1", "In progress")]
+    meta = gh.writes[-1][1]["metadata"]["rework"]
+    assert meta["round"] == 1 and meta["active"] is True and meta["prs"] == [URL.format(1)]
+    assert gh.events[0][0] == "rework"
+
+
+def test_cards_without_a_flagged_pr_and_cards_in_other_columns_stay(gh):
+    gh.flagged = {"acme/app": [(2, ["pl:needs-rework"])]}
+    cards = [_card("c1", prs=(1,)), _card("c2", col="In progress", prs=(2,)), _card("c3", prs=(3,), pipeline_mode="manual")]
+    assert rework.sweep(cards, dry=False) == []
+    assert gh.moves == []
+
+
+def test_one_search_per_repo_and_only_the_flagged_prs_of_a_stack(gh):
+    gh.flagged = {"acme/app": [(2, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1", prs=(1, 2, 3)), _card("c2", prs=(4,))], dry=False)
+    gets = [a for a in gh.calls if len(a) == 2]
+    assert len(gets) == 1 and "labels=pl%3Aneeds-rework" in gets[0][1]
+    assert gh.writes[-1][1]["metadata"]["rework"]["prs"] == [URL.format(2)]
+
+
+def test_the_round_counts_up_and_after_the_last_round_a_person_decides(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1", rework={"round": 2, "active": False})], dry=False)
+    assert gh.writes[-1][1]["metadata"]["rework"]["round"] == 3
+    gh.writes.clear(), gh.moves.clear(), gh.calls.clear()
+    rework._LAST["at"] = None
+    rework.sweep([_card("c1", rework={"round": 3, "active": False})], dry=False)
+    assert gh.moves == []
+    posts = [a for a in gh.calls if "POST" in a]
+    assert any(a[3] == "repos/acme/app/issues/1/labels" and a[5] == "labels[]=pl:review-failed" for a in posts)
+    assert any(a[3] == "repos/acme/app/issues/1/comments" for a in posts)
+    assert gh.writes[-1][1]["metadata"]["rework"]["gave_up_at"]
+
+
+def test_a_pr_already_labeled_failed_is_left_to_the_person(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework", "pl:review-failed"])]}
+    assert rework.sweep([_card("c1")], dry=False) == []
+    assert not [a for a in gh.calls if "POST" in a]
+
+
+def test_a_card_back_in_pr_open_ends_its_round(gh):
+    rework.sweep([_card("c1", rework={"round": 1, "active": True})], dry=False)
+    assert gh.writes == [("c1", {"metadata": {"rework": {"round": 1, "active": False}}})]
+
+
+def test_dry_run_writes_nothing(gh, capsys):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1", rework={"round": 1, "active": True})], dry=True)
+    assert gh.writes == [] and gh.moves == [] and not [a for a in gh.calls if "POST" in a]
+    assert "back to In progress (round 2)" in capsys.readouterr().out
+
+
+def test_sweeps_wait_rework_every_unless_forced(gh, monkeypatch):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    monkeypatch.setattr(rework.time, "time", lambda: 1000.0)
+    rework.sweep([_card("c1")], dry=True)
+    n = len(gh.calls)
+    monkeypatch.setattr(rework.time, "time", lambda: 1000.0 + rework.REWORK_EVERY - 1)
+    rework.sweep([_card("c1")], dry=True)
+    assert len(gh.calls) == n
+    rework.sweep([_card("c1")], dry=True, force=True)
+    assert len(gh.calls) > n
+
+
+def test_rework_rounds_0_turns_it_off(gh):
+    C.DISPATCH = {**C.DISPATCH, "rework_rounds": 0}
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    assert rework.sweep([_card("c1")], dry=False) == [] and gh.calls == []
+
+
+def test_the_run_prompt_of_a_reworked_card_says_rework_with_the_labels(gh):
+    c = _card("c1", col="In progress", rework={"round": 2, "active": True})
+    assert rework.prompt_arg(c) == " rework=2 rework_label=pl:needs-rework ready=pl:ready"
+    assert rework.prompt_arg(_card("c2", col="In progress")) == ""
+    assert rework.prompt_arg(_card("c3", rework={"round": 1, "active": False})) == ""
+
+
+def test_start_worker_adds_the_rework_argument_to_the_built_in_run_prompt(gh, monkeypatch):
+    C.PROMPTS = {**C.PROMPTS, "run": C.BUILTIN_PROMPTS["run"]}
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (types.SimpleNamespace(name="claude"), "acme"))
+    c = {**_card("c1", col="In progress", rework={"round": 1, "active": True}), "title": "Card one"}
+    out = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a))))
+    dispatch.start_worker(c, "run", 1, dry=True)
+    assert "rework=1 rework_label=pl:needs-rework" in out[0] and "review=pl:auto-review" in out[0]

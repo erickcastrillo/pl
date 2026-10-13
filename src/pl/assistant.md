@@ -48,6 +48,8 @@ Moving work (rule 1 applies):
 - `pl drop <id>` (`--reason`): a card no longer needed: stop its agent, move it to Done marked dropped.
 - `pl undrop <id>`: put a dropped card back in the column it came from.
 - `pl move <id> "<column>"`: move a card to a column.
+- `pl rework` (`--dry-run`): send cards in PR open whose PR the review labeled for rework back to a run agent now
+  (the dispatcher also does this every 10 minutes).
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.

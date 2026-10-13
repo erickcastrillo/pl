@@ -145,7 +145,7 @@ Flags: `--label-<key> NAME` changes one (`--label-merge-ready` for `merge_ready`
 | --- | --- |
 | `ready` | Required. pl tracks only open PRs with this label. Unset means pl does not track PRs. |
 | `failed` | Listed as "need your decision". |
-| `rework` | Listed as "need rework". |
+| `rework` | Listed as "need rework"; auto-rework sends the PR's card back to a run agent (below). |
 | `merge_ready` | Listed as "to merge". |
 | `review` | Named in the hint to add it back after you decide on a failed review. |
 
@@ -165,6 +165,8 @@ A profile whose `[tracker]` is `github-project` with a `repo` gets two things wi
 - `pl setup` creates the `pl:start` label.
 
 **Auto-review loop.** When `[code_host] labels` has `review` and `ready`, the dispatcher keeps an `auto-review` loop running on the profile's first account. If that account is parked at its usage limit, the loop runs on another account of the same harness until its own is back (README: Parked accounts). Its prompt names the repo and your labels. The agent reviews open PRs labelled `review` and always removes `review`. A clean review adds `ready`. Findings go in one PR comment and add both `ready` and `rework`, so pl lists the PR as needing rework. A review that cannot run adds `failed`; you decide, then add `review` back. It never merges.
+
+**Auto-rework.** The dispatcher looks every 10 minutes for open PRs labelled `rework` (one REST call per repo) and matches them with the PRs recorded on cards in PR open. Each such card goes back to In progress, and its run agent starts with `rework=N`: the built-in `pl-run` then reads the newest review, fixes each open finding on the PR's own branch (tests first, the base branch merged in, no new branch or PR), comments "Rework round N", swaps `rework` and `ready` for `review`, and moves the card back to PR open. The review loop then reviews it again. After `[dispatch] rework_rounds` rounds (3) a PR still labelled `rework` gets `failed` and a comment instead, and waits for you; remove `failed` to allow one more round. `pl rework --dry-run` shows what the next look would send back, and `pl rework` does it now. `rework_rounds = 0` turns it off. A stage prompt of your own for `run` gets no `rework=` argument: it then needs its own rework handling.
 
 Turn either off, or replace it:
 

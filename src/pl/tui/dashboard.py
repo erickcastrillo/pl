@@ -84,7 +84,7 @@ def decide_next(rows):
             ("specs", len(g["specs"]), f"{len(g['specs'])} specs wait for your review", "approve, or send back with notes", "#e0a040"),
             ("plans", len(plans), f"{len(plans)} plans wait a median of {age(statistics.median(plans)) if plans else '-'}",
              f"review; the oldest waited {age(plans[0]) if plans else '-'}", "#e0a040"),
-            ("rework", len(p["rework"]), f"{len(p['rework'])} PRs need rework", "send back to a run agent, or close", "red"),
+            ("rework", len(p["rework"]), f"{len(p['rework'])} PRs need rework", "pl sends them back to a run agent (pl rework)", "red"),
             ("decide", len(p["decide"]), f"{len(p['decide'])} PRs stopped for your call", "auto-review gave up on purpose", "#e0a040"),
             ("manual", len(g["manual"]), f"{len(g['manual'])} manual tasks", "no agent runs these", "#5f9fff")]
 

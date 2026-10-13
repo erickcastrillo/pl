@@ -124,6 +124,7 @@ interval = 120
 autostart = true                # the console starts this dispatcher in tmux; D starts or stops it by hand
 account_checks = [10, 30, 60]   # minutes between health checks of a parked account; the last repeats; [] turns them off
 release_waiting_after = 30      # minutes a run agent may wait before pl stops it (see Run slots below); 0 turns it off
+rework_rounds = 3               # times a PR the review labeled rework goes back to a run agent (docs/github.md); 0 turns it off
 
 [code_host]                     # PR labels pl reads (set by your review tools)
 owner = "your-org"
@@ -238,7 +239,7 @@ pl ships five skills, one per stage, so a new profile has a working pipeline wit
 | `pl-spec` | `/pl-spec {id}` | turns the card's INPUT into a spec with numbered Given/When/Then acceptance criteria, out of scope and open questions; writes SPEC and moves the card to Spec ready |
 | `pl-design` | `/pl-design {id}` | for cards tagged `frontend`: screens, the five states, layout and words; writes DESIGN |
 | `pl-plan` | `/pl-plan {id}` | work packages (what, where, the change, tests first, acceptance criteria) and a minimum-change budget; writes PLAN and moves the card to Plan for review |
-| `pl-run` | `/pl-run {id}` | builds the approved plan in a git worktree, one package at a time, tests first; opens a pull request with the `review` label and moves the card to PR open |
+| `pl-run` | `/pl-run {id}` | builds the approved plan in a git worktree, one package at a time, tests first; opens a pull request with the `review` label and moves the card to PR open. With `rework=N` (auto-rework) it fixes the review's findings on the PR's own branch and sends the PR back to review |
 | `pl-review` | the built-in auto-review loop | reviews pull requests with the `review` label, then labels them ready, rework or failed; never merges |
 
 They use only `pl` and `git` (and `gh` for pull requests), so they run on every harness: Claude gets them as `/pl:<name>` through the library plugin, Codex and Antigravity get them inlined. Stage agents write their result with `pl section <id> SPEC --from <file>` (also DESIGN and PLAN), read a section in full with `pl section <id> INPUT`, and move the card with `pl move`.
@@ -249,7 +250,7 @@ They use only `pl` and `git` (and `gh` for pull requests), so they run on every 
 
 **Use your own skills instead:** set the stage's `prompt` (for example `/my-spec {id}`) in `config.toml` or the Settings tab, and `[loops.auto-review] prompt` for reviews. An account skill with the same name as a built-in wins over the library copy. A profile made before the built-in skills keeps its prompts; `pl setup --use-builtin-stages --slug NAME` switches it, after a backup of `config.toml`, and prints each prompt it changes.
 
-Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl section`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
+Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl section`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl rework`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
 
 Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
 
