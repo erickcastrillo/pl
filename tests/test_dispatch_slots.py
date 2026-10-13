@@ -77,6 +77,44 @@ def test_sweep_untracked_counts_live_untracked_prep_windows_it_leaves_open(monke
     assert ["tmux", "kill-window", "-t", "@3"] in calls
 
 
+def _sweep_runs(monkeypatch, out, screen="", reg=None, cs=()):
+    """sweep_untracked with tmux faked: list-panes prints out, capture-pane prints screen. Returns (live, killed)."""
+    killed = []
+
+    def run(argv, *a, **kw):
+        return subprocess.CompletedProcess(argv, 0, screen if "capture-pane" in argv else out, "")
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: killed.append(a[2]) if a[0] == "kill-window" else None)
+    return dispatch.sweep_untracked(list(cs), reg or {}, False), killed
+
+
+def test_an_untracked_idle_run_window_is_closed_so_its_card_can_start_a_new_run(monkeypatch):
+    old = int(time.time()) - 5000
+    live, killed = _sweep_runs(monkeypatch, f"@4 %4 {old} run-fix-orphaned node\n", screen="PR #69 opened.\n❯ ")
+    assert killed == ["@4"] and live == 0
+
+
+def test_an_untracked_run_window_idle_in_its_registered_session_is_closed(monkeypatch):
+    now = int(time.time())
+    reg = {"s1": {"tmux": "pl-t:%4", "status": "idle", "statusUpdatedAt": (now - 900) * 1000}}
+    _, killed = _sweep_runs(monkeypatch, f"@4 %4 {now} run-x node\n", reg=reg)
+    assert killed == ["@4"]
+
+
+def test_an_untracked_run_window_waiting_at_a_human_gate_stays(monkeypatch):
+    old = int(time.time()) - 5000
+    _, killed = _sweep_runs(monkeypatch, f"@4 %4 {old} run-x node\n", screen="GATE: before-push\n❯ ")
+    assert killed == []
+
+
+def test_busy_or_tracked_run_windows_stay_and_hold_no_prep_slot(monkeypatch):
+    now, old = int(time.time()), int(time.time()) - 5000
+    reg = {"s1": {"tmux": "pl-t:%4", "status": "busy", "statusUpdatedAt": now * 1000}}
+    cs = [_card(1, worker={"window": "@5", "stage": "run"})]
+    live, killed = _sweep_runs(monkeypatch, f"@4 %4 {now} run-busy node\n@5 %5 {old} run-mine node\n", reg=reg, cs=cs)
+    assert killed == [] and live == 0
+
+
 def test_a_card_with_a_running_window_its_record_lacks_gets_no_second_agent(monkeypatch):
     seen = []
     monkeypatch.setattr(dispatch, "live_agent_window", lambda name, own=None: seen.append((name, own)) or True)

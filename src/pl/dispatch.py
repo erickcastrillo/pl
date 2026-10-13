@@ -15,7 +15,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
+from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
@@ -380,11 +380,13 @@ def _context_restart(name, svc, sid, s, ust, dry):
 
 
 def sweep_untracked(all_cards, reg, dry, st=None):
-    """Close spec/design/plan agent windows that no card tracks any more (a same-stage restart, pl approve or a lost
-    finished_workers write leaves them behind), once idle: a registered session idle for 5 minutes, else no window
-    activity or (st given) no change on screen for 10 minutes. Run windows are never touched: an idle run agent may
-    be waiting at a human gate. Returns how many untracked prep windows with a live process it left open: they
-    still hold a prep slot."""
+    """Close agent windows that no card tracks any more (a same-stage restart, pl approve, a card moved by hand or a
+    lost worker or finished_workers write leaves them behind), once idle: a registered session idle for 5 minutes,
+    else no window activity or (st given) no change on screen for 10 minutes. Such a window would otherwise block
+    its card's next agent of that stage forever (live_agent_window). A run window stays while its screen shows a
+    human gate (a person still has to act there) or a usage limit (the agent resumes itself after the reset).
+    Returns how many untracked prep windows with a live process it left open: they still hold a prep slot (run
+    windows hold none)."""
     tracked = set()
     for c in all_cards:
         m = c.get("metadata") or {}
@@ -400,16 +402,22 @@ def sweep_untracked(all_cards, reg, dry, st=None):
             continue
         wid, pane, activity, name = parts
         name, _, cmd = name.rpartition(" ") if " " in name else (name, "", "")   # the command is last; a bare name has none
-        if wid in tracked or not name.startswith(("spec-", "design-", "plan-")):
+        if wid in tracked or not name.startswith(("spec-", "design-", "plan-", "run-")):
             continue
+        prep = not name.startswith("run-")
         rec = next((r for r in reg.values() if (r.get("tmux") or "").endswith(pane)), None)
         if rec:
             if rec.get("status") != "idle" or time.time() - rec.get("statusUpdatedAt", 0) / 1000 <= 300:
-                live += 1   # a session is registered on it: really running
+                live += prep   # a session is registered on it: really running
                 continue
         elif time.time() - int(activity or 0) <= 600 and (cmd in harnesses.SHELLS or st is None or screen_quiet(st, pane) <= 600):
-            live += cmd not in harnesses.SHELLS
+            live += prep and cmd not in harnesses.SHELLS
             continue
+        if not prep:
+            screen = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-60"]).stdout or ""
+            if any(g in HUMAN_GATES for g in GATE_RE.findall(screen)) \
+                    or any(harnesses.limit_hit(h, screen) for h in harnesses.BUILTINS.values()):
+                continue   # an idle run agent waiting for a person, or for its usage limit to reset (it resumes itself)
         print(f"closing untracked {name} agent window {wid}")
         if not dry:
             tmux("kill-window", "-t", wid, check=False)
@@ -729,7 +737,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         if live_agent_window(f"{stage}-{slug_of(c)[:28]}", (w or {}).get("window")):
             # an agent window for this card is already running that its record does not name (a lost write):
-            # a second one would double the work; the sweep closes it if it goes idle
+            # a second one would double the work; sweep_untracked closes it once idle (not at a human gate)
             print(f"{short_id(c['id'])}  {stage} agent window {stage}-{slug_of(c)[:28]} is already running; not starting another")
             continue
         if stage == "run":
