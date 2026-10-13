@@ -185,7 +185,7 @@ def test_an_untracked_agy_plan_window_idle_at_its_prompt_frees_its_slot_and_clos
     panes[37] = ("plan-w3-assessment", "agy", AGY_IDLE + "working…")  # this one changed: still working
     assert dispatch.sweep_untracked([], {}, False, st) == 1
     kills = [c for c in calls if c[:2] == ["tmux", "kill-window"]]
-    assert kills == [["tmux", "kill-window", "-t", "@36"]]           # never the run window
+    assert kills == [["tmux", "kill-window", "-t", "@36"]]           # not the run window at its quota
 
 
 def test_a_finished_agy_plan_worker_is_closed_once_its_screen_stays_the_same(monkeypatch):
