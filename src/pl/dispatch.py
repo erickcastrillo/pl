@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -210,6 +210,8 @@ def start_worker(c, stage, attempts, dry):
         prompt += f" review={shlex.quote(review)}"   # pl-run labels its pull request with it
     if stage in ("plan", "run") and C.PROMPTS[stage] == C.BUILTIN_PROMPTS[stage]:
         prompt += pr_limit_args()
+    if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"]:
+        prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return
@@ -464,6 +466,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     reg = registry()
     all_cards = cards()
     _LAST["cards"] = all_cards   # the runaway check between passes names cards from the last read
+    if not paused():
+        try:   # PRs the review labeled for rework: their cards go back to In progress (rework.py)
+            rework.sweep(all_cards, dry)
+        except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
+            print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}

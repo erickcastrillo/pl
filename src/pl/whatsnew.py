@@ -109,6 +109,9 @@ ENTRIES = [
        "{worktrees_dir} in a stage prompt", "pl"),
     _e("2026-10-11.02", "Closing the console while the Assistant tab reads its screen no longer ends in a crash",
        "Assistant tab", "pl"),
+    _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
+       "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
+       "for you with the failed label", "pl rework --dry-run"),
 ]
 
 

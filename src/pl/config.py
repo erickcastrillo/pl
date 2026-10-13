@@ -72,7 +72,7 @@ def _defaults():
     # (the last repeats; [] is off). release_waiting_after: minutes a run agent may wait (a GATE line or an idle
     # screen) before pl stops it and holds its card back (0 is off)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
-                "release_waiting_after": 30, **MEMORY_DEFAULTS}
+                "release_waiting_after": 30, "rework_rounds": 3, **MEMORY_DEFAULTS}
     GATES = {"spec": False}
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
