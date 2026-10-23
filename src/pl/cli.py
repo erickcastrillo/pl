@@ -77,6 +77,9 @@
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
+  pl sandbox create|status|start|stop|destroy [--yes]
+                          manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
+                          work folder and worktrees folder; --yes destroys the VM without asking
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
@@ -215,6 +218,8 @@ def main():
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
+    p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -234,4 +239,5 @@ def main():
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
-     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
+     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
+     "sandbox": lambda a: __import__("pl.sandbox").sandbox.cmd_sandbox(a)}[a.cmd](a)
