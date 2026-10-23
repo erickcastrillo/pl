@@ -6,6 +6,24 @@ from pl import config as C
 from pl.trackers import localstore
 
 
+@pytest.fixture(autouse=True)
+def fake_home(tmp_path, monkeypatch):
+    saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in ("PL_CONFIG_DIR", "PL_TMUX_SESSION"):
+        monkeypatch.delenv(var, raising=False)
+    yield tmp_path
+    for k, v in saved.items():
+        setattr(C, k, v)
+
+
+def _write(home, name, text):
+    d = home / f".pl-{name}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.toml").write_text(text)
+    return d
+
+
 def test_db_is_created_0600_with_the_eight_columns(tmp_path):
     db_path = tmp_path / "board.db"
     conn = localstore.open_db(db_path)
@@ -150,3 +168,39 @@ def test_reopening_keeps_cards_and_does_not_reseed_columns(tmp_path):
         assert found["title"] == "Persistent Card"
     finally:
         conn2.close()
+
+
+def test_trackers_get_builds_the_local_board(fake_home):
+    _write(fake_home, "work", '[tracker]\ntype = "local"\n')
+    C.load("work")
+    from pl import trackers
+    from pl.trackers import local
+    trackers.reset()
+    t = trackers.get("tracker")
+    assert isinstance(t, local.Local)
+    assert t.test() == "ok: local board, 8 columns, 0 cards"
+
+
+def test_local_tracker_round_trip_through_board_helpers(fake_home):
+    _write(fake_home, "work", '[tracker]\ntype = "local"\n')
+    C.load("work")
+    from pl import board, commands, trackers
+    trackers.reset()
+    t = trackers.get("tracker")
+    card = t.create("Inbox", title="First Task", metadata={"status": "new"})
+    cid = card["id"]
+
+    all_cards = board.cards()
+    assert any(c["id"] == cid and c["title"] == "First Task" for c in all_cards)
+
+    board.update(cid, title="Updated Task", metadata={"priority": "high"})
+    updated = board.find_card(cid)
+    assert updated["title"] == "Updated Task"
+    assert updated["metadata"]["status"] == "new"
+    assert updated["metadata"]["priority"] == "high"
+
+    commands.move_to(cid, "Approved")
+    moved = board.find_card(cid)
+    cols = t.columns()
+    assert moved["list_id"] == cols["Approved"]
+
