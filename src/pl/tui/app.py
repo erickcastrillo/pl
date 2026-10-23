@@ -14,6 +14,7 @@ from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
+from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, attention_count, card_count
 from pl.tui.chrome import TABS, TAB_KEYS, header_text, tabs
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
@@ -28,12 +29,13 @@ from pl.tui.subagents import SubagentsView
 LATER = {}
 VIEWS = {"dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
-         "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView}
-
+         "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
+         "brain": BrainView}
+MEANING = {"brain": "Brain"}
 
 REFRESH, GITHUB_REFRESH = 15, 60   # seconds between board refreshes; GitHub's GraphQL budget needs the slower one
 BUILD_CHECK = 30   # seconds between checks for a newly installed pl build
-DRAFTS = ("#assistant-input", "#idea-input")   # boxes whose text is lost on a restart, focused or not
+DRAFTS = ("#assistant-input", "#idea-input", "#brain-input")   # boxes whose text is lost on a restart, focused or not
 
 
 def default_interval():
@@ -289,6 +291,12 @@ class PlApp(App):
                             self.action_whatsnew)
         yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
                             self.action_skills)
+        yield SystemCommand("Brain: ask questions across pipelines", "one read-only brain session per machine (b)",
+                            self.action_brain)
+
+    def action_brain(self):
+        """Brain tab, one machine-wide brain session."""
+        self.action_tab("brain")
 
     def action_skills(self):
         """Settings tab, the Skills section, its list focused."""
@@ -424,14 +432,18 @@ class PlApp(App):
         if self.active_tab == "assistant":
             self.query_one(AssistantView).opened()
             self.call_after_refresh(self.query_one(AssistantView).focus_box)
+        if self.active_tab == "brain":
+            self.query_one(BrainView).opened()
+            self.call_after_refresh(self.query_one(BrainView).focus_box)
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
 
     def on_descendant_focus(self, event):
         """A click on a tab leaves the focus on the tab bar, where typed letters run console commands (D, s, q, r ...)
         instead of reaching the Assistant's box: on the Assistant tab the box takes the focus back."""
-        if isinstance(event.widget, Tabs) and self.active_tab == "assistant" and len(self.screen_stack) == 1:
-            self.call_after_refresh(self.query_one(AssistantView).focus_box)
+        if isinstance(event.widget, Tabs) and self.active_tab in ("assistant", "brain") and len(self.screen_stack) == 1:
+            view = self.query_one(BrainView if self.active_tab == "brain" else AssistantView)
+            self.call_after_refresh(view.focus_box)
 
     def check_action(self, action, parameters):
         if action == "tab":
