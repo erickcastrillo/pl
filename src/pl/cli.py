@@ -68,6 +68,8 @@
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
+  pl ask "text" [--json] [--conversation ID]
+                          ask the central read-only brain across every pipeline and connector
   pl manager start|stop [--all]|status|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
@@ -153,6 +155,9 @@ def main():
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["ask"]:              # central brain: routed before profile load
+        from pl import brain
+        return brain.cmd_ask(pre_a.rest[1:])
     config.load(pre_a.profile)
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)
