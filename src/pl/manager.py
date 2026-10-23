@@ -67,6 +67,24 @@ def write_machine_toml() -> bool:
     return True
 
 
+def update_machine_toml(modifier):
+    """Update machine.toml using tomlkit so comments and formatting are preserved."""
+    import tomlkit
+    machine_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = _path("machine.toml")
+    if not path.exists():
+        write_machine_toml()
+    try:
+        doc = tomlkit.parse(path.read_text())
+    except (OSError, tomlkit.exceptions.TOMLKitError):
+        doc = tomlkit.document()
+    modifier(doc)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(tomlkit.dumps(doc))
+    tmp.replace(path)
+
+
+
 def _run(argv, timeout=None):
     """The one subprocess seam of this module (tests fake it)."""
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
