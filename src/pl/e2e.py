@@ -1,4 +1,4 @@
-"""pl e2e: run a repo's Playwright suite in a throwaway Multipass VM, set up from its .pl/e2e.yaml (docs/e2e.md).
+"""pl e2e: run a repo's Playwright suite in a throwaway Multipass VM, set up from its .pl/e2e.yaml (pl e2e --help).
 
 git runs through _run (tests fake it); Multipass only through pl.e2e_vm. Host files live in a plain folder
 (default ~/pl-e2e/<repo>/<timestamp>/), since the Multipass snap cannot read /tmp or hidden folders."""
@@ -97,7 +97,7 @@ def _prepare(a, env):
     sha = _git(repo, "rev-parse", "--verify", f"{a.ref}^{{commit}}")
     code, text, _ = _run(["git", "-C", str(repo), "show", f"{sha}:.pl/e2e.yaml"])
     if code:
-        raise Stop(f"pl e2e: {repo.name} has no .pl/e2e.yaml at {a.ref}; add one and commit it (docs/e2e.md)")
+        raise Stop(f"pl e2e: {repo.name} has no .pl/e2e.yaml at {a.ref}; add one and commit it (pl e2e --help)")
     try:
         spec = S.load(text, env)
     except S.SpecError as e:
@@ -264,7 +264,10 @@ def _finish(ctx, steps, outcome, code, started):
 
 def cmd_e2e(argv):
     ap = argparse.ArgumentParser(prog="pl e2e", description="Run the repo's Playwright suite in a throwaway "
-                                 "Multipass VM, set up from .pl/e2e.yaml at REF (docs/e2e.md).")
+                                 "Multipass VM, set up from .pl/e2e.yaml at REF.",
+                                 epilog="Exit codes: 0 passed, 1 tests failed, 2 setup, service or VM failure "
+                                 "(or a missing or invalid .pl/e2e.yaml). Results: report.md, summary.json, "
+                                 "logs/ and artifacts/ in the --out folder.")
     ap.add_argument("repo", nargs="?", help="the app repository (default: the git root of this folder)")
     ap.add_argument("--ref", default="HEAD", help="the commit, branch or tag to test (default HEAD)")
     ap.add_argument("--out", help="a plain folder for the results (default ~/pl-e2e/<repo>/<timestamp>)")

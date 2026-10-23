@@ -114,7 +114,7 @@ ENTRIES = [
        "for you with the failed label", "pl rework --dry-run"),
     _e("2026-10-22.01", "pl e2e: your repo's Playwright tests in a throwaway Multipass VM",
        "set up from the repo's .pl/e2e.yaml; ~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
-       "docs/e2e.md. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
+       "pl e2e --help. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
 ]
 
 

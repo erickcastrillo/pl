@@ -79,7 +79,7 @@
                           and model, and whether Ollama answers with that model pulled
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
-                          .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (docs/e2e.md). No profile needed
+                          .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
