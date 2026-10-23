@@ -48,6 +48,17 @@ _skipped = {}  # (board_id, card id) -> when its last skip event was emitted
 CLOSE_WAIT = 10  # seconds close() lets an in-flight call finish before cancelling it
 _secrets = set()  # every resolved ${VAR} value; masked in the SDK's and httpx's log records
 
+PROTOCOL_TOOLS = {
+    "columns": {"tool": "pl_columns", "args": {"board_id": "{board_id}"}, "result": "columns"},
+    "cards": {"tool": "pl_cards", "args": {"board_id": "{board_id}"}, "result": "cards"},
+    "card": {"tool": "pl_card", "args": {"board_id": "{board_id}", "id": "{item_id}"}, "result": "card"},
+    "create": {"tool": "pl_create", "args": {"board_id": "{board_id}", "column_id": "{column_id}", "*": "{fields}"}, "result": "card"},
+    "update": {"tool": "pl_update", "args": {"board_id": "{board_id}", "id": "{item_id}", "fields": "{fields}"}, "result": "card"},
+    "move": {"tool": "pl_move", "args": {"board_id": "{board_id}", "id": "{item_id}", "column_id": "{column_id}"}, "result": "card"},
+    "delete": {"tool": "pl_delete", "args": {"board_id": "{board_id}", "id": "{item_id}"}},
+    "ensure_column": {"tool": "pl_ensure_column", "args": {"board_id": "{board_id}", "title": "{column}"}, "result": "column"},
+}
+
 
 class _Mask(logging.Filter):
     def filter(self, record):
@@ -370,9 +381,41 @@ class Mcp:
         self.tools = cfg.get("tools") or {}
         self.board_id = cfg.get("board_id", "")
         self.timeout = float(cfg.get("timeout") or 60)
+        self.mode = None
         self._columns = None
 
+    def _protocol(self):
+        if self.tools and not self.cfg.get("protocol"):
+            self.mode = "mapping"
+            return
+        res, _ = self._run(lambda session: session.list_tools())
+        have = {t.name for t in res.tools}
+        if "pl_protocol" in have:
+            pres, s = self._run(lambda session: session.call_tool("pl_protocol", {}))
+            texts = [c.text for c in pres.content if getattr(c, "type", None) == "text"]
+            text = texts[0] if texts else ""
+            if pres.isError:
+                raise SystemExit(f"pl: MCP tool pl_protocol failed: {s.scrub(text, 200)}")
+            try:
+                data = json.loads(text) if text.strip() else {}
+            except ValueError:
+                data = {}
+            if data.get("version") != 1:
+                raise SystemExit(f"pl: unsupported pl_protocol version {data.get('version')}")
+            self.tools = PROTOCOL_TOOLS
+            self.mode = "pl"
+            if not self.board_id:
+                boards = data.get("boards") or []
+                if len(boards) == 1 and isinstance(boards[0], dict) and boards[0].get("id"):
+                    self.board_id = boards[0]["id"]
+            return
+        if self.cfg.get("protocol") == "pl":
+            raise SystemExit("pl: the board server has no pl_protocol tool")
+        self.mode = "mapping"
+
     def _spec(self, action):
+        if self.mode is None:
+            self._protocol()
         spec = self.tools.get(action)
         if not spec or not spec.get("tool"):
             raise SystemExit(f"pl: the MCP tracker has no [tracker.tools.{action}] mapping")
@@ -575,9 +618,12 @@ class Mcp:
 
     def test(self):
         """list_tools, then name any mapped tool the server lacks."""
+        if self.mode is None:
+            self._protocol()
         res, _ = self._run(lambda session: session.list_tools())
         have = {t.name for t in res.tools}
         missing = sorted({s["tool"] for s in self.tools.values() if isinstance(s, dict) and s.get("tool")} - have)
         if missing:
             return f"problem: the MCP server is missing mapped tools: {', '.join(missing)}"
-        return f"ok: mcp board {self.board_id}, {len(self.columns())} columns, {len(have)} server tools"
+        desc = "mcp board (pl protocol v1)" if self.mode == "pl" else f"mcp board {self.board_id}"
+        return f"ok: {desc}, {len(self.columns())} columns, {len(have)} server tools"

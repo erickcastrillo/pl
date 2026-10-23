@@ -269,7 +269,12 @@ def ask_tracker(answers, flags):
         server = _ask(flags, flags.server, "Which server holds the board",
                       ot.get("server") if ot.get("server") in names else names[0] if len(names) == 1 else None, "--server",
                       f"one of {', '.join(names)}", lambda v: None if v in names else f"choose one of {', '.join(names)}")
-        return {"type": "mcp", "mcp_config": str(p), "server": server}
+        res = {"type": "mcp", "mcp_config": str(p), "server": server}
+        if getattr(flags, "protocol", None):
+            res["protocol"] = flags.protocol
+        elif ot.get("protocol"):
+            res["protocol"] = ot["protocol"]
+        return res
     tracker = {"type": kind}
     if kind == "github-project":
         tracker["owner"] = _ask(flags, flags.owner, "GitHub user or organisation that owns the project", ot.get("owner"),
@@ -754,6 +759,7 @@ def _parser():
     ap.add_argument("--repo", help="owner/name: the repository cards live in (default: the work folder's GitHub remote)")
     ap.add_argument("--mcp-config", metavar="PATH", help="the harness's MCP config file (default: WORK/.mcp.json, then ~/.claude.json)")
     ap.add_argument("--server", help="the MCP server that holds the board")
+    ap.add_argument("--protocol", choices=["pl"], nargs="?", const="pl", help="the MCP board protocol (default: none; pl)")
     ap.add_argument("--gh-config-dir", metavar="PATH", help="a separate gh sign-in folder (default: the default gh sign-in)")
     ap.add_argument("--email", help="your email for cards and approvals (optional)")
     ap.add_argument("--work-dir", metavar="PATH", help="where agents run (default: this folder if it is a git repo)")
@@ -890,7 +896,7 @@ def cmd_setup(argv: list[str], profile=None):
         print("pl setup: the profile was written but does not pass its checks; edit "
               f"{d / 'config.toml'}:\n" + "\n".join(f"  {e}" for e in errs), file=sys.stderr)
         raise SystemExit(3)
-    if t["type"] == "mcp":
+    if t["type"] == "mcp" and t.get("protocol") != "pl":
         a["todo"].append(f"add a [tracker.tools] table that maps pl's card actions to {t['server']}'s tools; "
                          f"see {MCP_DOC} in the pl repository (pl list fails until then)")
     optional = []

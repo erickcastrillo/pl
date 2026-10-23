@@ -453,6 +453,18 @@ def test_mcp_lists_server_names_and_never_prints_a_value(fake_home, monkeypatch,
     assert C.validate(t) == []
 
 
+def test_mcp_with_protocol_flag_writes_protocol_and_no_mapping_todo(fake_home, monkeypatch, capsys):
+    (fake_home / "work" / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "board": {"command": "board-mcp"}}}))
+    _pl(monkeypatch, *BASE, "--tracker", "mcp", "--server", "board", "--protocol", "pl")
+    out = capsys.readouterr().out
+    assert "ACTION NEEDED: add a [tracker.tools] table" not in out
+    t = _cfg(fake_home, "work-acme")
+    assert t["tracker"] == {"type": "mcp", "mcp_config": str(fake_home / "work" / ".mcp.json"), "server": "board", "protocol": "pl"}
+    assert C.validate(t) == []
+
+
+
 @pytest.mark.parametrize("drop,flag", [("--tracker", "--tracker"), ("--harness", "--harness"), ("--name", "--name")])
 def test_missing_required_answer_exits_2_naming_the_flag(fake_home, monkeypatch, capsys, drop, flag):
     args = [*BASE, "--tracker", "github-issues", "--repo", "acme/app"]
