@@ -7,6 +7,25 @@ from typing import Any
 from pl import manager
 
 VAR_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+MONEY_RE = re.compile(
+    r"([$€£¥]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|CAD|AUD|JPY)\b|\b(?:USD|EUR|GBP|CAD|AUD|JPY)\s*\d+(?:[.,]\d+)?)"
+)
+ADDRESS_RE = re.compile(
+    r"\b\d+\s+[A-Za-z0-9.]+(?:\s+[A-Za-z0-9.]+)?\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way|Court|Ct)\b",
+    re.IGNORECASE,
+)
+DIGITS_RE = re.compile(r"\b\d{5,}\b")
+
+
+def safe_text(s: str) -> str:
+    from pl import util
+    s = util.mask(str(s))
+    s = EMAIL_RE.sub("…", s)
+    s = MONEY_RE.sub("…", s)
+    s = ADDRESS_RE.sub("…", s)
+    s = DIGITS_RE.sub("…", s)
+    return s[:300]
 
 
 def load() -> dict[str, dict[str, Any]]:

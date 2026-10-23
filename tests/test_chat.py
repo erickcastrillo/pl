@@ -65,3 +65,101 @@ def test_list_json_never_shows_the_token():
     # verify token in the json is '${TG_TOKEN}'
     val = data["connectors"]["telegram"] if "connectors" in data else data["telegram"]
     assert val["token"] == "${TG_TOKEN}"
+
+
+def test_safe_text_strips_email_amount_address_and_token(monkeypatch):
+    from pl.chat import safe_text
+    from pl.trackers import mcp
+
+    # Ensure token secret is tracked by mcp._secrets
+    mcp._secrets.add("supersecrettoken123")
+
+    msg = (
+        "Hello alice@example.com, please pay $500 or 250 USD at 123 Main Street or 456 Elm Ave. "
+        "Your account code is 12345678 and token is supersecrettoken123."
+    )
+    res = safe_text(msg)
+    assert "alice@example.com" not in res
+    assert "$500" not in res
+    assert "250 USD" not in res
+    assert "123 Main Street" not in res
+    assert "456 Elm Ave" not in res
+    assert "12345678" not in res
+    assert "supersecrettoken123" not in res
+    assert len(res) <= 300
+
+
+def test_telegram_send_uses_the_fake_api_only(monkeypatch):
+    from pl.chat.telegram import Telegram
+
+    calls = []
+
+    def fake_http(token, method, payload=None):
+        calls.append((token, method, payload))
+        return {"ok": True, "result": {"message_id": 42}}
+
+    monkeypatch.setattr("pl.chat.telegram._http", fake_http)
+
+    tg = Telegram("telegram", {"token": "${TG_TOKEN}", "allow": ["123"]})
+    tg.send("123", "hello world", buttons=[[{"text": "Approve", "callback_data": "app:1"}]])
+
+    assert len(calls) == 1
+    token, method, payload = calls[0]
+    assert token == "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    assert method == "sendMessage"
+    assert payload["chat_id"] == "123"
+    assert payload["text"] == "hello world"
+    assert "reply_markup" in payload
+
+
+def test_an_api_error_never_shows_the_token(monkeypatch):
+    import urllib.error
+    from pl.chat.telegram import _http
+
+    def fake_open(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            url="https://api.telegram.org/bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11/sendMessage",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=None,
+        )
+
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", fake_open)
+
+    with pytest.raises(Exception) as excinfo:
+        _http("123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", "sendMessage", {})
+
+    err_str = str(excinfo.value)
+    assert "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" not in err_str
+
+
+def test_token_absent_from_logs_events_and_json(tmp_path, monkeypatch):
+    from pathlib import Path
+    state_dir = tmp_path / "machine"
+    monkeypatch.setenv("PL_MACHINE_DIR", str(state_dir))
+
+    # Add connector
+    _run_chat("add", "telegram", "--token", "${TG_TOKEN}", "--allow", "123", "--yes")
+
+    # Run test command with fake API
+    script = (
+        "import sys\n"
+        "from pl.chat import cmd_chat\n"
+        "import pl.chat.telegram\n"
+        "def fake_http(token, method, payload=None):\n"
+        "    return {'ok': True, 'result': {'message_id': 1}}\n"
+        "pl.chat.telegram._http = fake_http\n"
+        "cmd_chat(['test', 'telegram'])\n"
+    )
+    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=os.environ)
+    assert r.returncode == 0
+
+    secret = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    assert secret not in r.stdout
+    assert secret not in r.stderr
+
+    for p in Path(state_dir).rglob("*"):
+        if p.is_file():
+            assert secret not in p.read_text(errors="ignore"), f"secret leaked in {p}"
+
