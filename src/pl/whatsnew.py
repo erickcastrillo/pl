@@ -112,6 +112,9 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-15.01", "Kill switch: hold every outward action across profiles",
+       "pl kill-switch on pauses runs with outward actions; pl kill-switch off releases them",
+       "pl kill-switch status"),
 ]
 
 

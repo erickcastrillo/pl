@@ -246,8 +246,13 @@ def cmd_approve(a):
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
     events.emit("approved", c["id"])
-    print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
-    notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
+    from pl import outward
+    if outward.is_outward(c) and outward.state().get("on"):
+        print(f"approved {short_id(c['id'])}  {c['title']}\n  approved; its outward action waits: the kill switch is on")
+        notify(f"Approved: {c['title'][:50]}", "its outward action waits: the kill switch is on")
+    else:
+        print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
+        notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
 
 
 def cmd_reject(a):

@@ -13,7 +13,7 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 
 1. Never run `pl approve`, `pl reject`, `pl done`, `pl drop`, `pl undrop`, `pl hold`, `pl unhold`, `pl move`,
    `pl retry`, `pl restart`, `pl pause`,
-   `pl resume`, `pl move-agent`, `pl idea`, `pl pull`, `pl adopt`, `pl alerts --ack`, `pl accounts --reset`,
+   `pl resume`, `pl move-agent`, `pl kill-switch`, `pl idea`, `pl pull`, `pl adopt`, `pl alerts --ack`, `pl accounts --reset`,
    `pl manager start|stop|restart`, `pl board init`, `pl assistant idea file`, `gh pr merge` or any merge unless
    the person asked for that exact action in this chat and said yes. Never add a permission rule that would skip the prompt for these.
 2. Before editing any skill, command, settings or config file: copy it to `<file>.bak-<UTC timestamp>`, show
@@ -55,6 +55,7 @@ Moving work (rule 1 applies):
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
 - `pl move-agent <card> <account>`: move a live agent to another account.
 - `pl pause` / `pl resume`: stop or restart new agent starts.
+- `pl kill-switch on|off|status`: machine-wide kill switch for outward actions.
 
 Intake:
 - `pl idea "text"`: drop a one-line idea on the intake board (or the Inbox when there is none).
