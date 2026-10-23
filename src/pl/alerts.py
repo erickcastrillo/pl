@@ -69,11 +69,22 @@ def _step(a, now):
 
 
 def _offer(key, why, title):
-    """Queue an alert that opened or escalated for the Assistant. It never fails the alert."""
+    """Queue an alert that opened or escalated for the Assistant and chat. It never fails the alert."""
+    hl = headline(why, title)
     try:
         from pl import assistant   # imported here: the alerts module stays light
-        assistant.offer(key, headline(why, title))
+        assistant.offer(key, hl)
     except (SystemExit, Exception):  # noqa: BLE001 - a tmux refusal raises SystemExit
+        pass
+    try:
+        from pl.manager import machine_dir
+        mdir = machine_dir()
+        mdir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        outbox = mdir / "chat-outbox.jsonl"
+        fd = os.open(outbox, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(json.dumps({"key": key, "headline": hl}) + "\n")
+    except Exception:  # noqa: BLE001
         pass
 
 
