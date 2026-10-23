@@ -2,7 +2,7 @@ import pytest
 import tomlkit
 
 from pl import config as C
-from pl import outbox, trackers
+from pl import cli, ghquota, outbox, trackers
 
 import sys
 sys.modules["tests.test_outbox"] = sys.modules[__name__]
@@ -248,6 +248,65 @@ def test_append_oserror_raises_systemexit(fake_home, monkeypatch):
     monkeypatch.setattr(outbox, "append", fail_append)
     with pytest.raises(SystemExit, match=r"pl: outbox: disk error"):
         tr.create("Inbox", title="Fail append")
+
+
+def test_sync_status_counts_queue(fake_home, monkeypatch, capsys):
+    toml = fake_home / ".pl-t" / "config.toml"
+    toml.write_text('[tracker]\ntype = "local"\n\n[sync]\ngithub = "your-org/projects/5"\n')
+    C.load("t")
+    outbox.append("c1", "create", {"title": "c1"})
+    outbox.append("c2", "create", {"title": "c2"})
+
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "sync", "status"])
+    cli.main()
+    captured = capsys.readouterr().out
+    assert "2 changes queued for your-org/projects/5" in captured
+    assert "next GitHub window:" in captured
+
+
+def test_sync_status_json(fake_home, monkeypatch, capsys):
+    import json
+    import time
+    toml = fake_home / ".pl-t" / "config.toml"
+    toml.write_text('[tracker]\ntype = "local"\n\n[sync]\ngithub = "your-org/projects/5"\n')
+    C.load("t")
+    outbox.append("c1", "create", {"title": "c1"})
+
+    monkeypatch.setattr(ghquota, "ledger", lambda *a: {"reset": time.time() + 1800})
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "sync", "status", "--json"])
+    cli.main()
+    data = json.loads(capsys.readouterr().out)
+    assert data["queued"] == 1
+    assert data["target"] == "your-org/projects/5"
+    assert data["next_window"] is not None
+    assert "T" in data["next_window"]
+
+
+def test_sync_status_without_setting_exits_1(fake_home, monkeypatch):
+    toml = fake_home / ".pl-t" / "config.toml"
+    toml.write_text('[tracker]\ntype = "local"\n')
+    C.load("t")
+
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "sync", "status"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert "pl sync: set [sync] github in config.toml" in str(exc.value)
+
+
+def test_sync_status_spends_no_points(fake_home, monkeypatch, capsys):
+    from pl.trackers import github
+    toml = fake_home / ".pl-t" / "config.toml"
+    toml.write_text('[tracker]\ntype = "local"\n\n[sync]\ngithub = "your-org/projects/5"\n')
+    C.load("t")
+
+    def fail_gh(*a, **kw):
+        pytest.fail("gh was called!")
+    monkeypatch.setattr(github, "_gh", fail_gh)
+
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "sync", "status"])
+    cli.main()
+    assert "0 changes queued for your-org/projects/5" in capsys.readouterr().out
+
 
 
 

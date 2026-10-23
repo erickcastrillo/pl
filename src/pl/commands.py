@@ -6,7 +6,8 @@ import re
 import stat
 import subprocess
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
@@ -730,4 +731,28 @@ def intent_text(pr, body):
                    "Review against the PR description only, and say so.")
     text = "\n".join(out)
     return text if len(text) <= 40000 else text[:40000] + "\n\n(truncated at 40,000 characters)"
+
+
+def cmd_sync(a):
+    from pl import ghquota, outbox
+    target = C.SYNC.get("github")
+    if not target:
+        raise SystemExit("pl sync: set [sync] github in config.toml")
+    n = outbox.count()
+    led = ghquota.ledger()
+    reset = led.get("reset")
+    now = time.time()
+    if isinstance(reset, (int, float)) and reset > now:
+        window_txt = f"next GitHub window: {time.strftime('%H:%M', time.localtime(reset))}"
+        window_iso = datetime.fromtimestamp(reset, timezone.utc).isoformat(timespec="seconds")
+    else:
+        window_txt = "next GitHub window: unknown (no reading yet)"
+        window_iso = None
+
+    if getattr(a, "json", False):
+        print(json.dumps({"queued": n, "target": target, "next_window": window_iso}))
+    else:
+        print(f"{n} changes queued for {target}")
+        print(window_txt)
+
 
