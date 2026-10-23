@@ -990,3 +990,10 @@ def test_forbidden_opens_an_alert_and_raises(proto_script, monkeypatch):
     assert title == "Board refused a write: forbidden"
     assert "forbidden" in detail
 
+
+def test_protocol_server_that_drops_a_metadata_key_is_named(proto_script):
+    t = tracker(proto_cfg(proto_script, LOSSY="worker"))
+    made = t.create("Inbox", title="Original", metadata={"pipeline_mode": "auto"})
+    with pytest.raises(SystemExit, match=r"metadata\.worker did not persist"):
+        t.update(made["id"], metadata={"worker": "w1"})
+
