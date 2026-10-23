@@ -148,6 +148,64 @@ def test_the_model_flags_never_trip_the_permission_check():
         assert not any(harnesses.PERMISSION_FLAG_RE.search(t) for t in flags), flags
 
 
+@pytest.mark.parametrize("harness,stage_flag,acct_flag", [
+    ("claude", ["--model", "stage-m"], ["--model", "acct-m"]),
+    ("antigravity", ["--model", "stage-m"], ["--model", "acct-m"]),
+    ("codex", ["-c", 'model="stage-m"'], ["-c", 'model="acct-m"']),
+])
+def test_a_stage_model_for_the_harness_beats_the_accounts(
+        fake_home, fake_tmux, harness, stage_flag, acct_flag):
+    agent, loop = _launch(
+        fake_home, fake_tmux, harness,
+        'model = "acct-m"',
+        f'[stages.spec.models]\n{harness} = "stage-m"\n',
+    )
+    assert agent[1:3] == stage_flag
+    assert loop[1:3] == acct_flag
+
+
+def test_plan_stage_models_per_harness(fake_home):
+    _profile(fake_home,
+        '[accounts.g]\nharness = "antigravity"\nconfig_dir = "~"\n'
+        '[accounts.c]\nharness = "claude"\nconfig_dir = "~"\n'
+        '[stages.plan.models]\nantigravity = "claude-opus-5-5-high"\nclaude = "opus"\n'
+    )
+    agy_argv, _ = harnesses.headless_argv(harnesses.get("antigravity"), "g", "hi", stage="plan")
+    assert agy_argv[:3] == ["agy", "--model", "claude-opus-5-5-high"]
+    claude_argv, _ = harnesses.headless_argv(harnesses.get("claude"), "c", "hi", stage="plan")
+    assert claude_argv[:3] == ["claude", "--model", "opus"]
+
+
+def test_a_stage_model_for_another_harness_leaves_the_accounts_model(fake_home):
+    _profile(fake_home,
+        '[accounts.a]\nharness = "claude"\nconfig_dir = "~"\nmodel = "sonnet"\n'
+        '[stages.spec.models]\nantigravity = "x"\n'
+    )
+    argv, _ = harnesses.headless_argv(harnesses.get("claude"), "a", "hi", stage="spec")
+    assert argv[:3] == ["claude", "--model", "sonnet"]
+    C.ACCOUNTS["a"].pop("model")
+    argv2, _ = harnesses.headless_argv(harnesses.get("claude"), "a", "hi", stage="spec")
+    assert "--model" not in argv2
+
+
+def test_a_resumed_stage_agent_keeps_the_stage_model(fake_home):
+    _profile(fake_home,
+        '[accounts.a]\nharness = "claude"\nconfig_dir = "~"\nmodel = "opus"\n'
+        '[stages.run.models]\nclaude = "sonnet"\n'
+    )
+    script = harnesses.launch_script(harnesses.get("claude"), "a", "go", SID, "l", resume=True, plugin=False, stage="run")
+    argv = shlex.split(script.splitlines()[-1][len("exec "):])
+    assert argv[:3] == ["claude", "--model", "sonnet"]
+
+
+def test_a_template_model_flag_still_beats_a_stage_model(fake_home, fake_tmux):
+    toml = '[harnesses.claude]\ninteractive = ["claude", "--model", "haiku", "{prompt}"]\n'
+    agent, _ = _launch(fake_home, fake_tmux, "claude", 'model = "opus"',
+                       toml + '[stages.spec.models]\nclaude = "sonnet"\n')
+    assert agent.count("--model") == 1
+    assert "haiku" in agent and "sonnet" not in agent and "opus" not in agent
+
+
 # ---------- model lists ----------
 
 AGY_OUT = ("Fetching available models...\ngemini-3.1-pro-high\tGemini 3.1 Pro (High)\n"
