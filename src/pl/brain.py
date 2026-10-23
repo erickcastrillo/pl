@@ -1,0 +1,206 @@
+"""Central read-only brain: ask questions across pipelines with checked sources."""
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+from pl import config as C, harnesses, manager, profiles, util
+from pl.manager import machine_dir
+from pl.util import short_id
+
+NO_SOURCE_ANSWER = "I found no source for that, so I won't guess."
+
+
+def _run(argv: list[str], env: dict[str, str] | None = None, input: str | None = None, **kw: Any) -> subprocess.CompletedProcess:
+    """The one subprocess seam of this module; tests fake it."""
+    return subprocess.run(argv, env=env, input=input, capture_output=True, text=True, **kw)
+
+
+def _sources_path(conv: str) -> Path:
+    d = machine_dir() / "brain" / "conversations"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d / f"{conv}.sources.jsonl"
+
+
+def _cards_path(conv: str) -> Path:
+    d = machine_dir() / "brain" / "conversations"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d / f"{conv}.cards.jsonl"
+
+
+def log_source(conv_or_source: Any, source_or_none: dict[str, Any] | None = None) -> None:
+    if isinstance(conv_or_source, dict):
+        conv, source = "default", conv_or_source
+    else:
+        conv, source = str(conv_or_source), source_or_none or {}
+    p = _sources_path(conv)
+    with open(p, "a") as f:
+        f.write(json.dumps(source) + "\n")
+
+
+def get_logged_sources(conv: str) -> list[dict[str, Any]]:
+    p = _sources_path(conv)
+    if not p.is_file():
+        return []
+    try:
+        return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def log_card(conv_or_card: Any, card_or_none: dict[str, Any] | None = None) -> None:
+    if isinstance(conv_or_card, dict):
+        conv, card = "default", conv_or_card
+    else:
+        conv, card = str(conv_or_card), card_or_none or {}
+    p = _cards_path(conv)
+    with open(p, "a") as f:
+        f.write(json.dumps(card) + "\n")
+
+
+def get_logged_cards(conv: str) -> list[dict[str, Any]]:
+    p = _cards_path(conv)
+    if not p.is_file():
+        return []
+    try:
+        return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def _is_parked(acc: str) -> bool:
+    from pl import accounts
+    info = accounts.parking(acc)
+    until = info.get("until")
+    return bool(until and util.parse_iso(until) > time.time())
+
+
+def _pick_profile_and_account() -> tuple[str | None, str | None]:
+    mt = manager._machine_toml()
+    b = mt.get("brain", {}) if isinstance(mt.get("brain"), dict) else {}
+    p_name = b.get("profile")
+    a_name = b.get("account")
+
+    if p_name:
+        C.load(p_name)
+        if a_name and a_name in C.PROFILES:
+            return p_name, a_name
+        for acc in C.PROFILES:
+            if not _is_parked(acc):
+                return p_name, acc
+        return p_name, next(iter(C.PROFILES), None)
+
+    rows = profiles.list_profiles(check_lock=False)
+    for r in rows:
+        C.load(r["name"])
+        for acc in C.PROFILES:
+            if not _is_parked(acc):
+                return r["name"], acc
+    if rows:
+        C.load(rows[0]["name"])
+        return rows[0]["name"], next(iter(C.PROFILES), None)
+    return None, None
+
+
+def ask(question: str, conv: str | None = None) -> dict[str, Any]:
+    conv = conv or f"ask-{short_id(str(time.time()))}"
+
+    profile, account = _pick_profile_and_account()
+    if not account:
+        raise SystemExit("pl: no account found for brain")
+
+    h = harnesses.account_harness(account)
+    if h.name not in ("claude", "codex"):
+        sys.stderr.write(f"pl: {h.name} has no way to restrict tools\n")
+        raise SystemExit(2)
+
+    guide_path = Path(__file__).with_name("brain.md")
+    guide = guide_path.read_text() if guide_path.is_file() else ""
+    prompt = f"{guide}\n\nQuestion: {question}"
+
+    argv, env = harnesses.headless_argv(h, account, prompt)
+
+    mcp_config = {"mcpServers": {"pl-brain": {"command": "pl", "args": ["mcp", "serve", "--brain", "--stdio"]}}}
+    mcp_json = json.dumps(mcp_config)
+
+    if h.name == "claude":
+        mcp_flags = ["--mcp-config", mcp_json, "--strict-mcp-config", "--allowedTools", "mcp__pl-brain__*"]
+        argv = [argv[0], *mcp_flags, *[a for a in argv[1:] if a not in ("Bash", "Edit", "Write")]]
+    elif h.name == "codex":
+        codex_arg = f'mcp_servers.pl-brain={json.dumps(mcp_config["mcpServers"]["pl-brain"])}'
+        argv = [argv[0], "-c", codex_arg, "--sandbox", "read-only", *argv[1:]]
+
+    res = _run(argv, env=env, input=None)
+    out = res.stdout if hasattr(res, "stdout") else str(res)
+
+    try:
+        data = json.loads(out)
+    except Exception:
+        m = re.search(r"\{.*\}", out, re.DOTALL)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+            except Exception:
+                data = {}
+        else:
+            data = {}
+
+    answer = data.get("answer") or ""
+    sources = data.get("sources") if isinstance(data.get("sources"), list) else []
+    cards = data.get("cards") if isinstance(data.get("cards"), list) else []
+
+    logged_sources = get_logged_sources(conv)
+    logged_urls = {s.get("url") for s in logged_sources if s.get("url")}
+    logged_urls |= {s.get("link") for s in logged_sources if s.get("link")}
+
+    valid_sources = [
+        s for s in sources
+        if isinstance(s, dict) and (s.get("url") in logged_urls or s.get("link") in logged_urls)
+    ]
+
+    if not valid_sources:
+        answer = NO_SOURCE_ANSWER
+        valid_sources = []
+
+    logged_cards = get_logged_cards(conv)
+    valid_cards = []
+    for c in cards:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("id")
+        curl = c.get("url")
+        if any((cid and lc.get("id") == cid) or (curl and lc.get("url") == curl) for lc in logged_cards):
+            valid_cards.append(c)
+
+    return {
+        "answer": answer,
+        "sources": valid_sources,
+        "cards": valid_cards,
+        "conversation": conv,
+    }
+
+
+def cmd_ask(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(prog="pl ask", description="ask the central read-only brain")
+    ap.add_argument("question", help="the question to ask")
+    ap.add_argument("--json", action="store_true", help="output result as JSON")
+    ap.add_argument("--conversation", help="conversation id")
+    a = ap.parse_args(argv)
+    res = ask(a.question, conv=a.conversation)
+    if a.json:
+        print(json.dumps(res))
+    else:
+        print(res["answer"])
+        if res.get("sources"):
+            print()
+            for i, s in enumerate(res["sources"], 1):
+                t = s.get("title")
+                u = s.get("url")
+                if t and u and t != u:
+                    print(f"{i}. {t}: {u}")
+                else:
+                    print(f"{i}. {u or t}")

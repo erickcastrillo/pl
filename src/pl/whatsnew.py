@@ -112,6 +112,8 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-23.01", "pl ask: central read-only brain answers with checked sources",
+       "ask questions across every pipeline and connector; every fact links a source", "pl ask \"what needs me today?\""),
 ]
 
 
