@@ -64,7 +64,22 @@ def hold_reason(c):
     tags = c.get("tags") or []
     why = next((v for k, v in HOLD.items() if k in tags), None)
     reason = (c.get("metadata") or {}).get("hold_reason")
-    return f"held: {str(reason)[:60]}" if why == "held" and reason else why
+    if why == "held" and reason:
+        return f"held: {str(reason)[:60]}"
+    if why:
+        return why
+    from pl import outward
+    if outward.is_outward(c) and outward.state().get("on"):
+        col = c.get("column")
+        if not col and "list_id" in c:
+            try:
+                from pl.board import col_name
+                col = col_name(c["list_id"])
+            except Exception:
+                pass
+        if col == "Approved" or c.get("list_id") == "Approved":
+            return "kill switch on"
+    return None
 
 
 def _on_pane(rec, w):
