@@ -1183,3 +1183,66 @@ def test_flags_change_an_existing_profile(fake_home, monkeypatch, capsys, ollama
 def test_no_local_model_on_a_new_profile_writes_nothing(fake_home, monkeypatch, capsys, ollama):
     _pl(monkeypatch, *GITHUB_ISSUES, "--no-local-model")
     assert "local_model" not in _cfg(fake_home, "work-acme") and ollama.calls == []
+
+
+def test_setup_defaults_to_the_local_board_without_a_github_remote(fake_home, monkeypatch, capsys):
+    work = fake_home / "noneng"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    answers = iter([
+        "Non Eng",
+        "",
+        "claude",
+        "",
+        "",          # tracker: accepts default "local"
+        "",          # gh sign-in
+        str(work),   # work folder
+        "",          # notifications: none
+        "",          # notify script: yes
+        "",          # local model: yes
+        "y",         # write it
+        "n",         # update-shell
+    ])
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda p="": (prompts.append(p), next(answers))[1])
+    _pl(monkeypatch)
+    t = _cfg(fake_home, "non-eng")
+    assert t["tracker"] == {"type": "local"}
+    out = capsys.readouterr().out
+    assert "cards      local (board.db in the profile folder)" in out
+
+
+def test_setup_yes_with_tracker_local_writes_a_working_profile(fake_home, monkeypatch, capsys):
+    _pl(monkeypatch, "--yes", "--name", "Local Profile", "--harness", "claude", "--work-dir", "~/work",
+        "--tracker", "local")
+    out = capsys.readouterr().out
+    assert "cards      local (board.db in the profile folder)" in out
+    t = _cfg(fake_home, "local-profile")
+    assert t["tracker"] == {"type": "local"}
+    assert C.validate(t) == []
+
+    C.load("local-profile")
+    from pl import trackers
+    trackers.reset()
+    cols = trackers.get("tracker").columns()
+    assert list(cols) == list(C.COLUMNS)
+    assert len(cols) == 8
+
+
+def test_setup_with_a_github_remote_still_asks_for_the_tracker(fake_home, monkeypatch, capsys):
+    repo = fake_home / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:acme/app.git"], check=True)
+    ap = setup._parser()
+    flags = ap.parse_args(["--work-dir", str(repo)])
+    flags.interactive = False
+    with pytest.raises(SystemExit) as exc:
+        setup.ask_tracker({"slug": "t"}, flags)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "--tracker" in err
+
+
+
+

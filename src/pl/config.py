@@ -331,6 +331,10 @@ def validate(doc) -> list[str]:
         t = doc.get(kind, {})
         if "board_id" in t and not str(t["board_id"]).strip():
             errs.append(f"{kind}.board_id must not be empty")
+        if t.get("type") == "local":
+            p = t.get("path")
+            if p is not None and (not isinstance(p, str) or Path(p).is_absolute()):
+                errs.append(f"{kind}.path must be a relative path")
         if t.get("type") == "github-project":
             if not str(t.get("owner") or "").strip():
                 errs.append(f"{kind}.owner must not be empty")
