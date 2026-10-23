@@ -541,7 +541,7 @@ async def test_d_warns_that_links_and_pl_prompts_will_break(home):
         await select(pilot, "beta", "b")
         await pilot.press("d")
         await settle(pilot)
-        text = screen_text(app)
+        text = " ".join(screen_text(app).replace("│", " ").split())   # the dialog wraps at a width set by tmp_path
         assert "other profiles" in text and "/pl:beta" in text
 
 
