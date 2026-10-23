@@ -1,6 +1,11 @@
+import argparse
+import copy
+import io
+from contextlib import redirect_stdout
+
 import pytest
 
-from pl import agents, config as C, dispatch
+from pl import agents, commands, config as C, dispatch, trackers
 from pl.agents import deps_waiting, slice_order
 from pl.dispatch import approved_label
 
@@ -102,4 +107,90 @@ def test_pl_list_shows_the_dependency_wait():
     r36 = _card("o/r#36", col="Approved")
     r37 = _card("o/r#37", col="Approved", depends_on=["o/r#36"])
     assert approved_label(r37, "Approved", {}, [r36, r37]) == "waiting: needs r#36 merged"
+
+
+# ---------- WP3: pl depends, cycle checks and pl card ----------
+
+class FakeTracker:
+    def __init__(self):
+        self.items, self.writes = {}, []
+
+    def columns(self):
+        return {t: f"col-{t}" for t in C.COLUMNS}
+
+    def cards(self, query=None):
+        return [copy.deepcopy(c) for c in self.items.values()]
+
+    def card(self, item_id):
+        return copy.deepcopy(self.items[item_id])
+
+    def update(self, item_id, *, verify=True, **fields):
+        self.writes.append((item_id, copy.deepcopy(fields)))
+        c = self.items[item_id]
+        if "metadata" in fields:
+            c["metadata"] = {**(c.get("metadata") or {}), **fields.pop("metadata")}
+        c.update(fields)
+        return copy.deepcopy(c)
+
+
+@pytest.fixture
+def board(monkeypatch):
+    fake = FakeTracker()
+    monkeypatch.setattr(trackers, "get", lambda kind: fake)
+    return fake
+
+
+def run_cli(fn, **kw):
+    out = io.StringIO()
+    with redirect_stdout(out):
+        fn(argparse.Namespace(**kw))
+    return out.getvalue()
+
+
+def test_depends_records_full_ids_and_pl_card_shows_them(board):
+    board.items["o/r#36"] = _card("o/r#36", title="card 36", col="Approved")
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", col="Approved")
+    lines = commands.depends("r#37", ["r#36"], clear=False)
+    assert board.items["o/r#37"]["metadata"]["depends_on"] == ["o/r#36"]
+    assert "depends on r#36" in lines[0]
+    out = run_cli(commands.cmd_card, id="r#37", delete=False)
+    assert "depends on r#36\n" in out
+
+
+def test_depends_adds_without_duplicates(board):
+    board.items["o/r#36"] = _card("o/r#36", title="card 36")
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", depends_on=["o/r#36"])
+    board.items["o/r#38"] = _card("o/r#38", title="card 38")
+    commands.depends("r#37", ["r#36", "r#38"], clear=False)
+    assert board.items["o/r#37"]["metadata"]["depends_on"] == ["o/r#36", "o/r#38"]
+
+
+def test_depends_refuses_a_cycle_with_exit_2_and_names_it(board, capsys):
+    board.items["o/r#36"] = _card("o/r#36", title="card 36", depends_on=["o/r#37"])
+    board.items["o/r#37"] = _card("o/r#37", title="card 37")
+    with pytest.raises(SystemExit) as exc:
+        commands.depends("r#37", ["r#36"], clear=False)
+    assert exc.value.code == 2
+    assert "pl depends: refused: that makes a cycle: r#37 -> r#36 -> r#37" in capsys.readouterr().err
+    assert board.writes == []
+
+    with pytest.raises(SystemExit) as exc2:
+        commands.depends("r#37", ["r#37"], clear=False)
+    assert exc2.value.code == 2
+    assert "pl depends: refused: that makes a cycle: r#37 -> r#37" in capsys.readouterr().err
+    assert board.writes == []
+
+
+def test_depends_clear_removes_them(board):
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", depends_on=["o/r#36"])
+    lines = commands.depends("r#37", [], clear=True)
+    assert board.items["o/r#37"]["metadata"]["depends_on"] == []
+    assert "no dependencies; it starts like any Approved card" in lines[0]
+
+
+def test_depends_without_on_or_clear_is_an_error(board):
+    board.items["o/r#37"] = _card("o/r#37", title="card 37")
+    with pytest.raises(SystemExit, match="pl depends: give --on <id>... or --clear"):
+        commands.depends("r#37", [], clear=False)
+
 

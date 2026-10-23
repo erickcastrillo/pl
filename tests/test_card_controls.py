@@ -180,7 +180,7 @@ def test_adopt_returns_the_lines_pl_adopt_prints(board, monkeypatch):
 
 # ---------- the CLI ----------
 
-@pytest.mark.parametrize("cmd, want", [("restart", "--stage"), ("hold", "--reason"), ("unhold", "id")])
+@pytest.mark.parametrize("cmd, want", [("restart", "--stage"), ("hold", "--reason"), ("unhold", "id"), ("depends", "--on")])
 def test_the_new_commands_have_help(tmp_path, cmd, want):
     prof = tmp_path / ".pl-help"
     prof.mkdir()
@@ -192,6 +192,6 @@ def test_the_new_commands_have_help(tmp_path, cmd, want):
 
 def test_the_assistant_asks_before_the_new_commands():
     from pl import assistant, cli
-    for cmd in ("restart", "hold", "unhold"):
+    for cmd in ("restart", "hold", "unhold", "depends"):
         assert cmd in assistant.PL_WRITES and cmd in cli.ASSISTANT_ACTIONS
         assert f"`pl {cmd}" in (Path(assistant.__file__).parent / "assistant.md").read_text()
