@@ -957,3 +957,36 @@ def test_protocol_cards_stop_on_a_repeated_cursor(proto_script):
     with pytest.raises(SystemExit, match="the board server repeated cursor loop"):
         t.cards()
 
+
+def test_a_conflict_rereads_and_retries_once(proto_script):
+    t = tracker(proto_cfg(proto_script, FAIL_CONFLICT_ONCE=1))
+    made = t.create("Inbox", title="Original", metadata={"pipeline_mode": "auto"})
+    updated = t.update(made["id"], title="Updated", metadata={"worker": "w1"})
+    assert updated["title"] == "Updated"
+    assert updated["metadata"] == {"pipeline_mode": "auto", "worker": "w1"}
+
+
+def test_two_conflicts_in_a_row_raise(proto_script):
+    t = tracker(proto_cfg(proto_script, FAIL_CONFLICT_ALWAYS=1))
+    made = t.create("Inbox", title="Original", metadata={"pipeline_mode": "auto"})
+    with pytest.raises(SystemExit, match="conflict") as e:
+        t.update(made["id"], title="Updated")
+    assert getattr(e.value, "code", None) == "conflict"
+
+
+def test_forbidden_opens_an_alert_and_raises(proto_script, monkeypatch):
+    from pl import alerts
+    opened = []
+    monkeypatch.setattr(alerts, "open", lambda *a: opened.append(a) or "open")
+    t = tracker(proto_cfg(proto_script, FAIL_FORBIDDEN=1))
+    made = t.create("Inbox", title="Original")
+    with pytest.raises(SystemExit, match="forbidden") as e:
+        t.update(made["id"], title="Updated")
+    assert getattr(e.value, "code", None) == "forbidden"
+    assert len(opened) == 1
+    key, sev, title, detail = opened[0]
+    assert key == "board_forbidden:b-1"
+    assert sev == "warn"
+    assert title == "Board refused a write: forbidden"
+    assert "forbidden" in detail
+
