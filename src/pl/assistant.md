@@ -68,6 +68,7 @@ Running pl:
 - `pl accounts` (`--reset NAME`): which harness account is parked for a usage limit.
 - `pl profiles`: every pl profile; `pl profiles new NAME` creates one.
 - `pl manager status|start|stop|restart NAME`: the machine manager that keeps dispatchers running.
+- `pl brain show <conv>` (`--json`) / `pl brain prune` (`--dry-run`): inspect or prune conversations.
 - `pl setup`: create a profile. Interactive; the person runs it.
 - `pl assistant log "..."`: rule 4. The Activity feed also records each pipeline
   command run from this window, but only on a best-effort basis: it is a record, not a guard.
