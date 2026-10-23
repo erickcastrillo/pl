@@ -53,6 +53,7 @@ Moving work (rule 1 applies):
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
+- `pl depends <id>` (`--on`, `--clear`): record cards this card depends on, or clear them.
 - `pl move-agent <card> <account>`: move a live agent to another account.
 - `pl pause` / `pl resume`: stop or restart new agent starts.
 
