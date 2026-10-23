@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 4
+pl-builtin-version: 5
 ---
 
 # pl-run: build the approved plan for one card
@@ -68,9 +68,16 @@ such choice in the pull request description.
    git diff --name-only origin/<default branch>...HEAD
    ```
 
-   Note the diff metrics. If the change is within target_lines and target_files, note that it qualifies
-   for auto-merge. If larger, note the metrics in the pull request description for standard review. Always
-   proceed to step 6 to push and open the pull request so downstream automated review and CI can run.
+   Over `max_lines` or `max_files`: CI rejects it, so do not push or open a pull request. Write the counts
+   and a suggested split into smaller pull requests to a file, then:
+
+   ```
+   pl section <id> "REVIEW NOTES" --from <file>
+   pl move <id> Manual
+   ```
+
+   Then stop. Otherwise note the counts in the pull request description, and whether the change fits
+   `target_lines` and `target_files` (the auto-merge size), then go on to step 6.
 
 6. Push and open the pull request:
 
