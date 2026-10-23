@@ -72,6 +72,18 @@ def header_text(data, error=None, note=None):
         t.append(f"   {snap['at']}", style="dim")
     else:
         t.append("   loading…", style="dim")
+    kill = (data or {}).get("kill")
+    if kill is None and isinstance(data, dict):
+        try:
+            from pl import outward
+            kill = outward.state()
+        except Exception:
+            pass
+    if kill and kill.get("on"):
+        since = kill.get("since") or ""
+        hhmm = since.split("T")[1][:5] if "T" in since else since[:5]
+        since_str = f" since {hhmm}" if hhmm else ""
+        t.append(f"   KILL SWITCH ON{since_str}", style="bold red")
     if note:
         t.append(f"   {note}", style="bold red" if "fail" in note or "still running" in note else "#e0a040")
     if error:

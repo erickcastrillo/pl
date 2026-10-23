@@ -257,6 +257,10 @@ class PrsView(Horizontal):
         if not PR_URL.fullmatch(pr["url"]):
             self.app.notify(f"not merging: {BAD_URL}", markup=False)
             return
+        from pl import outward
+        if outward.state().get("on"):
+            self.app.notify("not merging: the kill switch is on", markup=False)
+            return
         hit = self._cache.get(self._ckey(pr))
         v = hit[1] if hit and hit[0] == "ok" else None
         why = verdict(v) if v else "its overview has not loaded"
