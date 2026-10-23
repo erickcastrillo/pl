@@ -47,6 +47,14 @@ SKIP_EVERY = 3600  # seconds between error events for the same card skipped from
 _skipped = {}  # (board_id, card id) -> when its last skip event was emitted
 CLOSE_WAIT = 10  # seconds close() lets an in-flight call finish before cancelling it
 _secrets = set()  # every resolved ${VAR} value; masked in the SDK's and httpx's log records
+CODES = ("not_found", "conflict", "forbidden", "invalid")
+
+
+class ToolError(SystemExit):
+    def __init__(self, message, code=None, detail=""):
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
 
 
 class _Mask(logging.Filter):
@@ -357,6 +365,18 @@ def _from_file(path, name):
     return {"name": name, **servers[name]}
 
 
+PROTOCOL_TOOLS = {
+    "columns": {"tool": "pl_columns", "args": {"board_id": "{board_id}"}, "result": "columns"},
+    "cards": {"tool": "pl_cards", "args": {"board_id": "{board_id}"}, "result": None},
+    "card": {"tool": "pl_card", "args": {"board_id": "{board_id}", "id": "{item_id}"}, "result": "card"},
+    "create": {"tool": "pl_create", "args": {"board_id": "{board_id}", "column_id": "{column_id}", "*": "{fields}"}, "result": "card"},
+    "update": {"tool": "pl_update", "args": {"board_id": "{board_id}", "id": "{item_id}", "fields": "{fields}"}, "result": "card"},
+    "move": {"tool": "pl_move", "args": {"board_id": "{board_id}", "id": "{item_id}", "column_id": "{column_id}"}, "result": "card"},
+    "delete": {"tool": "pl_delete", "args": {"board_id": "{board_id}", "id": "{item_id}"}},
+    "ensure_column": {"tool": "pl_ensure_column", "args": {"board_id": "{board_id}", "title": "{column}"}, "result": "column"},
+}
+
+
 class Mcp:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -371,8 +391,40 @@ class Mcp:
         self.board_id = cfg.get("board_id", "")
         self.timeout = float(cfg.get("timeout") or 60)
         self._columns = None
+        self.mode = None
+
+    def _protocol(self):
+        if self.mode is not None:
+            return
+        if self.tools and self.cfg.get("protocol") != "pl":
+            self.mode = "mapping"
+            return
+        res, s = self._run(lambda session: session.list_tools())
+        have = {t.name for t in res.tools}
+        if "pl_protocol" in have:
+            reply_res, _ = self._run(lambda session: session.call_tool("pl_protocol", {}))
+            texts = [c.text for c in reply_res.content if getattr(c, "type", None) == "text"]
+            text = texts[0] if texts else ""
+            if reply_res.isError or not text.strip():
+                raise SystemExit(f"pl: pl_protocol failed: {s.scrub(text, 200)}")
+            try:
+                data = json.loads(text)
+            except ValueError:
+                raise SystemExit(f"pl: pl_protocol: non-JSON reply: {s.scrub(text, 200)}") from None
+            if data.get("version") != 1:
+                raise SystemExit(f"pl: pl_protocol version {data.get('version')} not supported (expected 1)")
+            boards = data.get("boards") or []
+            if not self.board_id and len(boards) == 1 and isinstance(boards[0], dict) and boards[0].get("id"):
+                self.board_id = boards[0]["id"]
+            self.tools = PROTOCOL_TOOLS
+            self.mode = "pl"
+            return
+        if self.cfg.get("protocol") == "pl":
+            raise SystemExit("pl: the board server has no pl_protocol tool")
+        self.mode = "mapping"
 
     def _spec(self, action):
+        self._protocol()
         spec = self.tools.get(action)
         if not spec or not spec.get("tool"):
             raise SystemExit(f"pl: the MCP tracker has no [tracker.tools.{action}] mapping")
@@ -401,7 +453,15 @@ class Mcp:
         texts = [c.text for c in res.content if getattr(c, "type", None) == "text"]
         text = texts[0] if texts else ""
         if res.isError:
-            raise SystemExit(f"pl: MCP tool {tool} ({action}) failed: {s.scrub(text, 200)}")
+            prefix = text.split(":", 1)[0].strip().lower()
+            if prefix not in CODES and "error executing tool" in prefix and ":" in text:
+                prefix = text.split(":", 2)[1].strip().lower()
+            code = prefix if prefix in CODES else None
+            masked = s.scrub(text, 200)
+            msg = f"pl: MCP tool {tool} ({action}) failed: {masked}"
+            if code:
+                raise ToolError(msg, code=code, detail=masked)
+            raise SystemExit(msg)
         if not text.strip():
             return {}
         try:
@@ -464,6 +524,12 @@ class Mcp:
     def cards(self, query=None):
         """Every card. Only query keys in the mapping's query table (pl key -> server argument) reach the
         server; the rest are dropped (callers still filter client-side)."""
+        self._protocol()
+        if self.mode == "pl":
+            extra = {}
+            if query and "assigned_to" in query:
+                extra["assigned_to"] = query["assigned_to"]
+            return self._cursor_pages(extra)
         spec = self.tools.get("cards", {})
         qmap = spec.get("query") or {}
         extra = {qmap[k]: v for k, v in (query or {}).items() if k in qmap}
@@ -481,6 +547,29 @@ class Mcp:
             rows += page
             if not pk or len(page) < size:
                 break
+        return [self._norm("cards", r) for r in rows if r is not None]
+
+    def _cursor_pages(self, extra):
+        cursor = None
+        seen_cursors = set()
+        seen_ids = set()
+        rows = []
+        for _ in range(MAX_PAGES):
+            reply = self._call("cards", extra={"cursor": cursor, "limit": 100, **extra})
+            if not isinstance(reply, dict):
+                raise SystemExit("pl: MCP tracker cards: expected a dict reply")
+            for c in reply.get("cards") or []:
+                cid = c.get("id") if isinstance(c, dict) else None
+                if cid is None or cid not in seen_ids:
+                    if cid is not None:
+                        seen_ids.add(cid)
+                    rows.append(c)
+            cursor = reply.get("next_cursor")
+            if cursor is None:
+                break
+            if cursor in seen_cursors:
+                raise SystemExit(f"pl: the board server repeated cursor {cursor}")
+            seen_cursors.add(cursor)
         return [self._norm("cards", r) for r in rows if r is not None]
 
     def _page(self, extra, paging):
@@ -534,13 +623,27 @@ class Mcp:
         move = column is not None and "move" in self.tools
         if column is not None and not move:
             fields["list_id"] = col_id
+        orig_meta = dict(fields.get("metadata") or {})
         if verify and "metadata" in fields:
-            fields["metadata"] = {**(self.card(item_id).get("metadata") or {}), **fields["metadata"]}
+            fields["metadata"] = {**(self.card(item_id).get("metadata") or {}), **orig_meta}
         got = {}
-        if fields or not move:  # fields first: a failed write must not leave the card moved
-            got = self._call("update", item_id=item_id, fields=self._out("update", fields))
-        if move:
-            got = self._call("move", item_id=item_id, column=column, column_id=col_id)
+        for attempt in (1, 2):
+            try:
+                if fields or not move:  # fields first: a failed write must not leave the card moved
+                    got = self._call("update", item_id=item_id, fields=self._out("update", fields))
+                if move:
+                    got = self._call("move", item_id=item_id, column=column, column_id=col_id)
+                break
+            except ToolError as e:
+                if e.code == "conflict" and attempt == 1:
+                    fresh = self.card(item_id)
+                    if verify and "metadata" in fields:
+                        fields["metadata"] = {**(fresh.get("metadata") or {}), **orig_meta}
+                    continue
+                if e.code and e.code != "conflict":
+                    from pl import alerts
+                    alerts.open(f"board_{e.code}:{self.board_id}", "warn", f"Board refused a write: {e.code}", e.detail)
+                raise
         if not verify:
             return self._norm("update", got) if isinstance(got, dict) and got else {}
         got = self.card(item_id)
@@ -575,6 +678,9 @@ class Mcp:
 
     def test(self):
         """list_tools, then name any mapped tool the server lacks."""
+        self._protocol()
+        if self.mode == "pl":
+            return f"ok: mcp board (pl protocol v1), {self.board_id}, {len(self.columns())} columns"
         res, _ = self._run(lambda session: session.list_tools())
         have = {t.name for t in res.tools}
         missing = sorted({s["tool"] for s in self.tools.values() if isinstance(s, dict) and s.get("tool")} - have)
