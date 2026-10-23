@@ -127,53 +127,57 @@ class AssistantInput(Input):
 
 class AssistantView(Widget):
     DEFAULT_CSS = """
-    AssistantView { height: 1fr; }
-    #assistant-center { height: 1fr; border: round $warning; padding: 0 1; }
-    #assistant-scroll { height: 1fr; }
-    #assistant-menu { height: auto; border: round $warning; background: $warning 15%; padding: 0 1; }
-    #assistant-status, #assistant-keys { height: 1; color: $text-muted; }
-    #assistant-warning { height: auto; color: $warning; }
-    #assistant-input { border: round $warning; }
+    AssistantView, BrainView { height: 1fr; }
+    #assistant-center, #brain-center { height: 1fr; border: round $warning; padding: 0 1; }
+    #assistant-scroll, #brain-scroll { height: 1fr; }
+    #assistant-menu, #brain-menu { height: auto; border: round $warning; background: $warning 15%; padding: 0 1; }
+    #assistant-status, #brain-status, #assistant-keys, #brain-keys { height: 1; color: $text-muted; }
+    #assistant-warning, #brain-warning { height: auto; color: $warning; }
+    #assistant-input, #brain-input { border: round $warning; }
     """
     BINDINGS = [Binding("ctrl+t", "mode", "chat/idea"), Binding("ctrl+o", "open_window", "open window"),
                 Binding("ctrl+r", "restart", "start over"), Binding("ctrl+f", "file_idea", "file idea"),
                 Binding("escape", "leave_box", "leave box", show=False)]
+    backend = assistant
+    prefix = "assistant"
+    title = "Assistant"
+    placeholder = "ask the assistant; enter sends"
 
     def __init__(self):
-        super().__init__(id="assistant-view")
-        self.started, self.mode, self.status = False, "chat", "opening the tab starts the assistant"
+        super().__init__(id=f"{self.prefix}-view")
+        self.started, self.mode, self.status = False, "chat", f"opening the tab starts the {self.prefix}"
         self.ready = None     # the idea the assistant marked ready to file, shown until it is filed
         self.activity, self.redraws = None, 0
         self._read_started, self._seq, self._shown = None, 0, 0   # the newest read: when it began, its number; shown
         self._key, self._lines, self._moved = None, None, 0.0   # what the chat was drawn from; the screen, when it moved
 
     def compose(self):
-        yield Static("", id="assistant-warning")
-        with Vertical(id="assistant-center"):
-            with VerticalScroll(id="assistant-scroll") as scroll:
+        yield Static("", id=f"{self.prefix}-warning")
+        with Vertical(id=f"{self.prefix}-center"):
+            with VerticalScroll(id=f"{self.prefix}-scroll") as scroll:
                 scroll.can_focus = False     # opening the tab focuses the box, the first focusable widget
-                yield Static(Text("the assistant starts when you open this tab", style="dim"), id="assistant-screen")
-            yield Static("", id="assistant-menu")
-            yield Static("", id="assistant-status")
-            yield AssistantInput(placeholder="ask the assistant; enter sends", id="assistant-input")
-            yield Static(Text(KEYS, style="dim"), id="assistant-keys")
+                yield Static(Text(f"the {self.prefix} starts when you open this tab", style="dim"), id=f"{self.prefix}-screen")
+            yield Static("", id=f"{self.prefix}-menu")
+            yield Static("", id=f"{self.prefix}-status")
+            yield AssistantInput(placeholder=self.placeholder, id=f"{self.prefix}-input")
+            yield Static(Text(KEYS, style="dim"), id=f"{self.prefix}-keys")
 
     def on_mount(self):
-        if C.CONFIG_DIR is None:   # pl commands need a profile: the assistant would have nothing to act on
-            self.query_one("#assistant-input", Input).disabled = True
-            self.status = "no profile loaded: the assistant needs one (pl setup)"
-        self.query_one("#assistant-menu").display = False
+        if C.CONFIG_DIR is None and self.backend is assistant:   # pl commands need a profile: the assistant would have nothing to act on
+            self.query_one(AssistantInput).disabled = True
+            self.status = f"no profile loaded: the {self.prefix} needs one (pl setup)"
+        self.query_one(f"#{self.prefix}-menu").display = False
         self._show_status()
         self.set_interval(1, self._poll)
 
     def focus_box(self):
         """Typed text must reach the box: with the focus anywhere else a letter is a console command."""
-        box = self.query_one("#assistant-input", AssistantInput)
+        box = self.query_one(AssistantInput)
         if not box.disabled and self.app.screen is self.screen and len(self.app.screen_stack) == 1:
             box.focus()
 
     def _poll(self):   # a slow read is never cancelled: the next poll waits, then after SLOW s starts a new read too
-        if not any(w.group == "assistant-screen" and w.is_running for w in self.workers):
+        if not any(w.group == f"{self.prefix}-screen" and w.is_running for w in self.workers):
             self.tick()
         elif self._read_started is not None and time.monotonic() - self._read_started > SLOW:
             self.activity = "still reading…"
@@ -187,7 +191,7 @@ class AssistantView(Widget):
             try:
                 out = fn()
             except (SystemExit, Exception) as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify, f"assistant: {e}", severity="error", markup=False)
+                self.app.call_from_thread(self.app.notify, f"{self.prefix}: {e}", severity="error", markup=False)
                 if failed:
                     self.app.call_from_thread(self._ui, failed)
                 return
@@ -204,29 +208,31 @@ class AssistantView(Widget):
             pass
 
     def _active(self):
-        return self.app.active_tab == "assistant"
+        return self.app.active_tab == self.prefix
 
     def opened(self):
         """The tab was opened: the first time in this console, start (or reattach to) the assistant."""
-        if not self.started and C.CONFIG_DIR is not None:
+        if not self.started and (C.CONFIG_DIR is not None or self.backend is not assistant):
             self.started = True
             self._start()
         self.tick()
 
     def _start(self):
         def fn():
-            status = assistant.ensure()
-            return status, assistant.load().get("mode") or "chat", assistant.warning()
-        self._bg(fn, "assistant-start", self._started, self._start_failed)
+            status = self.backend.ensure()
+            mode = getattr(self.backend, "load", lambda: {})().get("mode") or "chat"
+            warn = getattr(self.backend, "warning", lambda: None)()
+            return status, mode, warn
+        self._bg(fn, f"{self.prefix}-start", self._started, self._start_failed)
 
     def _start_failed(self):
         self.started = False     # the next time the tab opens, it tries again
-        self.status = "the assistant did not start (see the notice); reopen the tab to try again"
+        self.status = f"the {self.prefix} did not start (see the notice); reopen the tab to try again"
         self._show_status()
 
     def _started(self, out):
         self.status, self.mode, warn = out
-        self.query_one("#assistant-warning", Static).update(Text(warn or ""))   # one line: allow rules that skip asking
+        self.query_one(f"#{self.prefix}-warning", Static).update(Text(warn or ""))   # one line: allow rules that skip asking
         self._show_status()
         self.tick()
 
@@ -238,11 +244,13 @@ class AssistantView(Widget):
         seq, self._read_started = self._seq, time.monotonic()
 
         def fn():   # a pane that died while the console stays open (/exit, tmux lost it) is started again
-            status = None if assistant.pane() else assistant.ensure()
-            assistant.sync_session()              # /clear gives the harness a new session id and transcript
-            assistant.restart_if_updated()        # reads the screen again itself, under the lock
-            lines = assistant.screen(SCREEN_LINES)
-            st = assistant.load()
+            status = None if self.backend.pane() else self.backend.ensure()
+            if hasattr(self.backend, "sync_session"):
+                self.backend.sync_session()              # /clear gives the harness a new session id and transcript
+            if hasattr(self.backend, "restart_if_updated"):
+                self.backend.restart_if_updated()        # reads the screen again itself, under the lock
+            lines = self.backend.screen(SCREEN_LINES)
+            st = self.backend.load()
             found, chat = _transcript(st), None
             if found:         # read again only when the file's size or mtime changed
                 p, s = found
@@ -253,9 +261,12 @@ class AssistantView(Widget):
             else:             # no transcript yet (or not claude): the screen itself
                 key = ("screen", tuple(lines))
                 if key != last:
-                    chat = Text("\n".join(lines)) if lines else Text("the assistant's screen is empty", style="dim")
-            return seq, status, lines, key, chat, assistant.menu(lines), assistant.busy(st), assistant.ready_idea()
-        self._bg(fn, "assistant-screen", self._show_screen, self._start_failed)
+                    chat = Text("\n".join(lines)) if lines else Text(f"the {self.prefix}'s screen is empty", style="dim")
+            menu = getattr(self.backend, "menu", assistant.menu)(lines)
+            busy = getattr(self.backend, "busy", assistant.busy)(st)
+            ready = getattr(self.backend, "ready_idea", lambda: None)()
+            return seq, status, lines, key, chat, menu, busy, ready
+        self._bg(fn, f"{self.prefix}-screen", self._show_screen, self._start_failed)
 
     def _show_screen(self, out):
         seq, status, lines, key, chat, menu, busy, ready = out
@@ -268,14 +279,14 @@ class AssistantView(Widget):
             self.status = status
         if chat is not None:
             self._key = key
-            self.query_one("#assistant-screen", Static).update(chat)
-            self.query_one("#assistant-scroll", VerticalScroll).scroll_end(animate=False)
+            self.query_one(f"#{self.prefix}-screen", Static).update(chat)
+            self.query_one(f"#{self.prefix}-scroll", VerticalScroll).scroll_end(animate=False)
             self.redraws += 1
-        card = self.query_one("#assistant-menu", Static)
+        card = self.query_one(f"#{self.prefix}-menu", Static)
         card.display = bool(menu)
         if menu:
             card.update(menu_card(menu))
-        self.query_one("#assistant-input", AssistantInput).options = tuple(menu["options"]) if menu else ()
+        self.query_one(AssistantInput).options = tuple(menu["options"]) if menu else ()
         if self._lines is not None and lines != self._lines:
             self._moved = time.monotonic()
         self._lines = lines
@@ -284,14 +295,14 @@ class AssistantView(Widget):
         self._show_status()
 
     def _show_status(self):
-        box = self.query_one("#assistant-center")
-        box.border_title = f"Assistant · {self.mode} mode"
+        box = self.query_one(f"#{self.prefix}-center")
+        box.border_title = f"{self.title} · {self.mode} mode"
         box.border_subtitle = self.status
         if self.ready:
             line = Text(f"Idea ready: {str(self.ready.get('title'))[:80]} · ctrl+f to file", style="bold")
         else:
             line = Text(f"{self.activity or self.status} · {HINT.get(self.mode, '')}", style="dim")
-        self.query_one("#assistant-status", Static).update(line)
+        self.query_one(f"#{self.prefix}-status", Static).update(line)
 
     # ---------- keys ----------
 
@@ -302,17 +313,18 @@ class AssistantView(Widget):
             return
 
         def failed():      # the notice says why; the text comes back so nothing the person wrote is lost
-            box = self.query_one("#assistant-input", AssistantInput)
+            box = self.query_one(AssistantInput)
             if not box.value:
                 box.value = text
-        self._bg(lambda: assistant.send(text), "assistant-send", lambda _: self.tick(), failed)
+        self._bg(lambda: self.backend.send(text), f"{self.prefix}-send", lambda _: self.tick(), failed)
 
     def on_assistant_input_answer(self, m):
         def done(typed):
             if not typed:
                 self.app.notify(CHANGED, markup=False)
             self.tick()
-        self._bg(lambda: assistant.answer(m.digit, m.options), "assistant-send", done)
+        ans = getattr(self.backend, "answer", assistant.answer)
+        self._bg(lambda: ans(m.digit, m.options), f"{self.prefix}-send", done)
 
     def action_leave_box(self):
         self.app.set_focus(None)   # plain digits then switch tabs again
@@ -324,21 +336,24 @@ class AssistantView(Widget):
             self.mode = new
             self._show_status()
             self.tick()
-        self._bg(lambda: assistant.set_mode(new), "assistant-mode", done)
+        if hasattr(self.backend, "set_mode"):
+            self._bg(lambda: self.backend.set_mode(new), f"{self.prefix}-mode", done)
+        else:
+            done(None)
 
     def action_open_window(self):
-        win = assistant.load().get("window")
-        self._bg(lambda: agents.jump_to_window(win), "assistant-window", lambda msg: self.app.notify(msg, markup=False))
+        win = self.backend.load().get("window")
+        self._bg(lambda: agents.jump_to_window(win), f"{self.prefix}-window", lambda msg: self.app.notify(msg, markup=False))
 
     def action_restart(self):
         def fn():
-            assistant.reset()
-            return assistant.ensure(), "chat", assistant.warning()
+            self.backend.reset()
+            return self.backend.ensure(), "chat", getattr(self.backend, "warning", lambda: None)()
 
         def answered(yes):
             if yes:
-                self._bg(fn, "assistant-start", self._started)
-        self.app.push_screen(ConfirmScreen("Start a new assistant conversation? The current one ends."), answered)
+                self._bg(fn, f"{self.prefix}-start", self._started)
+        self.app.push_screen(ConfirmScreen(f"Start a new {self.prefix} conversation? The current one ends."), answered)
 
     def action_file_idea(self):
         """File the idea the assistant marked ready: a pl-side confirm, outside the harness, then one Inbox card."""

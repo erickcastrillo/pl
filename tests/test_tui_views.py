@@ -1992,3 +1992,13 @@ async def test_p_holds_a_card_with_a_reason_and_releases_a_held_one(monkeypatch)
         await settle(pilot)
     assert [g[0] for g in held] == [("e0000006aaaa", "legal")]
     assert [g[0] for g in freed] == [("e0000007aaaa",)]
+
+
+async def test_b_opens_the_brain_tab_on_any_profile():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+        await pilot.press("b")
+        await pilot.pause()
+        assert app.active_tab == "brain"
