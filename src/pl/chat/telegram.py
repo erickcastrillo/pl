@@ -20,8 +20,7 @@ def _http(token: str, method: str, payload: dict[str, Any] | None = None) -> Any
             body = r.read(1_000_000).decode("utf-8", "replace")
             res = json.loads(body)
             if not res.get("ok"):
-                desc = res.get("description", "unknown error")
-                masked = util.mask(f"Telegram API error {method}: {desc}").replace(token, "***")
+                masked = util.mask(f"Telegram API error {method}: {res.get('description', 'error')}").replace(token, "***")
                 raise RuntimeError(masked)
             return res.get("result")
     except urllib.error.HTTPError as e:
@@ -31,8 +30,7 @@ def _http(token: str, method: str, payload: dict[str, Any] | None = None) -> Any
                 err_body = e.read().decode("utf-8", "replace")
         except Exception:
             pass
-        msg = f"Telegram HTTP {e.code}: {e.reason} ({err_body}) for {method}"
-        masked = util.mask(msg).replace(token, "***")
+        masked = util.mask(f"Telegram HTTP {e.code}: {e.reason} ({err_body}) for {method}").replace(token, "***")
         raise RuntimeError(masked) from None
     except Exception as e:
         masked = util.mask(f"Telegram error {method}: {e}").replace(token, "***")
@@ -41,8 +39,7 @@ def _http(token: str, method: str, payload: dict[str, Any] | None = None) -> Any
 
 class Telegram:
     def __init__(self, name: str, cfg: dict[str, Any]):
-        self.name = name
-        self.cfg = cfg
+        self.name, self.cfg = name, cfg
         self.token_ref = cfg.get("token", "")
         self.allow = [str(x) for x in cfg.get("allow", [])]
         self.routes = cfg.get("routes", ["gates"])
@@ -57,19 +54,12 @@ class Telegram:
 
     def send(self, chat: str, text: str, buttons: list[Any] | dict[str, Any] | None = None) -> Any:
         from pl.chat import safe_text
-        clean = safe_text(text)
-        payload: dict[str, Any] = {"chat_id": str(chat), "text": clean}
-        if buttons:
-            if isinstance(buttons, dict):
-                payload["reply_markup"] = buttons
-            elif isinstance(buttons, list):
-                rows = []
-                for b in buttons:
-                    if isinstance(b, list):
-                        rows.append([self._format_button(x) for x in b])
-                    else:
-                        rows.append([self._format_button(b)])
-                payload["reply_markup"] = {"inline_keyboard": rows}
+        payload: dict[str, Any] = {"chat_id": str(chat), "text": safe_text(text)}
+        if isinstance(buttons, dict):
+            payload["reply_markup"] = buttons
+        elif isinstance(buttons, list):
+            rows = [[self._format_button(x) for x in (b if isinstance(b, list) else [b])] for b in buttons]
+            payload["reply_markup"] = {"inline_keyboard": rows}
         return _http(self._token(), "sendMessage", payload)
 
     @staticmethod
@@ -82,9 +72,7 @@ class Telegram:
 
     def edit(self, chat: str, msg: str | int, text: str) -> Any:
         from pl.chat import safe_text
-        clean = safe_text(text)
-        payload = {"chat_id": str(chat), "message_id": int(msg), "text": clean}
-        return _http(self._token(), "editMessageText", payload)
+        return _http(self._token(), "editMessageText", {"chat_id": str(chat), "message_id": int(msg), "text": safe_text(text)})
 
     def updates(self, offset: int | None = None) -> list[dict[str, Any]]:
         payload = {"offset": offset} if offset is not None else {}
