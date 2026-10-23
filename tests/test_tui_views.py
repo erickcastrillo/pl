@@ -1992,3 +1992,74 @@ async def test_p_holds_a_card_with_a_reason_and_releases_a_held_one(monkeypatch)
         await settle(pilot)
     assert [g[0] for g in held] == [("e0000006aaaa", "legal")]
     assert [g[0] for g in freed] == [("e0000007aaaa",)]
+
+
+async def test_header_says_kill_switch_on(monkeypatch):
+    from pl import outward
+    from pl.tui.chrome import header_text
+    data = fake_data()
+    data["kill"] = {"on": True, "since": "2026-10-23T14:30:00+00:00", "by": "user"}
+    t = header_text(data)
+    assert "KILL SWITCH ON since 14:30" in t.plain
+    # Also in app
+    outward.set(True)
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert "KILL SWITCH ON since 14:30" in screen_text(app)
+
+
+async def test_K_asks_then_turns_it_on_and_off(monkeypatch):
+    from pl import outward
+    from pl.tui.review import ConfirmScreen
+    outward.set(False)
+    assert not outward.state()["on"]
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("K")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "kill switch" in app.screen.message.lower()
+        await pilot.press("n")
+        await settle(pilot)
+        assert not outward.state()["on"] and len(app.screen_stack) == 1
+
+        await pilot.press("K")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await settle(pilot)
+        assert outward.state()["on"] and len(app.screen_stack) == 1
+
+        await pilot.press("K")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "off" in app.screen.message.lower()
+        await pilot.press("y")
+        await settle(pilot)
+        assert not outward.state()["on"] and len(app.screen_stack) == 1
+
+
+async def test_merge_is_refused_while_the_kill_switch_is_on(monkeypatch):
+    from pl import outward
+    outward.set(True)
+    gh = FakeGh(_view())
+    monkeypatch.setattr(tui_prs, "_run", gh)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_pr(pilot, app)
+        await pilot.press("m")
+        await settle(pilot)
+        assert gh.merges() == []
+        assert len(app.screen_stack) == 1  # no merge confirmation opened
+
+        await pilot.press("M")
+        await settle(pilot)
+        assert gh.merges() == []
+        assert len(app.screen_stack) == 1
+
+        # Turn it off and confirm merge is allowed
+        outward.set(False)
+        await pilot.press("m")
+        await settle(pilot)
+        assert len(app.screen_stack) == 2
+
