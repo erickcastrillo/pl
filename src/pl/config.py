@@ -79,6 +79,7 @@ def _defaults():
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
+    SYNC = {}
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -173,6 +174,7 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    g["SYNC"] = dict(t.get("sync", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -324,6 +326,17 @@ def validate(doc) -> list[str]:
             if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
                 errs.append(f"usage.{key}.{model} must be a number above 0")
     errs += _local_model_errors(doc.get("local_model", {}))
+    sync = doc.get("sync") if isinstance(doc.get("sync"), dict) else {}
+    if "github" in sync:
+        gh = sync["github"]
+        if not (isinstance(gh, str) and re.match(r"^[^/\s]+/projects/\d+$", gh)):
+            errs.append("sync.github must look like owner/projects/N")
+        if doc.get("tracker", {}).get("type") != "local":
+            errs.append('sync.github needs [tracker] type = "local"')
+    if "git" in sync:
+        git = sync["git"]
+        if not (isinstance(git, str) and git.strip()):
+            errs.append("sync.git must be a folder path")
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
