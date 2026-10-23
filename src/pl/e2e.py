@@ -77,17 +77,16 @@ tar -czf {OUT_TARS['logs']} -C {WORK} logs
 """
 
 
-def _write_private(path, text):
+def _private(path, mode="w"):
+    """A new file only its owner can read, made so before anything is written (it holds secrets)."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
+    return os.fdopen(fd, mode)
 
 
 def _bundle(stage, names):
-    """stage/bundle.tar (0600: it holds the env file) with the app archive, the env file and the scripts."""
-    fd = os.open(stage / "bundle.tar", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f, tarfile.open(fileobj=f, mode="w") as t:
+    """stage/bundle.tar (private: it holds the env file) with the app archive, the env file and the scripts."""
+    with _private(stage / "bundle.tar", "wb") as f, tarfile.open(fileobj=f, mode="w") as t:
         for n in names:
             t.add(stage / n, arcname=n)
 
@@ -111,7 +110,8 @@ def _prepare(a, env):
     stage.mkdir(parents=True, exist_ok=True)
     _git(repo, "archive", "--format=tar.gz", "-o", str(stage / "app.tar.gz"), sha)
     (stage / "cloud-init.yaml").write_text(V.cloud_init(spec.packages))
-    _write_private(stage / "env", "".join(f"export {k}={shlex.quote(v)}\n" for k, v in spec.env.items()))
+    with _private(stage / "env") as f:
+        f.write("".join(f"export {k}={shlex.quote(v)}\n" for k, v in spec.env.items()))
     t = spec.tests
     report = posixpath.normpath(posixpath.join(t.dir, t.report)) if t.report else None
     scripts = {f"setup-{i}.sh": _script(s.run) for i, s in enumerate(spec.setup, 1)}
@@ -131,7 +131,7 @@ def _plan(spec):
     def step(kind, name, log):
         return {"kind": kind, "name": name, "status": "skipped", "seconds": None, "log": log, "tail": None}
     steps = [(step("setup", "start-vm", None), ("vm",))]
-    steps += [(step("setup", s.name, f"logs/setup-{i}-{s.name}.log"), ("setup", f"setup-{i}.sh", f"setup-{i}-{s.name}.log"))
+    steps += [(step("setup", s.name, f"logs/setup-{i}-{s.name}.log"), ("setup", i, s.name))
               for i, s in enumerate(spec.setup, 1)]
     steps += [(step("service", s.name, f"logs/service-{s.name}.log"), ("service", s)) for s in spec.services]
     return steps + [(step("tests", "tests", "logs/tests.log"), ("tests",))]
@@ -158,11 +158,10 @@ def _do(ctx, what, left):
             return False
         return V.wait_ready(name, s.ready, min(s.timeout, left())) or "timeout"
     if what[0] == "setup":
-        code = V.exec_step(name, f"{WORK}/{what[1]}", f"{WORK}/logs/{what[2]}", APP, left())
+        code = V.exec_step(name, f"{WORK}/setup-{what[1]}.sh", f"{WORK}/logs/setup-{what[1]}-{what[2]}.log", APP, left())
     else:
         cwd = posixpath.normpath(posixpath.join(APP, spec.tests.dir))
-        code = V.exec_step(name, f"{WORK}/tests.sh", f"{WORK}/logs/tests.log", cwd,
-                           min(spec.tests.timeout, left()))
+        code = V.exec_step(name, f"{WORK}/tests.sh", f"{WORK}/logs/tests.log", cwd, min(spec.tests.timeout, left()))
     return True if code == 0 else "timeout" if code == V.TIMEOUT else False
 
 
@@ -185,11 +184,6 @@ def _drive(ctx, steps):
     return "passed", 0
 
 
-def _extract(tar_path, dest):
-    with tarfile.open(tar_path) as t:
-        t.extractall(dest, filter="data")
-
-
 def _collect(ctx):
     name, out = ctx["vm"], ctx["out"]
     if V.exec_step(name, f"{WORK}/collect.sh", f"{HOME_VM}/pl-e2e-collect.log", HOME_VM, COLLECT_TIMEOUT):
@@ -197,7 +191,8 @@ def _collect(ctx):
     for kind, vm_path in OUT_TARS.items():
         host = ctx["stage"] / os.path.basename(vm_path)
         V.transfer_out(name, vm_path, str(host))
-        _extract(host, out / kind if kind == "artifacts" else out)
+        with tarfile.open(host) as t:
+            t.extractall(out / kind if kind == "artifacts" else out, filter="data")
         host.unlink()
 
 
@@ -265,9 +260,8 @@ def _finish(ctx, steps, outcome, code, started):
 def cmd_e2e(argv):
     ap = argparse.ArgumentParser(prog="pl e2e", description="Run the repo's Playwright suite in a throwaway "
                                  "Multipass VM, set up from .pl/e2e.yaml at REF.",
-                                 epilog="Exit codes: 0 passed, 1 tests failed, 2 setup, service or VM failure "
-                                 "(or a missing or invalid .pl/e2e.yaml). Results: report.md, summary.json, "
-                                 "logs/ and artifacts/ in the --out folder.")
+                                 epilog="Exit codes: 0 passed, 1 tests failed, 2 setup, service or VM failure or a bad "
+                                 ".pl/e2e.yaml. --out gets report.md, summary.json, logs/ and artifacts/.")
     ap.add_argument("repo", nargs="?", help="the app repository (default: the git root of this folder)")
     ap.add_argument("--ref", default="HEAD", help="the commit, branch or tag to test (default HEAD)")
     ap.add_argument("--out", help="a plain folder for the results (default ~/pl-e2e/<repo>/<timestamp>)")
@@ -275,11 +269,8 @@ def cmd_e2e(argv):
     a = ap.parse_args(argv)
     try:
         ctx = _prepare(a, os.environ)
-    except Stop as e:
-        print(e, file=sys.stderr)
-        return 2
-    except OSError as e:
-        print(f"pl e2e: could not write the stage folder: {e}", file=sys.stderr)
+    except (Stop, OSError) as e:
+        print(e if isinstance(e, Stop) else f"pl e2e: could not write the stage folder: {e}", file=sys.stderr)
         return 2
     steps, started = _plan(ctx["spec"]), now_iso()
     outcome, code = "infra_failed", 2
