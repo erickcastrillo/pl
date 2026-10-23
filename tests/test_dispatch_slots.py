@@ -296,3 +296,19 @@ def test_in_progress_cards_go_oldest_first_then_approved_ones(monkeypatch):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     dispatch.dispatch_once(3, False, pull=False)
     assert started == ["o/r#3", "o/r#5", "o/r#1"]
+
+
+def test_an_unreadable_card_is_skipped_and_alerted_once(monkeypatch):
+    c = {**_card(1), "unreadable": "<!-- pl:metadata -->\n{broken\n"}
+    started, _ = _pass(monkeypatch, [c])
+    assert started == []
+    a = alerts.get(f"card_unreadable:{c['id']}")
+    assert a is not None
+    assert a["severity"] == "warn"
+    assert "broken pl metadata block" in a["title"]
+    assert "fix the block on the board; pl card <id> shows it" in a["fix"]
+    started, _ = _pass(monkeypatch, [c])
+    assert started == []
+    assert len([al for al in alerts.listing(all=True) if al["key"] == f"card_unreadable:{c['id']}"]) == 1
+    assert alerts.get(f"card_unreadable:{c['id']}").get("resolved_at") is None
+

@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 
 from pl import config as C
+from pl.trackers import metablock
 
 VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 PH_RE = re.compile(r"\{(\w+)\}")
@@ -370,6 +371,7 @@ class Mcp:
         self.tools = cfg.get("tools") or {}
         self.board_id = cfg.get("board_id", "")
         self.timeout = float(cfg.get("timeout") or 60)
+        self.meta_in_desc = cfg.get("metadata") == "description"
         self._columns = None
 
     def _spec(self, action):
@@ -436,6 +438,12 @@ class Mcp:
                      ("updated_at", ""), ("assigned_to", None)):
             if out.get(k) is None:
                 out[k] = d
+        if self.meta_in_desc:
+            text, meta, broken = metablock.split(out.get("description") or "")
+            out["description"] = text
+            out["metadata"] = meta
+            if broken:
+                out["unreadable"] = broken
         return out
 
     def _out(self, action, fields):
@@ -517,10 +525,17 @@ class Mcp:
         return self._norm("card", got)
 
     def create(self, column, *, title, description="", tags=(), metadata=None, assigned_to=None):
-        fields = {"title": title, "description": description, "tags": list(tags), "metadata": dict(metadata or {}),
-                  **({"assigned_to": assigned_to} if assigned_to else {})}
-        got = self._call("create", column=column, column_id=self._col(column), title=title, description=description,
-                         fields=self._out("create", fields))
+        if self.meta_in_desc:
+            desc = metablock.join(description, metadata or {})
+            fields = {"title": title, "description": desc, "tags": list(tags),
+                      **({"assigned_to": assigned_to} if assigned_to else {})}
+            got = self._call("create", column=column, column_id=self._col(column), title=title, description=desc,
+                             fields=self._out("create", fields))
+        else:
+            fields = {"title": title, "description": description, "tags": list(tags), "metadata": dict(metadata or {}),
+                      **({"assigned_to": assigned_to} if assigned_to else {})}
+            got = self._call("create", column=column, column_id=self._col(column), title=title, description=description,
+                             fields=self._out("create", fields))
         return self._norm("create", got) if isinstance(got, dict) and got else {}
 
     def update(self, item_id, *, verify=True, **fields):
@@ -534,8 +549,25 @@ class Mcp:
         move = column is not None and "move" in self.tools
         if column is not None and not move:
             fields["list_id"] = col_id
-        if verify and "metadata" in fields:
+        check_fields = dict(fields)
+        if self.meta_in_desc:
+            if "description" in fields or "metadata" in fields:
+                cur = self.card(item_id)
+                if cur.get("unreadable"):
+                    raise SystemExit(f"pl: card {item_id} has an unreadable metadata block; fix it on the board (pl card {item_id} shows it)")
+                new_text = fields.get("description")
+                current_text = cur.get("description") or ""
+                chosen_text = new_text or current_text
+                current_meta = cur.get("metadata") or {}
+                new_meta = fields.pop("metadata", None) or {}
+                merged_meta = {**current_meta, **new_meta}
+                fields["description"] = metablock.join(chosen_text, merged_meta)
+                check_fields["description"] = chosen_text
+                if merged_meta or "metadata" in check_fields:
+                    check_fields["metadata"] = merged_meta
+        elif verify and "metadata" in fields:
             fields["metadata"] = {**(self.card(item_id).get("metadata") or {}), **fields["metadata"]}
+            check_fields["metadata"] = fields["metadata"]
         got = {}
         if fields or not move:  # fields first: a failed write must not leave the card moved
             got = self._call("update", item_id=item_id, fields=self._out("update", fields))
@@ -545,8 +577,8 @@ class Mcp:
             return self._norm("update", got) if isinstance(got, dict) and got else {}
         got = self.card(item_id)
         if move:
-            fields["list_id"] = col_id
-        for k, v in fields.items():
+            check_fields["list_id"] = col_id
+        for k, v in check_fields.items():
             if k == "metadata":
                 for mk, mv in v.items():
                     if (got.get("metadata") or {}).get(mk) != mv:
