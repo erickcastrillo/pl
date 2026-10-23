@@ -77,8 +77,10 @@ def pull_one(pc, all_cards, dry=False):
     if dry:
         print(f"  would pull {short_id(pc['id'])}  {pc['title'][:60]}  ({col}, profile {profile})")
         return None
+    m = pc.get("metadata") or {}
     meta = {"pipeline_mode": "auto", "profile": profile, "submitted_by": C.USER_EMAIL, "submitted_at": now_iso(),
-            "submitted_from": C.HOST, "product_card": pc["id"], "product_url": product_url(pc["id"]), "product_column": col}
+            "submitted_from": C.HOST, "product_card": pc["id"], "product_url": product_url(pc["id"]), "product_column": col,
+            **{k: m[k] for k in ("plan", "slice") if k in m}}
     desc = check_size(render({"INPUT": "\n".join(body)}))
     item = trackers.get("tracker").create("Inbox", title=pc["title"][:200], description=desc,
                                           tags=["idea", "from-product"] + repos, metadata=meta, assigned_to=trackers.me(trackers.get("tracker")))
