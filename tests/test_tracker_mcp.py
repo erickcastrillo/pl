@@ -807,3 +807,59 @@ def test_as_is_missing_var_without_default_names_only_the_var(tmp_path, monkeypa
     with pytest.raises(SystemExit) as e:
         tracker(cfg).cards()
     assert "PL_MISSING_VAR" in str(e.value) and SECRET not in str(e.value)
+
+
+def test_description_mode_writes_the_block_and_leaves_the_text_above_unchanged(script):
+    from pl.trackers import metablock
+    t = tracker(stdio_cfg(script, metadata="description"))
+    text = "# Problem\nSomething to solve\n"
+    meta = {"pipeline_mode": "auto", "worker": {"stage": "spec"}}
+    made = t.create("Inbox", title="Card 1", description=text, metadata=meta)
+    assert made["id"] == "it-1"
+
+    raw_t = tracker(stdio_cfg(script))
+    raw = raw_t.card("it-1")
+    assert raw["description"] == metablock.join(text, meta)
+    assert raw["metadata"] == {}
+
+    t = tracker(stdio_cfg(script, metadata="description"))
+    t.update("it-1", metadata={"worker": {"stage": "run", "attempts": 1}})
+    raw = tracker(stdio_cfg(script)).card("it-1")
+    merged_meta = {"pipeline_mode": "auto", "worker": {"stage": "run", "attempts": 1}}
+    assert raw["description"] == metablock.join(text, merged_meta)
+
+
+def test_description_mode_hides_the_block_from_the_description(script):
+    from pl.trackers import metablock
+    t = tracker(stdio_cfg(script, metadata="description"))
+    text = "Clear description without metadata markers"
+    t.create("Inbox", title="Card 1", description=text, metadata={"k": "v"})
+    c = t.card("it-1")
+    assert c["description"] == text
+    assert metablock.MARK not in c["description"]
+    assert c["metadata"] == {"k": "v"}
+
+    cards = t.cards()
+    assert cards[0]["description"] == text
+    assert metablock.MARK not in cards[0]["description"]
+    assert cards[0]["metadata"] == {"k": "v"}
+
+
+def test_description_mode_refuses_to_write_an_unreadable_card(script):
+    from pl.trackers import metablock
+    raw_t = tracker(stdio_cfg(script))
+    broken_desc = f"Some card text\n\n{metablock.MARK}\n```json\n{{broken json\n```\n"
+    raw_t.create("Inbox", title="Broken card", description=broken_desc)
+
+    t = tracker(stdio_cfg(script, metadata="description"))
+    c = t.card("it-1")
+    assert c.get("unreadable")
+
+    with pytest.raises(SystemExit) as e:
+        t.update("it-1", metadata={"pipeline_mode": "auto"})
+    assert "card it-1 has an unreadable metadata block; fix it on the board (pl card it-1 shows it)" in str(e.value)
+
+    with pytest.raises(SystemExit) as e:
+        t.update("it-1", description="new text")
+    assert "card it-1 has an unreadable metadata block; fix it on the board (pl card it-1 shows it)" in str(e.value)
+
