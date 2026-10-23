@@ -77,6 +77,9 @@
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
+  pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
+                          run the repo's Playwright suite in a throwaway Multipass VM set up from its
+                          .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (docs/e2e.md). No profile needed
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
@@ -150,6 +153,9 @@ def main():
     if pre_a.rest[:1] == ["whatsnew"]:         # the package's own list: no profile needed
         from pl import whatsnew
         return whatsnew.cmd_whatsnew(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["e2e"]:              # repo-driven: reads .pl/e2e.yaml, needs no tracker
+        from pl import e2e
+        return e2e.cmd_e2e(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])

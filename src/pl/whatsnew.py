@@ -112,6 +112,9 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-22.01", "pl e2e runs your repo's Playwright suite in a throwaway Multipass VM, set up from .pl/e2e.yaml",
+       "~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
+       "docs/e2e.md. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
 ]
 
 

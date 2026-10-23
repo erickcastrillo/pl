@@ -34,6 +34,7 @@ All of these are on by default. The console lists new ones once after an upgrade
 | Spread a stage over several accounts, of any harness | Settings: `<stage> accounts` | `[stages.run] accounts = ["main", "agy"]` |
 | Antigravity's quota parks its account until "Resets in"; finished Antigravity prep windows close | `pl list`: limit hit | `pl accounts` |
 | Pick the model and reasoning effort per account, and the effort per stage | Settings: Models and effort, `<stage> effort` | `[accounts.main] model = "opus"` |
+| End-to-end tests in a throwaway Multipass VM, from the repo's `.pl/e2e.yaml` ([docs/e2e.md](docs/e2e.md)) | `~/pl-e2e/<repo>/<time>/report.md` | `pl e2e` |
 
 ## Your subscription
 
