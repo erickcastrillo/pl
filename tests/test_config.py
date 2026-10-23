@@ -286,3 +286,14 @@ def test_validate_pr_size_limits_are_whole_numbers_and_auto_merge_fits_the_max()
     errs = C.validate(tomlkit.parse("[code_host]\npr_auto_merge_lines = 301\n"))
     assert any("code_host.pr_auto_merge_lines" in e for e in errs)
     assert C.validate(tomlkit.parse("[code_host]\npr_max_lines = 150\npr_auto_merge_files = 10\n")) == []
+
+
+def test_validate_local_tracker_path_must_be_relative():
+    import tomlkit
+    assert C.validate(tomlkit.parse('[tracker]\ntype = "local"\n')) == []
+    assert C.validate(tomlkit.parse('[tracker]\ntype = "local"\npath = "board.db"\n')) == []
+    assert C.validate(tomlkit.parse('[tracker]\ntype = "local"\npath = "data/cards.db"\n')) == []
+    for bad in ("/abs/board.db", "/tmp/b.db"):
+        errs = C.validate(tomlkit.parse(f'[tracker]\ntype = "local"\npath = "{bad}"\n'))
+        assert any("tracker.path must be a relative path" in e for e in errs), bad
+
