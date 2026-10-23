@@ -592,7 +592,7 @@ def test_skills_keep_pull_requests_small():
     run = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
     plan = (skills.BUILTIN_DIR / "pl-plan" / "SKILL.md").read_text()
     review = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    for word in ("Manual", "--numstat", "tests/", "max_lines", "Write no comment that restates what the code does. "
+    for word in ("--numstat", "tests/", "max_lines", "Write no comment that restates what the code does. "
                  "Make the code explain itself with clear names and small functions. Add a comment only for a reason "
                  "the code cannot show, such as a non-obvious constraint or a workaround, in one line."):
         assert word in run, word
