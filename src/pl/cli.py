@@ -215,6 +215,9 @@ def main():
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    s = sub; p = s.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
+    q = pb.add_parser("end"); q.add_argument("conv")
+    q = pb.add_parser("undo"); q.add_argument("conv")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -233,5 +236,6 @@ def main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
+     "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
