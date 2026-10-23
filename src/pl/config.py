@@ -79,6 +79,7 @@ def _defaults():
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
+    SANDBOX = {}          # [sandbox] enabled, cpus, memory, disk: optional Multipass VM for stage agents
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -173,6 +174,7 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    g["SANDBOX"] = dict(t.get("sandbox", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -324,6 +326,7 @@ def validate(doc) -> list[str]:
             if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
                 errs.append(f"usage.{key}.{model} must be a number above 0")
     errs += _local_model_errors(doc.get("local_model", {}))
+    errs += _sandbox_errors(doc.get("sandbox", {}))
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
@@ -457,6 +460,25 @@ def _local_model_errors(lm) -> list[str]:
     t = lm.get("timeout")
     if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0):
         errs.append("local_model.timeout must be a number of seconds above 0")
+    return errs
+
+
+def _sandbox_errors(sb) -> list[str]:
+    """[sandbox]: enabled, cpus, memory, disk."""
+    from pl import sandbox
+    errs = [f"sandbox.{k} is not a setting; the keys are {', '.join(sandbox.DEFAULTS)}"
+            for k in sb if k not in sandbox.DEFAULTS]
+    if "enabled" in sb and not isinstance(sb["enabled"], bool):
+        errs.append("sandbox.enabled must be true or false")
+    if "cpus" in sb:
+        c = sb["cpus"]
+        if isinstance(c, bool) or not isinstance(c, int) or c < 1:
+            errs.append("sandbox.cpus must be a whole number of at least 1")
+    for key in ("memory", "disk"):
+        if key in sb:
+            v = sb[key]
+            if not (isinstance(v, str) and sandbox.SIZE_RE.fullmatch(v)):
+                errs.append(f'sandbox.{key} must be a size like "4G" or "512M"')
     return errs
 
 
