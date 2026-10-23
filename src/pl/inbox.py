@@ -7,7 +7,7 @@ from pathlib import Path
 from pl import config as C
 from pl import board, events, manager, profiles
 from pl.board import cards, col_name
-from pl.util import card_url, cmd_id, parse_iso
+from pl.util import card_url, cmd_id, mask, parse_iso, short_id
 
 
 def gate_of(c, col=None):
@@ -123,3 +123,14 @@ def listing():
 
     all_rows.sort(key=lambda r: (-(r.get("age_seconds") or 0), r.get("since") or ""))
     return all_rows
+
+
+def cmd_inbox(a):
+    """pl inbox [--json]: list waiting gates across profiles."""
+    items = listing()
+    if getattr(a, "json", False):
+        print(mask(json.dumps({"items": items})))
+        return
+    for r in items:
+        stale = " (stale)" if r.get("stale") else ""
+        print(f"{r['pipeline']:<12} {short_id(r['card']):<16} {r['gate']:<6} {r['summary']:<40} {r['command']}{stale}")

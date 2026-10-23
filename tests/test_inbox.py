@@ -1,4 +1,5 @@
 """Tests for pl inbox across profiles (WP1.1 and WP1.2)."""
+import argparse
 import json
 import stat
 import time
@@ -192,3 +193,95 @@ def test_dispatch_pass_writes_inbox_json_0600(fake_home, monkeypatch):
     assert len(data["items"]) == 1
     assert data["items"][0]["card"] == "repo#20"
     assert data["items"][0]["gate"] == "plan"
+
+
+def test_pl_inbox_json_is_one_document(fake_home, monkeypatch, capsys):
+    from pl.inbox import cmd_inbox
+
+    C.PROFILE_NAME = "p1"
+    c_waiting = _card("repo#30", "Waiting gate", "Plan for review")
+    monkeypatch.setattr("pl.inbox.cards", lambda: [c_waiting])
+    monkeypatch.setattr("pl.inbox.col_name", lambda lid: lid.removeprefix("col-"))
+    monkeypatch.setattr("pl.inbox.card_url", lambda cid: f"https://example.test/{cid}")
+
+    # Plain text output: one line per gate with command
+    cmd_inbox(argparse.Namespace(json=False))
+    out = capsys.readouterr().out
+    assert "repo#30" in out
+    assert "pl --profile p1 approve 'repo#30'" in out
+
+    # --json output: one document {"items": [...]}
+    cmd_inbox(argparse.Namespace(json=True))
+    json_out = capsys.readouterr().out
+    doc = json.loads(json_out)
+    assert "items" in doc
+    assert isinstance(doc["items"], list)
+    assert len(doc["items"]) == 1
+    assert doc["items"][0]["card"] == "repo#30"
+    assert doc["items"][0]["command"] == "pl --profile p1 approve 'repo#30'"
+
+
+def test_approve_and_reject_from_an_inbox_row_move_the_card_as_the_console_does(fake_home, monkeypatch):
+    import copy
+    import shlex
+    from pl import cli, commands, trackers
+    from pl.inbox import rows_here
+
+    C.PROFILE_NAME = "p1"
+
+    class FakeTracker:
+        def __init__(self, items):
+            self.items = {c["id"]: c for c in items}
+
+        def columns(self):
+            return {t: f"col-{t}" for t in C.COLUMNS}
+
+        def cards(self, query=None):
+            return [copy.deepcopy(c) for c in self.items.values()]
+
+        def card(self, item_id):
+            return copy.deepcopy(self.items[item_id])
+
+        def update(self, item_id, *, verify=True, **fields):
+            c = self.items[item_id]
+            if "column" in fields:
+                fields["list_id"] = self.columns()[fields.pop("column")]
+            if "metadata" in fields:
+                c["metadata"] = {**(c.get("metadata") or {}), **fields.pop("metadata")}
+            c.update(fields)
+            return copy.deepcopy(c)
+
+        def url(self, item_id):
+            return f"https://example.test/{item_id}"
+
+    card_obj = _card("repo#42", "Add inbox command", "Plan for review")
+    card_obj["description"] = ""
+    fake = FakeTracker([card_obj])
+    monkeypatch.setattr(trackers, "get", lambda kind: fake)
+    monkeypatch.setattr(commands, "fresh_next", lambda: None)
+    monkeypatch.setattr(commands, "plan_path", lambda c: None)
+    monkeypatch.setattr(commands, "edited_plan", lambda c, p: None)
+
+    rows = rows_here([card_obj])
+    assert len(rows) == 1
+    row = rows[0]
+
+    cmd_args = shlex.split(row["command"])
+    monkeypatch.setattr("sys.argv", cmd_args)
+    cli.main()
+
+    approved_card = fake.items["repo#42"]
+    assert approved_card["list_id"] == "col-Approved"
+    assert approved_card["metadata"]["approved_at"] is not None
+
+    reject_card = _card("repo#43", "Add reject test", "Plan for review")
+    reject_card["description"] = ""
+    fake.items["repo#43"] = reject_card
+    reject_row = rows_here([reject_card])[0]
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", reject_row["pipeline"], "reject", reject_row["card"], "needs changes"])
+    cli.main()
+
+    rejected_card = fake.items["repo#43"]
+    assert rejected_card["list_id"] == "col-Spec ready"
+    assert "needs changes" in rejected_card["description"]
+
