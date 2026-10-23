@@ -25,6 +25,7 @@ ID_RE = re.compile(r"[a-z0-9]{12}")
 TAG_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_TEXT, MAX_ITEMS, MAX_TITLE = 2000, 50, 200
+MAX_PLAN_TITLE = 80
 
 INSTRUCTIONS = """You are interviewing a person about a software idea so a spec writer can work from it.
 Ask exactly one question per turn: the single most useful thing still unclear.
@@ -43,6 +44,20 @@ def empty_brief():
 def clean_title(title):
     t = CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(title or ""))).strip()[:MAX_TITLE]
     return t or "Untitled idea"
+
+
+def plan_title(plan, slice_no, what):
+    head = f"Plan {plan} slice {slice_no}: "
+    what = clean_title(what)
+    room = MAX_PLAN_TITLE - len(head)
+    if len(what) > room:
+        cut = what[:room + 1]
+        if " " not in cut:
+            raise SystemExit("pl idea: the title's first word is too long for 80 characters; pass a shorter --title")
+        what = cut.rsplit(" ", 1)[0].rstrip(" ,;:-")
+        if not what:
+            raise SystemExit("pl idea: the title's first word is too long for 80 characters; pass a shorter --title")
+    return head + what
 
 
 def new_idea(text="", title=None, harness=None, account=None):

@@ -499,3 +499,22 @@ def test_pl_idea_with_intake_still_goes_to_triage(board):
     assert c["list_id"] == "col-t" and "pipeline_mode" not in c["metadata"]
     assert c["assigned_to"] == "me@example.com" and c["metadata"]["submitted_by"] == "me@example.com"
     assert c["title"] == "Export contacts as CSV\nwith every custom field"     # the whole text up to 70, as before
+
+
+def test_plan_title_prefixes_plan_and_slice():
+    assert ideas.plan_title(3, 2, "kill switch, CLI and dispatcher") == "Plan 3 slice 2: kill switch, CLI and dispatcher"
+
+
+def test_plan_title_is_at_most_80_chars_and_never_cuts_a_word():
+    long_what = "this is a long description with many words that will easily exceed the eighty character maximum limit when combined with prefix, and it has lots of detail"
+    title = ideas.plan_title(3, 2, long_what)
+    assert len(title) <= 80
+    assert not title.endswith(" ") and not title.endswith(",")
+    last_word = title.split()[-1]
+    assert last_word in long_what.split()
+
+
+def test_plan_title_refuses_a_single_word_too_long_to_fit():
+    with pytest.raises(SystemExit):
+        ideas.plan_title(3, 2, "a" * 90)
+
