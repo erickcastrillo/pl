@@ -11,7 +11,7 @@ from datetime import datetime
 from pl import config as C
 from pl import harnesses
 from pl.board import col_name
-from pl.util import mask, parse_iso
+from pl.util import mask, parse_iso, short_id
 
 # ---------- claude session registry (which agents are alive) ----------
 
@@ -65,6 +65,29 @@ def hold_reason(c):
     why = next((v for k, v in HOLD.items() if k in tags), None)
     reason = (c.get("metadata") or {}).get("hold_reason")
     return f"held: {str(reason)[:60]}" if why == "held" and reason else why
+
+
+SLICE_RE = re.compile(r"^Plan (\d+) slice (\d+)\b", re.I)
+
+
+def slice_order(c):
+    """(0, N, M) for a title starting 'Plan N slice M', else (1, 0, 0)."""
+    m = SLICE_RE.match(c.get("title") or "")
+    return (0, int(m.group(1)), int(m.group(2))) if m else (1, 0, 0)
+
+
+def deps_waiting(c, all_cards):
+    """'waiting: needs <short ids> merged' while any id in metadata.depends_on is unmet, else None."""
+    deps = (c.get("metadata") or {}).get("depends_on") or []
+    if not deps:
+        return None
+    by_id = {x["id"]: x for x in all_cards}
+    unmet = []
+    for dep in deps:
+        d = by_id.get(dep)
+        if not d or col_name(d.get("list_id")) != "Done" or (d.get("metadata") or {}).get("dropped_at"):
+            unmet.append(short_id(dep))
+    return f"waiting: needs {', '.join(unmet)} merged" if unmet else None
 
 
 def _on_pane(rec, w):
