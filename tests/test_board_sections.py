@@ -65,3 +65,17 @@ def test_update_goes_through_the_configured_tracker(fake_tracker):
 def test_update_raises_when_a_key_does_not_persist(fake_tracker):
     with pytest.raises(SystemExit, match="metadata.dropped did not persist"):
         board.update("a" * 36, metadata={"dropped": 1})
+
+
+def test_pl_card_prints_unreadable_and_the_text_found(monkeypatch, capsys):
+    import argparse
+    from pl import commands
+    broken_tail = "<!-- pl:metadata -->\n```json\n{broken\n```\n"
+    fake_card = {"id": "c-1", "title": "Card with broken block", "list_id": "col-1", "tags": [],
+                 "updated_at": "2026-10-01", "unreadable": broken_tail, "description": "Card description"}
+    monkeypatch.setattr(commands, "find_card", lambda ref: fake_card)
+    monkeypatch.setattr(commands, "col_name", lambda lid: "Inbox")
+    commands.cmd_card(argparse.Namespace(id="c-1", delete=False))
+    out = capsys.readouterr().out
+    assert "metadata: unreadable\n" + broken_tail in out
+

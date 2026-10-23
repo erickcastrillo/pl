@@ -438,7 +438,10 @@ def cmd_card(a):
         print(f"deleted {short_id(c['id'])}  {c['title']}")
         return
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
-    print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
+    if c.get("unreadable"):
+        print("metadata: unreadable\n" + str(c["unreadable"])[:2000])
+    else:
+        print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
     for k, v in sections(c.get("description")).items():
         print(f"-- section {k or '(preamble)'}: {len(v)} chars, first line: {v.strip().splitlines()[0][:80] if v.strip() else ''}")
 
