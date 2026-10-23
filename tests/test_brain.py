@@ -230,3 +230,58 @@ server = { command = "fake-billing" }
     assert len(logged) > 0
     urls = [s.get("url") or s.get("link") for s in logged]
     assert "https://billing.example/payments/pay-999" in urls
+
+
+def test_file_card_creates_a_card_in_the_named_pipeline_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(manager, "machine_dir", lambda: tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    calls = []
+
+    def fake_pl(argv):
+        import os
+        import subprocess
+        calls.append((list(argv), os.environ.get("PL_SOURCE")))
+        return subprocess.CompletedProcess(argv, returncode=0, stdout='{"id": "card-123"}', stderr="")
+
+    from pl import mcp_serve
+    monkeypatch.setattr(mcp_serve, "_pl", fake_pl)
+
+    server = brain_tools.build()
+    # Call pl_file_card
+    tool = server._tool_manager.get_tool("pl_file_card")
+    assert tool is not None
+
+    import asyncio
+    res = asyncio.run(server.call_tool("pl_file_card", {
+        "pipeline": "billing",
+        "title": "Send client X an invoice",
+        "text": "Please prepare an invoice for $500",
+    }))
+    assert res is not None
+
+    assert len(calls) == 1
+    argv, source = calls[0]
+    assert argv == ["--profile", "billing", "idea", "Please prepare an invoice for $500", "--title", "Send client X an invoice"]
+    assert source == "brain"
+
+
+def test_no_other_write_tool_is_listed(monkeypatch, tmp_path):
+    monkeypatch.setattr(manager, "machine_dir", lambda: tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    server = brain_tools.build()
+    tool_names = [t.name for t in server._tool_manager.list_tools()]
+
+    # pl_file_card is present
+    assert "pl_file_card" in tool_names
+
+    # All known write commands must NOT be in tools
+    forbidden_writes = [
+        "pl_approve", "pl_reject", "pl_move", "pl_drop", "pl_done",
+        "pl_undrop", "pl_hold", "pl_unhold", "pl_retry", "pl_restart",
+        "pl_move_agent", "pl_pause", "pl_resume",
+    ]
+    for fw in forbidden_writes:
+        assert fw not in tool_names
+

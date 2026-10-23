@@ -109,6 +109,23 @@ def build(conv: str = "default") -> FastMCP:
         brain.record_sources(conv, res)
         return res
 
+    # The one prepare tool: file a card in a named pipeline
+    @server.tool(name="pl_file_card", description="File a card in a named pipeline (Inbox or Triage).")
+    def pl_file_card(pipeline: str, title: str, text: str) -> Any:
+        import os
+        argv = ["--profile", pipeline, "idea", text, "--title", title]
+        old_source = os.environ.get("PL_SOURCE")
+        try:
+            os.environ["PL_SOURCE"] = "brain"
+            res = mcp_serve.run_pl(argv)
+            brain.record_sources(conv, res)
+            return res
+        finally:
+            if old_source is None:
+                os.environ.pop("PL_SOURCE", None)
+            else:
+                os.environ["PL_SOURCE"] = old_source
+
     # Proxy connector read tools
     connectors = _list_connectors()
     for cname, (ccfg, _) in connectors.items():
