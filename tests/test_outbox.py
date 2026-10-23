@@ -2,7 +2,51 @@ import pytest
 import tomlkit
 
 from pl import config as C
-from pl import outbox
+from pl import outbox, trackers
+
+import sys
+sys.modules["tests.test_outbox"] = sys.modules[__name__]
+
+
+class FakeLocal:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.items = {}
+        self.next_id = 1
+        self.fail_update = False
+
+    def create(self, column: str, *, title, description="", tags=(), metadata=None, assigned_to=None):
+        cid = str(self.next_id)
+        self.next_id += 1
+        item = {
+            "id": cid,
+            "list_id": column,
+            "title": title,
+            "description": description,
+            "tags": list(tags),
+            "metadata": metadata or {},
+            "assigned_to": assigned_to,
+        }
+        self.items[cid] = item
+        return dict(item)
+
+    def update(self, item_id, *, verify=True, **fields):
+        if self.fail_update:
+            raise SystemExit("fake update failure")
+        cid = str(item_id)
+        if cid not in self.items:
+            raise KeyError(cid)
+        item = self.items[cid]
+        if "column" in fields:
+            item["list_id"] = fields["column"]
+        for k, v in fields.items():
+            if k != "column":
+                item[k] = v
+        return dict(item)
+
+    def delete(self, item_id):
+        self.items.pop(str(item_id), None)
+
 
 
 @pytest.fixture(autouse=True)
@@ -109,4 +153,101 @@ def test_concurrent_appends_serialise_seq():
     assert seqs == {1, 2}
     entries = outbox.entries()
     assert [e["seq"] for e in entries] == [1, 2]
+
+
+def test_create_move_edit_each_add_one_entry(fake_home, monkeypatch):
+    monkeypatch.setitem(trackers.TYPES, "local", "tests.test_outbox:FakeLocal")
+    trackers.reset()
+    C.TRACKER = {"type": "local"}
+    C.SYNC = {"github": "your-org/projects/5"}
+    tr = trackers.get("tracker")
+    c = tr.create("Inbox", title="Initial title", description="desc", tags=["t1"])
+    cid = c["id"]
+    tr.update(cid, column="Approved")
+    tr.update(cid, title="x")
+
+    entries = outbox.entries()
+    assert len(entries) == 3
+    assert entries[0]["op"] == "create"
+    assert entries[0]["card"] == cid
+    assert entries[0]["fields"]["column"] == "Inbox"
+    assert entries[0]["fields"]["title"] == "Initial title"
+    assert entries[1]["op"] == "update"
+    assert entries[1]["card"] == cid
+    assert entries[1]["fields"] == {"column": "Approved"}
+    assert entries[2]["op"] == "update"
+    assert entries[2]["card"] == cid
+    assert entries[2]["fields"] == {"title": "x"}
+
+    assert tr.items[cid]["list_id"] == "Approved"
+    assert tr.items[cid]["title"] == "x"
+
+
+def test_no_sync_setting_no_outbox(fake_home, monkeypatch):
+    monkeypatch.setitem(trackers.TYPES, "local", "tests.test_outbox:FakeLocal")
+    trackers.reset()
+    C.TRACKER = {"type": "local"}
+    C.SYNC = {}
+    tr = trackers.get("tracker")
+    c = tr.create("Inbox", title="No sync")
+    tr.update(c["id"], column="Approved")
+    assert outbox.path() is None or not outbox.path().exists()
+
+
+def test_github_tracker_never_queues(fake_home, monkeypatch):
+    from pl.trackers import github
+    trackers.reset()
+    C.TRACKER = {"type": "github-project", "owner": "your-org", "number": 1, "repo": "your-org/repo"}
+    C.SYNC = {"github": "your-org/projects/5"}
+    monkeypatch.setattr(github, "_gh", lambda args, **kw: "")
+    monkeypatch.setattr(github.GitHubProject, "columns", lambda self: {"Inbox": "c1"})
+    monkeypatch.setattr(github.GitHubProject, "create", lambda self, col, **kw: {"id": "your-org/repo#1", "list_id": col, "title": kw.get("title")})
+    tr = trackers.get("tracker")
+    tr.create("Inbox", title="gh item")
+    assert outbox.path() is None or not outbox.path().exists()
+
+
+def test_failed_write_queues_nothing(fake_home, monkeypatch):
+    monkeypatch.setitem(trackers.TYPES, "local", "tests.test_outbox:FakeLocal")
+    trackers.reset()
+    C.TRACKER = {"type": "local"}
+    C.SYNC = {"github": "your-org/projects/5"}
+    tr = trackers.get("tracker")
+    c = tr.create("Inbox", title="Will fail update")
+    if outbox.path() and outbox.path().exists():
+        outbox.path().unlink()
+    tr.fail_update = True
+    with pytest.raises(SystemExit):
+        tr.update(c["id"], column="Approved")
+    assert outbox.entries() == []
+
+
+def test_delete_adds_one_entry(fake_home, monkeypatch):
+    monkeypatch.setitem(trackers.TYPES, "local", "tests.test_outbox:FakeLocal")
+    trackers.reset()
+    C.TRACKER = {"type": "local"}
+    C.SYNC = {"github": "your-org/projects/5"}
+    tr = trackers.get("tracker")
+    c = tr.create("Inbox", title="Will delete")
+    tr.delete(c["id"])
+    entries = outbox.entries()
+    assert len(entries) == 2
+    assert entries[1]["op"] == "delete"
+    assert entries[1]["card"] == c["id"]
+    assert entries[1]["fields"] == {}
+
+
+def test_append_oserror_raises_systemexit(fake_home, monkeypatch):
+    monkeypatch.setitem(trackers.TYPES, "local", "tests.test_outbox:FakeLocal")
+    trackers.reset()
+    C.TRACKER = {"type": "local"}
+    C.SYNC = {"github": "your-org/projects/5"}
+    tr = trackers.get("tracker")
+    def fail_append(*a, **kw):
+        raise OSError("disk error")
+    monkeypatch.setattr(outbox, "append", fail_append)
+    with pytest.raises(SystemExit, match=r"pl: outbox: disk error"):
+        tr.create("Inbox", title="Fail append")
+
+
 
