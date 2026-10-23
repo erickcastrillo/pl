@@ -260,7 +260,9 @@ def _doc(home, accounts_extra="", rest=""):
 
 def test_valid_model_and_effort_settings_pass(fake_home):
     doc = _doc(fake_home, 'model = "claude-opus-5-5[1m]"\neffort = "xhigh"',
-               '[stages.run]\naccounts = ["a", "g"]\neffort = "max"\n[stages.spec]\neffort = "low"\n')
+               '[stages.run]\naccounts = ["a", "g"]\neffort = "max"\n[stages.run.models]\nclaude = "sonnet"\n'
+               '[stages.plan.models]\nantigravity = "claude-opus-5-5-high"\nclaude = "opus"\n'
+               '[stages.spec]\neffort = "low"\n')
     assert C.validate(doc) == []
 
 
@@ -269,9 +271,13 @@ def test_valid_model_and_effort_settings_pass(fake_home):
     ('model = "-x"', "", "accounts.a: model must be a model id"),
     ('model = 3', "", "accounts.a: model must be a model id"),
     ('effort = "huge"', "", "accounts.a: effort 'huge' is not one of low, medium, high, xhigh, max"),
-    ("", '[stages.spec]\nmodel = "opus"\n', "stages.spec: model is not a stage setting"),
+    ("", '[stages.spec]\nmodel = "opus"\n', "[stages.spec.models]"),
     ("", '[stages.spec]\neffort = "turbo"\n', "stages.spec: effort 'turbo'"),
     ("", 'model = "opus"\n', "accounts.g: model 'opus' is a claude model"),
+    ("", '[stages.spec]\nmodels = "opus"\n', "stages.spec.models must be a table of harness = \"model\""),
+    ("", '[stages.spec.models]\ngem = "m"\n', "stages.spec.models.gem: harness gem takes no model"),
+    ("", '[stages.spec.models]\nclaude = "-x"\n', "stages.spec.models.claude: must be a model id like \"opus\""),
+    ("", '[stages.spec.models]\nantigravity = "opus"\n', "stages.spec.models.antigravity: 'opus' is a claude model name"),
 ])
 def test_bad_model_and_effort_settings_are_refused(fake_home, extra, rest, words):
     errs = C.validate(_doc(fake_home, extra, rest))
@@ -287,7 +293,7 @@ def test_a_harness_without_model_support_reports_both_settings(fake_home):
 
 
 def test_validation_never_runs_a_subprocess(fake_home):
-    assert C.validate(_doc(fake_home, rest='model = "anything-new"\n')) == []
+    assert C.validate(_doc(fake_home, rest='model = "anything-new"\n[stages.plan.models]\nantigravity = "gemini-future"\n')) == []
 
 
 # ---------- Settings ----------
