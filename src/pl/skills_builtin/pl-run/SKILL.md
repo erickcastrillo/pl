@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 4
+pl-builtin-version: 5
 ---
 
 # pl-run: build the approved plan for one card
@@ -50,7 +50,7 @@ such choice in the pull request description.
    it stopped. `git worktree list` shows where it is; an older one may be at `../<repo>-pl-<short-name>`.
    Run every later command inside the worktree.
 
-3. For each work package, in order:
+3. For each work package, in order (an "End-to-end tests" package comes last, as below):
    1. Write the tests the package lists. Run them and confirm they fail for the expected reason.
    2. Make the change the package describes, and nothing else.
    3. Run the package's tests until they pass, then the project's usual test and lint commands.
@@ -90,6 +90,15 @@ such choice in the pull request description.
    ```
 
    Moving the card is what tells the dispatcher the run is done. Then stop.
+
+## End-to-end tests package
+
+Build it last, once every other package passes. Write the Playwright tests the plan lists against the code you built,
+each titled by its criterion; they need not fail first. Use roles, labels or test ids; add test ids to the new interface
+if needed. Update `.pl/e2e.yaml` if the plan says so. Run the tests only when the repo's documented setup starts the app
+cheaply; else prove they compile and are found (`npx tsc --noEmit`, `npx playwright test --list`). Never run "pl e2e":
+it starts a virtual machine for many minutes; a person runs it. In the pull request body add an "End-to-end" section:
+each test file and title with its criterion, and "pl e2e <repo path> --ref pl/<short-name>"; or why there are none.
 
 ## Rework mode
 
