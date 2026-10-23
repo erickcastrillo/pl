@@ -87,44 +87,73 @@ def _tmux(*args):
 
 # ---------- state ----------
 
-def _path():
-    return C.STATE_DIR / "assistant.json"
+@dataclasses.dataclass(frozen=True)
+class Where:
+    state_dir: Path
+    file_name: str = "assistant.json"
+    lock_name: str = "assistant.lock"
+    tmux_session: str = ""
+    window: str = WINDOW
+    keys: tuple[str, ...] = KEYS
+
+    @property
+    def path(self) -> Path:
+        return self.state_dir / self.file_name
+
+    @property
+    def lock_path(self) -> Path:
+        return self.state_dir / self.lock_name
+
+    @property
+    def session(self) -> str:
+        return self.tmux_session or C.TMUX_SESSION
 
 
-def load():
+def _where():
+    return Where(state_dir=C.STATE_DIR, tmux_session=C.TMUX_SESSION, window=WINDOW, keys=KEYS)
+
+
+def _path(where=None):
+    return (where or _where()).path
+
+
+def load(where=None):
+    w = where or _where()
     try:
-        d = json.loads(_path().read_text())
+        d = json.loads(w.path.read_text())
     except (OSError, ValueError):
         return {}
-    return {k: v for k, v in d.items() if k in KEYS} if isinstance(d, dict) else {}
+    return {k: v for k, v in d.items() if k in w.keys} if isinstance(d, dict) else {}
 
 
-def _save(st):
+def _save(st, where=None):
     """Write the KEYS of st. Fields a newer pl wrote that this build does not know are kept. An older pl drops the
     fields it does not know (build among them), so while one still runs the assistant may restart once more."""
-    C.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    w = where or _where()
+    w.state_dir.mkdir(parents=True, exist_ok=True)
     try:
-        old = json.loads(_path().read_text())
+        old = json.loads(w.path.read_text())
     except (OSError, ValueError):
         old = {}
-    keep = {k: v for k, v in old.items() if k not in KEYS} if isinstance(old, dict) else {}
-    tmp = _path().with_name(f".assistant.{os.getpid()}.tmp")
+    keep = {k: v for k, v in old.items() if k not in w.keys} if isinstance(old, dict) else {}
+    tmp = w.path.with_name(f".{w.path.stem}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump(keep | {k: v for k, v in st.items() if k in KEYS}, f)
-    os.replace(tmp, _path())
+        json.dump(keep | {k: v for k, v in st.items() if k in w.keys}, f)
+    os.replace(tmp, w.path)
 
 
 BUSY = "pl: the assistant is busy in another console or the dispatcher; try again"
 
 
 @contextlib.contextmanager
-def _locked(wait=None):
+def _locked(wait=None, where=None):
     """The profile's assistant lock (a file lock in its state folder): two consoles, or a console and the dispatcher,
     never start two windows or write back a stale state. Not reentrant: never nest it. wait: give up after that many
     seconds with SystemExit(BUSY); None waits as long as it takes."""
-    C.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    fd = os.open(C.STATE_DIR / "assistant.lock", os.O_WRONLY | os.O_CREAT, 0o600)
+    w = where or _where()
+    w.state_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(w.lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
     try:
         end = None if wait is None else time.monotonic() + wait
         while True:
@@ -140,15 +169,16 @@ def _locked(wait=None):
         os.close(fd)
 
 
-def pane(st=None):
+def pane(st=None, where=None):
     """The saved pane when it is still the assistant's: a pane id in the saved window, named `assistant`, of this
     profile's tmux session (a tmux restart reuses ids). None otherwise. Every tmux write goes through this."""
-    st = load() if st is None else st
-    p, w = st.get("pane"), st.get("window")
-    if not (isinstance(p, str) and PANE_RE.fullmatch(p) and isinstance(w, str) and WINDOW_RE.fullmatch(w)):
+    w = where or _where()
+    st = load(where=w) if st is None else st
+    p, win = st.get("pane"), st.get("window")
+    if not (isinstance(p, str) and PANE_RE.fullmatch(p) and isinstance(win, str) and WINDOW_RE.fullmatch(win)):
         return None
     r = _run(["tmux", "display-message", "-p", "-t", p, "#{session_name} #{window_id} #{window_name}"])   # a hang raises
-    return p if r.returncode == 0 and (r.stdout or "").strip() == f"{C.TMUX_SESSION} {w} {WINDOW}" else None
+    return p if r.returncode == 0 and (r.stdout or "").strip() == f"{w.session} {win} {w.window}" else None
 
 
 # ---------- account and first prompt ----------
@@ -276,7 +306,7 @@ def warning():
     return mask(f"warning: allow rules {rules} ({where}) would skip the prompt; pl's ask rules still ask for these")
 
 
-def _type(pane, text, enter=True):
+def _type(pane, text, enter=True, where=None):
     if text:
         _tmux("send-keys", "-t", pane, "-l", "--", text)
     if enter:
