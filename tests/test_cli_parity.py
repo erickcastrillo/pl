@@ -45,6 +45,15 @@ def _wp2_expected(args, legacy):
         out = out.replace("  --profile {", "  --account {")
     if args[:1] == ["accounts"]:
         out = out.replace("usage: pl profiles", "usage: pl accounts")
+    if args[:1] == ["board"]:
+        out = out.replace("usage: pl board [-h] action",
+                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check}")
+        out = out.replace("action\n", "{init,serve,check}\n")
+        flags = "  --stdio\n  --listen HOST:PORT\n  --token-env VAR\n"
+        if "options:\n" in out:
+            out = out.replace("options:\n", f"options:\n{flags}")
+        elif "optional arguments:\n" in out:
+            out = out.replace("optional arguments:\n", f"optional arguments:\n{flags}")
     if args in (["--help"], []):
         out = out.replace("{idea,list,review,approve,reject,dispatch,pull,adopt,done,board,card,profiles,",
                           "{idea,list,review,approve,reject,dispatch,pull,adopt,done,board,card,profiles,accounts,")
