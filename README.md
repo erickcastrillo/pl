@@ -65,7 +65,19 @@ Each profile has its own lock, state folder and tmux session (default `pl-<name>
 
 ## Connections
 
-The tracker (`[tracker]`) holds the cards. `type` is `mcp`, `github-project` or `github-issues`. An optional `[intake]` table is a second board whose cards assigned to you become funnel ideas.
+The tracker (`[tracker]`) holds the cards. `type` is `local`, `mcp`, `github-project` or `github-issues`. An optional `[intake]` table is a second board whose cards assigned to you become funnel ideas.
+
+### Local board
+
+A built-in SQLite board (`type = "local"`) that works with no server. Cards live in `board.db` in the profile folder (mode 0600). It is setup's default for a profile without a GitHub remote:
+
+```toml
+[tracker]
+type = "local"
+# path = "board.db"   # optional relative path in the profile folder
+```
+
+Expose it to other MCP clients with `pl board serve --stdio` or `--listen HOST:PORT`. Test any board server against protocol rules with `pl board check <server>`. See [docs/board-protocol.md](docs/board-protocol.md).
 
 ### MCP tracker
 
@@ -186,6 +198,7 @@ A usage limit hit by one profile parks that account folder for every profile tha
 
 - [Use pl with GitHub](docs/github.md): Projects or Issues as the tracker, pull requests, a first run.
 - [Use any MCP board server as the tracker](docs/mcp-trackers.md): the tools mapping, security, troubleshooting.
+- [The pl Board Protocol](docs/board-protocol.md): standard tools, card contract, error codes and conformance rules.
 - [One dispatcher per profile](docs/dispatcher.md): the single-dispatcher check and keeping pl out of tmux session restore.
 
 ## The card contract
