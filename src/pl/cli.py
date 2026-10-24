@@ -153,6 +153,9 @@ def main():
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["mcp"]:              # MCP server: brain or profile server
+        from pl import mcp_serve
+        return mcp_serve.cmd_mcp(pre_a.rest[1:], pre_a.profile)
     config.load(pre_a.profile)
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)

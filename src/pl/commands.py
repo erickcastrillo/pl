@@ -46,7 +46,7 @@ def cmd_idea(a):
     # --start assigns it to you, and `pl pull` then feeds it into the pipeline.
     if not direct and "Triage" not in product_lists():
         raise SystemExit("pl idea: the intake board has no Triage column")
-    meta = {"source": "pl idea", **({"submitted_by": C.USER_EMAIL} if C.USER_EMAIL else {}), "submitted_at": now_iso(),
+    meta = {"source": os.environ.get("PL_SOURCE") or "pl idea", **({"submitted_by": C.USER_EMAIL} if C.USER_EMAIL else {}), "submitted_at": now_iso(),
             "submitted_from": C.HOST, "input_docs": docs, **({"preferred_profile": a.account} if a.account else {})}
     desc = "\n".join(["## Where this came from", f"`pl idea`{f' by {C.USER_EMAIL}' if C.USER_EMAIL else ''} on {now_iso()[:10]}.", "", "## The idea"] + body)
     if direct:
