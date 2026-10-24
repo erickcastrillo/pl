@@ -164,3 +164,76 @@ def test_a_crash_between_sending_and_sent_never_sends_twice(monkeypatch, tmp_pat
     outbound.send_due()
 
     assert call_count[0] == 1
+
+
+def test_a_recipient_outside_the_domain_is_flagged_and_needs_a_second_confirmation(monkeypatch, tmp_path):
+    from pl import outbound
+
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+
+    card = {
+        "id": "card-104",
+        "title": "Lead inquiry",
+        "list_id": "L1",
+        "description": "# PIPELINE: REPLY\nTo: eve@attacker.com\nSubject: Re: Lead\n\nSensitive info",
+        "metadata": {
+            "from": "lead@client-domain.com",
+            "contact_emails": ["partner@client-domain.com", "advisor@allowed.com"],
+            "refs": {"thread": "th-104"},
+        },
+    }
+
+    flagged = outbound.flagged_recipients(card)
+    assert flagged == ["outside: eve@attacker.com"]
+
+    monkeypatch.setattr(commands, "find_card", lambda cid: card)
+    monkeypatch.setattr(commands, "col_name", lambda lid: "Owner gate")
+    monkeypatch.setattr(commands, "col_id", lambda name: "col-approved")
+    updated = []
+    monkeypatch.setattr(commands, "update", lambda *a, **k: updated.append((a, k)))
+    monkeypatch.setattr(commands, "notify", lambda *a, **k: None)
+
+    # Approving without --confirm raises SystemExit
+    with pytest.raises(SystemExit) as exc:
+        commands.cmd_approve(argparse.Namespace(id="card-104", force=False, confirm=False))
+    assert "outside: eve@attacker.com" in str(exc.value)
+    assert "--confirm" in str(exc.value)
+    assert len(updated) == 0
+
+    # Approving with --confirm succeeds
+    commands.cmd_approve(argparse.Namespace(id="card-104", force=False, confirm=True))
+    assert len(updated) > 0
+
+
+def test_the_sender_himself_is_not_flagged(monkeypatch, tmp_path):
+    from pl import outbound
+
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+
+    card = {
+        "id": "card-105",
+        "title": "Lead inquiry",
+        "list_id": "L1",
+        "description": "# PIPELINE: REPLY\nTo: alice@client-domain.com, colleague@client-domain.com\nSubject: Re: Lead\n\nHello",
+        "metadata": {
+            "from": "alice@client-domain.com",
+            "refs": {"thread": "th-105"},
+        },
+    }
+
+    flagged = outbound.flagged_recipients(card)
+    assert flagged == []
+
+    monkeypatch.setattr(commands, "find_card", lambda cid: card)
+    monkeypatch.setattr(commands, "col_name", lambda lid: "Owner gate")
+    monkeypatch.setattr(commands, "col_id", lambda name: "col-approved")
+    updated = []
+    monkeypatch.setattr(commands, "update", lambda *a, **k: updated.append((a, k)))
+    monkeypatch.setattr(commands, "notify", lambda *a, **k: None)
+
+    # Approving without --confirm succeeds directly
+    commands.cmd_approve(argparse.Namespace(id="card-105", force=False, confirm=False))
+    assert len(updated) > 0
+

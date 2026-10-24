@@ -3,6 +3,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -78,6 +79,41 @@ def get_undo_minutes() -> float:
 
 def has_reply(c: dict) -> bool:
     return "REPLY" in sections(c.get("description") or "")
+
+
+def _extract_emails(val) -> list[str]:
+    if not val:
+        return []
+    if isinstance(val, (list, tuple)):
+        out = []
+        for v in val:
+            out.extend(_extract_emails(v))
+        return out
+    return re.findall(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", str(val))
+
+
+def flagged_recipients(c: dict) -> list[str]:
+    args = parse_reply(c)
+    recipients = _extract_emails(args.get("to"))
+    meta = c.get("metadata") or {}
+    refs = meta.get("refs") or {}
+    sender = meta.get("from") or meta.get("sender") or refs.get("sender") or ""
+    sender_emails = [e.lower() for e in _extract_emails(sender)]
+    sender_domains = {e.split("@")[1] for e in sender_emails if "@" in e}
+    contact_emails = {e.lower() for e in _extract_emails(meta.get("contact_emails") or [])}
+
+    flagged = []
+    for rec in recipients:
+        r_low = rec.lower()
+        if r_low in sender_emails:
+            continue
+        domain = r_low.split("@")[1] if "@" in r_low else ""
+        if domain and domain in sender_domains:
+            continue
+        if r_low in contact_emails:
+            continue
+        flagged.append(f"outside: {rec}")
+    return flagged
 
 
 def parse_reply(c: dict) -> dict:
