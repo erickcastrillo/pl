@@ -44,6 +44,7 @@ Status and the board:
 
 Moving work (rule 1 applies):
 - `pl approve <id>` / `pl reject <id> "notes"`: accept a plan, or send it back with notes.
+- `pl outbox cancel <id>`: cancel a queued send before the undo window expires.
 - `pl done <id>` (`--note`): move a card to Done.
 - `pl drop <id>` (`--reason`): a card no longer needed: stop its agent, move it to Done marked dropped.
 - `pl undrop <id>`: put a dropped card back in the column it came from.
