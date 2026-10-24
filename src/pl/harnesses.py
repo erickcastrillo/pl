@@ -89,6 +89,7 @@ TRUST_PATTERNS = {"claude": [r"Accessing workspace", r"Yes, I trust this folder"
 # A template token that already chooses a permission or sandbox mode (the Assistant refuses such a template too).
 PERMISSION_FLAG_RE = re.compile(r"dangerously|bypass|yolo|full-auto|approve-for-me|permission|approval|sandbox|dontask"
                                 r"|acceptedits|accept-edits|allowed-?tools|settings|^-[as]$|^--mode(?:=|$)", re.I)
+BYPASS_RE = re.compile(r"dangerously-skip|bypass|yolo|danger-full-access|full-auto|dontask", re.I)
 
 
 # Model and reasoning effort, from each CLI's --help: claude 2.1.295 (--model takes an alias such as 'fable', 'opus'
@@ -195,6 +196,13 @@ def unattended(h):
         return h
     return dataclasses.replace(h, interactive=[*h.interactive[:1], *flags, *h.interactive[1:]],
                                resume=[*h.resume[:1], *flags, *h.resume[1:]] if h.resume else [])
+
+
+def refuse_bypass(h):
+    """Raise SystemExit when h's template bypasses permissions, naming the [harnesses.<name>] key."""
+    if any(BYPASS_RE.search(t) for t in (*h.interactive, *h.headless, *h.resume)):
+        raise SystemExit(f"pl: [harnesses.{h.name}] template bypasses permissions; stages and loops refuse bypass modes")
+    return h
 
 
 def still_asks(name):
