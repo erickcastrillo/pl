@@ -987,6 +987,7 @@ def test_the_pipeline_keys_do_not_clash_with_the_console_keys():
     assert len(view_keys) == len(set(view_keys))
     assert not ({"d", "h", "f", "z", "u", "e"} & app_keys) and {"d", "h", "f", "z", "u", "e"} <= set(view_keys)
     assert "D" in app_keys and "D" not in view_keys   # D stays the dispatcher's key
+    assert {"ctrl+k", "exclamation_mark"} <= app_keys and not ({"ctrl+k", "exclamation_mark"} & set(view_keys))
 
 
 async def test_d_asks_for_a_reason_then_confirms_then_drops_off_the_ui_thread(monkeypatch):

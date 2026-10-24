@@ -1,4 +1,8 @@
 """PlApp: the pl console. One background refresh feeds every view; views never call the board, gh or tmux."""
+import json
+import subprocess
+import sys
+
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
@@ -29,6 +33,8 @@ LATER = {}
 VIEWS = {"dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView}
+
+_run = subprocess.run   # the one subprocess runner here; tests fake it
 
 
 REFRESH, GITHUB_REFRESH = 15, 60   # seconds between board refreshes; GitHub's GraphQL budget needs the slower one
@@ -172,6 +178,7 @@ class PlApp(App):
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
         Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
         Binding("ctrl+k", "switcher", "switch", priority=True),
+        Binding("exclamation_mark", "oldest", "oldest waiting", key_display="!"),
         Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
 
@@ -299,6 +306,28 @@ class PlApp(App):
         from pl.tui.switcher import SwitcherScreen
         if not isinstance(self.screen, SwitcherScreen):
             self.push_screen(SwitcherScreen(self.data))
+
+    @work(thread=True, group="inbox")
+    def action_oldest(self):
+        try:
+            r = _run([sys.executable, "-m", "pl", "inbox", "--json"],
+                     capture_output=True, text=True, timeout=10)
+            items = json.loads(r.stdout) if r.returncode == 0 else []
+            if isinstance(items, dict):
+                items = items.get("items") or items.get("cards") or []
+        except Exception:
+            items = []
+        if not items:
+            self.call_from_thread(self.notify, "nothing waits on you", markup=False)
+            return
+        first = items[0]
+        cid = first.get("card") or first.get("id") or first.get("card_id")
+        prof = first.get("profile")
+        if prof and prof != C.PROFILE_NAME:
+            self.call_from_thread(self.switch_to, prof, card=cid)
+        else:
+            from pl.tui.cards import CardScreen
+            self.call_from_thread(self.push_screen, CardScreen(cid, None))
 
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)

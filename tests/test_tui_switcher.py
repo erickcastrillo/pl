@@ -129,3 +129,50 @@ async def test_choosing_a_card_in_another_pipeline_restarts_on_that_profile_with
         await pilot.pause()
         assert app.restart_into == ("profile", "other", "remote_c1", None)
 
+
+@pytest.mark.asyncio
+async def test_bang_opens_the_oldest_gate_switching_pipelines_if_needed(monkeypatch):
+    import json
+    import subprocess
+    from pl import config as C
+    from pl.tui.cards import CardScreen
+
+    inbox_items = [{"card": "other_c1", "profile": "other_prof"}]
+
+    def fake_run(argv, **kw):
+        return subprocess.CompletedProcess(argv, 0, json.dumps(inbox_items), "")
+
+    monkeypatch.setattr(tui_app, "_run", fake_run, raising=False)
+    monkeypatch.setattr(C, "PROFILE_NAME", "myprof")
+    monkeypatch.setattr("pl.board.card", lambda cid: {"id": cid, "title": "Test Card", "description": "desc"})
+
+    # Case 1: item from another profile -> switch_to
+    app = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.pause()
+        assert app.restart_into == ("profile", "other_prof", "other_c1", None)
+
+    # Case 2: item from current profile -> CardScreen
+    inbox_items = [{"card": "my_c1", "profile": "myprof"}]
+    app2 = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False)
+    async with app2.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.pause()
+        assert isinstance(app2.screen, CardScreen)
+        assert app2.screen.card_id == "my_c1"
+
+    # Case 3: empty inbox -> notifies "nothing waits on you"
+    inbox_items = []
+    notified = []
+    app3 = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False)
+    monkeypatch.setattr(app3, "notify", lambda msg, **kw: notified.append(msg))
+    async with app3.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("exclamation_mark")
+        await pilot.pause()
+        assert "nothing waits on you" in notified
+
+
