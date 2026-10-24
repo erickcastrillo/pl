@@ -11,6 +11,7 @@ from pl import config as C
 from pl import harnesses, trackers
 from pl.trackers import github
 from pl.tui.extensions import ExtensionsView, missing_skill
+from pl.tui.panels import make_chat_panel, make_connectors_panel, make_models_panel, make_pods_panel
 from pl.tui.review import ConfirmScreen
 from pl.tui.skills import SkillsView
 
@@ -214,6 +215,14 @@ class SettingsView(Widget):
                                                options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
             with self._panel("Skills, agents and commands (every account; ctrl+p Skills jumps here)"):
                 yield SkillsView()
+            with self._panel("Connectors"):
+                yield make_connectors_panel()
+            with self._panel("Pods"):
+                yield make_pods_panel()
+            with self._panel("Local models"):
+                yield make_models_panel()
+            with self._panel("Chat"):
+                yield make_chat_panel()
             with self._panel("Extensions"):
                 yield ExtensionsView(SUBSCRIPTION_LINE)
             with self._panel("Loops"):

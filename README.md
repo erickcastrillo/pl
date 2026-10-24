@@ -211,6 +211,9 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 | Key | Action |
 | --- | --- |
 | 0 to 9 | Dashboard, Assistant, Ideas, Pipeline, Pull requests, Loops, Alerts, Activity, Settings, Background (the console opens on the Dashboard) |
+| ! | jump to the oldest waiting gate across pipelines |
+| ctrl+k | switcher over pipelines, tabs and cards |
+| i | pipeline details (from Home) |
 | 1 | Assistant: a live harness session that runs pl for you; ctrl+t switches chat and idea mode, ctrl+o opens its window, ctrl+r starts over, ctrl+f files an idea it marked ready |
 | 3 | Pipeline: every card by column; a red ! marks the cards that need you (a spec or plan to review, a manual card, an agent that waits or died) and n shows only those. enter opens a card, c in browser, w agent window, t try again, m move account, a / x approve / send back a spec or plan, o answer a spec's questions, v move to another column, d drop (asks for an optional reason), h hand off to Manual, f mark done, e edit the card's INPUT in `$EDITOR`, z show or hide Done, u undo a drop (in the Done group), R restart the card's agent fresh, p hold or release the card, i hand a manual card to the pipeline (pl adopt). d, h, f, u, v, R, p and i ask first |
 | 6 | Alerts (k acknowledges) |
@@ -226,7 +229,7 @@ Metadata keys pl reads or writes: `pipeline_mode` (`"auto"` marks funnel cards),
 
 ### Skills
 
-The Settings tab has a **Skills, agents and commands** section (ctrl+p "Skills" jumps there). It lists every `.md` under `skills/`, `agents/` and `commands/` of every account, plus `~/.claude/skills` and the shared library, with a read-only preview. `e` edits in the console (ctrl+s shows the diff and keeps `<file>.bak-<time>`; files over 1 MiB or not UTF-8 open only with `E`), `E` uses `$EDITOR`, `n` writes a new one from a template, `d` moves it to `<account folder>/.pl-trash/`. Plugin files are read-only, and a link leading out of the account folder is not followed.
+The Settings tab has a **Skills, agents and commands** section (ctrl+p "Skills" jumps there). It lists every `.md` under `skills/`, `agents/` and `commands/` of every account, plus `~/.claude/skills` and the shared library, with a read-only preview. `e` edits in the console (ctrl+s shows the diff and keeps `<file>.bak-<time>`; files over 1 MiB or not UTF-8 open only with `E`), `E` uses `$EDITOR`, `n` writes a new one from a template, `d` moves it to `<account folder>/.pl-trash/`, `I` installs from a repository, `u` checks for updates. Plugin files are read-only, and a link leading out of the account folder is not followed.
 
 `S` moves a skill into the library (`~/.local/share/pl/skills`, or `[skills] library`, an absolute path that is not HOME or an account folder) and leaves a link in its place. Every Claude session pl starts, except the Assistant, loads the library as a plugin (`--plugin-dir <profile>/state/plugin`), so it runs as `/pl:<name>`; a stage prompt `/<name>` is rewritten to that when neither the account nor the work folder (`.claude/skills/`) has a skill of its own by that name. Other harnesses get the skill inlined: a prompt `/<name> args` becomes "Follow the instructions in <file>". `l` links a library skill into one Claude or Codex account for use outside pl. Same from the shell: `pl skills list`, `pl skills share NAME`, `pl skills link NAME ACCOUNT`.
 
