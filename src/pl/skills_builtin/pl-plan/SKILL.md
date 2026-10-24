@@ -1,7 +1,7 @@
 ---
 name: pl-plan
 description: Turn a pl card's approved SPEC (and DESIGN, if any) into a plan of small work packages with tests first and a minimum-change budget, write it as the card's PLAN section, and move the card to Plan for review. Use as the plan stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 2
+pl-builtin-version: 3
 ---
 
 # pl-plan: write the implementation plan for one card
@@ -42,6 +42,11 @@ record each decision you had to make in the plan, with the option you picked.
    pl idea "Slice <k> of <card title> (after <id>): <what this slice builds>"
    ```
 
+   `pl idea` prints `created <id>`. Right after each one, record what that slice needs merged first:
+   `pl depends <that id> --on <id>...`, with at least the card you are planning (and the slice before it
+   when it builds on that one). If `pl idea` printed no pipeline id, or `pl depends` refuses, note it under
+   Decisions and go on.
+
    - **Isolate high-impact changes into dedicated slices**:
      - **Database Migrations / Schema**: Place EF Core migrations and SQL schema changes in their own dedicated slice. Tag it in the plan header: `Sensitivity: Migration (Requires Human Review)`. Never mix schema migrations with large business logic.
      - **Data Mutations / Backfills**: Isolate data migrations, backfill jobs, or destructive purge routines in their own slice. Tag it: `Sensitivity: Data Changes (Requires Human Review)`.
@@ -70,6 +75,7 @@ What changes, in two or three sentences.
 
 ## Minimum change
 budget: <n> files changed / <m> test files / about <L> lines
+Depends on: <card ids, comma-separated, e.g. pl#162, pl#170> | none
 Why this is the smallest change that meets the spec, in one or two sentences.
 
 ## Work packages
@@ -96,6 +102,7 @@ Only when the change is split: one line per later slice, with what it builds. Le
 
 ## Rules
 
+- Every plan has exactly one `Depends on:` line: the card ids this card needs merged first, or `Depends on: none`. Write it at the start of the line, without bold or a list marker.
 - Every acceptance criterion in the spec maps to at least one work package.
 - Order the packages so each one leaves the tests green on its own.
 - A small fix is one package of one or two files. Do not split a small change into many packages.
