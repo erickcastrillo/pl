@@ -28,7 +28,8 @@
                           hold a card (the parked tag, other tags kept): the dispatcher starts no agent on it; its
                           running agent is not stopped. unhold removes the tag and the reason
   pl board init           create the Inbox column if the board lacks it
-  pl card <id> [--delete] show a card's sections and metadata, or delete it
+  pl card <id> [--delete|--json]
+                          show a card's sections, metadata and stage caps, or delete it
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
@@ -177,7 +178,7 @@ def main():
     p = sub.add_parser("unhold"); p.add_argument("id")
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("board"); p.add_argument("action")
-    p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
+    p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--json", action="store_true", help="print the card with its stage caps and what it has spent")
     p = sub.add_parser("section"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
