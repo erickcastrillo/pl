@@ -171,6 +171,7 @@ class PlApp(App):
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
         Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
+        Binding("ctrl+k", "switcher", "switch", priority=True),
         Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
 
@@ -293,6 +294,11 @@ class PlApp(App):
     def action_whatsnew(self):
         if not isinstance(self.screen, WhatsNewScreen):
             self.push_screen(WhatsNewScreen(whatsnew.ENTRIES))
+
+    def action_switcher(self):
+        from pl.tui.switcher import SwitcherScreen
+        if not isinstance(self.screen, SwitcherScreen):
+            self.push_screen(SwitcherScreen(self.data))
 
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
