@@ -80,6 +80,8 @@ def _defaults():
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    PODS = {}             # [pods.<name>] pod definitions
+    POD = None            # [pipeline] pod: active pod name
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
     return out
@@ -173,6 +175,13 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    if "pods" in t:
+        g["PODS"] = dict(t["pods"])
+    pipeline = t.get("pipeline", {})
+    if "pod" in pipeline:
+        g["POD"] = pipeline["pod"]
+    elif "pod" in t:
+        g["POD"] = t["pod"]
 
 
 def default_worktrees(work_dir) -> Path:
@@ -359,6 +368,19 @@ def validate(doc) -> list[str]:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    pods = doc.get("pods") or {}
+    for pname, pod in (pods.items() if isinstance(pods, dict) else ()):
+        if not isinstance(pod, dict):
+            errs.append(f"pods.{pname} must be a table")
+            continue
+        plugins = pod.get("plugins")
+        if plugins is not None:
+            if not isinstance(plugins, list):
+                errs.append(f"pods.{pname}.plugins must be a list")
+            else:
+                for idx, entry in enumerate(plugins):
+                    if not isinstance(entry, dict) or "name" not in entry or not isinstance(entry.get("hooks"), bool):
+                        errs.append(f"pods.{pname}.plugins[{idx}] must be a table with name and hooks: bool")
     return errs
 
 
