@@ -215,6 +215,8 @@ def main():
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser('triggers'); pt = p.add_subparsers(dest="triggers_cmd")
+    q = pt.add_parser('test'); q.add_argument("name"); q.add_argument("--replay"); q.add_argument("--json", action="store_true")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -234,4 +236,5 @@ def main():
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
-     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
+     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
+     "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a)}[a.cmd](a)
