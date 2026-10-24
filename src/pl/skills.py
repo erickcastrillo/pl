@@ -415,7 +415,7 @@ def with_plugin(argv, p):
 
 def _clean_inlined(d):
     cut = time.time() - INLINE_MAX_AGE
-    for f in d.glob("skill-*.md"):
+    for f in (*d.glob("skill-*.md"), *d.glob("context-*.md")):
         try:
             if not f.is_symlink() and f.stat().st_mtime < cut:
                 f.unlink()
