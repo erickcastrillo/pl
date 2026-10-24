@@ -44,6 +44,8 @@ Status and the board:
 
 Moving work (rule 1 applies):
 - `pl approve <id>` / `pl reject <id> "notes"`: accept a plan, or send it back with notes.
+- `pl question <id> "text"`: ask the owner a question; ends the agent's step and waits.
+- `pl answer <id> "text"`: answer an open question on a card so its stage restarts.
 - `pl done <id>` (`--note`): move a card to Done.
 - `pl drop <id>` (`--reason`): a card no longer needed: stop its agent, move it to Done marked dropped.
 - `pl undrop <id>`: put a dropped card back in the column it came from.

@@ -101,6 +101,9 @@
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
+  pl question <id> "text"
+                          ask the owner a question; ends the agent's step and waits for an answer
+  pl answer <id> "text"   answer a card's open question so its stage restarts
 
 Settings come from a profile: pl --profile NAME, or PL_CONFIG_DIR. Boards are reached through the tracker
 set in its config.toml ([tracker], [intake]). Card contract: sections open with a line `# PIPELINE: <NAME>`.
@@ -215,6 +218,8 @@ def main():
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("question"); p.add_argument("id"); p.add_argument("text"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("answer"); p.add_argument("id"); p.add_argument("text"); p.add_argument("--json", action="store_true")
     a = ap.parse_args()
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
@@ -234,4 +239,6 @@ def main():
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
-     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
+     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
+     "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
+     "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a)}[a.cmd](a)
