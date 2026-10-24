@@ -175,7 +175,7 @@ class PlApp(App):
         Binding("q", "quit", "quit")]
 
     def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None,
-                 restarts=None):
+                 restarts=None, open_card=None, tab=None):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
         self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
@@ -185,6 +185,8 @@ class PlApp(App):
         self.restart_into = self.pending_build = None   # restart_into: the build to exec after run() returns
         self.snapshot_provider = snapshot_provider or default_provider
         self.interval = interval or default_interval()
+        self.open_card = open_card
+        self.initial_tab = tab
         self.data, self.error, self.window = None, None, 1   # window: index into WINDOWS, 24 hours first
 
     def compose(self) -> ComposeResult:
@@ -213,6 +215,11 @@ class PlApp(App):
         if self.check_build:
             update.build_id()   # this console's build, read now: a later install is a new build
             self.set_interval(BUILD_CHECK, self.build_job)
+        if self.open_card:
+            from pl.tui.cards import CardScreen
+            self.push_screen(CardScreen(self.open_card, None))
+        if self.initial_tab:
+            self.action_tab(self.initial_tab)
 
     @work(thread=True, exclusive=True, group="build")
     def build_job(self):
@@ -245,6 +252,10 @@ class PlApp(App):
     def restart_now(self, b):
         """Leave the app (the terminal is restored); pl watch then execs the same command line on the new build."""
         self.restart_into = b
+        self.exit()
+
+    def switch_to(self, profile, card=None, tab=None):
+        self.restart_into = ("profile", profile, card, tab)
         self.exit()
 
     def action_restart_console(self):

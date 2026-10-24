@@ -351,15 +351,26 @@ def cmd_watch(a):
     from pl import update
     from pl.tui import app as tui
     while True:   # a console that left for a new pl build execs the same command line; a failed exec opens this one again
-        app = tui.PlApp(interval=a.interval)
+        app = tui.PlApp(interval=a.interval, open_card=getattr(a, "open", None), tab=getattr(a, "tab", None))
         app.run()
         if not app.restart_into:
             return
-        try:
-            os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
-        except OSError as e:
-            update._BAD.add(app.restart_into)
-            print(f"pl: restart failed ({e}); keeping this version", flush=True)
+        if isinstance(app.restart_into, tuple) and app.restart_into[0] == "profile":
+            _, prof, card, tab = app.restart_into
+            cmd = [sys.executable, "-m", "pl", "--profile", prof, "watch",
+                   *(["--open", card] if card else []),
+                   *(["--tab", tab] if tab else [])]
+            try:
+                os.execv(sys.executable, cmd)
+            except OSError as e:
+                print(f"pl: switch to {prof} failed ({e})", flush=True)
+                return
+        else:
+            try:
+                os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+            except OSError as e:
+                update._BAD.add(app.restart_into)
+                print(f"pl: restart failed ({e}); keeping this version", flush=True)
 
 
 

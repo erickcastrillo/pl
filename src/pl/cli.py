@@ -189,6 +189,8 @@ def main():
     p = sub.add_parser("accounts"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand")
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
+    p.add_argument("--open", metavar="CARD", help="open this card on start")
+    p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
     sub.add_parser("pause"); sub.add_parser("resume")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
@@ -220,7 +222,7 @@ def main():
         raise SystemExit(NO_PROFILE)
     if not a.cmd:
         if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
-            return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False))
+            return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False, open=None, tab=None))
         ap.print_help()
         return
     from pl import ghquota
