@@ -52,18 +52,25 @@ def get(kind):
     if kind == "tracker":
         for name in ("create", "update", "delete", "move", "adopt"):
             if hasattr(tracker, name):
-                setattr(tracker, name, _marked(getattr(tracker, name)))
+                setattr(tracker, name, _marked(getattr(tracker, name), name))
     _cache[kind] = (cfg, tracker)
     return tracker
 
 
-def _marked(write):
+def _marked(write, name=None):
     """A board write that stops every process of the profile reusing a board read from before it (board.cards)."""
     def run(*a, **kw):
-        from pl import board
+        from pl import audit, board
         board.dirty()
         try:
-            return write(*a, **kw)
+            res = write(*a, **kw)
+            action_name = name or getattr(write, "__name__", "write")
+            card_id = res.get("id") if isinstance(res, dict) and "id" in res else (a[0] if a else kw.get("item_id") or kw.get("id") or kw.get("card_id"))
+            fields = sorted(k for k in kw.keys() if k != "verify")
+            if action_name == "move" and "column" not in fields:
+                fields.append("column")
+            audit.append(f"card.{action_name}", card=card_id, detail=fields)
+            return res
         finally:
             board.dirty()
     return run
