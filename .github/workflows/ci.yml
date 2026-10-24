@@ -20,6 +20,15 @@ jobs:
       - run: uv run ruff check src tests
       - run: uv run pytest -q
 
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv export --frozen --no-emit-project | uvx pip-audit==2.10.1 -r /dev/stdin
+
   size:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
