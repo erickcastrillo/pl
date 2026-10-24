@@ -54,3 +54,24 @@ def test_an_unrelated_pr_passes():
     files = [f("src/pl/watch.py")]
     p = pr(labels=[])
     assert check(p=p, files=files) == []
+
+
+def test_tag_check_fails_an_unverified_tag():
+    assert not security_label_check.check_tag({"verification": {"verified": False}})
+    assert not security_label_check.check_tag({})
+
+
+def test_tag_check_passes_a_verified_tag():
+    assert security_label_check.check_tag({"verification": {"verified": True}})
+
+
+def test_main_tag_check_fails_unverified(monkeypatch, capsys):
+    monkeypatch.setattr(security_label_check, "_gh", lambda args: '{"verification": {"verified": false}}')
+    assert security_label_check.main(["--tag", "owner/pl", "v1.0.0"]) == 1
+    assert "not signed and verified" in capsys.readouterr().err
+
+
+def test_main_tag_check_passes_verified(monkeypatch, capsys):
+    monkeypatch.setattr(security_label_check, "_gh", lambda args: '{"verification": {"verified": true}}')
+    assert security_label_check.main(["--tag", "owner/pl", "v1.0.0"]) == 0
+    assert "verified" in capsys.readouterr().out

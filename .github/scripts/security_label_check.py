@@ -1,13 +1,16 @@
-"""Require a security review label on pull requests touching security-sensitive paths.
+"""Require a security review label on pull requests touching security-sensitive paths,
+and verify that release tags are cryptographically signed.
 
-Run by .github/workflows/security-label.yml from the base branch, never from the pull request,
-so a pull request cannot change the rules that judge it. It reads the pull request through the
-GitHub API only and never runs the pull request's code.
+Run by .github/workflows/security-label.yml and .github/workflows/release-tag.yml from the base
+branch, never from the pull request, so a pull request cannot change the rules that judge it.
+It reads the pull request or tag through the GitHub API only and never runs the pull request's code.
 
 Usage: security_label_check.py OWNER/REPO NUMBER ACTION
+       security_label_check.py --tag OWNER/REPO SHA
 """
 import fnmatch
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -45,7 +48,35 @@ def check(pr, files, action="labeled", label=SECURITY_LABEL, labeled_at=None, co
     return why
 
 
+def check_tag(payload):
+    """Return True if the release tag is cryptographically signed and verified."""
+    return bool((payload.get("verification") or {}).get("verified"))
+
+
 def main(argv):
+    if not argv:
+        print("Usage: security_label_check.py OWNER/REPO NUMBER ACTION or --tag OWNER/REPO SHA", file=sys.stderr)
+        return 2
+    if argv[0] == "--tag":
+        if len(argv) == 3:
+            repo, sha = argv[1], argv[2]
+        elif len(argv) == 2:
+            repo = os.environ.get("GITHUB_REPOSITORY", "")
+            sha = argv[1]
+        else:
+            print("Usage: security_label_check.py --tag OWNER/REPO SHA", file=sys.stderr)
+            return 2
+        try:
+            payload = json.loads(_gh(["api", f"repos/{repo}/git/tags/{sha}"]))
+        except Exception as e:
+            print(f"Failed to fetch tag {sha} from {repo}: {e}", file=sys.stderr)
+            return 1
+        if not check_tag(payload):
+            print(f"Tag {sha} is not signed and verified", file=sys.stderr)
+            return 1
+        print(f"Tag {sha} is verified")
+        return 0
+
     repo, number, action = argv[:3]
     pr = json.loads(_gh(["api", f"repos/{repo}/pulls/{number}"]))
     files = json.loads(_gh(["api", f"repos/{repo}/pulls/{number}/files?per_page=100"]))
