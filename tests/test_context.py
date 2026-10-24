@@ -51,7 +51,7 @@ def test_a_billing_stage_prompt_has_the_layers_in_order(home, monkeypatch):
     marks = ["Net 30", "No refunds", "Quote in euros", "You are the run stage", "Acme pays late", "Bill Acme"]
     at = [text.index(m) for m in marks]
     assert at == sorted(at)
-    heads = [text.index(f"\n## {layer}\n") for layer in ("knowledge", "pod", "role", "client", "card")]
+    heads = [("\n" + text).index(f"\n## {layer}\n") for layer in ("knowledge", "pod", "role", "client", "card")]
     assert heads == sorted(heads)
     assert "abc" in text and report == []
     assert path.stat().st_mode & 0o777 == 0o600 and path.parent == C.STATE_DIR / "launch"
