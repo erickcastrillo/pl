@@ -80,6 +80,8 @@ def _defaults():
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    TRIGGERS = {}         # [triggers.<name>]
+    CONNECTORS = {}       # [connectors.<name>]
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
     return out
@@ -173,6 +175,8 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    g["TRIGGERS"] = dict(t.get("triggers", {}))
+    g["CONNECTORS"] = dict(t.get("connectors", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -359,6 +363,8 @@ def validate(doc) -> list[str]:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    from pl import triggers
+    errs += triggers.validate(doc)
     return errs
 
 
