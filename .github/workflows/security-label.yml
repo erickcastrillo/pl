@@ -1,0 +1,29 @@
+name: Security label gate
+
+# pull_request_target runs this file and the check script from the base branch,
+# so a pull request cannot change the rules that judge it.
+# Never check out or run the pull request's head code here.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      ACTION: ${{ github.event.action }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check security review label
+        run: python3 .github/scripts/security_label_check.py "$REPO" "$PR" "$ACTION"

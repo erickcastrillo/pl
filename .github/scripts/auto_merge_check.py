@@ -20,12 +20,18 @@ MAX_LINES = 150
 MAX_FILES = 6
 BASE_BRANCH = "main"
 
+SECURITY_PATHS = ("src/pl/connectors*", "src/pl/secrets.py", "src/pl/audit.py",
+                  "src/pl/sandbox.py", "src/pl/triggers.py", "src/pl/reader.py",
+                  "src/pl/chat/*", "src/pl/inbox.py", "src/pl/outward.py",
+                  "src/pl/trackers/*", "src/pl/harnesses.py", "SECURITY.md")
+
 # Changes here always need a person: CI and these rules, dependencies, setup and credentials,
 # the assistant's permission rules, the updater, agent-facing instructions and the review skill,
-# and any database migration.
+# any database migration, and security-sensitive paths.
 SENSITIVE = (".github/*", "pyproject.toml", "uv.lock", "src/pl/setup.py", "src/pl/assistant.py",
              "src/pl/assistant.md", "src/pl/update.py", "src/pl/accounts.py", "src/pl/skills_builtin/*",
-             "AGENTS.md", "INSTALL.md", "CLAUDE.md", "*migrations/*", "*.sql")
+             "AGENTS.md", "INSTALL.md", "CLAUDE.md", "*migrations/*", "*.sql",
+             *SECURITY_PATHS)
 
 RISKY = re.compile(r"shell\s*=\s*True|\beval\(|\bexec\(|\bos\.system\b|\bsubprocess\b|\bpickle\b|\byaml\.load\b"
                    r"|\bchmod\b|\burllib\b|\brequests\b|\bsocket\b|__import__"
