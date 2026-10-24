@@ -95,6 +95,8 @@ def run_waiting(w, reg, st=None):
     gates = GATE_RE.findall(harnesses._run(["tmux", "capture-pane", "-p", "-t", w["pane"], "-S", "-60"]).stdout or "")
     if gates:
         return f"waiting ({gates[-1]})"
+    if w.get("finished_turn"):   # the Stop hook said so: no waiting out the quiet screen
+        return "waiting (finished turn)"
     h = _harness(w)
     if st is not None and h is not None and not h.session_registry:
         idle = screen_quiet(st, w["pane"])

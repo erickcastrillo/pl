@@ -302,19 +302,22 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, hooks=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
     plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins.
-    worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant)."""
-    from pl import skills
+    worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
+    hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook."""
+    from pl import hooks as pl_hooks, skills
     pdir = skills.launch_plugin(h, plugin)
     prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
     template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
                               pdir)
+    if hooks and stage and h.name == "claude" and pl_hooks.enabled():
+        argv = [argv[0], "--settings", pl_hooks.settings_json(*hooks), *argv[1:]]
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
     if h.env_var and d:

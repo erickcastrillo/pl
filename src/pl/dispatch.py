@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, hooks, manager, memory, move_agent, rework, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -233,7 +233,7 @@ def start_worker(c, stage, attempts, dry):
         tmux("kill-window", "-t", win, check=False)
         raise
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
-                                                         stage=stage), script)
+                                                         stage=stage, hooks=(c["id"], win)), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
@@ -594,7 +594,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if bool(trust) != bool(w.get("trust_wait")):
                 w = {**w, "trust_wait": trust} if trust else {k: v for k, v in w.items() if k != "trust_wait"}
                 update(c["id"], metadata={"worker": w})
-            ask = None if trust else permission_wait(wh, w.get("pane"))
+            ask = None if trust else permission_wait(wh, w.get("pane")) or hooks.hook_permission(w)
             if ask and w.get("window"):
                 waiting.append(w["window"])
             if ask:
@@ -617,7 +617,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             idle_for = time.time() - (rec.get("statusUpdatedAt", 0) / 1000) if rec.get("status") == "idle" else 0
             if not wh.session_registry and w.get("pane"):   # no registry (agy): an unchanged screen
                 idle_for = screen_quiet(st, w["pane"])
-            if idle_for > 300 and w.get("window"):
+            if (idle_for > 300 or w.get("finished_turn")) and w.get("window"):
                 print(f"{short_id(c['id'])}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
                 if not dry:
                     tmux("kill-window", "-t", w["window"], check=False)
