@@ -302,7 +302,7 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
@@ -317,11 +317,22 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
                               pdir)
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
-    if h.env_var and d:
-        lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
-    if wt:
-        lines.append(f"export {WORKTREES_ENV}={shlex.quote(_typeable(wt))}")
-    lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in argv))
+    from pl import sandbox
+    sb = sandbox.settings()
+    if sb.get("enabled") and stage:
+        vm = sandbox.vm_name()
+        workdir = cwd or wt or C.WORK_DIR
+        env_args = []
+        if wt:
+            env_args.append(f"{WORKTREES_ENV}={_typeable(wt)}")
+        exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *argv]
+        lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in exec_argv))
+    else:
+        if h.env_var and d:
+            lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
+        if wt:
+            lines.append(f"export {WORKTREES_ENV}={shlex.quote(_typeable(wt))}")
+        lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in argv))
     return "\n".join(lines) + "\n"
 
 
