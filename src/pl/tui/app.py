@@ -1,4 +1,8 @@
 """PlApp: the pl console. One background refresh feeds every view; views never call the board, gh or tmux."""
+import json
+import subprocess
+import sys
+
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
@@ -29,6 +33,8 @@ LATER = {}
 VIEWS = {"dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView}
+
+_run = subprocess.run   # the one subprocess runner here; tests fake it
 
 
 REFRESH, GITHUB_REFRESH = 15, 60   # seconds between board refreshes; GitHub's GraphQL budget needs the slower one
@@ -171,11 +177,13 @@ class PlApp(App):
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
         Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
+        Binding("ctrl+k", "switcher", "switch", priority=True),
+        Binding("exclamation_mark", "oldest", "oldest waiting", key_display="!"),
         Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
 
     def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None,
-                 restarts=None):
+                 restarts=None, open_card=None, tab=None):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
         self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
@@ -185,6 +193,8 @@ class PlApp(App):
         self.restart_into = self.pending_build = None   # restart_into: the build to exec after run() returns
         self.snapshot_provider = snapshot_provider or default_provider
         self.interval = interval or default_interval()
+        self.open_card = open_card
+        self.initial_tab = tab
         self.data, self.error, self.window = None, None, 1   # window: index into WINDOWS, 24 hours first
 
     def compose(self) -> ComposeResult:
@@ -213,6 +223,11 @@ class PlApp(App):
         if self.check_build:
             update.build_id()   # this console's build, read now: a later install is a new build
             self.set_interval(BUILD_CHECK, self.build_job)
+        if self.open_card:
+            from pl.tui.cards import CardScreen
+            self.push_screen(CardScreen(self.open_card, None))
+        if self.initial_tab:
+            self.action_tab(self.initial_tab)
 
     @work(thread=True, exclusive=True, group="build")
     def build_job(self):
@@ -245,6 +260,10 @@ class PlApp(App):
     def restart_now(self, b):
         """Leave the app (the terminal is restored); pl watch then execs the same command line on the new build."""
         self.restart_into = b
+        self.exit()
+
+    def switch_to(self, profile, card=None, tab=None):
+        self.restart_into = ("profile", profile, card, tab)
         self.exit()
 
     def action_restart_console(self):
@@ -282,6 +301,33 @@ class PlApp(App):
     def action_whatsnew(self):
         if not isinstance(self.screen, WhatsNewScreen):
             self.push_screen(WhatsNewScreen(whatsnew.ENTRIES))
+
+    def action_switcher(self):
+        from pl.tui.switcher import SwitcherScreen
+        if not isinstance(self.screen, SwitcherScreen):
+            self.push_screen(SwitcherScreen(self.data))
+
+    @work(thread=True, group="inbox")
+    def action_oldest(self):
+        try:
+            r = _run([sys.executable, "-m", "pl", "inbox", "--json"],
+                     capture_output=True, text=True, timeout=10)
+            items = json.loads(r.stdout) if r.returncode == 0 else []
+            if isinstance(items, dict):
+                items = items.get("items") or items.get("cards") or []
+        except Exception:
+            items = []
+        if not items:
+            self.call_from_thread(self.notify, "nothing waits on you", markup=False)
+            return
+        first = items[0]
+        cid = first.get("card") or first.get("id") or first.get("card_id")
+        prof = first.get("profile")
+        if prof and prof != C.PROFILE_NAME:
+            self.call_from_thread(self.switch_to, prof, card=cid)
+        else:
+            from pl.tui.cards import CardScreen
+            self.call_from_thread(self.push_screen, CardScreen(cid, None))
 
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
