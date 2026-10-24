@@ -20,7 +20,7 @@ pl drives an idea → spec → plan → PR funnel through the AI coding harness 
 Releases are tags `vX.Y.Z` on https://github.com/erickcastrillo/pl; the update check (`src/pl/update.py`) compares the newest tag with the installed version.
 1. Bump `version` in `pyproject.toml` and `__version__` in `src/pl/__init__.py`, then `uv lock`.
 2. Add a what's-new entry for each new feature (`src/pl/whatsnew.py`).
-3. Merge to main, then `git tag vX.Y.Z` on that commit and `git push origin vX.Y.Z`.
+3. Merge to main, then `git tag -s vX.Y.Z` on that commit and `git push origin vX.Y.Z`.
 
 ## Security checklist
 - No `shell=True`; tmux `send-keys` strings built only with `shlex.quote` on every interpolated value.

@@ -75,6 +75,9 @@ def test_new_commits_after_the_review_block():
     "src/pl/setup.py", "src/pl/assistant.py", "src/pl/assistant.md", "src/pl/update.py", "src/pl/accounts.py",
     "src/pl/skills_builtin/pl-review/SKILL.md", "AGENTS.md", "INSTALL.md", "CLAUDE.md",
     "db/migrations/0001_init.py", "schema.sql",
+    "src/pl/connectors/github.py", "src/pl/secrets.py", "src/pl/audit.py", "src/pl/sandbox.py",
+    "src/pl/triggers.py", "src/pl/reader.py", "src/pl/chat/discord.py", "src/pl/inbox.py",
+    "src/pl/outward.py", "src/pl/trackers/github.py", "src/pl/harnesses.py", "SECURITY.md",
 ])
 def test_sensitive_paths_block(name):
     assert any(name in r for r in check(files=[f(name), f("tests/test_x.py")]))
