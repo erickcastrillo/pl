@@ -479,6 +479,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rework.sweep(all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
             print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
+        try:
+            from pl import outbound
+            outbound.send_due(dry=dry)
+        except Exception as e:
+            print(f"outbound send skipped this pass: {e}", file=sys.stderr)
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
