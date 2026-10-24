@@ -79,6 +79,8 @@ Running pl:
   `skills/<name>/SKILL.md`, slash commands in `commands/`, hooks and settings in `settings.json`.
 - `pl skills list` lists every account's skills, agents and commands and the shared library; `pl skills share NAME`
   moves a skill into the library and `pl skills link NAME ACCOUNT` links one into an account (ask first).
+- `pl pods history POD` lists the versions of a pod.md; `pl pods rule add POD "TEXT"` and `pl pods rollback POD --to N` save a
+  new version (ask first).
 - This profile's settings: `$PL_CONFIG_DIR/config.toml`. The machine manager's settings: `machine.toml` in its folder.
 - Events and state: `$PL_CONFIG_DIR/state/`. Read `events.jsonl` for history; never edit state files.
 
