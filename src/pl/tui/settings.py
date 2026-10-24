@@ -10,6 +10,7 @@ from textual.widgets import Button, Input, Label, Select, Static
 from pl import config as C
 from pl import harnesses, trackers
 from pl.trackers import github
+from pl.tui.connectors import ConnectorsPanel
 from pl.tui.extensions import ExtensionsView, missing_skill
 from pl.tui.review import ConfirmScreen
 from pl.tui.skills import SkillsView
@@ -179,6 +180,8 @@ class SettingsView(Widget):
                 if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
                     yield Button("Create project", id="create-project", compact=True)
                 yield Static(Text("code host  gh: checking…", style="dim"), id="codehost")
+            with self._panel("Connectors"):
+                yield ConnectorsPanel()
             with self._panel("Stages and harnesses"):
                 names = list(harnesses.BUILTINS)
                 for stage in C.PROMPTS:
