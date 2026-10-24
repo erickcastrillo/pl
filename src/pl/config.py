@@ -80,6 +80,7 @@ def _defaults():
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    RETENTION = {"email_days": 90}  # [retention] email_days = 90
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
     return out
@@ -173,6 +174,7 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    g["RETENTION"] = {**g["RETENTION"], **t.get("retention", {})}
 
 
 def default_worktrees(work_dir) -> Path:
@@ -324,6 +326,9 @@ def validate(doc) -> list[str]:
             if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
                 errs.append(f"usage.{key}.{model} must be a number above 0")
     errs += _local_model_errors(doc.get("local_model", {}))
+    ed = doc.get("retention", {}).get("email_days")
+    if ed is not None and (isinstance(ed, bool) or not isinstance(ed, int) or ed < 0):
+        errs.append("retention.email_days must be a whole number of at least 0")
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
