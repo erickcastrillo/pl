@@ -79,6 +79,8 @@ def _defaults():
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
+    PODS = {}             # [pods.<name>] file, knowledge, skills, plugins, budgets
+    POD = None            # [pipeline] pod: the pipeline's pod (default the profile name)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -173,6 +175,8 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    g["PODS"] = {n: dict(v) for n, v in t.get("pods", {}).items()}
+    g["POD"] = t.get("pipeline", {}).get("pod")
 
 
 def default_worktrees(work_dir) -> Path:
@@ -359,6 +363,46 @@ def validate(doc) -> list[str]:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    errs += _pod_errors(doc.get("pods", {}), globals()["CONFIG_DIR"])
+    return errs
+
+
+def _pod_path_error(label, v, root):
+    """A pod file or knowledge path: absolute = an existing file; relative = a path that stays inside the profile folder."""
+    if not isinstance(v, str) or not v.strip():
+        return f"{label} must be a file path (text)"
+    p = Path(v).expanduser()
+    if p.is_absolute():
+        return None if p.is_file() else f"{label} {v} is not an existing file"
+    if root is not None and not (root / p).resolve().is_relative_to(root.resolve()):
+        return f"{label} {v} is outside the profile folder"
+    return None
+
+
+def _pod_errors(pods, root) -> list[str]:
+    from pl.skills import NAME_RE as SKILL_NAME
+    whole = lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0  # noqa: E731
+    errs = []
+    for name, v in pods.items():
+        if not NAME_RE.match(name):
+            errs.append(f"pod name {name!r} must match {NAME_RE.pattern}")
+        if "file" in v and (e := _pod_path_error(f"pods.{name}.file (the pod.md)", v["file"], root)):
+            errs.append(e)
+        know = v.get("knowledge", [])
+        if not isinstance(know, list):
+            errs.append(f"pods.{name}.knowledge must be a list of file paths")
+        else:
+            errs += [e for k in know if (e := _pod_path_error(f"pods.{name}.knowledge", k, root))]
+        sk = v.get("skills", [])
+        if not (isinstance(sk, list) and all(isinstance(x, str) and SKILL_NAME.fullmatch(x) for x in sk)):
+            errs.append(f"pods.{name}.skills must be a list of skill names")
+        pl = v.get("plugins", [])
+        if not (isinstance(pl, list) and all(isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"]
+                                             and isinstance(x.get("hooks", True), bool) for x in pl)):
+            errs.append(f"pods.{name}.plugins must be a list of {{name, hooks = true|false}}")
+        b = v.get("budgets", {})
+        if not (isinstance(b, dict) and all(whole(x) for x in b.values())):
+            errs.append(f"pods.{name}.budgets must hold whole numbers")
     return errs
 
 
