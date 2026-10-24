@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import socket
+import sys
 from pathlib import Path
 import tomllib
 
@@ -79,6 +80,7 @@ def _defaults():
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
+    CAPS = {}             # [caps.<stage>] minutes, tokens ("2M", "500k" or a number): a stage's agent is stopped at the cap
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -117,6 +119,39 @@ def _review_prompt(repo, lab, account):
     q = shlex.quote   # a label with spaces stays one value
     text = f"/pl-review repo={q(repo)} review={q(lab['review'])} ready={q(lab['ready'])} rework={q(rework)} failed={q(failed)}"
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
+
+
+TOKEN_UNITS = {"": 1, "k": 10**3, "m": 10**6, "b": 10**9}
+
+
+def parse_tokens(v):
+    """A token count from 2_000_000, "2M", "500k" or "1.5b"; None when it is none of those."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kmb]?)", str(v).strip().lower())
+    return int(float(m[1]) * TOKEN_UNITS[m[2]]) if m else None
+
+
+def parse_caps(raw):
+    """{stage: {"minutes": n, "tokens": n}} from [caps.<stage>]; a value that is not a number is left out."""
+    out = {}
+    for stage, v in (raw or {}).items():
+        minutes = v.get("minutes") if isinstance(v, dict) else None
+        caps = {"minutes": minutes} if isinstance(minutes, int) and not isinstance(minutes, bool) else {}
+        if isinstance(v, dict) and (tokens := parse_tokens(v["tokens"]) if "tokens" in v else None) is not None:
+            caps["tokens"] = tokens
+        if caps:
+            out[stage] = caps
+    return out
+
+
+def without_repo_caps(data, source):
+    """A repo file's settings without `caps`: caps come only from the profile or the owner, never from a repo."""
+    if "caps" in data:
+        print(f"pl: {source} sets caps; ignored (caps come only from the profile)", file=sys.stderr)
+    return {k: v for k, v in data.items() if k != "caps"}
 
 
 def _apply(g, t):
@@ -168,6 +203,7 @@ def _apply(g, t):
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
     g["USAGE"] = dict(t.get("usage", {}))
+    g["CAPS"] = parse_caps(t.get("caps", {}))
     g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))
     g["SKILLS"] = dict(t.get("skills", {}))
