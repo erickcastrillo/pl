@@ -72,6 +72,9 @@
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
+  pl worktrees list | gc [--dry-run] [--yes] [--json]
+                          the worktrees pl-run made in the worktrees folder: their card, column and keep/remove;
+                          gc lists what is safe to remove (finished card, clean, all pushed); --yes removes it
   pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
@@ -213,6 +216,10 @@ def main():
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc"])
+    p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
+    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default)")
+    p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     a = ap.parse_args()
@@ -233,5 +240,6 @@ def main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
+     "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
