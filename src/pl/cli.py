@@ -60,6 +60,10 @@
                           3 an hour; background shells or agents the session started end with it). --github
                           shows GitHub's GraphQL budget this hour instead: points left, the reset, what each
                           profile and caller spent and each profile's fair share
+  pl hook <Notification|Stop> --card ID --window W
+                          what a Claude Code stage agent's hooks run (pl adds them at launch; [dispatch] hooks = false
+                          turns them off): a permission wait or a finished turn reaches the card at once. Exits 2
+                          for a card or window that is not this profile's; any other failure exits 0
   pl alerts [--all] [--ack KEY]
                           open alerts (account parked, all accounts out, a stage failed 3 times, a dead loop,
                           GitHub rate limit, low memory, a runaway agent, a PR waiting over 24 h): each notifies
@@ -111,7 +115,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, profiles, rework, setup, skills
+from pl import alerts, assistant, config, events, hooks, profiles, rework, setup, skills
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -199,6 +203,8 @@ def main():
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
+    p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
+    p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
     p = sub.add_parser("alerts"); p.add_argument("--all", action="store_true", help="include resolved alerts")
     p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears")
     p = sub.add_parser("move-agent"); p.add_argument("card"); p.add_argument("account", choices=list(C.PROFILES))
@@ -231,7 +237,7 @@ def main():
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
+     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "hook": hooks.cmd_hook, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
