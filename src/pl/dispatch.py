@@ -479,6 +479,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rework.sweep(all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
             print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
+        try:
+            from pl import triggers
+            triggers.run_due(dry=dry)
+        except Exception as e:
+            print(f"triggers skipped this pass: {e}", file=sys.stderr)
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
@@ -831,6 +836,12 @@ def check_alerts(all_cards, failed, st=None):
     alerts.sweep("stage_failed:", failed, notify)
     alerts.sweep("permission_wait:", failed, notify)
     alerts.sweep("api_error:", failed, notify)
+    try:
+        from pl import triggers
+        capped = {f"trigger_cap:{n}" for n, s in triggers.load_state().items() if s.get("paused") == "cap"}
+    except Exception:
+        capped = set()
+    alerts.sweep("trigger_cap:", capped, notify)
     waiting, now = set(), time.time()
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")
