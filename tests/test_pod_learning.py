@@ -247,6 +247,7 @@ def test_cli_pods_rule_add_and_accept(monkeypatch, tmp_path, capsys):
     prof = tmp_path / ".pl-test"
     prof.mkdir(parents=True)
     (prof / "config.toml").write_text('[pipeline]\npod = "sales"\n')
+    monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
     C.load("test", config_dir=str(prof))
 
     import sys
