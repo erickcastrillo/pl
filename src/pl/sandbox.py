@@ -1,19 +1,149 @@
 """Multipass sandbox VM lifecycle for isolated stage execution."""
+import ipaddress
 import json
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 
 from pl import config as C
 
-DEFAULTS = {"enabled": False, "cpus": 2, "memory": "4G", "disk": "20G"}
+DEFAULTS = {"enabled": False, "cpus": 2, "memory": "4G", "disk": "20G", "allow": []}
 SIZE_RE = re.compile(r"[1-9][0-9]*[KMG]")
+HOST_RE = re.compile(
+    r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*"
+    r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
+)
+
+SANDBOX_HOSTS = {
+    "claude": ["api.anthropic.com"],
+    "codex": ["api.openai.com"],
+    "antigravity": ["generativelanguage.googleapis.com"],
+}
 
 MULTIPASS = "multipass"
 INSTALL = ("pl sandbox needs Multipass (the multipass command): install it with "
            "sudo snap install multipass (Linux) or brew install --cask multipass (macOS); "
            "see https://canonical.com/multipass/install")
+
+
+def is_host_or_cidr(val: object) -> bool:
+    """True if val is a valid host name or IPv4/IPv6 CIDR/address."""
+    if not isinstance(val, str) or not val.strip():
+        return False
+    val = val.strip()
+    try:
+        ipaddress.ip_network(val, strict=False)
+        return True
+    except ValueError:
+        pass
+    if val.replace(".", "").isdigit():
+        return False
+    return bool(HOST_RE.fullmatch(val)) and len(val) <= 253
+
+
+def resolve_target(target: str, resolver=None) -> tuple[set[str], set[str]]:
+    """Return (ipv4_set, ipv6_set) of strings for a host name or CIDR."""
+    resolver = resolver or socket.getaddrinfo
+    try:
+        net = ipaddress.ip_network(target, strict=False)
+        formatted = str(net) if net.num_addresses > 1 else str(net.network_address)
+        if net.version == 4:
+            return ({formatted}, set())
+        else:
+            return (set(), {formatted})
+    except ValueError:
+        pass
+
+    v4, v6 = set(), set()
+    try:
+        infos = resolver(target, None)
+        for family, _, _, _, sockaddr in infos:
+            if family == socket.AF_INET:
+                v4.add(sockaddr[0])
+            elif family == socket.AF_INET6:
+                v6.add(sockaddr[0])
+    except (socket.gaierror, OSError):
+        pass
+    return (v4, v6)
+
+
+def ruleset(harness: str | None = None,
+            endpoint_port: int | None = None,
+            allow: list[str] | None = None,
+            include_code_host: bool | None = None,
+            resolver=None) -> str:
+    """Generate the constant nftables egress filtering ruleset."""
+    if harness:
+        harnesses_to_use = [harness]
+    else:
+        harnesses_to_use = [a.get("harness", "claude") for a in (C.ACCOUNTS or {}).values()] or ["claude"]
+
+    harness_hosts = [h for hname in harnesses_to_use for h in SANDBOX_HOSTS.get(hname, [])]
+
+    if include_code_host is None:
+        include_code_host = bool(C.CODE_HOST and (C.CODE_HOST.get("owner") or C.CODE_HOST.get("repos")))
+    code_hosts = ["github.com", "api.github.com"] if include_code_host else []
+
+    if allow is None:
+        allow = settings().get("allow") or []
+
+    v4_addrs, v6_addrs = set(), set()
+    for target in (*harness_hosts, *code_hosts, *allow):
+        t_v4, t_v6 = resolve_target(target, resolver=resolver)
+        v4_addrs.update(t_v4)
+        v6_addrs.update(t_v6)
+
+    port = endpoint_port if endpoint_port is not None else settings().get("endpoint_port")
+
+    lines = [
+        "flush ruleset",
+        "",
+        "table inet filter {",
+        "    chain output {",
+        "        type filter hook output priority 0; policy drop;",
+        "        oifname \"lo\" accept",
+        "        ct state established,related accept",
+        "        udp dport 53 accept",
+        "        tcp dport 53 accept",
+    ]
+    if port:
+        lines.append(f"        tcp dport {port} accept")
+    if v4_addrs:
+        lines.append(f"        ip daddr {{ {', '.join(sorted(v4_addrs))} }} accept")
+    if v6_addrs:
+        lines.append(f"        ip6 daddr {{ {', '.join(sorted(v6_addrs))} }} accept")
+    lines.extend([
+        "    }",
+        "}",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def apply_egress_rules(vm: str | None = None, **kw) -> None:
+    """Apply the nftables allow list ruleset to the VM via stdin."""
+    vm = vm or vm_name()
+    text = ruleset(**kw)
+    r = _run([MULTIPASS, "exec", vm, "--", "sudo", "nft", "-f", "-"], input=text)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "nftables failed"
+        raise SystemExit(f"pl: {err}")
+
+
+def up(vm: str | None = None, **kw) -> None:
+    """Ensure the VM is running and apply the egress allow list ruleset."""
+    vm = vm or vm_name()
+    info = _info(vm)
+    if info is None:
+        raise SystemExit(f"pl: no sandbox VM for profile {C.PROFILE_NAME}: run pl sandbox create first")
+    if info["state"] != "Running":
+        r = _run([MULTIPASS, "start", vm])
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "start failed"
+            raise SystemExit(f"pl: {err}")
+    apply_egress_rules(vm, **kw)
 
 
 def _run(argv, **kw):
@@ -124,6 +254,7 @@ def cmd_sandbox(args) -> None:
         if r.returncode != 0:
             err = (r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "launch failed"
             raise SystemExit(f"pl: {err}")
+        apply_egress_rules(vm)
         _status(vm)
     elif action == "status":
         _status(vm_name())
@@ -135,6 +266,11 @@ def cmd_sandbox(args) -> None:
         if r.returncode != 0:
             err = (r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "start failed"
             raise SystemExit(f"pl: {err}")
+        apply_egress_rules(vm)
+        _status(vm)
+    elif action == "up":
+        vm = vm_name()
+        up(vm)
         _status(vm)
     elif action == "stop":
         vm = vm_name()

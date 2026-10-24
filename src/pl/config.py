@@ -464,7 +464,7 @@ def _local_model_errors(lm) -> list[str]:
 
 
 def _sandbox_errors(sb) -> list[str]:
-    """[sandbox]: enabled, cpus, memory, disk."""
+    """[sandbox]: enabled, cpus, memory, disk, allow."""
     from pl import sandbox
     errs = [f"sandbox.{k} is not a setting; the keys are {', '.join(sandbox.DEFAULTS)}"
             for k in sb if k not in sandbox.DEFAULTS]
@@ -479,6 +479,14 @@ def _sandbox_errors(sb) -> list[str]:
             v = sb[key]
             if not (isinstance(v, str) and sandbox.SIZE_RE.fullmatch(v)):
                 errs.append(f'sandbox.{key} must be a size like "4G" or "512M"')
+    if "allow" in sb:
+        al = sb["allow"]
+        if not isinstance(al, list):
+            errs.append("sandbox.allow must be a list of host names or CIDRs")
+        else:
+            for item in al:
+                if not sandbox.is_host_or_cidr(item):
+                    errs.append(f"sandbox.allow entry {item!r} must be a host name or CIDR")
     return errs
 
 
