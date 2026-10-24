@@ -115,7 +115,7 @@ from pl import alerts, assistant, config, events, profiles, rework, setup, skill
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
-                         cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
+                         cmd_outbox, cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
                          cmd_review, cmd_restart, cmd_hold, cmd_unhold)
 from pl.dispatch import cmd_dispatch
 from pl.move_agent import cmd_move_agent
@@ -163,8 +163,9 @@ def main():
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p = sub.add_parser("list"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
-    p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true")
+    p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true")
     p = sub.add_parser("reject"); p.add_argument("id"); p.add_argument("notes")
+    p = sub.add_parser("outbox"); p.add_argument("action", choices=["cancel"]); p.add_argument("id")
     p = sub.add_parser("dispatch"); p.add_argument("--once", action="store_true"); p.add_argument("--interval", type=int, default=None)
     p.add_argument("--max-runs", type=int, default=None); p.add_argument("--dry-run", action="store_true")
     p.add_argument("--max-prep", type=int, default=None, help="max spec/design/plan agents in flight"); p.add_argument("--no-pull", action="store_true", help="do not pull from the Product board")
@@ -228,6 +229,7 @@ def main():
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
+     "outbox": cmd_outbox,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
