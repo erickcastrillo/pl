@@ -831,6 +831,11 @@ def check_alerts(all_cards, failed, st=None):
     alerts.sweep("stage_failed:", failed, notify)
     alerts.sweep("permission_wait:", failed, notify)
     alerts.sweep("api_error:", failed, notify)
+    try:
+        from pl import connectors
+        alerts.sweep("connector_tools:", connectors.active_tools_alerts(), notify)
+    except (ImportError, AttributeError):
+        pass
     waiting, now = set(), time.time()
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")
