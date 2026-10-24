@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, questions, rework, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -51,6 +51,8 @@ def approved_label(c, col, reg):
     """Status line for a Spec ready card whose spec you approved: which stage is next and whether an agent is on it."""
     if hold := hold_reason(c):
         return hold
+    if (c.get("metadata") or {}).get("question"):
+        return "waiting (question asked)"
     m = c.get("metadata") or {}
     stage = stage_for(c, col) if col == "Spec ready" and m.get("spec_approved_at") else None
     if stage not in ("design", "plan"):
@@ -212,6 +214,7 @@ def start_worker(c, stage, attempts, dry):
         prompt += pr_limit_args()
     if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"]:
         prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
+    prompt += questions.prompt_arg(c)
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return
@@ -228,7 +231,8 @@ def start_worker(c, stage, attempts, dry):
         update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
                                              "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
                                              "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
-                                             "launch": str(script)}})
+                                             "launch": str(script)},
+                                  "answered": None})
     except BaseException:   # a rate limit or a failed write: no record, so no window and no agent
         tmux("kill-window", "-t", win, check=False)
         raise
@@ -654,7 +658,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"{short_id(c['id'])}  card changed since its run agent was released; no longer held back")
             update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
             m = c["metadata"] = {**m, **dict.fromkeys(RELEASE_KEYS)}
-        if stage is None or hold_reason(c):   # a split or parked card gets no agent and holds no slot
+        if stage is None or hold_reason(c) or m.get("question"):   # a split or parked card gets no agent and holds no slot
             mirror_to_product(c, col, dry)
             continue
         mirror_to_product(c, col, dry)
