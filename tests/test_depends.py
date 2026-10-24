@@ -10,8 +10,8 @@ from pl.agents import deps_waiting, slice_order
 from pl.dispatch import approved_label
 
 
-def _card(cid, title="A card", col="Inbox", **meta):
-    return {"id": cid, "title": title, "list_id": col, "metadata": {"pipeline_mode": "auto", **meta}}
+def _card(cid, title="A card", col="Inbox", desc="", **meta):
+    return {"id": cid, "title": title, "list_id": col, "description": desc, "metadata": {"pipeline_mode": "auto", **meta}}
 
 
 @pytest.fixture(autouse=True)
@@ -192,5 +192,87 @@ def test_depends_without_on_or_clear_is_an_error(board):
     board.items["o/r#37"] = _card("o/r#37", title="card 37")
     with pytest.raises(SystemExit, match="pl depends: give --on <id>... or --clear"):
         commands.depends("r#37", [], clear=False)
+
+
+# ---------- WP2: pl depends --from-plans ----------
+
+def run_cli_exit(fn, **kw):
+    out = io.StringIO()
+    with pytest.raises(SystemExit) as exc:
+        with redirect_stdout(out):
+            fn(argparse.Namespace(**kw))
+    return exc.value.code, out.getvalue()
+
+
+def test_from_plans_dry_run_lists_and_changes_nothing(board):
+    board.items["o/r#36"] = _card("o/r#36", title="card 36")
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", desc="# PIPELINE: PLAN\nDepends on: r#36\n")
+    out = run_cli(commands.cmd_depends, id=None, from_plans=True, dry_run=True, on=[], clear=False)
+    assert "r#37: would depend on r#36\n" in out
+    assert "would update 1 card\n" in out
+    assert board.writes == []
+
+
+def test_from_plans_records_full_ids_and_card_shows_them(board):
+    board.items["o/r#36"] = _card("o/r#36", title="card 36")
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", desc="# PIPELINE: PLAN\nDepends on: r#36\n")
+    out = run_cli(commands.cmd_depends, id=None, from_plans=True, dry_run=False, on=[], clear=False)
+    assert "r#37: depends on r#36\n" in out
+    assert "updated 1 card\n" in out
+    assert board.items["o/r#37"]["metadata"]["depends_on"] == ["o/r#36"]
+    card_out = run_cli(commands.cmd_card, id="r#37", delete=False)
+    assert "depends on r#36\n" in card_out
+
+
+def test_from_plans_keeps_existing_dependencies(board):
+    board.items["o/r#5"] = _card("o/r#5", title="card 5")
+    board.items["o/r#36"] = _card("o/r#36", title="card 36")
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", desc="# PIPELINE: PLAN\nDepends on: r#36\n", depends_on=["o/r#5"])
+    out = run_cli(commands.cmd_depends, id=None, from_plans=True, dry_run=False, on=[], clear=False)
+    assert board.items["o/r#37"]["metadata"]["depends_on"] == ["o/r#5"]
+    assert "updated 0 cards\n" in out
+    assert board.writes == []
+
+
+def test_from_plans_skips_no_plan_no_line_and_none(board):
+    board.items["o/r#1"] = _card("o/r#1", title="no plan", desc="")
+    board.items["o/r#2"] = _card("o/r#2", title="plan no depends", desc="# PIPELINE: PLAN\n## Minimum change\n")
+    board.items["o/r#3"] = _card("o/r#3", title="none plain", desc="# PIPELINE: PLAN\nDepends on: none\n")
+    board.items["o/r#4"] = _card("o/r#4", title="none bold", desc="# PIPELINE: PLAN\n**Depends on:** none\n")
+    board.items["o/r#5"] = _card("o/r#5", title="none list", desc="# PIPELINE: PLAN\n- Depends on: none\n")
+    out = run_cli(commands.cmd_depends, id=None, from_plans=True, dry_run=False, on=[], clear=False)
+    assert "updated 0 cards\n" in out
+    assert board.writes == []
+
+
+def test_from_plans_skips_unknown_ids_and_cycles_and_exits_1(board):
+    board.items["o/r#36"] = _card("o/r#36", title="card 36")
+    board.items["o/r#37"] = _card("o/r#37", title="card 37", desc="# PIPELINE: PLAN\nDepends on: r#36\n")
+    board.items["o/r#38"] = _card("o/r#38", title="card 38", desc="# PIPELINE: PLAN\nDepends on: r#99\n")
+    board.items["o/r#40"] = _card("o/r#40", title="card 40", desc="# PIPELINE: PLAN\nDepends on: r#41\n")
+    board.items["o/r#41"] = _card("o/r#41", title="card 41", desc="# PIPELINE: PLAN\nDepends on: r#40\n")
+    code, out = run_cli_exit(commands.cmd_depends, id=None, from_plans=True, dry_run=False, on=[], clear=False)
+    assert code == 1
+    assert board.items["o/r#37"]["metadata"]["depends_on"] == ["o/r#36"]
+    assert "r#37: depends on r#36\n" in out
+    assert "r#38: skipped: r#99 is not a card on the board\n" in out
+    assert "r#41: skipped: that makes a cycle: r#41 -> r#40 -> r#41\n" in out
+    assert "updated 2 cards\n" in out
+
+
+@pytest.mark.parametrize("kw", [
+    {"id": "r#37", "on": [], "clear": False},
+    {"id": None, "on": ["r#36"], "clear": False},
+    {"id": None, "on": [], "clear": True},
+])
+def test_from_plans_refuses_an_id_on_or_clear(board, kw):
+    with pytest.raises(SystemExit, match=r"pl depends: --from-plans takes no card id, --on or --clear"):
+        commands.cmd_depends(argparse.Namespace(from_plans=True, dry_run=False, **kw))
+
+
+def test_depends_without_id_or_from_plans_refuses(board):
+    with pytest.raises(SystemExit, match=r"pl depends: give a card id, or --from-plans"):
+        commands.cmd_depends(argparse.Namespace(id=None, from_plans=False, dry_run=False, on=[], clear=False))
+
 
 

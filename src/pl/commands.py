@@ -636,6 +636,22 @@ def cmd_unhold(a):
         print(line)
 
 
+DEPENDS_LINE = re.compile(r"^[-*\s]*Depends on:?\**\s*(.*)$", re.I | re.M)
+
+
+def _dep_cycle(graph, start):
+    """Walk graph from start to see if it reaches start again. Returns path of full ids, or None."""
+    def walk(node, path):
+        for nxt in graph.get(node, []):
+            if nxt == start:
+                return path + [nxt]
+            if nxt not in path:
+                if cycle := walk(nxt, path + [nxt]):
+                    return cycle
+        return None
+    return walk(start, [start])
+
+
 def depends(ref, on, clear):
     """Record or clear card dependencies, refusing cycles. Returns lines to show."""
     fresh_next()
@@ -656,16 +672,7 @@ def depends(ref, on, clear):
     graph = {x["id"]: list((x.get("metadata") or {}).get("depends_on") or []) for x in cs}
     graph[c["id"]] = merged
 
-    def find_cycle(node, path):
-        for nxt in graph.get(node, []):
-            if nxt == c["id"]:
-                return path + [nxt]
-            if nxt not in path:
-                if cycle := find_cycle(nxt, path + [nxt]):
-                    return cycle
-        return None
-
-    if cycle := find_cycle(c["id"], [c["id"]]):
+    if cycle := _dep_cycle(graph, c["id"]):
         cycle_str = " -> ".join(short_id(x) for x in cycle)
         print(f"pl depends: refused: that makes a cycle: {cycle_str}", file=sys.stderr)
         raise SystemExit(2)
@@ -674,7 +681,81 @@ def depends(ref, on, clear):
     return [f"{head}: depends on {', '.join(short_id(x) for x in merged)}"]
 
 
+def depends_from_plans(dry_run=False):
+    """Record the Depends on line of every PLAN for cards with no dependencies yet."""
+    fresh_next()
+    cs = cards()
+    graph = {x["id"]: list((x.get("metadata") or {}).get("depends_on") or []) for x in cs}
+    lines, bad, updated = [], 0, 0
+    for c in cs:
+        meta = c.get("metadata") or {}
+        if meta.get("depends_on"):
+            continue
+        desc = c.get("description")
+        if desc is None:
+            desc = card(c["id"]).get("description") or ""
+        plan = sections(desc).get("PLAN")
+        if not plan:
+            continue
+        m = DEPENDS_LINE.search(plan)
+        if not m:
+            continue
+        val = m.group(1).strip()
+        if not val or val.rstrip(".;").lower() == "none":
+            continue
+        tokens = [t.strip().rstrip(".;") for t in re.split(r"[\s,]+", val) if t.strip().rstrip(".;")]
+        if not tokens:
+            continue
+        cid_short = short_id(c["id"])
+        ids, token_err = [], False
+        for tok in tokens:
+            hits = matches(tok, cs)
+            if len(hits) != 1:
+                lines.append(f"{cid_short}: skipped: {tok} is not a card on the board")
+                bad += 1
+                token_err = True
+                break
+            matched_id = hits[0]["id"]
+            if matched_id not in ids:
+                ids.append(matched_id)
+        if token_err:
+            continue
+        old_edges = list(graph.get(c["id"]) or [])
+        graph[c["id"]] = ids
+        if cycle := _dep_cycle(graph, c["id"]):
+            graph[c["id"]] = old_edges
+            cycle_str = " -> ".join(short_id(x) for x in cycle)
+            lines.append(f"{cid_short}: skipped: that makes a cycle: {cycle_str}")
+            bad += 1
+            continue
+        short_deps = ", ".join(short_id(x) for x in ids)
+        if dry_run:
+            lines.append(f"{cid_short}: would depend on {short_deps}")
+        else:
+            update(c["id"], metadata={"depends_on": ids})
+            events.emit("depends", c["id"])
+            lines.append(f"{cid_short}: depends on {short_deps}")
+        updated += 1
+    verb = "would update" if dry_run else "updated"
+    card_s = "card" if updated == 1 else "cards"
+    lines.append(f"{verb} {updated} {card_s}")
+    return lines, bad
+
+
 def cmd_depends(a):
+    if getattr(a, "from_plans", False):
+        if getattr(a, "id", None) or getattr(a, "on", None) or getattr(a, "clear", False):
+            raise SystemExit("pl depends: --from-plans takes no card id, --on or --clear")
+        lines, bad = depends_from_plans(dry_run=getattr(a, "dry_run", False))
+        for line in lines:
+            print(line)
+        if bad:
+            raise SystemExit(1)
+        return
+    if not getattr(a, "id", None):
+        raise SystemExit("pl depends: give a card id, or --from-plans")
+    if getattr(a, "dry_run", False):
+        raise SystemExit("pl depends: give --on <id>... or --clear")
     for line in depends(a.id, a.on, a.clear):
         print(line)
 
