@@ -30,6 +30,8 @@
   pl depends <id> --on <id>... | --clear
                           record cards this card depends on, or clear them; the dispatcher starts an Approved card
                           only once every dependency is merged
+  pl depends --from-plans [--dry-run]
+                          record the Depends on line of every PLAN for cards with no dependencies yet
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete] show a card's sections and metadata, or delete it
   pl section <id> NAME [--from FILE [--force]]
@@ -178,7 +180,7 @@ def main():
     p = sub.add_parser("undrop"); p.add_argument("id")
     p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)")
     p = sub.add_parser("unhold"); p.add_argument("id")
-    p = sub.add_parser("depends"); p.add_argument("id"); p.add_argument("--on", nargs="+", default=[], metavar="ID", help="cards this card depends on"); p.add_argument("--clear", action="store_true", help="remove every dependency")
+    p = sub.add_parser("depends"); p.add_argument("id", nargs="?"); p.add_argument("--on", nargs="+", default=[], metavar="ID", help="cards this card depends on"); p.add_argument("--clear", action="store_true", help="remove every dependency"); p.add_argument("--from-plans", action="store_true", help="record the Depends on line of every PLAN for cards with no dependencies yet"); p.add_argument("--dry-run", action="store_true", help="with --from-plans: show what it would record")
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("board"); p.add_argument("action")
     p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true")

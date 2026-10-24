@@ -112,6 +112,8 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-23.01", "Plans say what they depend on; pl depends --from-plans records it",
+       "pl-plan skill, pl depends", "pl depends --from-plans --dry-run"),
 ]
 
 
