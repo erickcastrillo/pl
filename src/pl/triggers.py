@@ -1,5 +1,6 @@
 """Triggers: automations that turn events or timers into pipeline cards."""
 import contextlib
+from datetime import datetime, timezone
 import email.utils
 import fcntl
 import json
@@ -17,6 +18,32 @@ def parse_after(val):
         return float(val)
     m = re.fullmatch(r"(\d+)([smhd])", str(val).strip()) if val else None
     return float(int(m.group(1)) * UNIT[m.group(2)]) if m else 0.0
+
+
+def parse_window(val):
+    if not val or not isinstance(val, str):
+        raise SystemExit(2)
+    m = re.fullmatch(r"([1-9]\d*)([smhd])", val.strip())
+    if not m:
+        raise SystemExit(2)
+    return int(m.group(1)) * UNIT[m.group(2)]
+
+
+def is_deduped(msg_id, cards, state, trigger_name=None):
+    if not msg_id:
+        return False
+    recent = set(state.get("recent_ids") or [])
+    if trigger_name and isinstance(state.get(trigger_name), dict):
+        recent.update(state[trigger_name].get("recent_ids") or [])
+    if msg_id in recent:
+        return True
+    for c in cards:
+        refs = (c.get("metadata") or {}).get("refs") or {}
+        if refs.get("email") == msg_id:
+            return True
+        if msg_id in (refs.get("email_more") or []):
+            return True
+    return False
 
 
 def call_tool(connector, tool, args, mode="trigger"):
@@ -182,8 +209,12 @@ def run_search_trigger(name, cfg, cards=None, dry=False, now=None):
 
     messages = res.get("messages") or [] if isinstance(res, dict) else res if isinstance(res, list) else []
     created = []
+    st = load_state()
 
     for msg in messages:
+        msg_id = msg.get("id") or msg.get("message_id")
+        if is_deduped(msg_id, cards, st, name):
+            continue
         sender = msg.get("from") or msg.get("sender") or ""
         matched = find_client_card(sender, cards, pipeline=pipeline, attach_to=attach_to)
         if matched is not None:
@@ -218,3 +249,68 @@ def run_due(dry=False, now=None, cards=None):
             continue
         created.extend(run_search_trigger(n, cfg, cards=cards, dry=dry, now=now))
     return created
+
+
+def cmd_triggers(a):
+    cmd = getattr(a, "triggers_cmd", None)
+    if cmd == "test":
+        replay = getattr(a, "replay", None)
+        seconds = parse_window(replay)
+        now = datetime.now(timezone.utc)
+        since_dt = datetime.fromtimestamp(now.timestamp() - seconds, tz=timezone.utc)
+        since_str = since_dt.isoformat()
+
+        cfg = get_triggers().get(a.name) or {}
+        connector = cfg.get("connector", "email")
+        query = cfg.get("query", "")
+        pipeline = cfg.get("pipeline")
+        attach_to = cfg.get("attach_to") or []
+
+        res = call_tool(connector, "search", {"query": query, "since": since_str}, mode="trigger")
+        messages = res.get("messages") or [] if isinstance(res, dict) else res if isinstance(res, list) else []
+
+        try:
+            cards = trackers.get("tracker").cards()
+        except Exception:
+            cards = board.cards()
+        st = load_state()
+
+        would_create = []
+        would_attach = []
+
+        for msg in messages:
+            msg_id = msg.get("id") or msg.get("message_id")
+            if is_deduped(msg_id, cards, st, a.name):
+                continue
+
+            sender = msg.get("from") or msg.get("sender") or ""
+            matched = find_client_card(sender, cards, pipeline=pipeline, attach_to=attach_to)
+            if matched is not None:
+                would_attach.append({
+                    "card_id": matched["id"],
+                    "title": matched.get("title", ""),
+                    "from": sender,
+                    "subject": msg.get("subject", ""),
+                    "id": msg_id,
+                })
+                continue
+
+            title = f"{sender}: {msg.get('subject', '')}"[:120].strip()
+            would_create.append({
+                "title": title,
+                "from": sender,
+                "subject": msg.get("subject", ""),
+                "id": msg_id,
+                "column": cfg.get("column", "Inbox"),
+            })
+
+        if getattr(a, "json", False):
+            print(json.dumps({"would_create": would_create, "would_attach": would_attach}, indent=2))
+        else:
+            for item in would_create:
+                print(f"would create: {item['title']}")
+            for item in would_attach:
+                print(f"would attach to {item['card_id']}: {item['from']}: {item['subject']}")
+        return
+    raise SystemExit(2)
+
