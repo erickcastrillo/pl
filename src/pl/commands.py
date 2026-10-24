@@ -12,7 +12,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
-from pl import events, ideas, move_agent, trackers
+from pl import audit, events, ideas, move_agent, trackers
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stop_worker
@@ -227,6 +227,7 @@ def cmd_approve(a):
             return
         update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL})
         events.emit("spec_approved", c["id"])
+        audit.append("spec_approved", card=c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
         return
     if col != "Plan for review" and not a.force:
@@ -246,6 +247,7 @@ def cmd_approve(a):
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
     events.emit("approved", c["id"])
+    audit.append("approved", card=c["id"])
     print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
     notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
 
@@ -264,6 +266,7 @@ def cmd_reject(a):
         update(c["id"], description=check_size(render(parts)))
         update(c["id"], list_id=col_id("Inbox"), metadata={"spec_round": n, "worker": None, "spec_approved_at": None})
         events.emit("spec_rejected", c["id"])
+        audit.append("spec_rejected", card=c["id"])
         print(f"sent back {short_id(c['id'])}  {c['title']}\n  back in Inbox with your notes; the spec writer rewrites it on the next pass")
         return
     n = int(m.get("review_round") or 0) + 1
@@ -272,6 +275,7 @@ def cmd_reject(a):
     update(c["id"], description=check_size(render(parts)))
     update(c["id"], list_id=col_id("Spec ready"), metadata={"review_round": n, "worker": None})
     events.emit("rejected", c["id"])
+    audit.append("rejected", card=c["id"])
     print(f"rejected {short_id(c['id'])}  {c['title']}\n  back in Spec ready with your notes; the planner re-plans on the next pass")
 
 
@@ -730,4 +734,18 @@ def intent_text(pr, body):
                    "Review against the PR description only, and say so.")
     text = "\n".join(out)
     return text if len(text) <= 40000 else text[:40000] + "\n\n(truncated at 40,000 characters)"
+
+
+def cmd_connectors(a):
+    sub = getattr(a, "connectors_cmd", None)
+    if sub == "add":
+        audit.append("connectors.add", target=a.name)
+        print(f"added connector {a.name}")
+    elif sub == "revoke":
+        audit.append("connectors.revoke", target=a.name)
+        print(f"revoked connector {a.name}")
+    elif sub in ("approve-tools", "approve_tools"):
+        audit.append("connectors.approve_tools", target=a.name)
+        print(f"approved tools for connector {a.name}")
+
 
