@@ -77,6 +77,24 @@ def get_undo_minutes() -> float:
     return 5.0
 
 
+def get_send_cap(connector: str) -> int:
+    if hasattr(C, "CONNECTORS") and isinstance(C.CONNECTORS, dict):
+        cfg = C.CONNECTORS.get(connector, {})
+        if "send_cap" in cfg:
+            return int(cfg["send_cap"])
+    p = getattr(C, "CONFIG_DIR", None)
+    if p and (cfg := p / "config.toml").is_file():
+        try:
+            import tomllib
+            d = tomllib.loads(cfg.read_text())
+            conns = d.get("connectors", {})
+            if connector in conns and "send_cap" in conns[connector]:
+                return int(conns[connector]["send_cap"])
+        except Exception:
+            pass
+    return 20
+
+
 def has_reply(c: dict) -> bool:
     return "REPLY" in sections(c.get("description") or "")
 
@@ -207,7 +225,33 @@ def send_due(dry: bool = False, now: float | None = None) -> list[dict]:
         return sent
     with _locked_queue() as items:
         for it in items:
-            if it.get("status") == "queued" and it.get("not_before", 0) <= now:
+            if it.get("status") in ("queued", "waiting_cap") and it.get("not_before", 0) <= now:
+                conn = it.get("connector", "email")
+                cap = get_send_cap(conn)
+                sends_today = sum(
+                    1 for x in items
+                    if x.get("connector") == conn and x.get("status") == "sent" and (now - x.get("sent_at", 0)) < 86400
+                )
+                if sends_today >= cap:
+                    it["status"] = "waiting_cap"
+                    try:
+                        from pl import alerts
+                        alerts.open(f"send_cap:{conn}", "warning", f"Daily send cap ({cap}) reached for {conn}",
+                                    fix="wait for daily reset or increase send_cap in config")
+                    except Exception:
+                        pass
+                    try:
+                        from pl.util import notify
+                        notify(f"Send cap reached: {conn}", f"Reached daily send cap ({cap}) for {conn}.")
+                    except Exception:
+                        pass
+                    try:
+                        from pl import chat
+                        if hasattr(chat, "route"):
+                            chat.route(f"send_cap:{conn}", f"Reached daily send cap ({cap}) for {conn}.")
+                    except Exception:
+                        pass
+                    continue
                 if dry:
                     sent.append(it)
                     continue
