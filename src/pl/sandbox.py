@@ -31,6 +31,37 @@ def vm_name() -> str:
     return f"pl-sbx-{C.PROFILE_NAME}"
 
 
+def bridge_address() -> str:
+    """The Multipass bridge IP address on the host (never 0.0.0.0 or LAN IP)."""
+    addr = settings().get("bridge_address")
+    if not addr:
+        try:
+            r = subprocess.run(["ip", "-brief", "addr"], capture_output=True, text=True, timeout=5)
+            for line in (r.stdout.splitlines() if r.returncode == 0 else []):
+                p = line.split()
+                if len(p) >= 3 and p[0].startswith("mp") and not p[2].startswith("fe80:"):
+                    addr = p[2].split("/")[0]
+                    break
+        except Exception:
+            pass
+    addr = addr or "10.0.0.1"
+    if addr in ("0.0.0.0", "", "::"):
+        raise ValueError("Invalid bridge address: refusing 0.0.0.0")
+    return addr
+
+
+def transfer_in(vm: str, host_path: Path | str, vm_path: str) -> None:
+    r = _run([MULTIPASS, "transfer", str(host_path), f"{vm}:{vm_path}"])
+    if r.returncode != 0:
+        raise SystemExit(f"pl: {(r.stderr or r.stdout).strip() or 'transfer failed'}")
+
+
+def transfer_out(vm: str, vm_path: str, host_path: Path | str) -> None:
+    r = _run([MULTIPASS, "transfer", f"{vm}:{vm_path}", str(host_path)])
+    if r.returncode != 0:
+        raise SystemExit(f"pl: {(r.stderr or r.stdout).strip() or 'transfer failed'}")
+
+
 def _forbidden_folders() -> list[Path]:
     home = Path.home().resolve()
     dirs = [
