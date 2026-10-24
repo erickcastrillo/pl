@@ -98,6 +98,8 @@
                           which Claude profile is parked for running out of usage credits (the dispatcher
                           detects the limit on an agent's screen, parks that profile, and restarts the card
                           under the other one); --reset un-parks a profile by hand
+  pl pods list [--json] | show NAME [--json]
+                          the pipeline's pods: rules (pod.md), knowledge, skills, plugins and layer budgets
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
@@ -111,7 +113,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, profiles, rework, setup, skills
+from pl import alerts, assistant, config, events, pods, profiles, rework, setup, skills
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -213,6 +215,9 @@ def main():
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
+    q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
+    q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     a = ap.parse_args()
@@ -232,6 +237,6 @@ def main():
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
-     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
+     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
