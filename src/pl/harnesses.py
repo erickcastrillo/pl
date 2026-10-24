@@ -278,7 +278,10 @@ def harness_for(stage, c=None):
         account = st.get("account") or (want if want in C.PROFILES else default_account())
     if account is None:
         raise SystemExit(f"pl: no harness accounts: add one under [accounts.<name>] in {C.path() or 'config.toml'}")
-    return (get(st["harness"]) if st.get("harness") else account_harness(account)), account
+    h = get(st["harness"]) if st.get("harness") else account_harness(account)
+    if st.get("reader") and h.name not in ("claude", "codex"):
+        raise SystemExit(f"pl: [stages.{stage}] reader stages support only claude and codex, not {h.name}")
+    return h, account
 
 
 def _argv(template, values):
@@ -317,6 +320,8 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
                               pdir)
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
+    if stage:
+        lines.append(f"export PL_STAGE={shlex.quote(str(stage))}")
     if h.env_var and d:
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
     if wt:
@@ -328,6 +333,8 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
 def headless_argv(h, account, prompt, stage=None):
     """(argv, env) for a one-shot run; no shell."""
     env = dict(os.environ)
+    if stage:
+        env["PL_STAGE"] = str(stage)
     d = C.PROFILES.get(account)
     if h.env_var and d:
         env[h.env_var] = str(d)
