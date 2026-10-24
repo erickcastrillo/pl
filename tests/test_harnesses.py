@@ -828,3 +828,27 @@ def test_retry_takes_repo_and_number_and_refuses_an_ambiguous_number(fake_home, 
     assert "o/r#12" in str(e.value) and "o/s#12" in str(e.value) and writes == []
     commands.retry("s#12")
     assert writes == [("o/s#12", {"metadata": {"worker": None}})]
+
+
+def test_a_stage_whose_template_bypasses_permissions_is_refused_and_no_window_opens(fake_home, fake_tmux):
+    from pl import alerts
+    sent, _ = fake_tmux
+    _profile(fake_home, '[accounts.a]\nharness = "antigravity"\nconfig_dir = "~/ag"\n'
+                        '[stages.spec]\nprompt = "/spec {id}"\n'
+                        '[harnesses.antigravity]\ninteractive = ["agy", "--dangerously-skip-permissions", "{prompt}"]\n')
+    card = {"id": "c1", "title": "t", "metadata": {"profile": "a"}}
+    with pytest.raises(SystemExit, match=r"\[harnesses\.antigravity\]"):
+        dispatch.start_worker(card, "spec", 1, False)
+    assert not sent
+    assert alerts.get("stage_unsafe:spec") is not None
+
+
+def test_a_loop_whose_template_bypasses_permissions_is_refused(fake_home, fake_tmux):
+    sent, _ = fake_tmux
+    _profile(fake_home, '[accounts.a]\nharness = "antigravity"\nconfig_dir = "~/ag"\n'
+                        '[harnesses.antigravity]\ninteractive = ["agy", "--yolo", "{prompt}"]\n')
+    C.SERVICES = {"rev": {"prompt": "/rev", "profile": "a"}}
+    with pytest.raises(SystemExit, match=r"\[harnesses\.antigravity\]"):
+        dispatch.ensure_services({}, [], {}, False, None)
+    assert not sent
+
