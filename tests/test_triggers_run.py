@@ -118,3 +118,56 @@ def test_a_message_from_a_linked_client_is_attached_not_a_new_card(fake_env, mon
     desc = updated["description"]
     assert "## Messages" in desc
     assert "- 2026-10-23T14:00:00+00:00: Follow-up question on pricing (https://mail.google.com/mail/u/0/#inbox/th-100)" in desc
+
+
+def test_the_21st_card_pauses_the_trigger_and_opens_an_alert(fake_env, monkeypatch):
+    from pl import alerts, dispatch, triggers
+
+    # Pre-seed 20 cards created today in triggers.json
+    now = datetime(2026, 10, 23, 15, 0, 0, tzinfo=timezone.utc)
+    triggers.save_state({
+        "sales_mail": {
+            "day": "2026-10-23",
+            "cards_today": 20,
+            "paused": False,
+        }
+    })
+
+    def fake_call(connector, tool, args, mode="trigger"):
+        return {
+            "messages": [
+                {
+                    "id": "msg-new-21",
+                    "from": "stranger@example.com",
+                    "subject": "New lead 21",
+                    "date": "2026-10-23T15:00:00+00:00",
+                    "snippet": "Hello I want to buy",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(triggers, "call_tool", fake_call)
+
+    created = triggers.run_due(now=now.timestamp())
+    assert len(created) == 0
+    assert len(fake_env.created) == 0
+
+    st = triggers.load_state()
+    assert st["sales_mail"]["paused"] == "cap"
+
+    # Alert was opened
+    al = alerts._load().get("trigger_cap:sales_mail")
+    assert al is not None
+    assert al["title"] == "Trigger sales_mail reached its cap of 20 cards today"
+    assert al["fix"] == "pl triggers resume sales_mail"
+
+    # dispatch.check_alerts sweeps it and keeps it open while paused == "cap"
+    dispatch.check_alerts([], set())
+    assert alerts._load()["trigger_cap:sales_mail"].get("resolved_at") is None
+
+    # Resuming the trigger and sweeping resolves the alert
+    st["sales_mail"]["paused"] = False
+    triggers.save_state(st)
+    dispatch.check_alerts([], set())
+    assert alerts._load()["trigger_cap:sales_mail"].get("resolved_at") is not None
+
