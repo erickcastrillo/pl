@@ -222,6 +222,11 @@ def start_worker(c, stage, attempts, dry):
         prompt += pr_limit_args()
     if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"]:
         prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
+    if (C.STAGES.get(stage) or {}).get("from_fields"):
+        from pl import reader
+        fields_json = json.dumps((c.get("metadata") or {}).get("fields") or {})
+        link = reader.extract_thread_link(c)
+        prompt += f" fields={shlex.quote(fields_json)} thread={shlex.quote(link)}"
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return

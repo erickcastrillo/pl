@@ -431,6 +431,16 @@ def cmd_profiles(a):
             print(f"         {check_note(p)}")
 
 
+EMAIL_BLOCK_RE = re.compile(r"```email[^\n]*\n[\s\S]*?```\n?", re.IGNORECASE)
+
+
+def _strip_email_block(text):
+    stage = os.environ.get("PL_STAGE")
+    if stage and (C.STAGES.get(stage) or {}).get("from_fields") and text:
+        return EMAIL_BLOCK_RE.sub("", text)
+    return text
+
+
 def cmd_card(a):
     c = find_card(a.id)
     if a.delete:
@@ -439,7 +449,10 @@ def cmd_card(a):
         return
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
     print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
-    for k, v in sections(c.get("description")).items():
+    parts = sections(c.get("description"))
+    if "INPUT" in parts:
+        parts["INPUT"] = _strip_email_block(parts["INPUT"])
+    for k, v in parts.items():
         print(f"-- section {k or '(preamble)'}: {len(v)} chars, first line: {v.strip().splitlines()[0][:80] if v.strip() else ''}")
 
 
@@ -492,6 +505,8 @@ def cmd_section(a):
         if text is None:
             print(f"pl: card {short_id(a.id)} has no {name} section", file=sys.stderr)
         else:
+            if name == "INPUT":
+                text = _strip_email_block(text)
             print(text.rstrip("\n"))
         return
     if name not in WRITABLE:

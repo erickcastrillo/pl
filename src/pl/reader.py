@@ -34,6 +34,19 @@ def extract_thread_link(c):
     return "<link>"
 
 
+def stage_connectors(stage, base=None):
+    cfg = C.STAGES.get(stage) or {}
+    if "connectors" in cfg:
+        stage_conns = list(cfg.get("connectors") or [])
+        if cfg.get("from_fields") and "email" not in stage_conns:
+            return [c for c in stage_conns if c != "email"]
+        return stage_conns
+    conns = list(base or [])
+    if cfg.get("from_fields"):
+        return [c for c in conns if c != "email"]
+    return conns
+
+
 def clean_fields(raw):
     if not isinstance(raw, dict):
         raise ValueError("reader output must be a JSON object")
