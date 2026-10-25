@@ -203,3 +203,10 @@ def no_live_agent_window(monkeypatch):
     monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda *a, **k: None)   # it reads the agent's screen: tests fake it
     monkeypatch.setattr(dispatch, "death_line", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def no_real_busy_agents(monkeypatch):
+    """A dispatcher pass writes its summary, which counts busy agents with tmux: no test lets it reach the real one."""
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "busy_agents", lambda reg: 0)
