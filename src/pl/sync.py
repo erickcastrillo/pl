@@ -5,10 +5,11 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from pl import board, dispatch, ghquota, outbox
+from pl import alerts, board, dispatch, ghquota, outbox
 from pl import config as C
 from pl.trackers.local import Local
 from pl.trackers import github
+from pl.util import now_iso
 
 ENTRY_POINTS = 8   # estimate of one entry's cost: a create is the dearest, an update with its re-read the next
 
@@ -33,13 +34,58 @@ def _state():
         return {"ids": {}, "last_sent": 0}
 
 
-def _save(state):
-    p = _ids_path()
+def _write_json(p, data):
     tmp = p.with_name(p.name + ".tmp")
     fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(state))
+        f.write(json.dumps(data))
     os.replace(tmp, p)
+
+
+def _save(state):
+    _write_json(_ids_path(), state)
+
+
+PULLED = ("column", "title", "description", "tags", "assigned_to")   # pipeline metadata is pl's own: never pulled
+
+
+def _norm(field, v):
+    if field == "tags":
+        return sorted(str(t) for t in v or ())
+    if field == "assigned_to":
+        return v or None
+    return str(v or "").strip()
+
+
+def _values(card, names):
+    return {f: _norm(f, names.get(card.get("list_id"), "") if f == "column" else card.get(f)) for f in PULLED}
+
+
+def _base_path():
+    return C.CONFIG_DIR / "sync-base.json"
+
+
+def _load_base():
+    try:
+        return dict(json.loads(_base_path().read_text()))
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _save_base(base):
+    _write_json(_base_path(), base)
+
+
+def _remember(card, fields):
+    """Record what GitHub now holds for these fields, so the next pull does not take it for a person's edit."""
+    fields = dict(fields)
+    if "list_id" in fields and "column" not in fields:
+        fields["column"] = _column(fields.pop("list_id"))
+    got = {f: _norm(f, v) for f, v in fields.items() if f in PULLED}
+    if got:
+        base = _load_base()
+        base.setdefault(str(card), {}).update(got)
+        _save_base(base)
 
 
 @contextmanager
@@ -83,6 +129,7 @@ def _send(gh, e, state):
             raise SystemExit('set [sync] repo = "owner/name": the repo where new cards become issues')
         column = _column(fields.pop("column"))
         state["ids"][card] = gh.create(column, **fields)["id"]
+        _remember(card, {**fields, "column": column})
         return
     gid = state["ids"].get(card)
     if gid is None:
@@ -94,6 +141,7 @@ def _send(gh, e, state):
     if "list_id" in fields:
         fields["column"] = _column(fields.pop("list_id"))
     gh.update(gid, verify=True, **fields)
+    _remember(card, fields)
 
 
 def replay(limit=None):
@@ -153,6 +201,76 @@ def _replay(limit):
     window = datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds") if until else None
     return {"sent": sent, "remaining": outbox.count(), "stopped_because": stopped, "next_window": window,
             "error": error}
+
+
+def pull():
+    """Take the GitHub edits no local change competes with; keep the local value, save GitHub's and alert on a clash."""
+    out = {"pulled": 0, "conflicts": [], "stopped_because": "done", "error": None}
+    rem, lim, _ = _reading()
+    if rem is not None and rem < ghquota.RESERVE * lim:
+        return {**out, "stopped_because": "reserve"}
+    try:
+        with _replay_lock():
+            return _pull(out)
+    except _Busy:
+        return {**out, "stopped_because": "busy"}
+
+
+def _pull(out):
+    gh = target()
+    try:
+        gcards = gh.cards()
+        gnames = {v: k for k, v in gh.columns().items()}
+    except github.RateLimited:   # OverBudget too
+        return {**out, "stopped_because": "reserve"}
+    except SystemExit as e:
+        return {**out, "stopped_because": "error", "error": f"reading {C.SYNC['github']} failed: {e}"}
+    local = Local(C.TRACKER)   # not trackers.get: the outbox wrapper must not see what GitHub said
+    lnames = {v: k for k, v in local.columns().items()}
+    by_gid = {gid: lid for lid, gid in _state()["ids"].items()}
+    base = _load_base()
+    pending = {}
+    for e in outbox.entries():
+        pending.setdefault(e["card"], set()).update("column" if k == "list_id" else k for k in e["fields"])
+    try:
+        for g in gcards:
+            lid = by_gid.get(g["id"])
+            if lid is not None:
+                _pull_card(local, lid, g, gnames, lnames, base.setdefault(lid, {}), pending.get(lid, ()), out)
+    finally:
+        _save_base(base)
+    return out
+
+
+def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
+    cur = local.card(lid)
+    gv, lv = _values(g, gnames), _values(cur, lnames)
+    held = (cur.get("metadata") or {}).get("remote_edit") or {}
+    take, clash = {}, {}
+    for f in PULLED:
+        if gv[f] == lv[f]:
+            b[f] = gv[f]
+        elif f not in held and f in b and gv[f] == b[f]:
+            continue   # only the local side changed: the replay sends it
+        elif f in held or f in pending or (f in b and lv[f] != b[f]):
+            clash[f] = gv[f]
+        else:
+            take[f] = b[f] = gv[f]
+    if take:
+        if "column" in take:
+            local.ensure_column(take["column"])
+        local.update(lid, verify=True, **take)
+        out["pulled"] += 1
+    if not clash:
+        return
+    new = {f: {"value": v, "at": now_iso()} for f, v in clash.items() if (held.get(f) or {}).get("value") != v}
+    if new:
+        local.update(lid, verify=True, metadata={"remote_edit": {**held, **new}})
+        out["conflicts"].append(lid)
+    outbox.strip(lid, set(clash))
+    alerts.open(f"sync-conflict:{lid}", "high",
+                f"card {lid} changed on GitHub and here: {', '.join(sorted({**held, **new}))}",
+                f"pl sync resolve {lid} --keep remote   (or --keep local)")
 
 
 def local_id(token):

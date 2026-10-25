@@ -64,6 +64,7 @@ def fake_home(tmp_path, monkeypatch):
 def fake(monkeypatch):
     f = FakeProject()
     monkeypatch.setattr(sync, "target", lambda: f)
+    monkeypatch.setattr(sync, "pull", lambda: {"pulled": 0, "conflicts": [], "stopped_because": "done", "error": None})
     return f
 
 
@@ -246,7 +247,7 @@ def test_sync_now_prints_counts(fake, capsys, monkeypatch):
     _ledger(4000)
     _queue_three()
     _run(monkeypatch, "sync", "now")
-    assert capsys.readouterr().out.strip() == "3 changes sent, 0 remain"
+    assert capsys.readouterr().out.strip() == "0 cards pulled\n3 changes sent, 0 remain"
 
 
 def test_sync_now_json_matches_plain(fake, capsys, monkeypatch):
@@ -254,7 +255,8 @@ def test_sync_now_json_matches_plain(fake, capsys, monkeypatch):
     _queue_three()
     _run(monkeypatch, "sync", "now", "--json")
     got = json.loads(capsys.readouterr().out)
-    assert got == {"sent": 3, "remaining": 0, "stopped_because": "done", "next_window": got["next_window"]}
+    assert got == {"sent": 3, "remaining": 0, "stopped_because": "done", "next_window": got["next_window"],
+                   "pulled": 0, "conflicts": []}
 
 
 def test_sync_now_error_exits_nonzero(fake, capsys, monkeypatch):
