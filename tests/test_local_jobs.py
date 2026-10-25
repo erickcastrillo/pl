@@ -1,4 +1,5 @@
 """Checked local jobs: one runner asks Ollama for JSON, validates it, falls back on any failure and logs the outcome."""
+import argparse
 import json
 import subprocess
 import urllib.error
@@ -147,3 +148,100 @@ def test_card_summary_never_calls_a_cloud_account_when_local_is_set(ollama, monk
     assert local_jobs.card_summary(card) == "All calm."
     sent = ollama[0][1]["messages"][1]["content"]
     assert sent.startswith("Fix login") and "the newest plan" in sent and "old" not in sent
+
+
+def embedder_tags_down(calls):
+    return calls.tags is None
+
+
+@pytest.fixture
+def embedder(ollama, monkeypatch):
+    """Like ollama, for /api/embed and /api/tags: .reply is the embed body, .tags the pulled model names."""
+    C.MODELS = {"local": {**C.MODELS["local"], "embed": "e:1"}}
+    ollama.tags = ["s:1", "other:1"]
+    ollama.reply = {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
+
+    def fake(url, payload, timeout):
+        ollama.append((url, payload, timeout))
+        if url.endswith("/api/tags"):
+            if embedder_tags_down(ollama):
+                raise OSError("down")
+            return json.dumps({"models": [{"name": n} for n in ollama.tags]})
+        if isinstance(ollama.reply, BaseException):
+            raise ollama.reply
+        if url.endswith("/api/chat"):
+            return json.dumps({"message": {"content": json.dumps(ollama.reply)}})
+        return json.dumps(ollama.reply)
+
+    monkeypatch.setattr(local_model, "_request", fake)
+    return ollama
+
+
+def test_embed_returns_one_vector_per_text(embedder):
+    assert local_jobs.embed(["a", "b"]) == [[0.1, 0.2], [0.3, 0.4]]
+    url, payload, _ = embedder[0]
+    assert url == "http://localhost:11434/api/embed" and payload["model"] == "e:1" and payload["input"] == ["a", "b"]
+    assert log()[0]["job"] == "embed" and log()[0]["ok"] is True
+
+
+def test_embed_with_ragged_vectors_is_a_schema_miss(embedder):
+    embedder.reply = {"embeddings": [[0.1, 0.2], [0.3]]}
+    assert local_jobs.embed(["a", "b"]) is None
+    assert log()[0]["ok"] is False and log()[0]["fallback"] == "skip"
+
+
+def test_models_list_json_shows_pulled_models_and_their_jobs(embedder, capsys):
+    embedder.tags = ["s:1:latest", "other:1"]
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="list", json=True))
+    out = json.loads(capsys.readouterr().out)
+    assert e.value.code == 0 and out["host"] == "http://localhost:11434" and out["lan"] is False
+    assert out["jobs"]["summarise"] == "s:1"
+    by_name = {m["name"]: m for m in out["models"]}
+    assert by_name["other:1"]["jobs"] == [] and by_name["other:1"]["pulled"] is True
+    assert by_name["s:1"]["jobs"] == ["summarise"] and by_name["s:1"]["pulled"] is True
+    assert by_name["r:1"]["jobs"] == ["route"] and by_name["r:1"]["pulled"] is False
+
+
+def test_models_list_exits_1_when_ollama_does_not_answer(embedder):
+    embedder.tags = None
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="list", json=False))
+    assert e.value.code == 1
+
+
+def test_models_test_prints_answer_schema_result_and_time(embedder, capsys):
+    embedder.reply = {"pipeline": "bugs", "confidence": 0.9}
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="test", job="route", json=False))
+    out = capsys.readouterr().out
+    assert e.value.code == 0 and out.count("schema: pass") == 3 and "bugs" in out and " ms" in out
+    assert sum(u.endswith("/api/chat") for u, *_ in embedder) == 3
+
+
+def test_models_test_exits_1_when_the_schema_fails(embedder, capsys):
+    embedder.reply = {"pipeline": 7}
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="test", job="route", json=False))
+    assert e.value.code == 1 and "schema: fail" in capsys.readouterr().out
+
+
+def test_models_test_of_an_unknown_job_exits_2(embedder):
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="test", job="dance", json=False))
+    assert e.value.code == 2
+
+
+def test_models_set_writes_the_job(embedder, tmp_path):
+    (tmp_path / ".claude-main").mkdir()
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="set", job="title", model="gemma4:e4b", yes=True))
+    assert e.value.code == 0
+    import tomlkit
+    assert tomlkit.parse((C.CONFIG_DIR / "config.toml").read_text())["models"]["local"]["title"] == "gemma4:e4b"
+
+
+def test_models_set_of_an_unknown_job_exits_2(embedder):
+    with pytest.raises(SystemExit) as e:
+        local_jobs.cmd_models(argparse.Namespace(models_cmd="set", job="dance", model="x", yes=True))
+    assert e.value.code == 2

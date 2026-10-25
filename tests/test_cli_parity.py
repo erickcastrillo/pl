@@ -74,6 +74,7 @@ def _wp2_expected(args, legacy):
         out = out.replace("update,local-model}", "update,local-model,connectors}")   # pl connectors (machine-wide MCP servers)
         out = out.replace("local-model,connectors}", "local-model,connectors,inbox}")   # pl inbox
         out = out.replace("connectors,inbox}", "connectors,inbox,kill-switch}")
+        out = out.replace("local-model,connectors,inbox}", "local-model,connectors,models,inbox}")   # pl models
         out = out.replace("kill-switch}", "kill-switch,triggers}")   # pl triggers
         out = out.replace("triggers}", "triggers,question,answer}")   # pl question, pl answer
         out = out.replace("skills,update,", "skills,pods,update,")   # pl pods (list, show)

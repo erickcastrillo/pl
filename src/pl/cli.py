@@ -109,6 +109,9 @@
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
+  pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
+                          test JOB [--json] runs the job's sample 3 times (answer, schema pass|fail, ms);
+                          set JOB MODEL [--yes] writes [models.local]; JOB is route, summarise, title or embed
   pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
                           turn matching incoming messages into cards; list [--json] shows status;
                           pause/resume NAME toggles whether it runs
@@ -354,6 +357,11 @@ def _main():
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
+    q = pm.add_parser("list"); q.add_argument("--json", action="store_true", help="output as JSON")
+    q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")
+    q = pm.add_parser("set"); q.add_argument("job"); q.add_argument("model")
+    q.add_argument("--yes", action="store_true", help="write without asking")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
@@ -435,5 +443,6 @@ def _main():
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
+     "models": lambda a: __import__("pl.local_jobs").local_jobs.cmd_models(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
      "kill-switch": outward.cmd_kill_switch}[a.cmd](a)
