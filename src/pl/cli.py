@@ -163,6 +163,9 @@
                           are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
+  pl loops list [--json] | add NAME (--skill S | --prompt P) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
+          | pause NAME | resume NAME | rm NAME [--yes]
+                          manage the profile's [loops.NAME] tables; --every is 30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
@@ -306,8 +309,6 @@ def _main():
     p = sub.add_parser("caps"); pc = p.add_subparsers(dest="caps_cmd", required=True)
     q = pc.add_parser("set"); q.add_argument("id"); q.add_argument("--minutes"); q.add_argument("--tokens", help="2M, 500k or a number")
     q = pc.add_parser("reset"); q.add_argument("id")
-    p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
-    q = pl_.add_parser("run"); q.add_argument("name"); q.add_argument("--wait", action="store_true", help="follow until the run ends and print its record"); q.add_argument("--json", action="store_true", help="with --wait: print the record as JSON")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); ps = p.add_subparsers(dest="profiles_cmd")
@@ -359,6 +360,17 @@ def _main():
     q.add_argument("--yes", action="store_true")
     q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
+    p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
+    q = pl_.add_parser("list"); q.add_argument("--json", action="store_true")
+    q = pl_.add_parser("add"); q.add_argument("name"); g = q.add_mutually_exclusive_group(required=True)
+    g.add_argument("--skill"); g.add_argument("--prompt")
+    q.add_argument("--every", help="30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>"); q.add_argument("--hours", help="HH:MM-HH:MM [weekdays]")
+    q.add_argument("--account"); q.add_argument("--team"); q.add_argument("--writes", action="store_true", help="let the loop write (default: read-only)")
+    q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="say what would be added, add nothing")
+    for verb in ("pause", "resume"):
+        q = pl_.add_parser(verb); q.add_argument("name")
+    q = pl_.add_parser("rm"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pl_.add_parser("run"); q.add_argument("name"); q.add_argument("--wait", action="store_true", help="follow until the run ends and print its record"); q.add_argument("--json", action="store_true", help="with --wait: print the record as JSON")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
