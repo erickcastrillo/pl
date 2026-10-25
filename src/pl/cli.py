@@ -83,6 +83,9 @@
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
+  pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
+                          pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
+                          and a rollback saves an earlier version's exact text as a new version
   pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
@@ -256,6 +259,10 @@ def _main():
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
+    q = pp.add_parser("rule"); qa = q.add_subparsers(dest="rule_cmd", required=True)
+    r = qa.add_parser("add"); r.add_argument("pod"); r.add_argument("text"); r.add_argument("--note"); r.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pp.add_parser("rollback"); q.add_argument("pod"); q.add_argument("--to", type=int, required=True); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pp.add_parser("history"); q.add_argument("pod"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
