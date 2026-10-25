@@ -7,6 +7,8 @@ import tomllib
 from importlib import resources
 from pathlib import Path
 
+import tomlkit
+
 from pl import config as C
 
 GATES = ("owner", "none", "auto-merge")
@@ -165,8 +167,71 @@ def _list_rows() -> list[dict]:
              "summary": summary.read(Path(r["dir"]))} for r in profiles.list_profiles(check_lock=False)]
 
 
+def _fail(msg):
+    print(f"pl: {msg}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _tracker(board):
+    if board == "local":
+        return {"type": "local"}
+    if board.startswith("mcp:") and board[4:]:
+        return {"type": "mcp", "server": board[4:]}
+    _fail(f"--board must be local or mcp:<server>, not {board!r}")
+
+
+def _add(name, p, a):
+    """Create the profile NAME with pipeline p; an existing profile is left as it is."""
+    from pl import profiles
+    if (Path.home() / f".pl-{name}").exists():
+        print(f"profile {name} already exists, unchanged")
+        return
+    p = {k: v for k, v in {**p, "name": name}.items() if v is not None}
+    if a.account:
+        if a.account not in C.ACCOUNTS:
+            _fail(f"unknown account {a.account!r}")
+        p["stages"] = {n: {"account": a.account, **s} for n, s in p["stages"].items()}
+    tracker = _tracker(a.board)
+    if a.dry_run:
+        print(tomlkit.dumps(profiles.pipeline_config(p, tracker, C.ACCOUNTS)), end="")
+    elif not (a.yes or sys.stdin.isatty()):
+        _fail(f"pl pipelines {a.pipelines_cmd} would create profile {name}: pass --yes")
+    else:
+        profiles.new_profile(name, pipeline_doc=p, tracker_doc=tracker)
+
+
+def _pipeline_of(name) -> dict:
+    try:
+        t = tomllib.loads((Path.home() / f".pl-{name}" / "config.toml").read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        _fail(f"no profile {name}")
+    return from_toml(t.get("pipeline"))
+
+
+def _import(a):
+    try:
+        t = tomllib.loads(Path(a.file).read_text())
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        _fail(f"{a.file}: {e}")
+    if "pipeline" not in t:
+        _fail(f"{a.file}: pipeline: missing [pipeline] table")
+    p = from_toml(t["pipeline"])
+    if errs := errors(p, t.get("connectors")):
+        _fail("\n".join(errs))
+    _add(a.name, p, a)
+
+
 def cmd_pipelines(a):
-    if a.pipelines_cmd == "show":
+    if a.pipelines_cmd == "add":
+        if a.template not in templates():
+            _fail(f"unknown template {a.template!r}: pl pipelines list --templates")
+        _add(a.name, templates()[a.template], a)
+    elif a.pipelines_cmd == "export":
+        p = {k: v for k, v in _pipeline_of(a.name).items() if v is not None}
+        print(tomlkit.dumps({"pipeline": p}), end="")
+    elif a.pipelines_cmd == "import":
+        _import(a)
+    elif a.pipelines_cmd == "show":
         d = _other_profile(a.name) if a.name and a.name != C.PROFILE_NAME else shown(C.PIPELINE)
         if a.json:
             print(json.dumps(d))
