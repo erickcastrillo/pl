@@ -52,14 +52,19 @@ class Telegram:
             self._resolved_token = mcp._resolve(self.token_ref, secrets)
         return self._resolved_token
 
-    def send(self, chat: str, text: str, buttons: list[Any] | dict[str, Any] | None = None) -> Any:
+    def send(self, chat: str, text: str, buttons: list[Any] | dict[str, Any] | None = None,
+             force_reply: bool = False, reply_to_message_id: int | None = None) -> Any:
         from pl.chat import safe_text
         payload: dict[str, Any] = {"chat_id": str(chat), "text": safe_text(text)}
-        if isinstance(buttons, dict):
+        if force_reply:
+            payload["reply_markup"] = {"force_reply": True}
+        elif isinstance(buttons, dict):
             payload["reply_markup"] = buttons
         elif isinstance(buttons, list):
             rows = [[self._format_button(x) for x in (b if isinstance(b, list) else [b])] for b in buttons]
             payload["reply_markup"] = {"inline_keyboard": rows}
+        if reply_to_message_id is not None:
+            payload["reply_to_message_id"] = int(reply_to_message_id)
         return _http(self._token(), "sendMessage", payload)
 
     @staticmethod
@@ -70,9 +75,15 @@ class Telegram:
             return {"text": str(b[0]), "callback_data": str(b[1])}
         return {"text": str(b), "callback_data": str(b)}
 
-    def edit(self, chat: str, msg: str | int, text: str) -> Any:
+    def edit(self, chat: str, msg: str | int, text: str, buttons: list[Any] | dict[str, Any] | None = None) -> Any:
         from pl.chat import safe_text
-        return _http(self._token(), "editMessageText", {"chat_id": str(chat), "message_id": int(msg), "text": safe_text(text)})
+        payload: dict[str, Any] = {"chat_id": str(chat), "message_id": int(msg), "text": safe_text(text)}
+        if isinstance(buttons, dict):
+            payload["reply_markup"] = buttons
+        elif isinstance(buttons, list):
+            rows = [[self._format_button(x) for x in (b if isinstance(b, list) else [b])] for b in buttons]
+            payload["reply_markup"] = {"inline_keyboard": rows}
+        return _http(self._token(), "editMessageText", payload)
 
     def updates(self, offset: int | None = None) -> list[dict[str, Any]]:
         payload = {"offset": offset} if offset is not None else {}

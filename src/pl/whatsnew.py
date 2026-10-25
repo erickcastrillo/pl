@@ -121,6 +121,8 @@ ENTRIES = [
        "pl kill-switch status"),
     _e("2026-10-23.04", "Gate messages in chat: approve, edit or send back directly from your phone",
        "manager posts waiting gates to Telegram/chat with Approve and Send back buttons", "pl manager status"),
+    _e("2026-10-23.05", "Send back notes and /stop guard from chat",
+       "chat approvals: reply with notes to send back, /stop pauses outward actions", "pl"),
 ]
 
 
