@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, harnesses, ideas, move_agent, pods, recall, trackers, usage, worktrees
+from pl import audit, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -35,6 +35,10 @@ def cmd_idea(a):
         if plan is None or slice_no is None or plan < 1 or slice_no < 1:
             raise SystemExit("pl idea: --plan and --slice go together, both whole numbers from 1")
         title = ideas.plan_title(plan, slice_no, a.title or line)
+    from_loop = os.environ.get("PL_LOOP_WRITES") == "0"   # a read-only loop only proposes: unstarted, tagged
+    if os.environ.get("PL_DRY_RUN") == "1":
+        print(f"would file: {title}")
+        return
     body, docs = [text, ""], []
     for d in a.doc:
         p = Path(d).expanduser().resolve()
@@ -62,8 +66,8 @@ def cmd_idea(a):
         desc, title = render({"INPUT": ideas._plain(desc)}), ideas.clean_title(title)
     check_size(desc)
     t = trackers.get("tracker" if direct else "intake")
-    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo),
-                    metadata=meta, assigned_to=trackers.me(t) if a.start else None)
+    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []),
+                    metadata=meta, assigned_to=trackers.me(t) if a.start and not from_loop else None)
     if not item.get("id"):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
     events.emit("idea_approved", item["id"])
@@ -274,9 +278,28 @@ def spec_gated(col):
     return col == "Spec ready" and bool((C.GATES or {}).get("spec"))
 
 
+def _at_gate(c, verb):
+    col = col_name(c["list_id"])
+    if not (gate := pipeline.gate_for(col)):
+        raise BadInput(f"pl {verb}: card is in '{col}', which is not an owner gate")
+    return gate
+
+
+def _approve_gate(c):
+    name, stage = _at_gate(c, "approve")
+    gates = {**((c.get("metadata") or {}).get("gates") or {}), name: {"approved_by": C.USER_EMAIL, "approved_at": now_iso()}}
+    target = pipeline.approved_column(stage)
+    update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None})
+    events.emit("gate_approved", c["id"])
+    audit.append("gate_approved", card=c["id"], stage=name)
+    print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
+
+
 def cmd_approve(a):
     fresh_next()   # it writes what it read: never from a copy that may be minutes old
     c = find_card(a.id)
+    if pipeline.is_config():
+        return _approve_gate(c)
     col = col_name(c["list_id"])
     if spec_gated(col):
         at = (c.get("metadata") or {}).get("spec_approved_at")
@@ -336,7 +359,8 @@ def cmd_reject(a):
     c = find_card(a.id)
     parts = sections(c.get("description"))
     m = c.get("metadata") or {}
-    if spec_gated(col_name(c["list_id"])):
+    back_to = _at_gate(c, "reject")[1]["column"] if pipeline.is_config() else None
+    if back_to is None and spec_gated(col_name(c["list_id"])):
         w = m.get("worker")
         if w and worker_status(w, registry())[0] != "dead":
             raise SystemExit("pl reject: an agent is working on this card; wait or stop it first")
@@ -353,11 +377,13 @@ def cmd_reject(a):
     entry = f"## {now_iso()[:10]} round {n}\n{a.notes.strip()}"
     parts["REVIEW NOTES"] = (parts["REVIEW NOTES"].rstrip() + "\n\n" + entry) if parts.get("REVIEW NOTES") else entry
     update(c["id"], description=check_size(render(parts)))
-    update(c["id"], list_id=col_id("Spec ready"), metadata={"review_round": n, "worker": None})
+    then = "the stage runs again" if back_to else "the planner re-plans"
+    back_to = back_to or "Spec ready"
+    update(c["id"], list_id=col_id(back_to), metadata={"review_round": n, "worker": None})
     events.emit("rejected", c["id"])
     recall.note(a.notes.strip(), "rejection", f"rejection:{c['id']}#{n}", c["id"])
     audit.append("rejected", card=c["id"])
-    print(f"rejected {short_id(c['id'])}  {c['title']}\n  back in Spec ready with your notes; the planner re-plans on the next pass")
+    print(f"rejected {short_id(c['id'])}  {c['title']}\n  back in {back_to} with your notes; {then} on the next pass")
 
 
 def cmd_done(a):
@@ -530,6 +556,11 @@ def cmd_profiles(a):
         C.PROFILE_STATE.write_text(json.dumps(st, indent=1))
         print(f"un-parked {a.reset}")
     bad = exhausted_profiles()
+    if getattr(a, "json", False):
+        emit({"accounts": [{"name": p, "parked": p in bad, "until": parking(p).get("until", "") if p in bad else "",
+                            "reason": parking(p).get("reason", "") if p in bad else "", "dir": str(C.PROFILES[p])}
+                           for p in C.PROFILES]})
+        return
     for p in C.PROFILES:
         r = parking(p)   # with the machine-wide entry: parked by another profile that shares the folder, and its checks
         state = f"PARKED until {r.get('until', '')[11:16]} UTC ({r.get('reason', '')}, seen {r.get('exhausted_at', '')[:16]})" if p in bad else "ok"
@@ -615,7 +646,6 @@ def cmd_caps(a):
     print(f"{short_id(c['id'])}: card caps {caps}")
 
 
-WRITABLE = ("SPEC", "DESIGN", "PLAN")   # the sections stage agents write; INPUT and REVIEW NOTES are yours
 SECTION_MAX = 256 * 1024                # bytes a --from file may hold
 APPROVED_COLUMNS = ("Approved", "In progress", "PR open", "Done")   # the PLAN is a person's decision from here on
 AGENT_DIRS = ("skills", "agents", "commands")   # the only parts of a harness folder --from may read
@@ -676,10 +706,10 @@ def cmd_section(a):
 
 
 def write_section(card_id, name, text, force=False) -> str:
-    """Replace one writable section of a card with text; the one place the WRITABLE, '# PIPELINE:' and approval
+    """Replace one writable section of a card with text; the one place the writable-section, '# PIPELINE:' and approval
     rules live. Returns the line to print."""
-    if name not in WRITABLE:
-        raise BadInput(f"pl section: only SPEC, DESIGN or PLAN can be written, not {name}")
+    if name not in (writable := pipeline.writable()):
+        raise BadInput(f"pl section: only {', '.join(writable[:-1])}{' or ' if len(writable) > 1 else ''}{writable[-1]} can be written, not {name}")
     if not text.strip():
         raise SystemExit("pl section: the text is empty; nothing was written")
     if re.search(r"^# PIPELINE:", text, re.M):
@@ -691,6 +721,8 @@ def write_section(card_id, name, text, force=False) -> str:
             raise SystemExit(f"pl section: the plan was approved (card is in '{col}'); a person can override with --force")
         if name == "SPEC" and (c.get("metadata") or {}).get("spec_approved_at"):
             raise SystemExit("pl section: the spec was approved; a person can override with --force")
+        if pipeline.is_config() and pipeline.past_gate(col_name(c.get("list_id")), name):
+            raise SystemExit(f"pl section: {name} was approved at its gate; a person can override with --force")
     parts = sections(c.get("description"))
     parts[name] = text.strip("\n")
     update(c["id"], description=check_size(render(parts)))
@@ -704,6 +736,9 @@ def cmd_board(a):
     if a.action == "check":
         from pl import boardcheck
         return boardcheck.cmd_check(a)
+    if a.action == "migrate":
+        from pl import migrate
+        return migrate.cmd_migrate(a)
     if a.action != "init":
         raise SystemExit("pl board: only 'init' is supported")
     if "Inbox" in lists():
@@ -1020,14 +1055,17 @@ def cmd_intent(a):
     r = subprocess.run(["gh", "pr", "view", m.group(3), "--repo", f"{m.group(1)}/{m.group(2)}", "--json", "body"],
                        capture_output=True, text=True, timeout=60, env=C.gh_env())
     body = (json.loads(r.stdout).get("body") or "") if r.returncode == 0 else ""
+    if getattr(a, "json", False):
+        emit({"pr": a.pr, "cards": [{"id": c["id"], "title": c["title"], "spec": (secs.get("SPEC") or "").strip(),
+                                     "plan_scope": "\n\n".join(picked)} for c, secs, picked in _intent_cards(a.pr, body)]})
+        return
     print(intent_text(a.pr, body))
 
 
-def intent_text(pr, body):
-    """The `pl intent` text for PR URL pr whose body is body: the spec + plan scope of the cards behind it."""
+def _intent_cards(pr, body):
+    """(card, its sections, the plan's scope sections) for the cards behind PR URL pr."""
     ids = [c["id"] for c in cards() if pr in ((c.get("metadata") or {}).get("pr_urls") or [])]
     ids = list(dict.fromkeys(ids + re.findall(r"cardId=([0-9a-f-]{36})", body)))
-    out = [f"# What {pr} was meant to do", ""]
     keep = re.compile(r"minimum change|deliberately not|acceptance|scope|non-goal", re.I)
     for cid in ids:
         try:
@@ -1035,13 +1073,20 @@ def intent_text(pr, body):
         except SystemExit:
             continue
         secs = sections(c.get("description"))
+        picked = [p.strip() for p in re.split(r"(?m)^(?=## )", secs.get("PLAN") or "") if keep.search(p.split("\n", 1)[0])]
+        yield c, secs, picked
+
+
+def intent_text(pr, body):
+    """The `pl intent` text for PR URL pr whose body is body: the spec + plan scope of the cards behind it."""
+    out = [f"# What {pr} was meant to do", ""]
+    for c, secs, picked in _intent_cards(pr, body):
+        cid = c["id"]
         out += [f"## Card {short_id(cid)}: {c['title']}", ""]
         if secs.get("SPEC"):
             out += ["### SPEC", secs["SPEC"].strip(), ""]
-        if secs.get("PLAN"):
-            picked = [p.strip() for p in re.split(r"(?m)^(?=## )", secs["PLAN"]) if keep.search(p.split("\n", 1)[0])]
-            if picked:
-                out += ["### PLAN (scope sections only)"] + picked + [""]
+        if picked:
+            out += ["### PLAN (scope sections only)"] + picked + [""]
         if not secs.get("SPEC") and not secs.get("PLAN"):
             out += [(c.get("description") or "(no description)").strip()[:6000], ""]
     if len(out) == 2:
@@ -1094,11 +1139,25 @@ def clear_bootstrap_failure(card_ref):
         update(c["id"], metadata={"bootstrap_error": None})
 
 
+def _sync_now(r, as_json):
+    if r["stopped_because"] == "error":
+        print(f"pl sync: {r['error']}", file=sys.stderr)
+        raise SystemExit(1)
+    if as_json:
+        print(json.dumps({k: r[k] for k in ("sent", "remaining", "stopped_because", "next_window")}))
+        return
+    print(f"{r['sent']} changes sent, {r['remaining']} remain")
+    if r["stopped_because"] in ("reserve", "half-budget") and r["next_window"]:
+        print("next GitHub window: " + datetime.fromisoformat(r["next_window"]).astimezone().strftime("%H:%M"))
+
+
 def cmd_sync(a):
-    from pl import ghquota, outbox
+    from pl import ghquota, outbox, sync
     target = C.SYNC.get("github")
     if not target:
         raise SystemExit("pl sync: set [sync] github in config.toml")
+    if a.action == "now":
+        return _sync_now(sync.replay(), getattr(a, "json", False))
     n = outbox.count()
     led = ghquota.ledger()
     reset = led.get("reset")

@@ -74,13 +74,45 @@ def _write(path, data):
     os.replace(tmp, path)
 
 
+_TOKENS = {}   # "<folder>@<host>" -> short hash of the token gh uses there, or None; never the token itself
+
+
+def _ask_token():
+    """The token gh uses, from `gh auth token` (which applies GH_TOKEN and the profile's folder); "" when it has none."""
+    from pl.trackers import github
+    r = github._run(["auth", "token"])
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _token_hash(folder=None):
+    """12 hex characters of SHA-256 of this process's token, asked of gh once per sign-in folder; None without one."""
+    if folder is not None and _folder(folder) != _folder():
+        return None   # another profile's sign-in: this process cannot see its token
+    key = f"{_folder()}@{_host()}"
+    if key not in _TOKENS:
+        try:
+            tok = _ask_token()
+        except (SystemExit, OSError):   # gh missing or timed out: the login ledger, not an error
+            tok = ""
+        _TOKENS[key] = hashlib.sha256(tok.encode()).hexdigest()[:12] if tok else None
+    return _TOKENS[key]
+
+
 def account(folder=None):
-    """The ledger's key: the GitHub login seen for this sign-in folder and host, else a hash of the folder."""
+    """The ledger's key: the GitHub login seen for this sign-in folder (else a hash of the folder), then the short hash
+    of the token, since each token has its own budget. Without a token: the login alone."""
     where = f"{_folder(folder)}@{_host()}"
     login = _load(_dir() / "logins.json").get(where)
-    if isinstance(login, str) and login.replace("-", "").isalnum():
-        return f"{login}@{_host()}"
-    return "dir-" + hashlib.sha256(where.encode()).hexdigest()[:12] + f"@{_host()}"
+    base = login if isinstance(login, str) and login.replace("-", "").isalnum() \
+        else "dir-" + hashlib.sha256(where.encode()).hexdigest()[:12]
+    return f"{base}.{h}@{_host()}" if (h := _token_hash(folder)) else f"{base}@{_host()}"
+
+
+def _label(acct):
+    """"acme-bot.0123abcd4567@github.com" -> "acme-bot@github.com (token 0123abcd4567)"; a key with no hash as it is."""
+    name, _, host = acct.partition("@")
+    login, dot, tok = name.partition(".")
+    return f"{login}@{host} (token {tok})" if dot else acct
 
 
 def learn(login):
@@ -242,7 +274,9 @@ def summary(acct=None):
     by = led.get("by") or {}
     top = max(by, key=by.get) if by else None
     reset = time.strftime("%H:%M", time.localtime(led["reset"]))
-    return (f"GitHub {(acct or account()).split('@')[0]}: {led['remaining']} of {led.get('limit') or 5000} GraphQL "
+    who, _, token = _label(acct or account()).partition(" ")
+    name = f"{who.split('@')[0]} {token}".strip()
+    return (f"GitHub {name}: {led['remaining']} of {led.get('limit') or 5000} GraphQL "
             f"points left, resets {reset}" + (f"; top this hour: {top} ({by[top]})" if top else ""))
 
 
@@ -266,6 +300,10 @@ def usage_for(folder, profile):
     """What profile spent of its GitHub user's budget this window, for pl manager status; None before any reading."""
     acct = account(folder)
     led = ledger(acct)
+    if not isinstance(led.get("remaining"), int) and "." not in acct.split("@")[0]:   # another folder's token is unseen
+        base = acct.split("@")[0]
+        led = max((l for a, l in accounts() if a.split("@")[0].split(".")[0] == base), default={},
+                  key=lambda l: l.get("at") or 0)
     if not isinstance(led.get("remaining"), int) or (led.get("reset") or 0) <= _clock():
         return None
     return {"account": acct, "spent": (led.get("spent") or {}).get(profile, 0), "share": fair_share(led),
@@ -281,7 +319,7 @@ def report():
     for acct, led in rows:
         reset = time.strftime("%H:%M", time.localtime(led["reset"]))
         age = int(_clock() - (led.get("at") or 0))
-        out.append(f"{acct}: {led['remaining']} of {led.get('limit') or 5000} GraphQL points left, resets {reset} "
+        out.append(f"{_label(acct)}: {led['remaining']} of {led.get('limit') or 5000} GraphQL points left, resets {reset} "
                    f"(read {age} s ago)")
         for p, (v, share) in profile_rows(led).items():
             out.append(f"  {p:<20} spent {v:>5}   fair share {share}")

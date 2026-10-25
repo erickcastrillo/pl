@@ -12,7 +12,7 @@ import pytest
 from pl import board, cli, commands, harnesses, skills
 from pl import config as C
 
-NAMES = ["pl-design", "pl-plan", "pl-read-mail", "pl-review", "pl-run", "pl-spec"]
+NAMES = ["pl-design", "pl-plan", "pl-read-mail", "pl-review", "pl-run", "pl-spec", "pl-stage"]
 CLI = Path(cli.__file__).read_text()
 
 
@@ -44,7 +44,7 @@ def _bump(shipped, name, text="\nNew step.\n"):
 
 # ---------- the package ----------
 
-def test_the_package_ships_six_skills_with_frontmatter():
+def test_the_package_ships_seven_skills_with_frontmatter():
     assert skills.builtin_names() == NAMES
     for n in NAMES:
         text = (skills.BUILTIN_DIR / n / "SKILL.md").read_text()
@@ -73,9 +73,18 @@ def test_every_pl_command_a_skill_names_exists_in_the_cli():
     for n in NAMES:
         for cmd, sub in _mentions((skills.BUILTIN_DIR / n / "SKILL.md").read_text()):
             seen.add(cmd)
+            if cmd == "pipelines":   # the command arrives with the templates slice of plan 10
+                continue
             assert cmd in top, f"{n}: pl {cmd}"
             assert cmd not in subs or not sub or sub in subs[cmd], f"{n}: pl {cmd} {sub}"
     assert {"card", "move", "section", "depends"} <= seen
+
+
+def test_pl_stage_skill_ships_with_a_version_and_names_its_commands():
+    text = (skills.BUILTIN_DIR / "pl-stage" / "SKILL.md").read_text()
+    assert re.search(r"^pl-builtin-version: 1$", text, re.M)
+    for cmd in ("pl pipelines show --json", "pl card <id>", "pl section <id> <SECTION> --from <file>", 'pl move <id> "<done>"'):
+        assert cmd in text
 
 
 def test_the_mention_parser_catches_a_made_up_command():
@@ -91,7 +100,7 @@ def test_install_copies_every_builtin_into_the_library(lib):
     assert sorted(p.name for p in lib.iterdir() if not p.name.startswith(".")) == NAMES
     for n in NAMES:
         assert (lib / n / "SKILL.md").read_bytes() == (skills.BUILTIN_DIR / n / "SKILL.md").read_bytes()
-    assert len(out) == 6 and all(m.startswith("installed built-in ") for m in out)
+    assert len(out) == 7 and all(m.startswith("installed built-in ") for m in out)
     assert skills.install_builtins() == []                       # a second run changes nothing
     assert {i["name"] for i in skills.scan() if i["account"] == "library"} == set(NAMES)
 
@@ -250,11 +259,12 @@ def test_a_loop_prompt_of_a_library_skill_gets_the_plugin_name_on_claude(lib, mo
 
 def test_the_builtin_review_loop_uses_pl_review(tmp_path, monkeypatch):
     lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    p = C._review_prompt("acme/app", lab, {"harness": "claude"})
-    assert p == "/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready rework=pl:rework failed=pl:failed"
-    assert C._review_prompt("acme/app", lab, {"harness": "codex"}).startswith("/pl-review repo=acme/app ")
+    p = C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS)
+    assert p == ("/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready rework=pl:rework failed=pl:failed "
+                 "auto_lines=150 auto_files=6")
+    assert C._review_prompt("acme/app", lab, {"harness": "codex"}, C.PR_LIMITS).startswith("/pl-review repo=acme/app ")
     text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge"):
+    for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge directly"):
         assert rule in text
 
 
@@ -390,7 +400,7 @@ def test_a_failed_install_never_stops_the_dispatcher(lib, monkeypatch):
 
 def test_the_review_loop_falls_back_to_the_inline_prompt_while_pl_review_is_missing(lib, monkeypatch):
     lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    svc = {"prompt": C._review_prompt("acme/app", lab, {"harness": "claude"}),
+    svc = {"prompt": C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS),
            "fallback": C._review_text("acme/app", lab, {"harness": "claude"}), "builtin": True}
     assert svc["fallback"].startswith("/loop 30m Review pull requests on acme/app.")
     assert "Never merge" in svc["fallback"]
@@ -558,7 +568,7 @@ def test_two_interleaved_installs_leave_complete_files(lib, monkeypatch):
         return real(dest, raw)
     monkeypatch.setattr(skills, "_write_builtin", write)
     out = skills.install_builtins()
-    assert inner == [[]] and len(out) == 6
+    assert inner == [[]] and len(out) == 7
     for n in NAMES:
         assert (lib / n / "SKILL.md").read_bytes() == (skills.BUILTIN_DIR / n / "SKILL.md").read_bytes()
 
@@ -578,8 +588,9 @@ def test_pl_run_never_force_pushes_and_takes_the_label_as_an_argument():
 
 def test_review_loop_quotes_labels_with_spaces():
     lab = {"review": "needs review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    p = C._review_prompt("acme/app", lab, {"harness": "claude"})
-    assert p == "/loop 30m /pl-review repo=acme/app review='needs review' ready=pl:ready rework=pl:rework failed=pl:failed"
+    p = C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS)
+    assert p == ("/loop 30m /pl-review repo=acme/app review='needs review' ready=pl:ready rework=pl:rework failed=pl:failed "
+                 "auto_lines=150 auto_files=6")
     assert "quote" in (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
 
 
@@ -709,9 +720,29 @@ def test_pl_plan_splits_into_independent_slices():
     assert "pl-builtin-version: 6" in text
 
 
+def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
+    lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed",
+           "merge_ready": "ship it"}
+    limits = {"pr_auto_merge_lines": 100, "pr_auto_merge_files": 4}
+    p = C._review_prompt("acme/app", lab, {"harness": "codex"}, limits)
+    assert p.endswith("failed=pl:failed merge_ready='ship it' auto_lines=100 auto_files=4")
+    del lab["merge_ready"]
+    p = C._review_prompt("acme/app", lab, {"harness": "codex"}, limits)
+    assert "merge_ready=" not in p and p.endswith("failed=pl:failed auto_lines=100 auto_files=4")
+
+
+def test_pl_review_has_one_merge_rule():
+    text = _shipped("pl-review")
+    for gone in ("Never merges.", "pl:merge-ready", "150 lines", "6 files"):
+        assert gone not in text
+    for phrase in ("<merge_ready>", "<auto_lines>", "--auto --squash", "auto-merge is off", "do not retry",
+                   "Never merge directly"):
+        assert phrase in text
+
+
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     text = _shipped("pl-review")
     for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 4" in text
+    assert "pl-builtin-version: 5" in text

@@ -1,0 +1,30 @@
+[pipeline]
+name = "existing-client"
+template = "existing-client"
+columns = ["Check-in", "Check-in review", "Renewal", "Renewal review", "Issues", "Issues review", "Done"]
+
+[pipeline.stages.check-in]
+column = "Check-in"
+done = "Check-in review"
+next = "Renewal"
+skill = "pl-stage"
+section = "CHECK IN"
+gate = "owner"
+instructions = "Read the client card and its history. Write a short check-in: how the account is doing, open risks, and what to raise with the client."
+
+[pipeline.stages.renewal]
+column = "Renewal"
+done = "Renewal review"
+next = "Issues"
+skill = "pl-stage"
+section = "RENEWAL"
+gate = "owner"
+instructions = "Write the renewal plan for the client: term, price changes, what to propose, and what could block it."
+
+[pipeline.stages.issue-triage]
+column = "Issues"
+done = "Issues review"
+skill = "pl-stage"
+section = "TRIAGE"
+gate = "owner"
+instructions = "Sort the client's open issues by urgency and impact, and say who should handle each one and what to tell the client."

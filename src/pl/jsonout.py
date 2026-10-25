@@ -3,7 +3,8 @@ import json
 
 from pl.util import mask
 
-SHAPES = {"list": "board", "card": "card", "section": "section", "alerts": "alerts"}
+SHAPES = {"list": "board", "card": "card", "section": "section", "alerts": "alerts",
+          "usage": "usage", "standup": "standup", "accounts": "accounts", "profiles": "profiles", "intent": "intent"}
 
 
 def emit(data):

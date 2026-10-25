@@ -131,7 +131,7 @@ def models(s=None):
     """The names of the models Ollama has pulled, or None when it does not answer (or the url is refused).
     s: [local_model] settings to use instead of the loaded profile's (pl setup, before the profile exists)."""
     s = _settings(s)
-    if url_problem(s.get("url")):
+    if url_problem(s.get("url"), s.get("allow_lan") is True):
         return None
     try:
         tags = json.loads(_request(s["url"].rstrip("/") + "/api/tags", None, _timeout(s)))
