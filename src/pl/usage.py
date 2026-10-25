@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl import events, harnesses
+from pl.jsonout import emit
 from pl.util import _nofollow, load_state, mask, parse_iso, short_id
 
 FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -358,6 +359,14 @@ def table(st, since, by="account", cards=None):
     return "\n".join("  ".join(v.ljust(w[i]) if i == 0 else v.rjust(w[i]) for i, v in enumerate(r)).rstrip() for r in out)
 
 
+def rows_json(st, since, by="account", cards=None):
+    """The `pl usage --json` rows: one per group, biggest first; cost only when [usage] prices are set."""
+    priced = bool((C.USAGE or {}).get("prices"))
+    return [{"group": g, **dict(zip(("input", "output", "cache_read", "cache_write"), r[:4])), "total": sum(r[:4]),
+             **({"cost": r[4]} if priced else {})}
+            for g, r in sorted(totals(st, since, by, cards).items(), key=lambda kv: -sum(kv[1][:4]))]
+
+
 def _spent(st, sids, since):
     cut = _hour(since)
     return sum(sum(n[:4]) for k, n in (st.get("buckets") or {}).items() if k.rsplit("|", 1)[-1] in sids and k[:13] >= cut)
@@ -396,4 +405,8 @@ def cmd_usage(a):
             cards = board_cards()
         except (Exception, SystemExit):  # noqa: BLE001
             cards = None
+    if getattr(a, "json", False):
+        emit({"since": datetime.fromtimestamp(since, timezone.utc).isoformat(), "by": a.by or "account",
+              "rows": rows_json(scan(), since, a.by or "account", cards)})
+        return
     print(table(scan(), since, a.by or "account", cards))

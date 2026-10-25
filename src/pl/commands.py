@@ -481,6 +481,11 @@ def cmd_profiles(a):
         C.PROFILE_STATE.write_text(json.dumps(st, indent=1))
         print(f"un-parked {a.reset}")
     bad = exhausted_profiles()
+    if getattr(a, "json", False):
+        emit({"accounts": [{"name": p, "parked": p in bad, "until": parking(p).get("until", "") if p in bad else "",
+                            "reason": parking(p).get("reason", "") if p in bad else "", "dir": str(C.PROFILES[p])}
+                           for p in C.PROFILES]})
+        return
     for p in C.PROFILES:
         r = parking(p)   # with the machine-wide entry: parked by another profile that shares the folder, and its checks
         state = f"PARKED until {r.get('until', '')[11:16]} UTC ({r.get('reason', '')}, seen {r.get('exhausted_at', '')[:16]})" if p in bad else "ok"
@@ -932,14 +937,17 @@ def cmd_intent(a):
     r = subprocess.run(["gh", "pr", "view", m.group(3), "--repo", f"{m.group(1)}/{m.group(2)}", "--json", "body"],
                        capture_output=True, text=True, timeout=60, env=C.gh_env())
     body = (json.loads(r.stdout).get("body") or "") if r.returncode == 0 else ""
+    if getattr(a, "json", False):
+        emit({"pr": a.pr, "cards": [{"id": c["id"], "title": c["title"], "spec": (secs.get("SPEC") or "").strip(),
+                                     "plan_scope": "\n\n".join(picked)} for c, secs, picked in _intent_cards(a.pr, body)]})
+        return
     print(intent_text(a.pr, body))
 
 
-def intent_text(pr, body):
-    """The `pl intent` text for PR URL pr whose body is body: the spec + plan scope of the cards behind it."""
+def _intent_cards(pr, body):
+    """(card, its sections, the plan's scope sections) for the cards behind PR URL pr."""
     ids = [c["id"] for c in cards() if pr in ((c.get("metadata") or {}).get("pr_urls") or [])]
     ids = list(dict.fromkeys(ids + re.findall(r"cardId=([0-9a-f-]{36})", body)))
-    out = [f"# What {pr} was meant to do", ""]
     keep = re.compile(r"minimum change|deliberately not|acceptance|scope|non-goal", re.I)
     for cid in ids:
         try:
@@ -947,13 +955,20 @@ def intent_text(pr, body):
         except SystemExit:
             continue
         secs = sections(c.get("description"))
+        picked = [p.strip() for p in re.split(r"(?m)^(?=## )", secs.get("PLAN") or "") if keep.search(p.split("\n", 1)[0])]
+        yield c, secs, picked
+
+
+def intent_text(pr, body):
+    """The `pl intent` text for PR URL pr whose body is body: the spec + plan scope of the cards behind it."""
+    out = [f"# What {pr} was meant to do", ""]
+    for c, secs, picked in _intent_cards(pr, body):
+        cid = c["id"]
         out += [f"## Card {short_id(cid)}: {c['title']}", ""]
         if secs.get("SPEC"):
             out += ["### SPEC", secs["SPEC"].strip(), ""]
-        if secs.get("PLAN"):
-            picked = [p.strip() for p in re.split(r"(?m)^(?=## )", secs["PLAN"]) if keep.search(p.split("\n", 1)[0])]
-            if picked:
-                out += ["### PLAN (scope sections only)"] + picked + [""]
+        if picked:
+            out += ["### PLAN (scope sections only)"] + picked + [""]
         if not secs.get("SPEC") and not secs.get("PLAN"):
             out += [(c.get("description") or "(no description)").strip()[:6000], ""]
     if len(out) == 2:

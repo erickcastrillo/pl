@@ -3,14 +3,18 @@ import argparse
 import json
 import re
 import time
+import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from pl import alerts, board, commands, jsonout
+from pl import alerts, board, commands, events, jsonout, profiles, standup, usage, watch
+from pl import config as C
 from pl.trackers import mcp
 
 SNAP = json.loads((Path(__file__).parent / "snapshots" / "cli-json.json").read_text())
+PR = "https://github.com/acme/app/pull/3"
 NOW = time.time()
 ISO = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(NOW - 120))
 CARD = {"id": "acme/app#7", "title": "A card", "list_id": "L1", "tags": ["idea"], "updated_at": ISO,
@@ -34,13 +38,46 @@ def fake_board(monkeypatch):
         {"key": "k1", "severity": "high", "title": "t", "fix": "f", "first_seen": 1.5, "count": 2}])
 
 
+PLAN_CARD = {"id": "acme/app#9", "title": "Planned", "list_id": "L1", "metadata": {"pr_urls": [PR]},
+             "description": "# PIPELINE: SPEC\nthe spec\n\n# PIPELINE: PLAN\n## Summary\nx\n\n## Minimum change\nsmall\n"}
+
+
+@pytest.fixture(autouse=True)
+def fake_reads(monkeypatch):
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(usage, "scan", lambda: {})
+    monkeypatch.setattr(C, "USAGE", {"prices": {"m": [1, 1]}})
+    monkeypatch.setattr(usage, "totals", lambda *a, **k: {"work": [1, 2, 3, 4, 0.5, False]})
+    monkeypatch.setattr(standup, "pr_summary", lambda start: {k: {"total": 1, "items": [{"repo": "app", "number": 3, "title": "t", "url": "u", "yours": True}]}
+                                                              for k in ("merged", "opened", "closed")})
+    monkeypatch.setattr(standup, "_cards", lambda: [])
+    monkeypatch.setattr(watch, "watch_snapshot", lambda: {"rows": [], "needs": {}})
+    monkeypatch.setattr(events, "_read", lambda: [{"kind": "idea_approved", "card": "c1", "_t": now - timedelta(hours=1)},
+                                                  {"kind": "error", "message": "boom", "_t": now - timedelta(hours=1)}])
+    monkeypatch.setattr(C, "PROFILES", {"work": "/home/x/.claude-work"})
+    monkeypatch.setattr(commands, "exhausted_profiles", lambda: ["work"])
+    monkeypatch.setattr(commands, "parking", lambda p: {"until": "2026-01-01T10:00:00", "reason": "limit", "exhausted_at": "2026-01-01T08:00:00"})
+    monkeypatch.setattr(profiles, "list_profiles", lambda check_lock=True: [
+        {"name": "one", "dir": "/home/x/.pl-one", "running": False, "holder": "", "tmux_session": "pl-one", "tracker": "github 1",
+         "board_id": "1", "accounts": {"work": "/home/x/.claude-work"}}])
+    monkeypatch.setattr(commands, "cards", lambda: [PLAN_CARD])
+    monkeypatch.setattr(commands, "card", lambda cid: PLAN_CARD)
+    monkeypatch.setattr(commands.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=json.dumps({"body": ""})))
+
+
+NS = {"list": dict(all=False, product=False), "card": dict(id="x", delete=False),
+      "section": dict(id="x", name="spec", from_=None), "alerts": dict(all=False, ack=None),
+      "usage": dict(since=None, by="account", github=False),
+      "standup": dict(since=None, markdown=False, slack=False, summary=False),
+      "accounts": dict(reset=None), "profiles": dict(profiles_cmd=None), "intent": dict(pr=PR)}
+FN = {"list": commands.cmd_list, "card": commands.cmd_card, "section": commands.cmd_section, "alerts": alerts.cmd_alerts,
+      "usage": usage.cmd_usage, "standup": standup.cmd_standup, "accounts": commands.cmd_profiles,
+      "profiles": profiles.cmd_profiles, "intent": commands.cmd_intent}
+ALL = list(FN)
+
+
 def run(cmd, **kw):
-    ns = {"list": dict(all=False, product=False), "card": dict(id="x", delete=False),
-          "section": dict(id="x", name="spec", from_=None), "alerts": dict(all=False, ack=None)}[cmd]
-    a = argparse.Namespace(**{"json": True, **ns, **kw})
-    fn = {"list": commands.cmd_list, "card": commands.cmd_card, "section": commands.cmd_section,
-          "alerts": alerts.cmd_alerts}[cmd]
-    fn(a)
+    FN[cmd](argparse.Namespace(**{"json": True, **NS[cmd], **kw}))
 
 
 def outline(v):
@@ -51,14 +88,14 @@ def outline(v):
     return type(v).__name__
 
 
-@pytest.mark.parametrize("cmd", ["list", "card", "section", "alerts"])
+@pytest.mark.parametrize("cmd", ALL)
 def test_shape_snapshot(cmd, capsys):
     run(cmd)
     got = outline(json.loads(capsys.readouterr().out))
     assert got == SNAP[cmd]
 
 
-@pytest.mark.parametrize("cmd", ["list", "card", "section", "alerts"])
+@pytest.mark.parametrize("cmd", ALL)
 def test_every_json_output_is_one_document(cmd, capsys):
     run(cmd)
     out = capsys.readouterr().out
@@ -98,4 +135,21 @@ def test_docs_cli_json_names_every_shape_in_SHAPES():
     doc = (Path(__file__).parent.parent / "docs" / "cli-json.md").read_text()
     for cmd, shape in jsonout.SHAPES.items():
         assert re.search(rf"^## {re.escape(shape)}\b", doc, re.M), f"{cmd}: no '## {shape}' in docs/cli-json.md"
-    assert set(jsonout.SHAPES) == {"list", "card", "section", "alerts"}
+    assert set(jsonout.SHAPES) == set(ALL)
+
+
+def test_usage_json_rows_are_the_table_data(capsys):
+    run("usage")
+    got = json.loads(capsys.readouterr().out)
+    assert got["by"] == "account" and got["rows"][0] == {"group": "work", "input": 1, "output": 2, "cache_read": 3, "cache_write": 4, "total": 10, "cost": 0.5}
+
+
+def test_accounts_json_says_who_is_parked(capsys):
+    run("accounts")
+    assert json.loads(capsys.readouterr().out)["accounts"][0]["parked"] is True
+
+
+def test_intent_json_keeps_the_plan_scope_sections_only(capsys):
+    run("intent")
+    card = json.loads(capsys.readouterr().out)["cards"][0]
+    assert card["spec"] == "the spec" and card["plan_scope"].startswith("## Minimum change") and "Summary" not in card["plan_scope"]
