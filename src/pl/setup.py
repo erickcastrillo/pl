@@ -31,7 +31,7 @@ CONFIG_DIRS = {"claude": "~/.claude", "codex": "~/.codex", "agy": None}
 INSTALL = {"claude": "npm install -g @anthropic-ai/claude-code  (https://docs.claude.com/en/docs/claude-code/setup)",
            "codex": "npm install -g @openai/codex  (https://github.com/openai/codex)",
            "agy": "see https://antigravity.google"}
-TRACKERS = ("github-project", "github-issues", "mcp")
+TRACKERS = ("local", "github-project", "github-issues", "mcp")
 STAGES = ("spec", "design", "plan", "run")
 MCP_DOC = "docs/mcp-trackers.md"
 SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
@@ -252,12 +252,15 @@ def ask_harnesses(answers, flags):
 def ask_tracker(answers, flags):
     """[tracker]. A create-project answer is kept as tracker["_create"] = title and done after the summary."""
     was = _old(answers, "tracker", "type")
-    kind = _ask(flags, flags.tracker, "Where do cards live? github-project, github-issues or mcp",
-                was if was in TRACKERS else None, "--tracker",
-                "github-project, github-issues or mcp",
-                lambda v: None if v in TRACKERS else f"choose github-project, github-issues or mcp, not {v!r}")
-    ot = (_old(answers, "tracker") or {}) if kind == was else {}   # the old tracker's answers, same type only
     work = _work_default(flags, _old(answers, "paths", "work_dir"))
+    default = was if was in TRACKERS else ("local" if (_remote_repo(work) or flags.repo) is None else None)
+    kind = _ask(flags, flags.tracker, "Where do cards live? local, github-project, github-issues or mcp",
+                default, "--tracker",
+                "local, github-project, github-issues or mcp",
+                lambda v: None if v in TRACKERS else f"choose local, github-project, github-issues or mcp, not {v!r}")
+    if kind == "local":
+        return {"type": "local"}
+    ot = (_old(answers, "tracker") or {}) if kind == was else {}   # the old tracker's answers, same type only
     if kind == "mcp":
         p = Path(ot["mcp_config"]).expanduser() if ot.get("mcp_config") and not flags.mcp_config else _mcp_file(flags, work)
         p = Path(_ask(flags, str(p) if p else None, "Harness MCP config file (JSON with mcpServers)", None, "--mcp-config",
@@ -341,7 +344,7 @@ def ask_user(answers, flags):
     """[user]: login = the chosen gh sign-in (GitHub trackers); email is optional (--email, or asked with Enter = skip).
     An existing profile's [user] values are the defaults."""
     old = _old(answers, "user") or {}
-    on_github = answers["tracker"]["type"] != "mcp"
+    on_github = answers["tracker"]["type"] not in ("mcp", "local")
     email = flags.email if flags.email is not None else old.get("email")
     if on_github and flags.email is None and flags.interactive:
         email = _ask(flags, None, "Your email (optional; Enter skips)", old.get("email") or "", "--email", "")
@@ -846,14 +849,15 @@ def cmd_setup(argv: list[str], profile=None):
     a["user"] = ask_user(a, flags)
     repo = a["tracker"].get("repo") or flags.repo
     a["labels"], a["no_labels"] = ask_labels(a, flags, repo), flags.no_labels
-    a["owner"] = flags.owner or (a["tracker"].get("repo") or "").partition("/")[0] or _old(a, "code_host", "owner")
+    a["owner"] = flags.owner or (a["tracker"].get("repo") or "").partition("/")[0] or _old(a, "code_host", "owner") or None
     a["work_dir"] = ask_work_dir(a, flags)
     a["attention"] = ask_attention(a, flags)
     a["local_model"] = ask_local_model(a, flags)
     d = Path.home() / f".pl-{a['slug']}"
     t = a["tracker"]
+    cards_desc = "local (board.db in the profile folder)" if t["type"] == "local" else f"{t['type']} {t.get('repo') or t.get('server') or ''}{' (new project)' if '_create' in t else ''}"
     print(f"\nProfile {a['name']} in {_tilde(d)}\n  harnesses  {', '.join(a['accounts'])} (stages use {a['default_account']})\n"
-          f"  cards      {t['type']} {t.get('repo') or t.get('server') or ''}{' (new project)' if '_create' in t else ''}\n"
+          f"  cards      {cards_desc}\n"
           f"  gh sign-in {a['gh_config_dir'] or 'the default'}\n  work folder {a['work_dir']}\n"
           f"  notifications {a['attention'] or 'none'}\n  PR labels  {', '.join(a['labels'].values()) if a['labels'] else 'none'}" +
           (f"\n  local model {a['local_model']['model']} on Ollama (this machine only)"
