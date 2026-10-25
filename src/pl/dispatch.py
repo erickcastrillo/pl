@@ -1670,7 +1670,7 @@ def reload_config():
 
 
 def cmd_dispatch(a):
-    if not a.once:
+    if not getattr(a, "once", False):
         return _dispatch(a)
     with jobs.track("dispatch"):
         jobs.progress("dispatch pass started")
