@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
-from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
+from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
 from pl import audit, events, ideas, move_agent, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
@@ -76,8 +76,9 @@ def cmd_idea(a):
 
 
 def _list_json(a):
-    def row(c, col, agent):
+    def row(c, col, agent, deps=None):
         return {"id": c["id"], "title": c["title"], "column": col, "agent": agent,
+                **({"depends_on": list((c.get("metadata") or {}).get("depends_on") or []), "waiting_on": deps_open(c, pipeline)} if deps else {}),
                 "age_seconds": int(time.time() - parse_iso(c.get("updated_at") or "")) if c.get("updated_at") else 0}
     reg = registry()
     share("read")
@@ -86,7 +87,7 @@ def _list_json(a):
     if not a.product:
         for c in pipeline:
             if (col := col_name(c["list_id"])) != "Done" or a.all:
-                rows["pipeline"].append(row(c, col, approved_label(c, col, reg) or worker_view(c, reg)))
+                rows["pipeline"].append(row(c, col, approved_label(c, col, reg) or worker_view(c, reg), deps=True))
     if intake_configured():
         linked = {(c.get("metadata") or {}).get("product_card"): c for c in pipeline if (c.get("metadata") or {}).get("product_card")}
         for c in product_cards_mine():

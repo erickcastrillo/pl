@@ -17,7 +17,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, manager, memory, move_agent, pipeline, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
+from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
@@ -1143,6 +1143,45 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
 PR_WAIT = 86400   # seconds a card may sit in the PR column before its PR raises an alert
 
 
+_PR_STATE = {}   # url -> (checked_at, "open" | "merged" | "closed")
+PR_STATE_EVERY = 600
+
+
+def _pr_state(url):
+    cached = _PR_STATE.get(url)
+    if cached and time.time() - cached[0] < PR_STATE_EVERY:
+        return cached[1]
+    try:
+        m = rework.PR_URL.match(url)
+        pr = json.loads(github._gh(["api", f"repos/{m.group(1)}/pulls/{m.group(2)}"]))
+    except (RateLimited, OverBudget, SystemExit, ValueError, AttributeError):
+        return cached[1] if cached else None
+    state = "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open"
+    _PR_STATE[url] = (time.time(), state)
+    return state
+
+
+def check_deps(all_cards):
+    """Alert for each Approved card waiting on a dependency that was dropped or whose last PR was closed unmerged."""
+    by_id = {x["id"]: x for x in all_cards}
+    active = set()
+    for c in all_cards:
+        if col_name(c["list_id"]) != "Approved" or (c.get("metadata") or {}).get("dropped_at"):
+            continue
+        for dep_id in deps_open(c, all_cards):
+            why = dep_broken(by_id.get(dep_id), _pr_state)
+            if not why:
+                continue
+            key = f"dep_broken:{c['id']}:{dep_id}"
+            active.add(key)
+            title = f"Card {short_id(c['id'])} waits on {short_id(dep_id)}: " + ("it was dropped" if why == "dropped" else "its PR was closed unmerged")
+            fix = (f"pl undrop {cmd_id(dep_id)}" if why == "dropped" else f"open a new PR for {cmd_id(dep_id)}") \
+                + f" or pl depends {cmd_id(c['id'])} --clear"
+            if w := alerts.open(key, "warn", title, fix):
+                notify(alerts.headline(w, title), fix)
+    alerts.sweep("dep_broken:", active, notify)
+
+
 def check_alerts(all_cards, failed, st=None):
     """End of a pass: resolve the alerts whose condition cleared, escalate the rest, and run the pass-end checks
     (a dead loop, a loop that has not run for 2 of its intervals, a PR waiting over PR_WAIT). failed: the
@@ -1175,6 +1214,7 @@ def check_alerts(all_cards, failed, st=None):
             if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
                 notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {cmd_id(c['id'])}")
     alerts.sweep("pr_waiting:", waiting, notify)
+    check_deps(all_cards)
     stale = set()
     for name, svc in C.SERVICES.items() if st is not None and not paused() else ():
         s = (st.get("services") or {}).get(name) or {}
