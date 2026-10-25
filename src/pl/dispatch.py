@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, schedule, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -267,6 +267,9 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
             live[parts[3]] = {"window": parts[0], "pane": parts[1], "cmd": parts[2]}
     svc_state, ust = st.setdefault("services", {}), None
     for name, svc in C.SERVICES.items():
+        if svc.get("every"):
+            _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=not (pause or hold))
+            continue
         w = live.get(name)
         rec = next((r for r in reg.values() if w and (r.get("tmux") or "").endswith(w["pane"])), None) if w else None
         sid = (rec or {}).get("sessionId")
@@ -331,12 +334,7 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         print(f"starting {name} loop under {use}: {prompt}")
         if dry:
             continue
-        if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
-            tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
-        win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(C.WORK_DIR),
-                   "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
-        tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
-        pane = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
+        pane = _loop_pane(name)
         _launch(pane, name, harnesses.launch_script(harnesses.unattended(harnesses.account_harness(use)), use, prompt,
                                                     None, name))
         old = svc_state.get(name, {})
@@ -345,6 +343,72 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                            **({"fallback_from": moved} if moved else {})}
         if moved:
             events.emit("loop_fallback", None, loop=name, account=use, parked=moved)
+
+
+def _loop_pane(name):
+    """A new tmux window named after the loop (the session is made when missing); its pane id."""
+    if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
+        tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
+    win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(C.WORK_DIR),
+               "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
+    tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
+    return tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
+
+
+def _local_now():
+    return datetime.now().replace(microsecond=0)
+
+
+def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
+    """A loop with `every` runs as one fresh headless session per due time, in its own window. A finished run leaves
+    a record file (see harnesses.headless_script): it is read, kept (the last 20) and the window closed. A run that is
+    due outside the loop's hours is skipped without a word; after sleeping through several, one run fires."""
+    s = st.setdefault("services", {}).setdefault(name, {})
+    runs_dir = C.STATE_DIR / "loops"
+    record = runs_dir / f"{name}.run.json"
+    w = live.get(name)
+    if record.is_file():
+        try:
+            run = json.loads(record.read_text())
+        except ValueError:
+            run = {"result": "unreadable run record", "exit": -1}
+        print(f"{name} loop run ended: exit {run.get('exit')}, {run.get('result')}")
+        if not dry:
+            s["last_run"] = run
+            s["runs"] = (s.get("runs", []) + [run])[-20:]
+            record.unlink()
+            if w:
+                tmux("kill-window", "-t", w["window"], check=False)
+        return
+    if w:
+        s["ran_at"] = now_iso()
+        s.pop("waits", None)
+        return
+    now = _local_now()
+    if not start or (s.get("next_at") and now < datetime.fromisoformat(s["next_at"])):
+        return
+    upcoming = schedule.next_run(schedule.parse_every(svc["every"]), after=now).isoformat()
+    if svc.get("hours") and not schedule.in_hours(schedule.parse_hours(svc["hours"]), now):
+        s["next_at"] = upcoming
+        return
+    pin = svc["profile"]
+    use = pin
+    if not pin:
+        use = healthy_profile(s.get("profile"), all_cards)
+    elif pin in accounts.exhausted_profiles():
+        use = None if svc.get("pinned_only") else \
+            healthy_profile(None, all_cards, harness=harnesses.account_harness(pin).name, skip=pin)
+    if use is None:
+        _loop_waits(st["services"], name, "no account is free to run it")
+        return
+    print(f"starting {name} loop run under {use}: {svc['prompt']}")
+    if dry:
+        return
+    runs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    script = harnesses.headless_script(harnesses.account_harness(use), use, loop_prompt(svc), name,
+                                       runs_dir / f"{name}.log", record)
+    _launch(_loop_pane(name), name, script)
+    s.update(profile=use, started_at=now_iso(), ran_at=now_iso(), next_at=upcoming)
 
 
 def _loop_waits(svc_state, name, why):
