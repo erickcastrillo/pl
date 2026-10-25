@@ -1,11 +1,52 @@
+import hmac
+import ipaddress
 import json
+import os
 import sys
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import mcp.types as types
 
 from pl import config as C
-from pl.trackers import localstore
+from pl.trackers import localstore, mcp
+
+
+def _is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _auth_app(app, token: str | None):
+    if token:
+        mcp._secrets.add(token)
+        mcp._mask_loggers()
+
+    async def asgi_app(scope, receive, send):
+        if scope["type"] == "http":
+            client = scope.get("client")
+            client_host = client[0] if client else None
+            if not token:
+                if not client_host or not _is_loopback(client_host):
+                    res = b"Forbidden"
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [(b"content-type", b"text/plain"), (b"content-length", str(len(res)).encode())]})
+                    await send({"type": "http.response.body", "body": res})
+                    return
+            else:
+                auth = next((v.decode("latin1") for k, v in scope.get("headers", []) if k.lower() == b"authorization"), None)
+                if not auth or not hmac.compare_digest(auth, f"Bearer {token}"):
+                    res = b"Unauthorized"
+                    await send({"type": "http.response.start", "status": 401,
+                                "headers": [(b"content-type", b"text/plain"), (b"content-length", str(len(res)).encode())]})
+                    await send({"type": "http.response.body", "body": res})
+                    return
+        await app(scope, receive, send)
+
+    return asgi_app
 
 
 def build(store_path) -> FastMCP:
@@ -94,18 +135,37 @@ def build(store_path) -> FastMCP:
     return srv
 
 
+def _store_path():
+    p = C.TRACKER.get("path") or "board.db"
+    return (C.CONFIG_DIR / p) if C.CONFIG_DIR else Path(p)
+
+
 def run(args):
-    if not getattr(args, "stdio", False) and not getattr(args, "listen", None):
+    listen = getattr(args, "listen", None)
+    token_env = getattr(args, "token_env", None)
+    stdio = getattr(args, "stdio", False)
+    if not listen and not stdio:
         print("pl board serve: give --stdio or --listen HOST:PORT", file=sys.stderr)
-        sys.exit(2)
+        raise SystemExit(2)
+    token = None
+    if token_env:
+        token = os.environ.get(token_env)
+        if not token:
+            print(f"pl board serve: --token-env {token_env} is empty or not set", file=sys.stderr)
+            raise SystemExit(2)
+    if listen:
+        host, port_str = listen.rsplit(":", 1)
+        port = int(port_str)
+        if not token_env and not _is_loopback(host):
+            print("--listen on a non-loopback address needs --token-env VAR", file=sys.stderr)
+            raise SystemExit(2)
     if C.TRACKER.get("type") != "local":
         print("pl board serve: only a local board can be served", file=sys.stderr)
-        sys.exit(2)
-    p = C.TRACKER.get("path") or "board.db"
-    store_path = (C.CONFIG_DIR / p) if C.CONFIG_DIR else Path(p)
-    if getattr(args, "stdio", False):
-        srv = build(store_path)
+        raise SystemExit(2)
+    srv = build(_store_path())
+    if listen:
+        import uvicorn
+        app = _auth_app(srv.streamable_http_app(), token=token)
+        uvicorn.run(app, host=host, port=port)
+    else:
         srv.run(transport="stdio")
-    elif getattr(args, "listen", None):
-        print("pl board serve: --listen is not yet implemented", file=sys.stderr)
-        sys.exit(2)
