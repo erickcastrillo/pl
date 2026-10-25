@@ -119,6 +119,8 @@ ENTRIES = [
     _e("2026-10-23.03", "Kill switch: hold every outward action across profiles",
        "pl kill-switch on pauses runs with outward actions; pl kill-switch off releases them",
        "pl kill-switch status"),
+    _e("2026-10-23.04", "Gate messages in chat: approve, edit or send back directly from your phone",
+       "manager posts waiting gates to Telegram/chat with Approve and Send back buttons", "pl manager status"),
 ]
 
 
