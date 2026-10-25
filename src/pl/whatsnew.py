@@ -207,6 +207,9 @@ ENTRIES = [
        "pl memory search \"split into 3 PRs\""),
     _e("2026-10-25.33", "pl usage --github shows GitHub's own budget next to pl's and marks a gap",
        "pl usage --github", "pl usage --github"),
+    _e("2026-10-25.34", "No command waits for an answer without a terminal; adding what exists is a no-op",
+       "scripts and agent sessions: exit 2 names the flag (--yes); a repeated add says already exists, unchanged",
+       "pl skills reset <name> < /dev/null"),
 ]
 
 

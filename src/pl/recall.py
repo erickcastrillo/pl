@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pl import config as C
 from pl import events, jsonout, local_jobs, local_model, util
 from pl.board import sections
+from pl.util import ask
 
 SEMANTIC_MIN = 0.55
 KINDS = ("run", "approval", "rejection", "decision", "fact", "preference", "commitment")
@@ -388,10 +389,8 @@ def _cmd_forget(a):
         print(json.dumps({"would_delete": n}) if a.json else f"would delete {n} entries")
         return 0
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit(2)
         try:
-            ok = input(f"Forget every memory entry linked to contact {a.contact}? [y/N]: ")
+            ok = ask("recall forget", f"Forget every memory entry linked to contact {a.contact}? [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):

@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -16,6 +17,13 @@ PEM_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PR
 
 class BadInput(SystemExit):
     """A refusal caused by what the caller gave or how pl is set up: exit code 2 (other failures exit 1)."""
+
+
+def ask(cmd, question, flag="--yes"):
+    """The answer to a question for the person at the terminal; with no terminal, exit 2 naming the flag that answers it."""
+    if not sys.stdin.isatty():
+        raise BadInput(f"pl: {cmd} needs {flag} when run without a terminal")
+    return input(question)
 
 
 def now_iso():

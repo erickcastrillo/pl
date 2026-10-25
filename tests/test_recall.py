@@ -7,6 +7,7 @@ import pytest
 
 from pl import config as C
 from pl import recall
+from pl.util import BadInput
 
 
 @pytest.fixture(autouse=True)
@@ -280,7 +281,7 @@ def test_forget_without_a_terminal_needs_yes(monkeypatch):
     a.yes = False
     with pytest.raises(SystemExit) as e:
         recall.cmd_memory(a)
-    assert e.value.code == 2 and recall.get(i)
+    assert isinstance(e.value, BadInput) and recall.get(i)
 
 
 def test_forget_dry_run_counts_and_deletes_nothing(capsys):

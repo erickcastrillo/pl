@@ -55,7 +55,9 @@ def run(monkeypatch, capsys, argv, tracker):
         code = e.code if isinstance(e.code, int) else 1
     else:
         code = 0
-    return code, capsys.readouterr().err
+    captured = capsys.readouterr()
+    run.out = captured.out
+    return code, captured.err
 
 
 @pytest.mark.parametrize("argv,expected", [
@@ -87,3 +89,79 @@ def test_a_reason_without_the_pl_prefix_gets_it(monkeypatch, capsys):
     t.update = lambda *a, **k: (_ for _ in ()).throw(SystemExit("boom"))
     _, err = run(monkeypatch, capsys, ["move", "aaaa", "Inbox"], t)
     assert err == "pl: boom\n"
+
+
+class _Closed:
+    def isatty(self):
+        return False
+
+    def readline(self):
+        return ""
+
+
+@pytest.mark.parametrize("argv,flag", [
+    (["move-agent", "aaaa", "t"], "--yes"),
+    (["skills", "reset", "pl-run"], "--yes"),
+    (["connectors", "add", "x", "--url", "https://x.example/mcp"], "--yes"),
+])
+def test_no_command_waits_for_input_with_stdin_closed(monkeypatch, capsys, argv, flag):
+    import time
+    from pl import move_agent
+    monkeypatch.setattr(sys, "stdin", _Closed())
+    (C.CONFIG_DIR / "config.toml").write_text("[accounts.t]\n")
+    C.load("t")
+    monkeypatch.setattr(move_agent, "move_card", lambda ref, target, confirm: confirm("Move it?"))
+    start = time.monotonic()
+    code, err = run(monkeypatch, capsys, argv, Tracker())
+    assert code == 2 and flag in err and err.count("\n") == 1
+    assert time.monotonic() - start < 1
+
+
+def test_setup_prompt_without_a_terminal_names_the_flag(monkeypatch):
+    from pl import setup
+    from pl.util import BadInput
+    monkeypatch.setattr(sys, "stdin", _Closed())
+    with pytest.raises(SystemExit) as e:
+        setup._input("Name: ")
+    assert isinstance(e.value, BadInput) and "--yes" in str(e.value)
+
+
+def test_no_bare_input_calls_left():
+    import ast
+    from pathlib import Path
+    root = Path(cli.__file__).parent
+    bare = [str(path.relative_to(root)) for path in root.rglob("*.py")
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "input"]
+    assert bare == ["util.py"]
+
+
+def _skills_link(tmp_path, monkeypatch):
+    acct = tmp_path / ".claude-a"
+    acct.mkdir()
+    (tmp_path / ".pl-t" / "config.toml").write_text(f'[accounts.a]\nconfig_dir = "{acct}"\n[skills]\nlibrary = "{tmp_path}/lib"\n')
+    skill = tmp_path / "lib" / "my-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: d\n---\n")
+    return ["skills", "link", "my-skill", "a"]
+
+
+@pytest.mark.parametrize("what", ["profiles new", "skills link", "board init"])
+def test_add_twice_changes_nothing_and_exits_0(monkeypatch, capsys, tmp_path, what):
+    argv = {"profiles new": ["profiles", "new", "again"], "skills link": None, "board init": ["board", "init"]}[what]
+    if argv is None:
+        argv = _skills_link(tmp_path, monkeypatch)
+    code, err = run(monkeypatch, capsys, argv, Tracker())
+    assert code == 0, err
+    assert "already exists" not in run.out or what == "board init"
+    before = sorted(str(p) for p in tmp_path.rglob("*"))
+    code, _ = run(monkeypatch, capsys, argv, Tracker())
+    assert code == 0 and "already exists, unchanged" in run.out
+    assert sorted(str(p) for p in tmp_path.rglob("*")) == before
+
+
+def test_a_profile_with_other_content_is_still_refused_with_exit_2(monkeypatch, capsys, tmp_path):
+    assert run(monkeypatch, capsys, ["profiles", "new", "other"], Tracker())[0] == 0
+    (tmp_path / ".pl-other" / "config.toml").write_text("# edited\n")
+    code, err = run(monkeypatch, capsys, ["profiles", "new", "other"], Tracker())
+    assert code == 2 and "exists" in err

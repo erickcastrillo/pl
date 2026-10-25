@@ -742,7 +742,7 @@ def cmd_board(a):
     if a.action != "init":
         raise SystemExit("pl board: only 'init' is supported")
     if "Inbox" in lists():
-        print(f"Inbox exists: {lists()['Inbox']['id']}")
+        print(f"Inbox already exists, unchanged: {lists()['Inbox']['id']}")
         return
     try:
         lid = trackers.get("tracker").ensure_column("Inbox", description=(

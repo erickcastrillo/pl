@@ -20,7 +20,7 @@ from pl.accounts import exhausted_profiles, healthy_profile
 from pl.agents import alive, registry, worker_status
 from pl.board import card, cards, find_card, fresh_next, update
 from pl.usage import SID_RE
-from pl.util import notify, now_iso, parse_iso, short_id, slug_of
+from pl.util import ask, notify, now_iso, parse_iso, short_id, slug_of
 
 STOP_TRIES = 4     # Ctrl-C presses at most (Claude exits on the second one)
 STOP_WAIT = 10     # seconds to wait for the shell and for the session to leave the registry
@@ -433,5 +433,5 @@ def move_card(ref, target=None, confirm=None):
 
 
 def cmd_move_agent(a):
-    ask = None if a.yes else (lambda q: input(q + " [y/N] ").strip().lower() in ("y", "yes"))
-    print(move_card(a.card, a.account, ask))
+    confirm = None if a.yes else (lambda q: ask("move-agent", q + " [y/N] ").strip().lower() in ("y", "yes"))
+    print(move_card(a.card, a.account, confirm))

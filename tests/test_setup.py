@@ -561,7 +561,7 @@ def test_profiles_new_still_refuses_an_existing_profile(fake_home, monkeypatch, 
     monkeypatch.setattr(sys, "argv", ["pl", "profiles", "new", "work-acme"])
     with pytest.raises(SystemExit) as e:
         cli.main()
-    assert e.value.code == 1 and "exists" in capsys.readouterr().err
+    assert e.value.code == 2 and "exists" in capsys.readouterr().err
     assert list((fake_home / ".pl-work-acme").iterdir()) == []
 
 

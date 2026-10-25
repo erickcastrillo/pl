@@ -12,6 +12,7 @@ import tomlkit
 
 from pl import config as C
 from pl.jsonout import emit
+from pl.util import BadInput
 
 def _tilde(p):
     s = str(p)
@@ -150,11 +151,23 @@ def _doc(v, tracker, intake):
     })
 
 
+def refuse_existing(d):
+    if d.exists():
+        raise BadInput(f"pl: profile {d.name[len('.pl-'):]!r} exists ({d}); pick another name or edit its config.toml")
+
+
 def _write_config(d, doc):
+    """Create the profile folder; False when it already holds exactly this config (nothing is touched)."""
+    cfg = d / "config.toml"
+    if cfg.is_file() and cfg.read_text() == tomlkit.dumps(doc):
+        print(f"profile {d.name[len('.pl-'):]!r} already exists, unchanged ({d})")
+        return False
+    refuse_existing(d)
     d.mkdir(mode=0o700)
     fd = os.open(d / "config.toml", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(tomlkit.dumps(doc))
+    return True
 
 
 def pipeline_config(pipeline_doc, tracker, accounts) -> dict:
@@ -164,11 +177,8 @@ def pipeline_config(pipeline_doc, tracker, accounts) -> dict:
 
 def _target(name):
     if not C.NAME_RE.match(name):
-        raise SystemExit(f"pl: bad profile name {name!r}")
-    d = Path.home() / f".pl-{name}"
-    if d.exists():
-        raise SystemExit(f"pl: profile {name!r} exists ({d}); pick another name or edit its config.toml")
-    return d
+        raise BadInput(f"pl: bad profile name {name!r}")
+    return Path.home() / f".pl-{name}"
 
 
 def new_profile(name: str, from_current: bool = False, github_owner: str | None = None, github_title: str | None = None,
@@ -177,8 +187,8 @@ def new_profile(name: str, from_current: bool = False, github_owner: str | None 
     With github_owner, first create a GitHub Project with a "pl stage" field and make it the tracker."""
     d = _target(name)
     if pipeline_doc is not None:
-        _write_config(d, pipeline_config(pipeline_doc, tracker_doc, C.ACCOUNTS))
-        print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+        if _write_config(d, pipeline_config(pipeline_doc, tracker_doc, C.ACCOUNTS)):
+            print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
         return
     v = _values(from_current)
     if not from_current:
@@ -186,14 +196,15 @@ def new_profile(name: str, from_current: bool = False, github_owner: str | None 
     tracker = dict(v["TRACKER"])
     if github_owner is not None:
         from pl.trackers.github import GitHubProject
+        refuse_existing(d)   # a re-run would make a second project that never matches the first
         made = GitHubProject.create_project(github_owner, github_title or f"pl {name}", v["COLUMNS"])
         tracker = {"type": "github-project", "owner": github_owner, "number": made["number"], "status_field": made["status_field"],
                    **({"repo": github_repo} if github_repo else {})}
     intake = {**v["INTAKE"], "columns": list(v["INTAKE"]["columns"]) if not isinstance(v["INTAKE"]["columns"], str) else v["INTAKE"]["columns"]}
-    _write_config(d, _doc(v, tracker, intake))
     if github_owner is not None:
         print(f"created GitHub Project {made['url']} (stage field \"{made['status_field']}\")")
-    print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+    if _write_config(d, _doc(v, tracker, intake)):
+        print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
 
 
 # ---------- --from-legacy: read the one-file pl script's settings ----------
@@ -333,8 +344,8 @@ def from_legacy(name: str, script: Path, mcp_json: Path | None = None, server: s
               **({"card_url": v["_intake_url"]} if v["_intake_url"] else {})}
     if not intake["board_id"]:
         intake = {}
-    _write_config(d, _doc(base, tracker, intake))
-    print(f"created {d}/config.toml from {script}\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+    if _write_config(d, _doc(base, tracker, intake)):
+        print(f"created {d}/config.toml from {script}\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
 
 
 def cmd_new(argv: list[str], profile: str | None = None):
