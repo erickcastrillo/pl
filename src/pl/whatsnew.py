@@ -163,6 +163,9 @@ ENTRIES = [
     _e("2026-10-25.15", "pl e2e: your repo's Playwright tests in a throwaway Multipass VM",
        "set up from the repo's .pl/e2e.yaml; ~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
        "pl e2e --help. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
+    _e("2026-10-25.16", "Pods: rules, knowledge and skills per team",
+       "pl pods show NAME --json adds approval rate, edits per draft and escalations over 30 days; pod.md versions, "
+       "rule add, rollback and rules suggested from repeated edits", "pl pods show engineering"),
 ]
 
 
