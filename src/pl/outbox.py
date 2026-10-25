@@ -94,14 +94,14 @@ def drop_through(seq) -> int:
 
 
 def strip(card, fields) -> int:
-    """Take these fields out of the card's queued updates (a column move is `list_id`); returns how many entries changed."""
-    gone = set(fields) | ({"list_id"} if "column" in fields else set())
+    """Take these fields out of the card's queued updates (a column move is `list_id`; None drops every update whole); returns how many entries changed."""
+    gone = set(fields or ()) | ({"list_id"} if "column" in (fields or ()) else set())
     with _lock():
         keep, changed = [], 0
         for e in entries():
-            if e.get("card") == str(card) and e.get("op") == "update" and gone & set(e["fields"]):
+            if e.get("card") == str(card) and e.get("op") == "update" and (fields is None or gone & set(e["fields"])):
                 changed += 1
-                e = {**e, "fields": {k: v for k, v in e["fields"].items() if k not in gone}}
+                e = {**e, "fields": {k: v for k, v in e["fields"].items() if fields is not None and k not in gone}}
                 if not e["fields"]:
                     continue
             keep.append(e)

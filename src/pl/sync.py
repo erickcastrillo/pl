@@ -229,17 +229,55 @@ def _pull(out):
     lnames = {v: k for k, v in local.columns().items()}
     by_gid = {gid: lid for lid, gid in _state()["ids"].items()}
     base = _load_base()
-    pending = {}
+    pending, creating = {}, set()
     for e in outbox.entries():
         pending.setdefault(e["card"], set()).update("column" if k == "list_id" else k for k in e["fields"])
+        if e["op"] == "create":
+            creating.add(e["fields"].get("title"))
     try:
         for g in gcards:
             lid = by_gid.get(g["id"])
             if lid is not None:
                 _pull_card(local, lid, g, gnames, lnames, base.setdefault(lid, {}), pending.get(lid, ()), out)
+            elif g["title"] not in creating:   # else the replay's create is in flight: its card is already here
+                _create_local(local, g, gnames, base)
+                out["pulled"] += 1
+        if gcards:   # an empty read may be a wrong project, not a board with no cards
+            _flag_gone(local, {g["id"] for g in gcards}, out)
     finally:
         _save_base(base)
     return out
+
+
+def _create_local(local, g, gnames, base):
+    """Add a card people made on GitHub; no pipeline metadata is copied and nothing is queued back."""
+    col = gnames.get(g.get("list_id")) or "Inbox"
+    local.ensure_column(col)
+    new = local.create(col, title=g["title"], description=g.get("description") or "", tags=list(g.get("tags") or ()),
+                       assigned_to=g.get("assigned_to"))
+    state = _state()
+    state["ids"][new["id"]] = g["id"]
+    state.setdefault("items", {})[new["id"]] = g.get("item_id")
+    _save(state)   # per card: a crash later must not make a second local card
+    base[new["id"]] = _values(g, gnames)
+
+
+def _flag_gone(local, seen, out):
+    for lid, gid in _state()["ids"].items():
+        if gid in seen:
+            continue
+        try:
+            cur = local.card(lid)
+        except SystemExit:
+            continue
+        held = (cur.get("metadata") or {}).get("remote_edit") or {}
+        if "deleted" not in held:
+            local.update(lid, verify=True, metadata={"remote_edit": {**held, "deleted": {"value": True, "at": now_iso()}}})
+            out["conflicts"].append(lid)
+        outbox.strip(lid, None)
+        alerts.open(f"sync-conflict:{lid}", "high",
+                    f"card {lid} changed on GitHub and here: {', '.join(sorted({**held, 'deleted': 1}))}",
+                    f"pl sync resolve {lid} --keep remote   (or --keep local)")
 
 
 def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
