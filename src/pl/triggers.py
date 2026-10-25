@@ -152,6 +152,108 @@ def extract_email(sender):
     return addr.strip().lower() if addr else str(sender).strip().lower()
 
 
+def is_open(card):
+    col = card.get("column")
+    if not col and "list_id" in card:
+        try:
+            col = board.col_name(card["list_id"])
+        except Exception:
+            pass
+    return col != "Done" and not bool((card.get("metadata") or {}).get("dropped_at"))
+
+
+def find_client_card(sender, cards, pipeline=None, attach_to=None):
+    addr = extract_email(sender)
+    if not addr:
+        return None
+    allowed = set()
+    if pipeline:
+        allowed.add(str(pipeline).lower())
+    if attach_to:
+        allowed.update(str(p).lower() for p in attach_to)
+    for c in cards:
+        if not is_open(c):
+            continue
+        c_pipe = (c.get("metadata") or {}).get("pipeline")
+        if allowed and c_pipe and str(c_pipe).lower() not in allowed:
+            continue
+        contacts = (c.get("metadata") or {}).get("contact_emails") or []
+        if isinstance(contacts, str):
+            contacts = [contacts]
+        if any(str(ce).strip().lower() == addr for ce in contacts):
+            return c
+    return None
+
+
+def append_message_to_input(desc, date, subject, link):
+    parts = board.sections(desc or "")
+    inp = parts.get("INPUT", "")
+    line = f"- {date}: {subject} ({link})" if link else f"- {date}: {subject}"
+    if "## Messages" in inp:
+        lines = inp.split("\n")
+        idx = next((i for i, l in enumerate(lines) if l.strip().startswith("## Messages")), -1)
+        if idx != -1:
+            insert_at = len(lines)
+            for j in range(idx + 1, len(lines)):
+                if lines[j].strip().startswith("#"):
+                    insert_at = j
+                    break
+            lines.insert(insert_at, line)
+            inp = "\n".join(lines)
+        else:
+            inp = inp.rstrip() + f"\n{line}\n"
+    else:
+        inp = (inp.rstrip() + f"\n\n## Messages\n{line}\n").lstrip("\n")
+    parts["INPUT"] = inp
+    return board.render(parts)
+
+
+def attach_to_card(card, msg):
+    meta = dict(card.get("metadata") or {})
+    refs = dict(meta.get("refs") or {})
+    msg_id = msg.get("id") or msg.get("message_id")
+    if msg_id:
+        more = list(refs.get("email_more") or [])
+        if msg_id not in more:
+            more.append(msg_id)
+        refs["email_more"] = more[-50:]
+        meta["refs"] = refs
+
+    date = msg.get("date") or msg.get("timestamp") or ""
+    subject = msg.get("subject") or "(no subject)"
+    link = msg.get("link") or msg.get("thread_link") or ""
+
+    new_desc = append_message_to_input(card.get("description") or "", date, subject, link)
+    card["metadata"] = meta
+    card["description"] = new_desc
+
+    try:
+        board.update(card["id"], description=board.check_size(new_desc), metadata=meta)
+    except Exception:
+        try:
+            trackers.get("tracker").update(card["id"], description=new_desc, metadata=meta)
+        except Exception:
+            pass
+    return card
+
+
+def _today_utc(ts=None):
+    dt = datetime.fromtimestamp(ts, timezone.utc) if ts is not None else datetime.now(timezone.utc)
+    return dt.strftime("%Y-%m-%d")
+
+
+def _roll_day(state, name, now_ts):
+    """A new UTC day starts the trigger's card count over and lifts a pause that came from the daily cap."""
+    flat = state.setdefault(name, {})
+    today = _today_utc(now_ts)
+    if flat.get("day") != today:
+        flat["day"] = today
+        flat["cards_today"] = 0
+        if flat.get("paused") == "cap":
+            flat["paused"] = False
+    return flat
+
+
 def is_due(name, cfg, state, now_ts):
     if cfg.get("paused") or (state.get(name) or {}).get("paused"):
         return False
@@ -204,6 +306,9 @@ def run_search_trigger(name, cfg, state, cards, dry=False, now_ts=None):
     recent_ids = list(state.get("recent_ids") or [])
     recent_set = set(recent_ids)
 
+    flat = _roll_day(state, name, now_ts)
+    cap = int(cfg.get("cap", 20))
+    attach_pipes = cfg.get("attach_to") or []
     created = []
     for msg in messages:
         msg_id = msg.get("id") or msg.get("message_id")
@@ -214,6 +319,21 @@ def run_search_trigger(name, cfg, state, cards, dry=False, now_ts=None):
             continue
 
         sender = msg.get("from") or msg.get("sender") or ""
+        matched = find_client_card(sender, cards, pipeline=cfg.get("pipeline"), attach_to=attach_pipes)
+        if matched is not None:   # a message from a client with an open card joins that card instead of making a new one
+            if not dry:
+                attach_to_card(matched, msg)
+            recent_ids.append(msg_id_str)
+            recent_set.add(msg_id_str)
+            existing_board_ids.add(msg_id_str)
+            continue
+        if int(flat.get("cards_today", 0)) >= cap:
+            flat["paused"] = "cap"
+            from pl import alerts
+            alerts.open(f"trigger_cap:{name}", "warn", f"Trigger {name} reached its cap of {cap} cards today",
+                        f"pl triggers resume {name}")
+            break
+
         name_part, addr_part = email.utils.parseaddr(str(sender))
         from_address = addr_part.strip().lower() if addr_part else str(sender).strip().lower()
         sender_name = name_part.strip() if name_part.strip() else (from_address if from_address else "Unknown")
@@ -261,6 +381,7 @@ def run_search_trigger(name, cfg, state, cards, dry=False, now_ts=None):
                                                       tags=["trigger"], metadata=meta)
 
         created.append(card_obj)
+        flat["cards_today"] = int(flat.get("cards_today", 0)) + 1
         recent_ids.append(msg_id_str)
         recent_set.add(msg_id_str)
         existing_board_ids.add(msg_id_str)
@@ -280,6 +401,7 @@ def run_due(dry=False, now=None, cards=None):
 
     with _locked_state() as state:
         for name, cfg in all_triggers.items():
+            _roll_day(state, name, now_ts)
             if not is_due(name, cfg, state, now_ts):
                 continue
             new_cards = run_search_trigger(name, cfg, state, cards, dry=dry, now_ts=now_ts)
