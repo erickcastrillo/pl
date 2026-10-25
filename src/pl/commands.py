@@ -15,8 +15,8 @@ from pl.accounts import check_note, exhausted_profiles, next_profile, parking, p
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
 from pl import audit, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
-from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
-                      share, update)
+from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
+                      render, sections, share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
@@ -106,11 +106,7 @@ def _list_json(a):
 
 def _list_plan(pipeline, plan, reg):
     """pl list --plan N: that plan's cards (Done too), by slice, then by card id."""
-    def key(c):
-        s = str((c.get("metadata") or {}).get("slice", ""))
-        head, _, num = str(c["id"]).rpartition("#")
-        return (int(s) if s.isdigit() else 10**9, head, int(num) if num.isdigit() else 0, str(c["id"]))
-    rows = sorted((c for c in pipeline if str((c.get("metadata") or {}).get("plan")) == str(plan)), key=key)
+    rows = sorted((c for c in pipeline if plan_slice(c)[0] == plan), key=plan_order)
     if not rows:
         print(f"no cards in plan {plan}")
         return

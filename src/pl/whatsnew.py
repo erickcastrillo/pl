@@ -213,6 +213,7 @@ ENTRIES = [
     _e("2026-10-25.35", "pl skills remove: take out a skill installed from GitHub",
        "unlinks it, moves the folder to a trash folder and names the stages and loops that used it",
        "pl skills remove NAME"),
+    _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
 ]
 
 
