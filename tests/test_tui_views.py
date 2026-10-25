@@ -2273,3 +2273,35 @@ async def test_three_prs_and_two_gates_give_5_everywhere(monkeypatch):
         await pilot.press("3")
         await settle(pilot)
         assert "5 need you" in app.query_one("#prs-table").border_title
+
+
+async def test_an_empty_board_says_no_cards_and_how_to_add_one():
+    data = fake_data()
+    data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"] if r.get("card") is None and not r.get("pr")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        text = screen_text(app)
+    assert "No cards yet." in text and "Add one with n on the Ideas tab," in text and 'or pl idea "..."' in text
+    assert "loading" not in text and "not reachable" not in text
+
+
+async def test_a_failed_refresh_shows_last_good_time_and_what_failed(monkeypatch):
+    prov = Provider()
+    app = PlApp(snapshot_provider=prov)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        good = app.last_good_at
+        assert good is not None and "data from" not in screen_text(app)
+        prov.fail = SystemExit("pl: board API answered Rate exceeded")
+        app.refresh_data()
+        await settle(pilot)
+        text = screen_text(app)
+        assert f"data from {good}" in text
+        assert "refresh failed: pl: board API answered Rate exceeded" in text
+        assert app.query_one("#cards-table").border_subtitle.startswith("refresh failed: ")
+        assert app.query_one("#prs-table").border_subtitle.startswith("refresh failed: ")
+        prov.fail = None
+        app.refresh_data()
+        await settle(pilot)
+        assert not app.query_one("#cards-table").border_subtitle
