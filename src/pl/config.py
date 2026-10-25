@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import socket
+import sys
 from pathlib import Path
 import tomllib
 
@@ -76,6 +77,7 @@ def _defaults():
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
                 "release_waiting_after": 30, "rework_rounds": 3, **MEMORY_DEFAULTS}
     GATES = {"spec": False}
+    PIPELINE = None       # [pipeline]: columns, stages and gates; the engineering pipeline when absent
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
@@ -172,6 +174,10 @@ def _apply(g, t):
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
+    from pl import pipeline
+    g["PIPELINE"] = pipeline.from_toml(t.get("pipeline"))
+    if t.get("pipeline"):
+        g["COLUMNS"] = g["PIPELINE"]["columns"]
     g["USAGE"] = dict(t.get("usage", {}))
     g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))
@@ -228,6 +234,13 @@ def load(profile: str | None = None, config_dir: str | None = None) -> None:
     except tomllib.TOMLDecodeError as e:
         raise SystemExit(f"pl: {toml}: {e}")
     _apply(g, t)
+    if t.get("pipeline"):
+        from pl import pipeline
+        bad = pipeline.errors(g["PIPELINE"], t.get("connectors"))
+        for e in bad:
+            print(f"pl: {toml}: {e}", file=sys.stderr)
+        if bad:
+            raise SystemExit(2)
     if not (isinstance(g["TMUX_SESSION"], str) and NAME_RE.match(g["TMUX_SESSION"])):
         raise SystemExit(f"pl: bad tmux_session {g['TMUX_SESSION']!r} in {toml}")
     g["STATE_DIR"] = g["ATTN"] = d / "state"
@@ -331,6 +344,9 @@ def validate(doc) -> list[str]:
                 errs.append(f"usage.{key}.{model} must be a number above 0")
     errs += _local_model_errors(doc.get("local_model", {}))
     errs += _models_local_errors(doc.get("models", {}).get("local", {}), doc.get("accounts", {}))
+    if doc.get("pipeline"):
+        from pl import pipeline
+        errs += pipeline.errors(pipeline.from_toml(doc["pipeline"]), doc.get("connectors"))
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
