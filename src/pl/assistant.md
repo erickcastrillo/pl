@@ -31,7 +31,7 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 ## pl commands and when to use them
 
 Status and the board:
-- `pl list` (`--all`, `--product`): what is where and what each agent is doing. Start here for "what is stuck?".
+- `pl list` (`--all`, `--product`, `--json`: cards with depends_on and waiting_on): what is where and what each agent is doing. Start here for "what is stuck?".
 - `pl card <id>`: one card's sections and metadata. Use it to explain why a card is stuck.
 - `pl section <id> NAME` (`--from FILE`): one section in full; `--from` replaces SPEC, DESIGN or PLAN (it asks).
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.

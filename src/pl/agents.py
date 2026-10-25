@@ -91,18 +91,35 @@ def slice_order(c):
     return (0, int(m.group(1)), int(m.group(2))) if m else (1, 0, 0)
 
 
-def deps_waiting(c, all_cards):
-    """'waiting: needs <short ids> merged' while any id in metadata.depends_on is unmet, else None."""
-    deps = (c.get("metadata") or {}).get("depends_on") or []
-    if not deps:
-        return None
+def deps_open(c, all_cards):
+    """The ids in metadata.depends_on that are not met: missing from the board, not in Done, or dropped."""
     by_id = {x["id"]: x for x in all_cards}
     unmet = []
-    for dep in deps:
+    for dep in (c.get("metadata") or {}).get("depends_on") or []:
         d = by_id.get(dep)
         if not d or col_name(d.get("list_id")) != "Done" or (d.get("metadata") or {}).get("dropped_at"):
-            unmet.append(short_id(dep))
-    return f"waiting: needs {', '.join(unmet)} merged" if unmet else None
+            unmet.append(dep)
+    return unmet
+
+
+def deps_waiting(c, all_cards):
+    """'waiting: needs <short ids> merged' while any id in metadata.depends_on is unmet, else None."""
+    ids = deps_open(c, all_cards)
+    return f"waiting: needs {', '.join(map(short_id, ids))} merged" if ids else None
+
+
+def dep_broken(d, pr_state):
+    """Why dependency card d will never finish as it is: "dropped", or "closed" (its last PR was closed unmerged); else None.
+    pr_state(url) gives "open", "merged", "closed" or None."""
+    if not d:
+        return None
+    meta = d.get("metadata") or {}
+    if meta.get("dropped_at"):
+        return "dropped"
+    urls = meta.get("pr_urls") or []
+    if col_name(d.get("list_id")) != "Done" and urls and pr_state(urls[-1]) == "closed":
+        return "closed"
+    return None
 
 
 def _on_pane(rec, w):
