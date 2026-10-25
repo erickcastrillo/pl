@@ -166,6 +166,9 @@ ENTRIES = [
     _e("2026-10-25.16", "Pods: rules, knowledge and skills per team",
        "pl pods show NAME --json adds approval rate, edits per draft and escalations over 30 days; pod.md versions, "
        "rule add, rollback and rules suggested from repeated edits", "pl pods show engineering"),
+    _e("2026-10-25.17", "Small jobs on local models, checked, with fallbacks",
+       "[models.local]: a model per job (route, summarise, title, embed); setup writes it for a new profile",
+       "pl models test summarise"),
 ]
 
 

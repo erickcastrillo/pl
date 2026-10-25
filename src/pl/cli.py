@@ -108,7 +108,8 @@
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
-                          and model, and whether Ollama answers with that model pulled
+                          and model, and whether Ollama answers with that model pulled; [models.local] sets a
+                          model per small job (route, summarise, title, embed), each checked with a fallback
   pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
                           turn matching incoming messages into cards; list [--json] shows status;
                           pause/resume NAME toggles whether it runs
