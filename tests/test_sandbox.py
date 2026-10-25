@@ -286,3 +286,98 @@ def test_cli_sandbox_status_via_main(monkeypatch):
     cli.main()
     assert len(called) == 1
     assert called[0].action == "status"
+
+
+def test_a_sandboxed_stage_runs_inside_the_vm_in_its_worktree(fake_home):
+    from pl import harnesses
+    h = harnesses.get("claude")
+    C.ACCOUNTS["acme"] = {"harness": "claude", "config_dir": str(fake_home / ".claude-acme")}
+    C.PROFILES["acme"] = fake_home / ".claude-acme"
+    C.SANDBOX = {"enabled": True}
+    wt = fake_home / "worktrees" / "wt-1"
+    wt.mkdir(parents=True)
+    script = harnesses.launch_script(h, "acme", "do work", "sid-123", "run:1", stage="run", cwd=wt)
+    assert "multipass exec pl-sbx-t --working-directory " + str(wt) in script
+    assert " -- env " in script
+    assert "claude" in script
+    assert "do work" in script
+
+
+def test_reading_ssh_or_another_profile_fails_inside_the_vm(fake_home):
+    from pl import harnesses
+    ssh_dir = fake_home / ".ssh"
+    ssh_dir.mkdir()
+    other_prof = fake_home / ".pl-other"
+    other_prof.mkdir()
+    ms = sandbox.mounts()
+    for m in ms:
+        assert not m.is_relative_to(ssh_dir) and not ssh_dir.is_relative_to(m)
+        assert not m.is_relative_to(other_prof) and not other_prof.is_relative_to(m)
+
+    h = harnesses.get("claude")
+    C.ACCOUNTS["acme"] = {"harness": "claude", "config_dir": str(fake_home / ".claude-acme")}
+    C.PROFILES["acme"] = fake_home / ".claude-acme"
+    C.PROFILES["other"] = other_prof
+    C.SANDBOX = {"enabled": True}
+    wt = fake_home / "worktrees" / "wt-1"
+    wt.mkdir(parents=True)
+    script = harnesses.launch_script(h, "acme", "do work", "sid-123", "run:1", stage="run", cwd=wt)
+    assert str(ssh_dir) not in script
+    assert str(other_prof) not in script
+    assert str(fake_home / ".claude-acme") not in script
+
+
+def test_its_team_connectors_still_answer_through_the_host_endpoint(fake_home):
+    from pl import connectors_proxy
+    srv = connectors_proxy.ProxyServer(host="127.0.0.1", port=0)
+    srv.start()
+    try:
+        scope = srv.register_session(
+            session_id="sid-1",
+            card_id="card-158",
+            stage="run",
+            team="core",
+            connectors={"test_conn": lambda tool, args: {"echo": args.get("val")}},
+        )
+        resp = connectors_proxy.call_proxy(
+            url=f"http://127.0.0.1:{srv.port}/connectors/test_conn",
+            bearer=scope.bearer,
+            body={"tool": "echo", "arguments": {"val": "ping"}},
+        )
+        assert resp == {"echo": "ping"}
+    finally:
+        srv.stop()
+
+
+def test_the_session_bearer_works_only_for_its_card(fake_home):
+    from pl import connectors_proxy
+    with pytest.raises(ValueError) as exc:
+        connectors_proxy.ProxyServer(host="0.0.0.0", port=0)
+    assert "bridge address" in str(exc.value)
+
+    srv = connectors_proxy.ProxyServer(host="127.0.0.1", port=0)
+    srv.start()
+    try:
+        scope = srv.register_session(
+            session_id="sid-1",
+            card_id="card-158",
+            stage="run",
+            team="core",
+            connectors={"test_conn": lambda tool, args: {"ok": True}},
+        )
+        url = f"http://127.0.0.1:{srv.port}/connectors/test_conn"
+
+        with pytest.raises(connectors_proxy.ProxyError) as exc:
+            connectors_proxy.call_proxy(url=url, bearer="wrong-token", body={"card_id": "card-158"})
+        assert exc.value.status == 401
+
+        resp = connectors_proxy.call_proxy(url=url, bearer=scope.bearer, body={"card_id": "card-158"})
+        assert resp == {"ok": True}
+
+        with pytest.raises(connectors_proxy.ProxyError) as exc:
+            connectors_proxy.call_proxy(url=url, bearer=scope.bearer, body={"card_id": "other-999"})
+        assert exc.value.status == 403
+        assert "refused" in exc.value.message
+    finally:
+        srv.stop()
+

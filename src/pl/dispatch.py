@@ -306,6 +306,14 @@ def start_worker(c, stage, attempts, dry):
     except BaseException:   # a rate limit or a failed write: no record, so no window and no agent
         tmux("kill-window", "-t", win, check=False)
         raise
+    if C.SANDBOX.get("enabled"):
+        from pl import sandbox, connectors_proxy
+        bridge = sandbox.bridge_address()
+        srv = connectors_proxy.get_proxy(bridge)
+        scope = srv.register_session(sid, c["id"], stage, profile)
+        host_mcp = C.STATE_DIR / f"mcp-{sid}.json"
+        connectors_proxy.write_mcp_config(host_mcp, connectors_proxy.make_mcp_config(f"http://{bridge}:{srv.port}", scope.bearer))
+        sandbox.transfer_in(sandbox.vm_name(), host_mcp, f"/tmp/mcp-{sid}.json")
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
                                                          stage=stage), script)
     if C.ATTENTION:
