@@ -544,6 +544,9 @@ def cmd_profiles(a):
     if getattr(a, "check_trust", False):
         return _check_trust()
     st = profile_state()
+    if a.reset and a.dry_run:
+        print(f"would un-park {a.reset}")
+        return
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):
             st.pop(p, None)
@@ -1026,6 +1029,9 @@ def cmd_pause(a):
     if paused():
         print(f"already paused since {paused().get('since', '?')[:16]} UTC")
         return
+    if a.dry_run:
+        print("would pause: no new agents would start from the next dispatcher pass")
+        return
     C.ATTN.mkdir(exist_ok=True)
     C.PAUSE_FILE.write_text(json.dumps({"since": now_iso(), "host": C.HOST}))
     print("paused: no new agents start from the next dispatcher pass; working agents finish their step (pl resume)")
@@ -1034,6 +1040,9 @@ def cmd_pause(a):
 def cmd_resume(a):
     if not paused():
         print("not paused")
+        return
+    if a.dry_run:
+        print("would resume: the next dispatcher pass would start waiting cards again")
         return
     C.PAUSE_FILE.unlink()
     print("resumed: the next dispatcher pass starts waiting cards again")

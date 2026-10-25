@@ -112,7 +112,7 @@ def test_no_command_waits_for_input_with_stdin_closed(monkeypatch, capsys, argv,
     monkeypatch.setattr(sys, "stdin", _Closed())
     (C.CONFIG_DIR / "config.toml").write_text("[accounts.t]\n")
     C.load("t")
-    monkeypatch.setattr(move_agent, "move_card", lambda ref, target, confirm: confirm("Move it?"))
+    monkeypatch.setattr(move_agent, "move_card", lambda ref, target, confirm, dry_run=False: confirm("Move it?"))
     start = time.monotonic()
     code, err = run(monkeypatch, capsys, argv, Tracker())
     assert code == 2 and flag in err and err.count("\n") == 1
@@ -252,3 +252,57 @@ def test_dry_run_approve_and_reject_write_no_memory_or_audit(monkeypatch, capsys
         assert code == 0, err
     assert writes == []
     assert not (C.STATE_DIR / "audit.jsonl").exists()
+
+
+def _stub_agent_move(monkeypatch):
+    from pl import move_agent
+    moved = []
+    monkeypatch.setattr(commands, "worker_status", lambda w, reg: ("alive", ""))
+    monkeypatch.setattr(move_agent, "worker_status", lambda w, reg: ("alive", ""))
+    monkeypatch.setattr(move_agent, "locked", lambda cid: False)
+    monkeypatch.setattr(move_agent, "refusal", lambda w, target: None)
+    monkeypatch.setattr(move_agent, "move", lambda *a, **k: moved.append(a) or (True, "moved", None))
+    return moved
+
+
+@pytest.mark.parametrize("argv", [
+    ["pause"],
+    ["resume"],
+    ["accounts", "--reset", "all"],
+    ["alerts", "--ack", "some-key"],
+    ["move-agent", "aaaa", "t"],
+    ["skills", "share", "demo"],
+    ["profiles", "new", "fresh"],
+], ids=lambda argv: " ".join(argv[:2]) if argv[0] in ("accounts", "alerts", "skills", "profiles") else argv[0])
+def test_local_dry_run_writes_nothing(monkeypatch, capsys, tmp_path, argv):
+    from pl import alerts, harnesses, skills
+    moved = _stub_agent_move(monkeypatch)
+    (tmp_path / ".pl-t" / "config.toml").write_text('[accounts.t]\nconfig_dir = "~/.claude-t"\n')
+    monkeypatch.setattr(harnesses, "default_account", lambda: "t")
+    monkeypatch.setattr(skills, "_root", lambda account: tmp_path)
+    shared = []
+    monkeypatch.setattr(skills, "share", lambda *a: shared.append(a))
+    monkeypatch.setattr(alerts, "ack", lambda key: shared.append(key))
+    if argv[0] == "resume":
+        C.ATTN.mkdir(exist_ok=True)
+        C.PAUSE_FILE.write_text('{"since": "2026-01-01T00:00"}')
+    before = sorted(str(p) for p in tmp_path.rglob("*"))
+    code, err = run(monkeypatch, capsys, [*argv, "--dry-run"], WorkerTracker())
+    assert code == 0, err
+    assert run.out.startswith("would") or "\nwould" in run.out
+    assert sorted(str(p) for p in tmp_path.rglob("*")) == before
+    assert moved == [] and shared == []
+    assert argv[0] != "resume" or C.PAUSE_FILE.exists()
+
+
+WRITE_COMMANDS = [["idea"], ["approve"], ["reject"], ["done"], ["drop"], ["undrop"], ["hold"], ["unhold"], ["move"], ["adopt"],
+                  ["section"], ["retry"], ["restart"], ["card"], ["pause"], ["resume"], ["accounts"], ["alerts"],
+                  ["move-agent"], ["skills", "share"], ["skills", "link"], ["skills", "reset"], ["profiles", "new"]]
+
+
+@pytest.mark.parametrize("argv", WRITE_COMMANDS, ids=lambda argv: " ".join(argv))
+def test_every_write_command_accepts_dry_run(monkeypatch, capsys, argv):
+    monkeypatch.setattr(sys, "argv", ["pl", "--profile", "t", *argv, "--help"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "--dry-run" in capsys.readouterr().out

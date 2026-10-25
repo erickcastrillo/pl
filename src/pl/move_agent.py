@@ -414,7 +414,7 @@ def limit_screen(c, w, h):
     return None
 
 
-def move_card(ref, target=None, confirm=None):
+def move_card(ref, target=None, confirm=None, dry_run=False):
     """pl move-agent: move one card's live agent to target (default: another healthy Claude account).
     confirm(question) -> bool is asked first when given."""
     c = find_card(ref)
@@ -430,6 +430,8 @@ def move_card(ref, target=None, confirm=None):
     why = refusal(w, target)
     if why:
         raise SystemExit(f"pl move-agent: not moved: {why}")
+    if dry_run:
+        return f"would move the {w.get('stage')} agent of {short_id(c['id'])} from {w.get('profile')} to {target}"
     if confirm and not confirm(f"Move the {w.get('stage')} agent of {short_id(c['id'])} from {w.get('profile')} to {target}? "
                                "pl stops it with Ctrl-C in its window and resumes the same session there."):
         return "not moved"
@@ -441,4 +443,4 @@ def move_card(ref, target=None, confirm=None):
 
 def cmd_move_agent(a):
     confirm = None if a.yes else (lambda q: ask("move-agent", q + " [y/N] ").strip().lower() in ("y", "yes"))
-    print(move_card(a.card, a.account, confirm))
+    print(move_card(a.card, a.account, confirm, a.dry_run))

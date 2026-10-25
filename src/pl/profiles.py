@@ -361,7 +361,11 @@ def cmd_new(argv: list[str], profile: str | None = None):
     ap.add_argument("--owner", help="GitHub user or organisation that owns the new project")
     ap.add_argument("--title", help="the new project's title (default: pl NAME)")
     ap.add_argument("--repo", help="owner/name: the repository the new project's cards are issues in")
+    ap.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     a = ap.parse_args(argv)
+    if a.dry_run:
+        print(f"would create {_target(a.name)}/config.toml")
+        return
     if a.github_project and a.owner is None:
         ap.error("--github-project create needs --owner")
     if a.from_legacy:
