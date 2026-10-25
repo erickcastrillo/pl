@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from pl import alerts
 from pl import config as C
-from pl import manager
+from pl import connectors_oauth, manager
 
 ROLES = ("payments", "contacts", "email", "calendar", "messaging", "memory")
 AUTHS = ("oauth", "token", "none")
@@ -231,11 +231,36 @@ def cmd_connectors(a):
         _audit("connectors.revoke", a.name)
         print(f"revoked connector {a.name}")
     elif sub == "add":
-        add(a.name, command=getattr(a, "command", None) or None, url=getattr(a, "url", None), pin=getattr(a, "pin", None))
-        _audit("connectors.add", a.name)
-        print(f"added connector {a.name}")
+        add_cmd(a)
     else:
         raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME")
+
+
+def add_cmd(a) -> None:
+    command, url = list(getattr(a, "command", None) or []), getattr(a, "url", None)
+    if not url and len(command) == 1 and re.match(r"https?://", command[0]):
+        url, command = command[0], []
+    if a.name in load_config():
+        print(f"connector {a.name} already exists, unchanged")
+        return
+    if not a.yes and not sys.stdin.isatty():
+        print(f"pl connectors add: pass --yes to add {a.name} without asking", file=sys.stderr)
+        raise SystemExit(2)
+    if not a.yes and input(f"add connector {a.name} ({url or ' '.join(command)}) and sign in? [y/N] ").strip().lower() != "y":
+        raise SystemExit("pl connectors add: cancelled")
+    try:
+        state = add(a.name, command=command or None, url=url, pin=getattr(a, "pin", None), role=getattr(a, "role", None),
+                    teams=getattr(a, "team", None), access=getattr(a, "access", None), tier=getattr(a, "tier", None))
+    except BaseExceptionGroup as group:
+        while isinstance(group, BaseExceptionGroup):
+            group = group.exceptions[0]
+        raise SystemExit(f"pl connectors add: {a.name}: {group}")
+    _audit("connectors.add", a.name)
+    count = len(state["approved_snapshot"])
+    if getattr(a, "json", False):
+        print(json.dumps({"connector": a.name, "status": "connected", "tools": count}))
+    else:
+        print(f"connector {a.name} connected ({count} tools)")
 
 
 def load_config() -> dict:
@@ -290,11 +315,10 @@ def _run(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
-def _transport(cfg: dict):
+def _transport(cfg: dict, auth=None):
     if cfg.get("url"):
         from mcp.client.streamable_http import streamable_http_client
-        from mcp.shared._httpx_utils import create_mcp_http_client
-        return streamable_http_client(cfg["url"], http_client=create_mcp_http_client(headers=cfg.get("headers") or {}))
+        return streamable_http_client(cfg["url"], http_client=connectors_oauth.http_client(cfg.get("headers") or {}, auth))
     cmd = cfg.get("command") or []
     cmd = [cmd] if isinstance(cmd, str) else list(cmd)
     cmd += list(cfg.get("args") or [])
@@ -304,9 +328,9 @@ def _transport(cfg: dict):
     return stdio_client(StdioServerParameters(command=cmd[0], args=cmd[1:], env=env))
 
 
-async def _query_raw(cfg: dict):
+async def _query_raw(cfg: dict, auth=None):
     from mcp import ClientSession
-    async with _transport(cfg) as (r, w):
+    async with _transport(cfg, auth) as (r, w, *_):
         async with ClientSession(r, w) as session:
             init = await session.initialize()
             version = str(getattr(getattr(init, "serverInfo", None), "version", "") or "")
@@ -352,12 +376,31 @@ def active_tools_alerts() -> set:
     return {f"connector_tools:{n}" for n, cs in load_state().items() if cs.get("tools_changed")}
 
 
-def add(name: str, command=None, url: str | None = None, pin: str | None = None) -> dict:
+async def _needs_oauth(url: str) -> bool:
+    """A 401 that names its resource metadata (header or well-known document) means the server wants OAuth."""
+    async with connectors_oauth.http_client() as http:
+        r = await http.post(url, json={"jsonrpc": "2.0", "id": 0, "method": "ping"},
+                            headers={"accept": "application/json, text/event-stream"})
+        if r.status_code != 401:
+            return False
+        if "www-authenticate" in r.headers:
+            return True
+        parts = urlsplit(url)
+        return (await http.get(f"{parts.scheme}://{parts.netloc}/.well-known/oauth-protected-resource")).status_code == 200
+
+
+def add(name: str, command=None, url: str | None = None, pin: str | None = None, role=None, teams=None, access=None,
+        tier=None) -> dict:
     c = {"command": list(command)} if command else ({"url": url} if url else {})
-    if pin:
-        c["pin"] = pin
+    c.update({k: v for k, v in (("pin", pin), ("role", role), ("teams", teams), ("access", access), ("tier", tier)) if v})
     _edit_config(lambda table: table.__setitem__(name, c))
-    version, raw = _run(_query_raw(c))
+    auth = None
+    if url and _run(_needs_oauth(url)):
+        _edit_config(lambda table: table[name].__setitem__("auth", "oauth"))
+        c["auth"], auth = "oauth", connectors_oauth.provider(name, url, interactive=True)
+    version, raw = _run(_query_raw(c, auth))
+    if auth:
+        connectors_oauth.record_sign_in(name)
     fp, snap = _fingerprint_tools(raw, version)
     reads = [t.get("name", "") for t in raw if not is_write_tool(name, t.get("name", ""), t)]
     state = load_state()
@@ -413,7 +456,7 @@ def call(name: str, tool_name: str, args: dict | None = None, mode: str | None =
     cfg = load_config().get(name, {})
     async def _call():
         from mcp import ClientSession
-        async with _transport(cfg) as (r, w):
+        async with _transport(cfg) as (r, w, *_):
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 return await s.call_tool(tool_name, args or {})
