@@ -106,7 +106,8 @@ def test_too_many_files_fails_size(host):
     assert rules["size"]["ok"] is False and "7 files (limit 6)" in rules["size"]["why"]
 
 
-@pytest.mark.parametrize("path", ["db/migrations/0001_init.py", ".github/workflows/ci.yml", "uv.lock", "src/auth.py"])
+@pytest.mark.parametrize("path", ["db/migrations/0001_init.py", ".github/workflows/ci.yml", "uv.lock", "src/auth.py",
+                                  "src/Data/Migrations/20260101_Init.cs", "Data/Migrations/Init.Designer.cs", "src/Models/Order.Designer.cs"])
 def test_sensitive_path_fails(host, path):
     card, _ = _add(host, _card("c1"), _pr(1, files=((path, 1, 0),)))
     rules, j = _rules(host, card)

@@ -10,7 +10,7 @@ from pl.board import col_name, sections
 from pl.trackers import github
 from pl.util import short_id
 
-SENSITIVE = ["**/migrations/**", "**/*.sql", "**/schema*", "**/*auth*", "**/*token*", "**/*secret*", "**/*key*", ".github/**",
+SENSITIVE = ["**/migrations/**", "**/*.sql", "**/*.designer.cs", "**/schema*", "**/*auth*", "**/*token*", "**/*secret*", "**/*key*", ".github/**",
              "**/uv.lock", "**/package-lock.json", "**/yarn.lock", "**/poetry.lock", "**/Gemfile.lock", "**/go.sum", "**/Cargo.lock"]
 HUMAN_TAG = "Requires Human Review"
 TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*$|_test\.[^/]+$")
@@ -22,7 +22,9 @@ def settings():
 
 
 def _match(path, globs):
-    return any(fnmatch.fnmatch(path, g) or (g.startswith("**/") and fnmatch.fnmatch(path, g[3:])) for g in globs)
+    path = path.lower()
+    return any(fnmatch.fnmatchcase(path, g) or (g.startswith("**/") and fnmatch.fnmatchcase(path, g[3:]))
+               for g in (g.lower() for g in globs))
 
 
 def _pr(repo, num):
