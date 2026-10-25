@@ -436,8 +436,7 @@ def cmd_usage(a):
     if getattr(a, "json", False):
         from pl import jsonout, local_jobs
         rows = totals(scan(), since, by, cards)
-        usage = {g: {**dict(zip(("input", "output", "cache_read", "cache_write", "cost", "unpriced"), r)), "total": sum(r[:4])}
-                 for g, r in rows.items()}
+        usage = {g: dict(zip(("input", "output", "cache_read", "cache_write", "cost", "unpriced"), r)) for g, r in rows.items()}
         jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage,
                      "local_jobs": local_jobs.stats(since)})
         return
