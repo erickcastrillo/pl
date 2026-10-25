@@ -1,9 +1,14 @@
 """The board copy engine: same columns and cards on another board, resumable, with a dry run."""
+import argparse
 import itertools
+import json
+import sys
 
 import pytest
+import tomlkit
 
-from pl import migrate
+from pl import agents, migrate, trackers
+from pl import config as C
 
 
 class Board:
@@ -124,3 +129,119 @@ def test_verify_names_a_dropped_metadata_key(tmp_path):
     mapping = {c["metadata"]["migrated_from"]["id"]: c["id"] for c in dst.cards()}
     out = migrate.verify(src, dst, mapping)
     assert len(out) == 1 and victim["id"] in out[0] and "metadata.k" in out[0]
+
+
+# --- pl board migrate: target resolution and the switch ---
+
+OLD = '[tracker]\ntype = "local"\n'
+
+
+@pytest.fixture
+def profile(tmp_path, monkeypatch):
+    saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    d = tmp_path / ".pl-mig"
+    d.mkdir()
+    (d / "config.toml").write_text(OLD)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PL_CONFIG_DIR", raising=False)
+    C.load(config_dir=str(d))
+    yield d
+    for k, v in saved.items():
+        setattr(C, k, v)
+
+
+@pytest.fixture
+def boards(profile, monkeypatch):
+    src, dst = seeded(50), Board("dst")
+    monkeypatch.setattr(trackers, "get", lambda kind: src)
+    monkeypatch.setattr(migrate, "_build", lambda cfg: dst)
+    monkeypatch.setattr(agents, "registry", lambda: {})
+    return src, dst
+
+
+def args(**kw):
+    base = dict(action="migrate", to="local", board=None, mcp_config=None, token_env=None, yes=True, dry_run=False, json=False)
+    return argparse.Namespace(**{**base, **kw})
+
+
+def tracker_table(profile):
+    return tomlkit.parse((profile / "config.toml").read_text())["tracker"]
+
+
+def test_migrate_yes_switches_tracker_and_backs_up_config(boards, profile, capsys):
+    src, dst = boards
+    migrate.cmd_migrate(args(to="http://127.0.0.1:9000/mcp"))
+    assert len(dst.cards()) == 50
+    doc = tomlkit.parse((profile / "config.toml").read_text())
+    assert doc["tracker"]["type"] == "mcp" and doc["tracker"]["protocol"] == "pl"
+    assert doc["tracker_previous"]["type"] == "local"
+    (bak,) = profile.glob("config.toml.bak-*")
+    assert bak.read_text() == OLD and bak.stat().st_mode & 0o777 == 0o600
+    assert "[tracker] now points at http://127.0.0.1:9000/mcp; the old board is unchanged" in capsys.readouterr().out
+    assert len(src.cards()) == 50
+
+
+def test_a_failed_verify_keeps_the_old_tracker(boards, profile, monkeypatch):
+    monkeypatch.setattr(migrate, "verify", lambda s, d, m: ["x -> y: title differs"])
+    with pytest.raises(SystemExit) as e:
+        migrate.cmd_migrate(args())
+    assert e.value.code == 1
+    assert (profile / "config.toml").read_text() == OLD
+    assert not list(profile.glob("config.toml.bak-*"))
+
+
+def test_migrate_refuses_while_an_agent_is_live(boards, profile, monkeypatch, capsys):
+    src, dst = boards
+    first = next(iter(src._cards.values()))
+    first["metadata"]["worker"] = {"harness": "claude", "stage": "run"}
+    monkeypatch.setattr(agents, "worker_status", lambda w, reg: ("alive", None))
+    with pytest.raises(SystemExit) as e:
+        migrate.cmd_migrate(args())
+    assert e.value.code == 1
+    assert "wait for these agents or pl restart them" in capsys.readouterr().err
+    assert dst.cards() == [] and (profile / "config.toml").read_text() == OLD
+
+
+def test_migrate_without_yes_and_no_tty_exits_2(boards, profile, monkeypatch, capsys):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SystemExit) as e:
+        migrate.cmd_migrate(args(yes=False))
+    assert e.value.code == 2 and "--yes" in capsys.readouterr().err
+    assert boards[1].cards() == []
+
+
+def test_migrate_asks_on_a_terminal_and_n_copies_nothing(boards, profile, monkeypatch):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "n")
+    with pytest.raises(SystemExit):
+        migrate.cmd_migrate(args(yes=False))
+    assert asked == ["Copy 50 cards to local and switch? [y/N]: "]
+    assert boards[1].cards() == [] and (profile / "config.toml").read_text() == OLD
+
+
+def test_migrate_json_shape(boards, profile, capsys):
+    migrate.cmd_migrate(args(json=True))
+    out = json.loads(capsys.readouterr().out)
+    assert set(out) == {"columns_created", "cards_copied", "cards_refreshed", "switched", "state_file"}
+    assert out["cards_copied"] == 50 and out["columns_created"] == 3 and out["switched"] is True
+
+
+def test_dry_run_writes_nothing_and_does_not_switch(boards, profile, capsys):
+    migrate.cmd_migrate(args(dry_run=True, yes=False))
+    assert boards[1].cards() == [] and (profile / "config.toml").read_text() == OLD
+    assert "would copy card" in capsys.readouterr().out
+
+
+def test_target_cfg_forms(profile, tmp_path, monkeypatch):
+    assert migrate.target_cfg("local", args()) == {"type": "local"}
+    cfg = migrate.target_cfg("https://hub.example/mcp", args(token_env="HUB_TOKEN", board="eng"))
+    assert cfg == {"type": "mcp", "protocol": "pl", "board_id": "eng",
+                   "server": {"url": "https://hub.example/mcp", "headers": {"Authorization": "Bearer ${HUB_TOKEN}"}}}
+    with pytest.raises(SystemExit):
+        migrate.target_cfg("https://hub.example/mcp", args())
+    assert migrate.target_cfg("http://localhost:1/mcp", args())["server"] == {"url": "http://localhost:1/mcp"}
+    named = migrate.target_cfg("hub", args(mcp_config=str(tmp_path / "m.json")))
+    assert named == {"type": "mcp", "protocol": "pl", "mcp_config": str(tmp_path / "m.json"), "server": "hub"}
+    with pytest.raises(SystemExit):
+        migrate.target_cfg("hub", args())
