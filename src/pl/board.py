@@ -144,6 +144,9 @@ def pick(token, cs, who="pl", min_prefix=1):
 def find_card(token):
     """Full id, a unique id prefix, or for a GitHub card "repo#N" or "#N" (see matches). A full GitHub id
     "owner/repo#N" (what agents' pl card and pl section pass) is one issue read, never the whole board."""
+    from pl import sync
+    if (C.TRACKER or {}).get("type") == "local" and (lid := sync.local_id(token)):
+        return card(lid)
     if len(token) >= 32 or ((C.TRACKER or {}).get("type") == "github-project"
                             and re.fullmatch(r"[\w.-]+/[\w.-]+#\d+", token.strip())):
         return card(token.strip())

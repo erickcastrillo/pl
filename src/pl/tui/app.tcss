@@ -16,3 +16,6 @@ DashboardView .row { height: 1fr; }
 #decide { border: round $warning; }
 Sparkline { height: 1; }
 PrsView { height: 1fr; padding: 0 1; }
+#cards-table, #prs-table { width: 84; }
+.-narrow #cards-table, .-narrow #prs-table { width: 1fr; }
+.-narrow #cards-side, .-narrow #prs-side { display: none; }

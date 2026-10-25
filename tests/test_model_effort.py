@@ -512,3 +512,67 @@ def test_plan_budget_reads_files_and_lines():
     assert harnesses.plan_budget("budget: 1 file changed, about 10 lines") == (1, 10)
     assert harnesses.plan_budget("budget: 6 files changed / about 40-60 lines") is None
     assert harnesses.plan_budget(None) is None
+
+
+# ---------- the record of which model an agent started with ----------
+
+def _started(monkeypatch, run):
+    """(the started event, the worker record) of the one agent run() starts."""
+    from pl import events
+    records = []
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: records.append(f))
+    run()
+    event = next(e for e in events._read() if e["kind"] == "started")
+    return event, records[-1]["metadata"]["worker"]
+
+
+def test_a_plan_agent_records_its_stage_model_and_reason(fake_home, fake_tmux, monkeypatch):
+    toml = '[stages.plan.models]\nantigravity = "claude-opus-5-5-high"\n'
+    event, worker = _started(monkeypatch, lambda: _launch(fake_home, fake_tmux, "antigravity", toml=toml, stage="plan"))
+    assert (event["model"], event["reason"]) == ("claude-opus-5-5-high", "stage plan, harness antigravity")
+    assert (worker["model"], worker["model_reason"]) == (event["model"], event["reason"])
+
+
+def test_a_small_run_records_the_small_model_and_its_budget(fake_home, fake_tmux, monkeypatch):
+    event, worker = _started(monkeypatch, lambda: _run_launch(fake_home, fake_tmux, monkeypatch, "claude", SMALL_PLAN))
+    assert (event["model"], event["reason"]) == ("haiku", "small change: 42 lines, 2 files")
+    assert (worker["model"], worker["model_reason"]) == ("haiku", "small change: 42 lines, 2 files")
+
+
+@pytest.mark.parametrize("account_extra,want", [
+    ('model = "sonnet"', ("sonnet", "account a")), ("", ("default", "harness default"))])
+def test_the_reason_names_the_account_or_the_harness_default(fake_home, fake_tmux, monkeypatch, account_extra, want):
+    event, _ = _started(monkeypatch, lambda: _launch(fake_home, fake_tmux, "claude", account_extra))
+    assert (event["model"], event["reason"]) == want
+
+
+def test_a_rework_round_names_the_stage_model_not_the_small_one(fake_home, fake_tmux, monkeypatch):
+    event, _ = _started(monkeypatch, lambda: _run_launch(fake_home, fake_tmux, monkeypatch, "claude", SMALL_PLAN, rework=True))
+    assert (event["model"], event["reason"]) == ("opus", "stage run, harness claude (rework)")
+
+
+def test_a_template_model_flag_is_reported_as_the_template(fake_home, fake_tmux, monkeypatch):
+    toml = '[harnesses.claude]\ninteractive = ["claude", "--model", "haiku", "{prompt}"]\n'
+    event, worker = _started(monkeypatch, lambda: _launch(fake_home, fake_tmux, "claude", 'model = "opus"', toml))
+    assert (event["model"], event["reason"]) == ("template", "[harnesses.claude] template")
+    assert worker["model"] == "template"
+
+
+async def test_activity_shows_model_and_reason_and_old_started_events(work, monkeypatch):
+    from test_settings import PlApp, app_data, open_activity, settle
+    new = {"ts": "2026-09-29T10:11:12+00:00", "kind": "started", "card": "abcdef1234567890", "stage": "plan",
+           "model": "claude-opus-5-5-high", "reason": "stage plan, harness antigravity"}
+    old = {"ts": "2026-09-29T10:11:13+00:00", "kind": "started", "card": "abcdef1234567890", "stage": "spec"}
+    copied, _ = await open_activity(work, monkeypatch, [old, new], {"pbcopy"})
+    app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("activity")
+        await settle(pilot)
+        await pilot.press("y")
+        await settle(pilot)
+        assert "model=claude-opus-5-5-high" in copied[-1] and "stage plan, harness antigravity" in copied[-1]
+        await pilot.press("down")
+        await pilot.press("y")
+        await settle(pilot)
+        assert "stage=spec" in copied[-1] and "model=" not in copied[-1]

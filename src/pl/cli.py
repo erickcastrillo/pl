@@ -4,8 +4,10 @@
                           drop an idea (and files) into Triage on the intake board, unassigned, to be
                           assessed; --start assigns it to you so the pipeline pulls it in;
                           --plan/--slice title the card 'Plan N slice M: <--title or first line>' and record both in its metadata
-  pl list [--all]         both boards: the Feature Pipeline by column with agent state, then the intake board's
+  pl list [--all] [--plan N]
+                          both boards: the Feature Pipeline by column with agent state, then the intake board's
                           cards assigned to you (5 per column; --product shows them all; --all includes Done)
+                          --plan N lists only plan N's cards, ordered by slice, Done included
   pl inbox [--json]       every gate waiting on you, in every profile (--json: one document)
   pl review [id|slug]     open a plan in Neovim in a NEW iTerm window (--here: this terminal / a tmux window);
                           a card id pulls its plan into the plans folder first
@@ -55,6 +57,9 @@
   pl rework [--dry-run]    send cards in PR open whose pull request the review labeled for rework back to a run
                           agent now (the dispatcher does this every 10 min); after [dispatch] rework_rounds rounds
                           (3) the PR gets the failed label for a person
+  pl merges --dry-run [--json]
+                          each pull request ready to merge, every merge rule's result and what the merge loop would
+                          do (nothing is merged)
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
@@ -81,7 +86,8 @@
                           max_context = 60 sets another percent, 0 turns it off; one loop interval apart, at most
                           3 an hour; background shells or agents the session started end with it). --github
                           shows GitHub's GraphQL budget this hour instead: points left, the reset, what each
-                          profile and caller spent and each profile's fair share
+                          profile and caller spent and each profile's fair share; it also asks GitHub for a fresh
+                          reading of this process's token and prints it next to pl's, marking a GAP past 10%
   pl hook <Notification|Stop> --card ID --window W
                           what a Claude Code stage agent's hooks run (pl adds them at launch; [dispatch] hooks = false
                           turns them off): a permission wait or a finished turn reaches the card at once. Exits 2
@@ -94,6 +100,8 @@
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl sync status [--json]
                           how many changes are queued for the GitHub board and when the next window opens
+  pl sync init --from-github [--dry-run]
+                          copy the [sync] github board into the empty local board once, and write sync-ids.json
   pl sync now [--json]  send queued changes to the GitHub board now, within the budget
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
@@ -105,18 +113,18 @@
                           a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
                           ask the central read-only brain across every pipeline and connector
-  pl manager start|stop [--all]|status|restart NAME
+  pl manager start|stop [--all]|status [--json]|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
   pl worktrees list | gc [--dry-run] [--yes] [--json]
                           the worktrees pl-run made in the worktrees folder: their card, column and keep/remove;
                           gc lists what is safe to remove (finished card, clean, all pushed); --yes removes it
-  pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
+  pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
   pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
-  pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
+  pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
@@ -127,6 +135,8 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
+  pl mcp serve --brain|--memory
+                          serve the brain tools, or memory_search over the agent memory, to an MCP client
   pl memory search Q [--card ID] [--pod P] [--limit N] | add TEXT --kind K [--card ID] [--client C] [--contact C]
                           [--replaces ID] | show ID  (each takes --json)
                           what agents remember: run summaries, approval reasons, decisions; says when search is
@@ -140,15 +150,17 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
-  pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
+  pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
-                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
+                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
+                          install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
+                          and installs into the library only after a yes
   pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
@@ -190,7 +202,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, loops, outward, pods, profiles, retention, rework, setup, skills, titles
+from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -216,6 +228,12 @@ class VersionAction(argparse.Action):
         from pl import update
         print(update.version_text())
         raise SystemExit(0)
+
+
+def _plan_number(s):
+    if not s.isdigit() or int(s) < 1:
+        raise argparse.ArgumentTypeError("--plan takes a whole number from 1")
+    return int(s)
 
 
 def main():
@@ -269,7 +287,7 @@ def _main():
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int)
-    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you")
+    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")
     p.add_argument("--reason", help="why you approve; saved to memory with the card")
@@ -346,6 +364,7 @@ def _main():
     p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("rework"); p.add_argument("--dry-run", action="store_true", help="say what would be sent back")
+    p = sub.add_parser("merges"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("retention"); ps = p.add_subparsers(dest="retention_cmd")
     q = ps.add_parser("run")
     q.add_argument("--dry-run", action="store_true", help="say what would be retained")
@@ -355,7 +374,7 @@ def _main():
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
-    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
+    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller, beside GitHub's own reading")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
     p = sub.add_parser("alerts"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include resolved alerts")
@@ -369,7 +388,11 @@ def _main():
     r.add_argument("--brief", required=True, help="JSON: problem, who, outcome, in_scope, out_of_scope, repos, open_questions")
     r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
-    pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
+    q = pk.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, with the source of installed skills")
+    q = pk.add_parser("install"); q.add_argument("source", help="github:owner/repo[/path][@ref]")
+    q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="list the files and stop")
+    q.add_argument("--name", help="the library name (default: the skill's folder name)")
+    q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
@@ -416,9 +439,9 @@ def _main():
     p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
-    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
+    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
-    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
     q = pm.add_parser("list"); q.add_argument("--json", action="store_true", help="output as JSON")
     q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")
@@ -473,7 +496,8 @@ def _main():
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     q = pb.add_parser("end"); q.add_argument("conv")
     q = pb.add_parser("undo"); q.add_argument("conv")
-    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "now"]); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "init", "now"]); p.add_argument("--json", action="store_true")
+    p.add_argument("--from-github", action="store_true"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -503,7 +527,7 @@ def _main():
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
-     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
+     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),

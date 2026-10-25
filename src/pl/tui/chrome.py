@@ -5,6 +5,7 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
+from pl.tui.needs import needs_you_count
 
 
 class _TabsList(list):
@@ -128,6 +129,8 @@ def header_text(data, error=None, note=None):
         hhmm = since.split("T")[1][:5] if "T" in since else since[:5]
         since_str = f" since {hhmm}" if hhmm else ""
         t.append(f"   KILL SWITCH ON{since_str}", style="bold red")
+    if snap and (n := needs_you_count(data)):
+        t.append(f"   needs you {n}", style="bold red")
     if note:
         t.append(f"   {note}", style="bold red" if "fail" in note or "still running" in note else "#e0a040")
     if error:

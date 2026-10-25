@@ -63,6 +63,9 @@ NAV = {
     "app.focus_next",
     "app.focus_previous",
     "leave_box",
+    # DataTable's own top and bottom keys, inherited by FitTable (the other table keys are listed below)
+    "scroll_top",
+    "scroll_bottom",
     # Window and screen navigation
     "cycle_window",
     "open_window",

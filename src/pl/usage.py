@@ -410,9 +410,17 @@ def card_report(st, since, cards):
 
 
 def cmd_usage(a):
+    if getattr(a, "github", False) and getattr(a, "json", False):
+        raise SystemExit("pl: --json does not apply to --github")
     if getattr(a, "github", False):
         from pl import ghquota
-        print(ghquota.report())
+        from pl.trackers import github
+        rows, current = ghquota.accounts(), ghquota.account()   # pl's readings from before the fresh one
+        budget = github._graphql_budget()
+        if budget and budget[1]:
+            ghquota.refresh(*budget)
+        fresh = budget if budget and budget[1] else "GitHub refused: rate limited" if budget else "gh could not read the budget"
+        print(ghquota.report(rows=rows, fresh=fresh, current=current))
         return
     from pl.standup import parse_since
     try:

@@ -15,12 +15,36 @@ from pl.board import card, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import show_first_heading, skip_headings
 from pl.tui.loops import COPIERS, _copy_run
-from pl.tui.needs import detail, needs_groups, needs_me, review_kind, start_review
+from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
 from pl.tui.subagents import TODO_MARK
 from pl.util import ago, short_id
 
 TITLE_WIDTH = 34   # two less than before: the state column starts with the ! marker
+NARROW_NOW = 14
+
+
+class FitTable(DataTable):
+    """Under the app's -narrow class the `flex` column takes the width the others leave, and the `capped` columns stop
+    growing with their text, so no column is cut at 80 columns. Wide, columns keep their own widths."""
+
+    def __init__(self, flex, wide=None, capped=(), **kw):
+        super().__init__(**kw)
+        self.flex, self.wide, self.capped = flex, wide, capped
+
+    def on_resize(self, _):
+        narrow = self.app.has_class("-narrow")
+        cols = {c.key.value: c for c in self.ordered_columns}
+        for k in self.capped:
+            cols[k].auto_width, cols[k].width = not narrow, NARROW_NOW if narrow else cols[k].width
+        flex = cols[self.flex]
+        if narrow:
+            others = sum(c.get_render_width(self) for c in cols.values() if c is not flex)
+            flex.auto_width, flex.width = False, max(10, self.content_size.width - others - 2)
+        else:
+            flex.auto_width, flex.width = self.wide is None, self.wide or flex.width
+        self._require_update_dimensions = True
+        self.refresh(layout=True)
 
 
 STATE = {"review": ("your review", "#e0a040"), "manual": ("yours to do", "#5f9fff"), "working": ("working", "green"),
@@ -332,11 +356,6 @@ def card_count(data):
     return sum(len(here) for _, here in card_rows(data))
 
 
-def attention_count(data):
-    """Cards on the Pipeline list (Done hidden) that wait on a person."""
-    return sum(needs_me(r) for _, here in card_rows(data) for r in here)
-
-
 class ColumnPicker(ModalScreen):
     """The board's columns but the card's own; enter picks one, esc cancels."""
     DEFAULT_CSS = """
@@ -397,7 +416,7 @@ def drop_back(c):
 class CardsView(CardActions, Horizontal):
     DEFAULT_CSS = """
     CardsView { height: 1fr; }
-    #cards-table { width: 84; height: 1fr; border: round $primary; }
+    #cards-table { height: 1fr; border: round $primary; }
     #cards-side { width: 1fr; height: 1fr; }
     #cards-detail { height: auto; }
     #cards-body { height: 1fr; }
@@ -419,10 +438,11 @@ class CardsView(CardActions, Horizontal):
         self._last = None   # the cursor row before the last move: which way it travels
 
     def compose(self):
-        t = DataTable(id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_column("id")
-        t.add_column("title", width=TITLE_WIDTH)   # a long title ends in … so state and now stay on screen
-        t.add_columns("state", "now")
+        t = FitTable("title", TITLE_WIDTH, ("now",), id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
+        t.add_column("id", key="id")
+        t.add_column("title", width=TITLE_WIDTH, key="title")   # a long title ends in … so state and now stay on screen
+        t.add_column("state", key="state")
+        t.add_column("now", key="now")
         yield t
         with Vertical(id="cards-side", classes="panel"):
             yield Static(Text(""), id="cards-detail")
@@ -432,13 +452,13 @@ class CardsView(CardActions, Horizontal):
     def show(self, data):
         self._now, self._data = data.get("now") or {}, data
         groups = card_rows(data)
-        total, mine = sum(len(h) for _, h in groups), attention_count(data)
+        total, mine = sum(len(h) for _, h in groups), needs_you_count(data)
         if self.show_done and (finished := [r for r in data["snapshot"].get("done") or [] if r.get("card")]):
             groups = [*groups, ("Done", finished)]
         t = self.query_one(DataTable)
         if self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
-            t.border_title = f"Pipeline · needs you only · {mine} of {total} cards · f shows all"
+            t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} cards · f shows all"
         else:
             t.border_title = f"Pipeline · {total} cards · {mine} need you (f only those) · " + (
                 "z hides Done" if self.show_done else "Done is hidden (z shows it)")

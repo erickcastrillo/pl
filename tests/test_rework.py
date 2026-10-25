@@ -135,7 +135,7 @@ def test_the_run_prompt_of_a_reworked_card_says_rework_with_the_labels(gh):
 
 def test_start_worker_adds_the_rework_argument_to_the_built_in_run_prompt(gh, monkeypatch):
     C.PROMPTS = {**C.PROMPTS, "run": C.BUILTIN_PROMPTS["run"]}
-    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (types.SimpleNamespace(name="claude"), "acme"))
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (types.SimpleNamespace(name="claude", interactive=[]), "acme"))
     c = {**_card("c1", col="In progress", rework={"round": 1, "active": True}), "title": "Card one"}
     out = []
     monkeypatch.setattr("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a))))

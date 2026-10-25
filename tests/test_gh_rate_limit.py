@@ -1315,13 +1315,14 @@ def test_a_spec_agents_commands_never_read_the_whole_board(gh, tmp_path, capsys,
 
 def test_pl_usage_github_prints_the_budget(gh, capsys):
     from pl import usage
+    gh.set(remaining=3100, reset=int(time.time()) + 600)
     usage.cmd_usage(argparse.Namespace(github=True, since=None, by="account"))
-    assert "no GraphQL reading this hour" in capsys.readouterr().out
+    assert "pl: no reading yet" in capsys.readouterr().out
     gh.set(rate=_rate(3100, int(time.time()) + 600))
     trackers.get("tracker").cards()
     usage.cmd_usage(argparse.Namespace(github=True, since=None, by="account"))
     out = capsys.readouterr().out
-    assert "acme-bot@github.com: 3100 of 5000 GraphQL points left" in out and "fair share 5000" in out
+    assert "acme-bot@github.com: pl 3100 of 5000 GraphQL points left" in out and "fair share 5000" in out
 
 
 # ---------- no herd at the reset; the GraphQL budget comes from GraphQL ----------
@@ -1624,3 +1625,88 @@ def test_manager_share_reads_the_freshest_token_ledger_of_another_folder(gh, tok
     got = ghquota.usage_for("/other/folder", "main")
     assert got and got["remaining"] == 1234 and got["spent"] == 7
 
+
+
+# ---------- pl usage --github next to GitHub's own reading (Plan 25 slice 3) ----------
+
+def _hhmm(epoch):
+    return time.strftime("%H:%M", time.localtime(epoch))
+
+
+def _usage_github(capsys):
+    from pl import usage
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None))
+    out = capsys.readouterr().out
+    for tok in (TOKEN_A, TOKEN_B):
+        assert tok not in out
+    assert not github.TOKEN_RE.search(out)
+    return out
+
+
+def _line(out, text):
+    return next(l for l in out.splitlines() if text in l)
+
+
+@pytest.fixture
+def mine(gh, tokens):
+    tokens(TOKEN_A)
+    ghquota.learn("acme-bot")
+    return _hash(TOKEN_A)
+
+
+def test_usage_github_shows_pl_and_github_side_by_side_with_a_gap(gh, mine, capsys):
+    r1, r2 = int(time.time()) + 1800, int(time.time()) + 2700
+    _ledger(199, {}, reset=r1)
+    gh.set(remaining=3287, reset=r2)
+    line = _line(_usage_github(capsys), mine)
+    for text in ("acme-bot@github.com", "pl 199 of 5000", _hhmm(r1), "GitHub 3287 of 5000", _hhmm(r2),
+                 "GAP 3088 points, over 10% of 5000"):
+        assert text in line
+
+
+def test_usage_github_no_flag_within_10_percent(gh, mine, capsys):
+    _ledger(4700, {})
+    gh.set(remaining=4600, reset=int(time.time()) + 1800)
+    out = _usage_github(capsys)
+    assert "pl 4700 of 5000" in out and "GitHub 4600 of 5000" in out and "GAP" not in out
+
+
+def test_usage_github_other_tokens_ledger_has_no_fresh_reading(gh, mine, capsys):
+    _ledger(4700, {})
+    other = f"acme-bot.{_hash(TOKEN_B)}@github.com"
+    ghquota._write(ghquota._path(other), {"limit": 5000, "remaining": 100, "reset": int(time.time()) + 900,
+                                          "at": time.time(), "window": 1, "spent": {}, "by": {}})
+    gh.set(remaining=4600, reset=int(time.time()) + 1800)
+    out = _usage_github(capsys)
+    line = _line(out, _hash(TOKEN_B))
+    assert "pl 100 of 5000" in line and "no fresh reading: token not used by this process" in line and "GAP" not in line
+    assert budget_asks(gh) == 1
+
+
+@pytest.mark.parametrize("state, why", [({"mode": "ratelimit", "remaining": 0}, "GitHub refused: rate limited"),
+                                        ({"reset": None}, "gh could not read the budget")])
+def test_usage_github_says_why_there_is_no_reading(gh, mine, capsys, state, why):
+    _ledger(199, {})
+    before = ghquota.ledger()
+    gh.set(**state)
+    line = _line(_usage_github(capsys), mine)
+    assert "pl 199 of 5000" in line and why in line and "GAP" not in line
+    assert ghquota.ledger() == before
+
+
+def test_usage_github_saves_the_fresh_reading_but_prints_the_old_one(gh, mine, capsys):
+    _ledger(199, {})
+    gh.set(remaining=3287, reset=int(time.time()) + 1800)
+    assert "pl 199" in _usage_github(capsys)
+    assert ghquota.ledger()["remaining"] == 3287
+
+
+def test_usage_github_with_no_ledger_yet(gh, mine, capsys):
+    gh.set(remaining=3287, reset=int(time.time()) + 1800)
+    out = _usage_github(capsys)
+    assert "pl: no reading yet" in out and "GitHub 3287" in out and "GAP" not in out
+
+
+def test_usage_github_without_fresh_reading_keeps_the_old_output(gh, mine):
+    _ledger(4200, {})
+    assert "pl 4200" not in ghquota.report() and "4200 of 5000 GraphQL points left" in ghquota.report()
