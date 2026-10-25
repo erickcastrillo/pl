@@ -807,3 +807,149 @@ def test_as_is_missing_var_without_default_names_only_the_var(tmp_path, monkeypa
     with pytest.raises(SystemExit) as e:
         tracker(cfg).cards()
     assert "PL_MISSING_VAR" in str(e.value) and SECRET not in str(e.value)
+
+
+PROTO_SERVER = textwrap.dedent('''
+    import json, os, sys
+    from mcp.server.fastmcp import FastMCP
+
+    srv = FastMCP("proto-board")
+    COLS = {"col-1": "Inbox", "col-2": "Spec ready"}
+    ITEMS = {}
+    SEQ = 0
+
+    def _board(board_id):
+        if board_id != "b-1":
+            raise ValueError("not_found: unknown board " + board_id)
+
+    def _meta(m):
+        out = dict(m or {})
+        if os.environ.get("LOSSY"):
+            out.pop(os.environ["LOSSY"], None) if os.environ["LOSSY"] in out else out.pop(next(iter(out), None), None)
+        return out
+
+    @srv.tool()
+    def pl_protocol() -> str:
+        return json.dumps({"version": 1, "boards": [{"id": "b-1", "title": "Main"}]})
+
+    @srv.tool()
+    def pl_columns(board_id: str = "") -> str:
+        _board(board_id)
+        return json.dumps({"columns": [{"id": k, "title": v} for k, v in COLS.items()]})
+
+    @srv.tool()
+    def pl_ensure_column(board_id: str = "", title: str = "", description: str = "") -> str:
+        _board(board_id)
+        k = next((cid for cid, t in COLS.items() if t == title), None)
+        if k is None:
+            k = "col-%d" % (len(COLS) + 1)
+            COLS[k] = title
+        return json.dumps({"column": {"id": k, "title": title}})
+
+    @srv.tool()
+    def pl_cards(board_id: str = "", cursor: str | None = None, limit: int = 100,
+                 assigned_to: str | None = None, updated_since: str | None = None) -> str:
+        _board(board_id)
+        rows = [c for c in ITEMS.values() if assigned_to is None or c.get("assigned_to") == assigned_to]
+        start = int(cursor) if cursor else 0
+        nxt = str(start + limit) if start + limit < len(rows) else None
+        return json.dumps({"cards": rows[start:start + limit], "next_cursor": nxt})
+
+    @srv.tool()
+    def pl_card(board_id: str = "", id: str = "") -> str:
+        _board(board_id)
+        if id not in ITEMS:
+            raise ValueError("not_found: no card " + id)
+        return json.dumps({"card": ITEMS[id]})
+
+    @srv.tool()
+    def pl_create(board_id: str = "", column_id: str = "", title: str = "", description: str = "",
+                  tags: list[str] | None = None, metadata: dict | None = None, assigned_to: str | None = None) -> str:
+        global SEQ
+        _board(board_id)
+        if column_id not in COLS:
+            raise ValueError("invalid: no column " + column_id)
+        SEQ += 1
+        n = "it-%d" % SEQ
+        ITEMS[n] = {"id": n, "title": title, "description": description, "tags": list(tags or []),
+                    "metadata": _meta(metadata), "list_id": column_id, "updated_at": "2026-09-28T10:00:00+00:00",
+                    "assigned_to": assigned_to}
+        return json.dumps({"card": ITEMS[n]})
+
+    @srv.tool()
+    def pl_update(board_id: str = "", id: str = "", fields: dict | None = None) -> str:
+        _board(board_id)
+        if id not in ITEMS:
+            raise ValueError("not_found: no card " + id)
+        f = dict(fields or {})
+        if "metadata" in f:
+            f["metadata"] = _meta(f["metadata"])
+        ITEMS[id].update(f)
+        return json.dumps({"card": ITEMS[id]})
+
+    @srv.tool()
+    def pl_move(board_id: str = "", id: str = "", column_id: str = "") -> str:
+        _board(board_id)
+        if id not in ITEMS:
+            raise ValueError("not_found: no card " + id)
+        if column_id not in COLS:
+            raise ValueError("invalid: no column " + column_id)
+        ITEMS[id]["list_id"] = column_id
+        return json.dumps({"card": ITEMS[id]})
+
+    @srv.tool()
+    def pl_delete(board_id: str = "", id: str = "") -> str:
+        _board(board_id)
+        if id not in ITEMS:
+            raise ValueError("not_found: no card " + id)
+        ITEMS.pop(id)
+        return json.dumps({"deleted": True})
+
+    srv.run(transport="stdio")
+''')
+
+
+@pytest.fixture
+def proto_script(tmp_path):
+    p = tmp_path / "proto_board_server.py"
+    p.write_text(PROTO_SERVER)
+    return p
+
+
+def test_protocol_server_needs_no_mapping_and_round_trips(proto_script):
+    t = tracker({"type": "mcp", "board_id": "b-1", "server": {"command": sys.executable, "args": [str(proto_script)]}})
+    assert t.columns() == {"Inbox": "col-1", "Spec ready": "col-2"}
+    assert t.ensure_column("Done") == "col-3"
+    made = t.create("Inbox", title="Add login", description="why", tags=["frontend"], metadata={"pipeline_mode": "auto"})
+    assert made["id"] == "it-1" and made["list_id"] == "col-1"
+    got = t.cards()
+    assert [c["id"] for c in got] == ["it-1"]
+    moved = t.update("it-1", column="Spec ready", title="Add login v2", metadata={"worker": "w1"})
+    assert moved["list_id"] == "col-2" and moved["title"] == "Add login v2"
+    assert t.card("it-1")["metadata"] == {"pipeline_mode": "auto", "worker": "w1"}
+    assert "mcp board (pl protocol v1)" in t.test()
+    t.delete("it-1")
+    assert t.cards() == []
+
+
+def test_protocol_picks_the_only_board_when_board_id_is_unset(proto_script):
+    t = tracker({"type": "mcp", "server": {"command": sys.executable, "args": [str(proto_script)]}})
+    assert t.columns() == {"Inbox": "col-1", "Spec ready": "col-2"}
+    assert t.board_id == "b-1"
+
+
+def test_a_mapping_wins_over_protocol_discovery(script):
+    script.write_text(SERVER.replace(
+        "srv.run(",
+        '@srv.tool()\ndef pl_protocol() -> str:\n    raise ValueError("pl_protocol must not be called")\n\nsrv.run(',
+    ))
+    t = tracker(stdio_cfg(script))
+    assert t.columns() == {"Inbox": "col-1", "Spec ready": "col-2"}
+    assert t.mode == "mapping"
+
+
+def test_protocol_pl_without_the_tool_names_it(script):
+    t = tracker({"type": "mcp", "protocol": "pl", "server": {"command": sys.executable, "args": [str(script)]}})
+    with pytest.raises(SystemExit, match="the board server has no pl_protocol tool"):
+        t.columns()
+
