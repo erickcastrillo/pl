@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
-from pl import events, ideas, move_agent, trackers
+from pl import events, ideas, move_agent, recall, trackers
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -271,6 +271,7 @@ def cmd_approve(a):
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
     events.emit("approved", c["id"])
+    recall.note((getattr(a, "reason", None) or "approved").strip(), "approval", f"approval:{c['id']}", c["id"])
     from pl import outward
     if outward.is_outward(c) and outward.state().get("on"):
         print(f"approved {short_id(c['id'])}  {c['title']}\n  approved; its outward action waits: the kill switch is on")
@@ -294,6 +295,7 @@ def cmd_reject(a):
         update(c["id"], description=check_size(render(parts)))
         update(c["id"], list_id=col_id("Inbox"), metadata={"spec_round": n, "worker": None, "spec_approved_at": None})
         events.emit("spec_rejected", c["id"])
+        recall.note(a.notes.strip(), "rejection", f"rejection:{c['id']}#{n}", c["id"])
         print(f"sent back {short_id(c['id'])}  {c['title']}\n  back in Inbox with your notes; the spec writer rewrites it on the next pass")
         return
     n = int(m.get("review_round") or 0) + 1
@@ -302,6 +304,7 @@ def cmd_reject(a):
     update(c["id"], description=check_size(render(parts)))
     update(c["id"], list_id=col_id("Spec ready"), metadata={"review_round": n, "worker": None})
     events.emit("rejected", c["id"])
+    recall.note(a.notes.strip(), "rejection", f"rejection:{c['id']}#{n}", c["id"])
     print(f"rejected {short_id(c['id'])}  {c['title']}\n  back in Spec ready with your notes; the planner re-plans on the next pass")
 
 

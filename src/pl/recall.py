@@ -2,9 +2,11 @@
 import os
 import secrets
 import sqlite3
+import sys
 from datetime import datetime, timezone
 
 from pl import config as C
+from pl.board import sections
 
 KINDS = ("run", "approval", "rejection", "decision", "fact", "preference")
 _SCHEMA = """
@@ -93,3 +95,50 @@ def search(q, limit=10, pod=None):
     finally:
         con.close()
     return [dict(r) for r in rows]
+
+
+def _already(source, card, author):
+    con = _db()
+    try:
+        return con.execute("SELECT 1 FROM entries WHERE source=? AND card=? AND author=?",
+                           (source, card, author)).fetchone() is not None
+    finally:
+        con.close()
+
+
+def _first_paragraph(text):
+    return next((p.strip() for p in (text or "").split("\n\n") if p.strip() and not p.startswith("#")), "")
+
+
+def _section_body(text, heading):
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lstrip("#").strip().lower() == heading.lower() and line.startswith("#"):
+            return _first_paragraph("\n".join(lines[i + 1:]).lstrip("\n"))
+    return ""
+
+
+def run_text(c):
+    parts = sections(c.get("description"))
+    pieces = [_section_body(parts.get("PLAN"), "Summary"),
+              _section_body(parts.get("SPEC"), "Outcome") or _first_paragraph(parts.get("SPEC")),
+              *((c.get("metadata") or {}).get("pr_urls") or [])[-1:]]
+    return " ".join(p for p in pieces if p)[:400] or c.get("title", "")
+
+
+def record_run(c, stage, worker):
+    """One `run` entry for a stage that finished, once per (card, stage, session)."""
+    source = f"run:{worker.get('session_id')}"
+    author = f"{stage} agent ({worker.get('harness') or 'claude'}/{worker.get('profile')})"
+    if _already(source, c["id"], author):
+        return None
+    return add(run_text(c), "run", source, card=c["id"], author=author)
+
+
+def note(text, kind, source, card):
+    """add() for callers that must carry on when the store fails: the failure is printed, never raised."""
+    try:
+        return add(text, kind, source, card=card, author=C.USER_EMAIL or None)
+    except Exception as e:
+        print(f"pl: memory not saved: {e}", file=sys.stderr)
+        return None

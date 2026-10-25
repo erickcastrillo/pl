@@ -8,7 +8,7 @@
   pl inbox [--json]       every gate waiting on you, in every profile (--json: one document)
   pl review [id|slug]     open a plan in Neovim in a NEW iTerm window (--here: this terminal / a tmux window);
                           a card id pulls its plan into the plans folder first
-  pl approve <id>         sync your local edits of the plan to the card, move it to Approved, notify
+  pl approve <id>         [--reason why] sync your local edits of the plan to the card, move it to Approved, notify
   pl reject <id> "notes"  append review notes to the card and send it back to Spec ready for re-planning
   pl dispatch [--once] [--interval SEC] [--max-runs N] [--dry-run]
                           start the right agent for every waiting card, in the profile's tmux session
@@ -184,6 +184,7 @@ def _main():
     p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true")
+    p.add_argument("--reason", help="why you approve; saved to memory with the card")
     p = sub.add_parser("reject"); p.add_argument("id"); p.add_argument("notes")
     p = sub.add_parser("dispatch"); p.add_argument("--once", action="store_true"); p.add_argument("--interval", type=int, default=None)
     p.add_argument("--max-runs", type=int, default=None); p.add_argument("--dry-run", action="store_true")
