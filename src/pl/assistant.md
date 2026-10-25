@@ -37,6 +37,7 @@ Status and the board:
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
 - `pl alerts` (`--all`, `--ack KEY`): open alerts and their fix line; `--ack` stops reminders until it clears.
 - `pl watch --once`: one text frame of the console board.
+- `pl audit` (`--since 7d`, `--json`, `--verify`): the profile's append-only log of who did what; `--verify` checks its hash chain.
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.

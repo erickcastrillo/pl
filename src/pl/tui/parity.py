@@ -11,6 +11,7 @@ COMMANDS = {
     "HomeView.details": "pl profiles",
     "PlApp.switcher": "pl list --json",
     "PlApp.oldest": "pl inbox --json",
+    "ConnectorsPanel.revoke": "pl connectors revoke NAME",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardScreen.approve": "pl approve <id>",
     "CardScreen.send_back": "pl reject <id> NOTES",
@@ -73,7 +74,6 @@ NAV = {
     "refresh",
     "restart_console",
     "install",   # Skills panel: pl skills install is not in any merged slice yet
-    "revoke",   # Connectors panel: no pl connectors revoke command exists in any merged slice yet
     "quit",
     "help",
     # Filters and display toggles

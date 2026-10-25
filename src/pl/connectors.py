@@ -201,17 +201,41 @@ def list_connectors(json_out: bool = False):
             print(f"warning: {r['warning']}")
 
 
+def revoke(name: str) -> None:
+    """Remove a connector from connectors.toml and forget its approved tool state."""
+    if name not in load_config():
+        raise SystemExit(f"pl connectors revoke: no connector {name!r}")
+    _edit_config(lambda table: table.pop(name))
+    state = load_state()
+    if state.pop(name, None) is not None:
+        save_state(state)
+    alerts.resolve(f"connector_tools:{name}")
+
+
+def _audit(action, name):
+    try:
+        from pl import audit
+        audit.append(action, target=name)
+    except Exception:
+        pass
+
+
 def cmd_connectors(a):
     sub = getattr(a, "connectors_cmd", None)
     if sub == "list":
         list_connectors(json_out=getattr(a, "json", False))
     elif sub == "approve-tools":
         approve_tools(a.name, yes=a.yes, json_out=getattr(a, "json", False))
+    elif sub == "revoke":
+        revoke(a.name)
+        _audit("connectors.revoke", a.name)
+        print(f"revoked connector {a.name}")
     elif sub == "add":
         add(a.name, command=getattr(a, "command", None) or None, url=getattr(a, "url", None), pin=getattr(a, "pin", None))
+        _audit("connectors.add", a.name)
         print(f"added connector {a.name}")
     else:
-        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME")
+        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME")
 
 
 def load_config() -> dict:

@@ -94,7 +94,7 @@
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
-  pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME
+  pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
@@ -267,6 +267,7 @@ def _main():
     q = pc.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, without any secret")
     q = pc.add_parser("add"); q.add_argument("name"); q.add_argument("command", nargs="*"); q.add_argument("--url"); q.add_argument("--pin", help="the server version you expect; another version counts as a tool change")
     q.add_argument("--yes", action="store_true")
+    q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
@@ -303,6 +304,10 @@ def _main():
     q = pt.add_parser("test"); q.add_argument("name"); q.add_argument("--replay", metavar="WINDOW", help="search this far back, like 7d"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("question"); p.add_argument("id"); p.add_argument("text"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("answer"); p.add_argument("id"); p.add_argument("text"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("audit")
+    p.add_argument("--since", help="7d, 24h, or date")
+    p.add_argument("--json", action="store_true", help="output json lines")
+    p.add_argument("--verify", action="store_true", help="verify the hash chain and exit 1 on broken chain")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -335,6 +340,7 @@ def _main():
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
+     "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
