@@ -582,6 +582,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         except SystemExit as e:
             print(f"product bridge failed this pass: {e}", file=sys.stderr)
             events.emit("error", message=str(e))
+    try:
+        from pl import triggers
+        triggers.run_due(dry=dry)
+    except Exception as e:
+        events.emit("error", message=str(e))
     reg = registry()
     all_cards = cards()
     _LAST["cards"] = all_cards   # the runaway check between passes names cards from the last read

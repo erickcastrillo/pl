@@ -132,6 +132,8 @@ ENTRIES = [
        "What's new is in the palette (ctrl+p)", "pl"),
     _e("2026-10-25.02", "Link cards across pipelines", "pl card shows links",
        "pl link <id> engineering:<id> --relation built-for"),
+    _e("2026-10-25.03", "Triggers: matching mail becomes a card in its pipeline",
+       "[triggers.<name>] in profile; runs in dispatcher pass", "pl triggers list"),
 ]
 
 
