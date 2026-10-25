@@ -14,6 +14,7 @@ from pl.board import sections
 
 SEMANTIC_MIN = 0.55
 KINDS = ("run", "approval", "rejection", "decision", "fact", "preference", "commitment")
+UNTRUSTED_SOURCES = ("email:", "connector:", "trigger:")
 
 
 class Refused(Exception):
@@ -76,8 +77,8 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
         replaces=None, link=None):
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
-    if os.environ.get("PL_UNTRUSTED") == "1":   # an agent reading untrusted content may not write memory
-        raise Refused("untrusted source")
+    if os.environ.get("PL_UNTRUSTED") == "1" or source.startswith(UNTRUSTED_SOURCES):   # PL_UNTRUSTED: an agent reading outside data
+        raise Refused("memory takes no text from emails or connector results")
     text = _clean(text)
     pipeline = pipeline or C.PROFILE_NAME
     pod = pod or pipeline
