@@ -1113,11 +1113,25 @@ def clear_bootstrap_failure(card_ref):
         update(c["id"], metadata={"bootstrap_error": None})
 
 
+def _sync_now(r, as_json):
+    if r["stopped_because"] == "error":
+        print(f"pl sync: {r['error']}", file=sys.stderr)
+        raise SystemExit(1)
+    if as_json:
+        print(json.dumps({k: r[k] for k in ("sent", "remaining", "stopped_because", "next_window")}))
+        return
+    print(f"{r['sent']} changes sent, {r['remaining']} remain")
+    if r["stopped_because"] in ("reserve", "half-budget") and r["next_window"]:
+        print("next GitHub window: " + datetime.fromisoformat(r["next_window"]).astimezone().strftime("%H:%M"))
+
+
 def cmd_sync(a):
-    from pl import ghquota, outbox
+    from pl import ghquota, outbox, sync
     target = C.SYNC.get("github")
     if not target:
         raise SystemExit("pl sync: set [sync] github in config.toml")
+    if a.action == "now":
+        return _sync_now(sync.replay(), getattr(a, "json", False))
     n = outbox.count()
     led = ghquota.ledger()
     reset = led.get("reset")
