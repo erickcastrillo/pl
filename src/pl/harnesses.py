@@ -154,10 +154,16 @@ def models(name):
 
 def model_effort(h, account, stage=None):
     """(model, effort) a launch of h under account passes, None for each that is unset or that h does not take.
-    The model is the account's, only when h is the account's own harness; the effort is the stage's, else the account's."""
+    The model is the stage's for h's harness, else the account's (only when h is the account's own harness);
+    the effort is the stage's, else the account's."""
     a = C.ACCOUNTS.get(account) or {}
-    model = a.get("model") if (a.get("harness") or "claude") == h.name and h.name in MODEL_FLAGS else None
-    model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
+    sm = (C.STAGES.get(stage) or {}).get("models") if stage else None
+    sm = sm.get(h.name) if isinstance(sm, dict) else None
+    if h.name in MODEL_FLAGS and isinstance(sm, str) and MODEL_RE.fullmatch(sm):
+        model = sm
+    else:
+        model = a.get("model") if (a.get("harness") or "claude") == h.name and h.name in MODEL_FLAGS else None
+        model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
     effort = (C.STAGES.get(stage) or {}).get("effort") if stage else None
     effort = effort or a.get("effort")
     return model, (effort if effort in EFFORT_LEVELS.get(h.name, ()) else None)

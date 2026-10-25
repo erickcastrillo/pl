@@ -537,12 +537,26 @@ def stage_harnesses(v, accounts) -> set[str]:
 
 
 def _stage_effort_errors(name, v, accounts) -> list[str]:
-    """[stages.<name>] effort: a level every harness the stage can run on takes. No model: that belongs to accounts."""
+    """[stages.<name>] effort: a level every harness the stage can run on takes. models: a model per harness."""
     from pl import harnesses
     errs = []
     if "model" in v:
-        errs.append(f"stages.{name}: model is not a stage setting; set model on each account ([accounts.<name>] "
-                    "model), because a stage may pool accounts of different harnesses")
+        errs.append(f"stages.{name}: model is not a stage setting; set one per harness in [stages.{name}.models], "
+                    "like claude = \"opus\" (a stage may pool accounts of different harnesses)")
+    if "models" in v:
+        models = v["models"]
+        if not isinstance(models, dict):
+            errs.append(f"stages.{name}.models must be a table of harness = \"model\"")
+        else:
+            for h, m in models.items():
+                if h not in harnesses.MODEL_FLAGS:
+                    errs.append(f"stages.{name}.models.{h}: harness {h} takes no model; "
+                                f"models take {', '.join(harnesses.MODEL_FLAGS)}")
+                elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
+                    errs.append(f"stages.{name}.models.{h}: must be a model id like \"opus\" "
+                                "(no spaces or quotes, not starting with -)")
+                elif h != "claude" and m in harnesses.CLAUDE_MODELS:
+                    errs.append(f"stages.{name}.models.{h}: {m!r} is a claude model name; use a model {h} offers")
     if "effort" not in v:
         return errs
     hs = stage_harnesses(v, accounts)
