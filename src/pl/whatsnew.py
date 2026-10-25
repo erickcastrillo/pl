@@ -207,6 +207,8 @@ ENTRIES = [
        "pl memory search \"split into 3 PRs\""),
     _e("2026-10-25.33", "pl usage --github shows GitHub's own budget next to pl's and marks a gap",
        "pl usage --github", "pl usage --github"),
+    _e("2026-10-25.34", "Auto-merge loop: pl merges what passes every rule",
+       "Loops tab: auto-merge; [loops.auto-merge] enabled, every, merge_method, max_per_pass", "pl merges --dry-run"),
 ]
 
 

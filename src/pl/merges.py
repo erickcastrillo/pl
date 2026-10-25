@@ -1,14 +1,15 @@
 """The merge judge: which open pull requests are ready to merge, in what order, and every merge rule's result.
-Nothing here merges, labels or comments on a pull request."""
+The merge pass merges the ones that pass every rule; nothing here labels or comments on a pull request."""
 import fnmatch
 import json
 import re
 
-from pl import agents, board, jsonout, rework
+from pl import agents, board, events, jsonout, rework
 from pl import config as C
 from pl.board import col_name, sections
 from pl.trackers import github
-from pl.util import short_id
+from pl.trackers.github import OverBudget, RateLimited
+from pl.util import now_iso, short_id
 
 SENSITIVE = ["**/migrations/**", "**/*.sql", "**/*.designer.cs", "**/schema*", "**/*auth*", "**/*token*", "**/*secret*", "**/*key*", ".github/**",
              "**/uv.lock", "**/package-lock.json", "**/yarn.lock", "**/poetry.lock", "**/Gemfile.lock", "**/go.sum", "**/Cargo.lock"]
@@ -21,6 +22,20 @@ def settings():
     return {"hold": C.AUTO_MERGE.get("hold_label", "hold"), "sensitive": C.AUTO_MERGE.get("sensitive", SENSITIVE)}
 
 
+def method():
+    return C.AUTO_MERGE.get("merge_method", "squash")
+
+
+def per_pass():
+    return C.AUTO_MERGE.get("max_per_pass", 5)
+
+
+def account():
+    """The profile's run account, whose gh sign-in merges; None when the profile has no accounts."""
+    acct = (C.STAGES.get("run") or {}).get("account")
+    return acct if acct in C.PROFILES else next(iter(C.PROFILES), None)
+
+
 def _match(path, globs):
     path = path.lower()
     return any(fnmatch.fnmatchcase(path, g) or (g.startswith("**/") and fnmatch.fnmatchcase(path, g[3:]))
@@ -29,7 +44,7 @@ def _match(path, globs):
 
 def _pr(repo, num):
     return json.loads(github._gh(["pr", "view", str(num), "--repo", repo, "--json",
-                                  "number,url,state,isDraft,baseRefName,body,labels,files"]))
+                                  "number,url,state,isDraft,baseRefName,headRefOid,body,labels,files"]))
 
 
 def candidates(all_cards):
@@ -84,6 +99,74 @@ def judge(card, pr, all_cards):
             "action": f"needs a person: {', '.join(failed)}" if failed else "would merge once tests and conflicts pass"}
 
 
+def passes(verdict):
+    return all(r["ok"] is True for r in verdict["rules"])
+
+
+def default_branch(repo):
+    return json.loads(github._gh(["api", f"repos/{repo}"]))["default_branch"]
+
+
+def _closed(url):
+    m = rework.PR_URL.match(url)
+    return json.loads(github._gh(["pr", "view", m.group(2), "--repo", m.group(1), "--json", "state"]))["state"] in ("MERGED", "CLOSED")
+
+
+def _finish(card, url, all_cards, dry):
+    """Record the merge on the card, then move it to Done once every other pull request of the card is closed. A failed
+    move is left for the next pass: the record says the merge already happened."""
+    from pl import commands
+    repo, num, _ = next(p for p in rework._prs(card) if p[2] == url)
+    if not dry:
+        board.update(card["id"], metadata={"auto_merged": {"note": f"merged by auto-merge: {repo}#{num}", "pr": url,
+                                                           "method": method(), "at": now_iso()}})
+    if all(_closed(u) for _, _, u in rework._prs(card) if u != url):
+        try:
+            if not dry:
+                commands.done(card["id"], all_cards)
+        except SystemExit as e:
+            print(f"{short_id(card['id'])}: merged, but not moved to Done yet ({e}); the next pass retries")
+
+
+def _retry_finished(all_cards, dry):
+    for c in all_cards:
+        if col_name(c.get("list_id")) == "PR open" and (am := (c.get("metadata") or {}).get("auto_merged")):
+            _finish(c, am["pr"], all_cards, dry)
+
+
+def run_pass(all_cards, dry):
+    """Merge, in candidate order, up to max_per_pass pull requests that pass every rule; each is judged right before it
+    is merged, so it is checked against the default branch as the earlier merges left it. Returns the merged URLs."""
+    _retry_finished(all_cards, dry)
+    merged, defaults = [], {}
+    for card, pr in candidates(all_cards):
+        if len(merged) >= per_pass():
+            break
+        if not passes(judge(card, pr, all_cards)):
+            continue
+        repo, n = C.TRACKER["repo"], pr["number"]
+        base = defaults.setdefault(repo, default_branch(repo))
+        if pr["baseRefName"] != base:
+            msg = f"#{n} targets {pr['baseRefName']}, not the default branch {base}: not merged"
+            print(msg)
+            events.emit("auto_merge_failed", card["id"], pr=n, repo=repo, message=msg)
+            continue
+        print(f"merging {repo}#{n} ({method()})")
+        if not dry:
+            try:
+                github._gh(["pr", "merge", str(n), "--repo", repo, f"--{method()}", "--match-head-commit", pr["headRefOid"]])
+            except (RateLimited, OverBudget):
+                raise
+            except SystemExit as e:
+                print(f"#{n} not merged: {e}")
+                events.emit("auto_merge_failed", card["id"], pr=n, repo=repo, message=str(e))
+                continue
+            events.emit("auto_merged", card["id"], pr=n, repo=repo, method=method())
+            _finish(card, pr["url"], all_cards, dry)
+        merged.append(pr["url"])
+    return merged
+
+
 def cmd_merges(a):
     if not a.dry_run:
         raise SystemExit("pl merges: only --dry-run exists so far")
@@ -91,6 +174,11 @@ def cmd_merges(a):
         raise SystemExit("pl merges: needs a github-project tracker with a repo")
     all_cards = board.cards()
     judged = [judge(c, pr, all_cards) for c, pr in candidates(all_cards)]
+    rank = 0
+    for j in judged:
+        if passes(j):
+            rank += 1
+            j["action"] = "would merge this pass" if rank <= per_pass() else f"passes; waits for the next pass (max_per_pass = {per_pass()})"
     if a.json:
         return jsonout.emit({"candidates": judged})
     if not judged:

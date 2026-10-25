@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Static
 
-from pl import agents
+from pl import agents, merges, util
 from pl import config as C
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
@@ -78,7 +78,19 @@ def loop_rows(data):
                     "context": ctx, "tokens": tok,
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
                     "pane": w.get("pane"), "window": w.get("window")})
+    if C.TRACKER.get("type") == "github-project":
+        out.append(_auto_merge_row())
     return out
+
+
+def _auto_merge_row():
+    s = util.load_state().get("services", {}).get("auto-merge", {})
+    last, nxt = (s.get("last_run") or {}), s.get("next_at")
+    on, waits = C.AUTO_MERGE.get("enabled") is True, s.get("waits")
+    return {"name": "auto-merge", "state": "waiting" if on and waits else "on" if on else "off",
+            "prompt": "built in: merges what passes every rule", "account": merges.account() or "-", "context": "n/a", "tokens": "n/a",
+            "last": util.ago(last.get("at")), "next": nxt[11:16] if nxt else "-",
+            "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
 
 
 class LoopsView(Widget):
