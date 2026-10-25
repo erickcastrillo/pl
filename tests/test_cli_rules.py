@@ -42,12 +42,14 @@ def profile(tmp_path, monkeypatch):
     C.load("t")
     monkeypatch.setattr(commands, "registry", lambda: {})
     yield
+    trackers.set_dry_run(False)
     for k, v in saved.items():
         setattr(C, k, v)
 
 
 def run(monkeypatch, capsys, argv, tracker):
-    monkeypatch.setattr(trackers, "get", lambda name: tracker)
+    monkeypatch.setattr(trackers, "_build", lambda name: tracker)
+    monkeypatch.setattr(trackers, "_dry", False)
     monkeypatch.setattr(sys, "argv", ["pl", "--profile", "t", *argv])
     try:
         cli.main()
@@ -165,3 +167,88 @@ def test_a_profile_with_other_content_is_still_refused_with_exit_2(monkeypatch, 
     (tmp_path / ".pl-other" / "config.toml").write_text("# edited\n")
     code, err = run(monkeypatch, capsys, ["profiles", "new", "other"], Tracker())
     assert code == 2 and "exists" in err
+
+
+class ReadOnlyTracker(Tracker):
+    """Reads work; any write is a test failure."""
+
+    def update(self, item_id, *, verify=True, **fields):
+        raise AssertionError(f"wrote {item_id}: {fields}")
+
+    create = delete = ensure_column = update
+
+    def url(self, item_id):
+        return f"https://board/{item_id}"
+
+
+def _state_files():
+    return sorted(str(p) for p in C.STATE_DIR.rglob("*")) if C.STATE_DIR.exists() else []
+
+
+@pytest.mark.parametrize("argv", [
+    ["move", "aaaa", "Approved"],
+    ["done", "aaaa"],
+    ["drop", "aaaa"],
+    ["hold", "aaaa", "--reason", "later"],
+    ["idea", "a brand new thing"],
+    ["card", "aaaa", "--delete"],
+], ids=lambda argv: argv[0])
+def test_dry_run_writes_nothing(monkeypatch, capsys, argv):
+    before = _state_files()
+    code, err = run(monkeypatch, capsys, [*argv, "--dry-run"], ReadOnlyTracker())
+    assert code == 0, err
+    assert _state_files() == before
+
+
+def test_dry_run_prints_what_it_would_do(monkeypatch, capsys):
+    code, err = run(monkeypatch, capsys, ["move", "aaaa", "Approved", "--dry-run"], ReadOnlyTracker())
+    out = run.out
+    assert code == 0, err
+    assert f"would update {CARD['id']}: column='Approved'" in out
+
+
+def test_dry_run_cuts_card_text_and_masks_secrets(monkeypatch, capsys):
+    text = "x" * 200 + " sk-" + "a" * 30
+    run(monkeypatch, capsys, ["idea", text, "--dry-run"], ReadOnlyTracker())
+    out = next(line for line in run.out.splitlines() if line.startswith("would create"))
+    assert "x" * 61 not in out and "sk-" + "a" * 30 not in out
+
+
+WORKER = {"pane": "%7", "window": "@7", "session_id": "s1", "stage": "run"}
+
+
+class WorkerTracker(ReadOnlyTracker):
+    def card(self, item_id):
+        return {**copy.deepcopy(CARD), "metadata": {"worker": dict(WORKER)}}
+
+    def cards(self, query=None):
+        return [self.card("")]
+
+
+@pytest.mark.parametrize("argv", [["restart", "aaaa1111"], ["drop", "aaaa"], ["retry", "aaaa1111"]], ids=lambda argv: argv[0])
+def test_dry_run_does_not_stop_a_running_agent(monkeypatch, capsys, argv):
+    from pl import commands, move_agent
+    sent = []
+    monkeypatch.setattr(commands, "worker_status", lambda w, reg: ("alive", ""))
+    monkeypatch.setattr(move_agent, "pane_refusal", lambda c, w: None)
+    monkeypatch.setattr(move_agent, "_pane_cmd", lambda pane: "claude")
+    monkeypatch.setattr(move_agent, "_run", lambda argv, **k: sent.append(argv))
+    before = _state_files()
+    code, err = run(monkeypatch, capsys, [*argv, "--dry-run"], WorkerTracker())
+    assert code == 0, err
+    assert sent == []
+    assert _state_files() == before
+    assert argv[0] == "retry" or "would stop" in run.out
+
+
+def test_dry_run_approve_and_reject_write_no_memory_or_audit(monkeypatch, capsys):
+    from pl import audit, recall
+    writes = []
+    monkeypatch.setattr(recall, "add", lambda *a, **k: writes.append("memory"))
+    monkeypatch.setattr(audit, "_append_locked", lambda *a, **k: writes.append("audit"))
+    t = ReadOnlyTracker()
+    for argv in (["approve", "aaaa", "--force"], ["reject", "aaaa", "not good"]):
+        code, err = run(monkeypatch, capsys, [*argv, "--dry-run"], t)
+        assert code == 0, err
+    assert writes == []
+    assert not (C.STATE_DIR / "audit.jsonl").exists()

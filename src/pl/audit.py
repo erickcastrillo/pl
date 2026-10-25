@@ -80,6 +80,9 @@ def _format_what(action: str, detail=None) -> str:
 
 def append(action: str, *, card=None, target=None, detail=None, host=None, connector=None, channel=None, when=None,
            **extra) -> None:
+    from pl import trackers
+    if trackers.dry_run():
+        return
     try:
         C.STATE_DIR.mkdir(parents=True, exist_ok=True)
         try:

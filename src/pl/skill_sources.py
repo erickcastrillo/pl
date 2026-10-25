@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl import harnesses
+from pl.util import ask
 from pl import skills
 
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -304,7 +305,7 @@ def install(text, yes, out, dry_run=False, name=None, plugin=None):
         what = f"{plugin_name} ({len(picks)} skills)" if plugin_name else picks[0][0]
         if not yes:
             try:
-                ok = input(f"Install {what} from {src['owner']}/{src['repo']}@{sha[:7]}? [y/N]: ")
+                ok = ask("skills install", f"Install {what} from {src['owner']}/{src['repo']}@{sha[:7]}? [y/N]: ")
             except EOFError:
                 ok = ""
             if ok.strip().lower() not in ("y", "yes"):

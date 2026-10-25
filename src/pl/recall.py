@@ -302,6 +302,10 @@ def record_run(c, stage, worker):
 
 def note(text, kind, source, card):
     """add() for callers that must carry on when the store fails: the failure is printed, never raised."""
+    from pl import trackers
+    if trackers.dry_run():
+        print(f"would remember ({kind}) on {card}")
+        return None
     try:
         return add(text, kind, source, card=card, author=C.USER_EMAIL or None)
     except Exception as e:
