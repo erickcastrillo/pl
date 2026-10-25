@@ -780,6 +780,14 @@ def cmd_skills(a):
     if a.skills_cmd == "install":
         from pl import skill_sources
         return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name)
+    if a.skills_cmd == "update":
+        from pl import skill_sources
+        if a.check:
+            return skill_sources.check(sys.stdout, as_json=a.json)
+        if not a.name:
+            print("pl skills update: name a skill, or use --check", file=sys.stderr)
+            return 2
+        return skill_sources.update(a.name, a.yes, sys.stdout)
     if a.skills_cmd == "share":
         print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":

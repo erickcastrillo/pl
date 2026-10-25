@@ -129,7 +129,9 @@
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
                           install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
-                          and installs into the library only after a yes
+                          and installs into the library only after a yes;
+                          update --check lists newer upstream commits; update NAME [--yes] shows the diff, asks, and keeps
+                          an edited copy under .pl-edited/
   pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
@@ -325,6 +327,9 @@ def _main():
     q = pk.add_parser("install"); q.add_argument("source", help="github:owner/repo[/path][@ref]")
     q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="list the files and stop")
     q.add_argument("--name", help="the library name (default: the skill's folder name)")
+    q = pk.add_parser("update"); q.add_argument("name", nargs="?", help="the installed skill to update")
+    q.add_argument("--check", action="store_true", help="list skills with a newer upstream commit and change nothing")
+    q.add_argument("--json", action="store_true", help="with --check: machine-readable"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
