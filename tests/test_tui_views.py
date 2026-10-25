@@ -2468,3 +2468,73 @@ def test_header_never_shows_the_raw_profile_line():
     plain = header_text(data).plain
     assert "Running, 2 cards waiting" in plain
     assert "acme: ok" not in plain and "dispatcher running" not in plain and "not paused" not in plain
+
+
+def _loops_state(next_at, last_run):
+    C.STATE_FILE.parent.mkdir(exist_ok=True)
+    C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"next_at": next_at, "last_run": last_run}}}))
+
+
+def test_loops_tab_shows_next_run_last_result_and_week_tokens():
+    from pl.tui import loops as tui_loops
+    soon = (datetime.now() + timedelta(minutes=90)).replace(microsecond=0).isoformat()
+    _loops_state(soon, {"result": "3 invoices overdue", "exit": 0, "tokens": 900})
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False},
+                  "triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
+    C.LOOPS_OFF = {"stale": {"prompt": "find stale cards", "every": "daily 09:00", "enabled": False}}
+    data = {"snapshot": {"rows": []}, "usage": {"loops": {"invoices": {"tokens_1h": 0, "tokens_7d": 12_500, "context": None, "dead": False}}}}
+    rows = {r["name"]: r for r in tui_loops.loop_rows(data)}
+    assert rows["invoices"]["next"] == soon.replace("T", " ")[:16]
+    assert rows["invoices"]["output"] == "3 invoices overdue"
+    assert rows["invoices"]["tokens7d"] == "12.5k"
+    assert rows["triage"]["tokens7d"] == "-" and rows["triage"]["next"] == "-"
+    assert rows["stale"]["state"] == "paused" and rows["stale"]["next"] == "-"
+
+
+async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
+    from pl import agents, loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    calls = []
+    monkeypatch.setattr(loops, "edit", lambda name, **kw: calls.append(("edit", name, kw)))
+    monkeypatch.setattr(loops, "set_enabled", lambda name, on: calls.append(("enabled", name, on)))
+    monkeypatch.setattr(loops, "run", lambda name, **kw: calls.append(("run", name)))
+    monkeypatch.setattr(loops, "remove", lambda name: calls.append(("remove", name)))
+    monkeypatch.setattr(agents, "jump_to_window", lambda name: calls.append(("window", name)) or "ok")
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    data = fake_data()
+    data["snapshot"]["rows"].append({"loop": "invoices", "kind": "loop_idle", "worker": {"pane": "%1", "window": "@7"}})
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        assert [r["name"] for r in app.query_one(tui_loops.LoopsView).loops] == ["invoices"]
+        await pilot.press("p")
+        await settle(pilot)
+        await pilot.press("g")
+        await settle(pilot)
+        await pilot.press("w")
+        await settle(pilot)
+        await pilot.press("d")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.ConfirmScreen) and ("remove", "invoices") not in calls
+        await pilot.press("y")
+        await settle(pilot)
+        await pilot.press("e")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.EditLoopScreen)
+        app.screen.query_one("#loop-every").value = "daily 09:30"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert calls == [("enabled", "invoices", False), ("run", "invoices"), ("window", "invoices"), ("remove", "invoices"),
+                     ("edit", "invoices", {"every": "daily 09:30"})]
+
+
+def test_dashboard_health_lists_every_harness_account():
+    from pl.tui.dashboard import health
+    data = fake_data()
+    data["snapshot"]["prof"] = "acme: ok (2 running, 1 queued)  acme2: PARKED until 21:00 (0 running, 0 queued)"
+    plain = health(data).plain
+    assert "acme: ok (2 running, 1 queued)" in plain and "acme2: PARKED until 21:00" in plain

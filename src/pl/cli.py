@@ -8,6 +8,8 @@
                           both boards: the Feature Pipeline by column with agent state, then the intake board's
                           cards assigned to you (5 per column; --product shows them all; --all includes Done)
                           --plan N lists only plan N's cards, ordered by slice, Done included
+  pl help [--json]        the usage text; --json lists every command with its flags and JSON shape name
+  pl jobs [--json]        the long jobs running now (pl rework, pl dispatch --once) with their last progress line
   pl inbox [--json]       every gate waiting on you, in every profile (--json: one document)
   pl review [id|slug]     open a plan in Neovim in a NEW iTerm window (--here: this terminal / a tmux window);
                           a card id pulls its plan into the plans folder first
@@ -222,6 +224,7 @@ from pl.move_agent import cmd_move_agent
 from pl.standup import cmd_standup
 from pl.usage import cmd_usage
 from pl.watch import cmd_watch
+from pl.jobs import cmd_jobs
 from pl.util import BadInput
 
 
@@ -229,6 +232,8 @@ PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFI
 # commands that change the pipeline; the event is a record for the Activity feed, not a guard
 ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
                      "restart", "hold", "unhold", "depends")
+# commands parsed before the profile loads, each by its own module
+PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "manager", "mcp", "ask")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -291,6 +296,74 @@ def _main():
         from pl import brain
         return brain.cmd_ask(pre_a.rest[1:])
     config.load(pre_a.profile)
+    ap = build_parser()
+    a = ap.parse_args()
+    is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
+    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain", "help", "jobs") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
+        raise BadInput(NO_PROFILE)
+    if not a.cmd:
+        if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
+            return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False, open=None, tab=None))
+        ap.print_help()
+        return
+    if getattr(a, "dry_run", False) and a.cmd in BOARD_WRITES and (a.cmd != "board" or a.action == "init"):
+        trackers.set_dry_run()
+    from pl import ghquota
+    ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
+    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in assistant.PL_WRITES and a.cmd != "idea":
+        raise BadInput("pl: read-only loop: file the action as an idea")
+    if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
+        events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
+    if os.environ.get("PL_SOURCE"):
+        card_id = getattr(a, "id", None) or getattr(a, "card", None)
+        events.emit("remote_action", card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
+        try:
+            from pl import audit
+            audit.record("remote_action", card=card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
+        except Exception:
+            pass
+    {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
+     "outbox": cmd_outbox,
+     "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
+     "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
+     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
+     "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
+     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
+     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
+     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
+     "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
+     "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
+     "forget": retention.cmd_forget,
+     "memory": lambda a: __import__("pl.recall").recall.cmd_memory(a),
+     "pipelines": lambda a: __import__("pl.pipeline").pipeline.cmd_pipelines(a),
+     "sync": cmd_sync,
+     "depends": cmd_depends,
+     "titles": titles.cmd_titles,
+     "hook": hooks.cmd_hook,
+     "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
+     "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
+     "sandbox": lambda a: __import__("pl.sandbox").sandbox.cmd_sandbox(a),
+     "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
+     "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
+     "update": lambda a: __import__("pl.update").update.cmd_update(a),
+     "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
+     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
+     "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
+                          else __import__("pl.local_jobs").local_jobs.cmd_models)(a),
+     "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
+     "kill-switch": outward.cmd_kill_switch, "help": cmd_help, "jobs": cmd_jobs}[a.cmd](a)
+
+
+
+def cmd_help(a):
+    """pl help [--json]: the usage text, or every command with its flags and JSON shape name."""
+    if not a.json:
+        return build_parser().print_help()
+    from pl import jsonout
+    jsonout.emit({"commands": jsonout.commands(build_parser(), PRE_COMMANDS)})
+
+
+def build_parser():
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)
     ap.add_argument("--version", action=VersionAction, nargs=0, help="show program's version number and exit")
@@ -351,7 +424,7 @@ def _main():
     p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"]); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("profiles"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
-    q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
+    q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script"); q.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("pipelines"); pl_ = p.add_subparsers(dest="pipelines_cmd", required=True)
     q = pl_.add_parser("list"); q.add_argument("--templates", action="store_true", help="list the built-in templates"); q.add_argument("--json", action="store_true")
     q = pl_.add_parser("show"); q.add_argument("name", nargs="?", help="a profile (default: this one)"); q.add_argument("--json", action="store_true")
@@ -362,13 +435,14 @@ def _main():
     q = pl_.add_parser("import"); q.add_argument("file"); q.add_argument("--name", required=True)
     q.add_argument("--board", default="local", help="local or mcp:<server>"); q.add_argument("--account")
     q.add_argument("--yes", action="store_true"); q.add_argument("--dry-run", action="store_true")
-    p = sub.add_parser("accounts"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
+    p = sub.add_parser("accounts"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p.add_argument("--check-trust", action="store_true", help="show whether each Claude account trusts the work and worktrees folders (reads only)")
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     p.add_argument("--open", metavar="CARD", help="open this card on start")
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
-    sub.add_parser("pause"); sub.add_parser("resume")
+    for verb in ("pause", "resume"):
+        sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
@@ -390,9 +464,9 @@ def _main():
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
     p = sub.add_parser("alerts"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include resolved alerts")
-    p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears")
+    p.add_argument("--ack", metavar="KEY", help="acknowledge an open alert: no more reminders until it clears"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("move-agent"); p.add_argument("card"); p.add_argument("account", choices=list(C.PROFILES))
-    p.add_argument("--yes", action="store_true", help="do not ask first")
+    p.add_argument("--yes", action="store_true", help="do not ask first"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("assistant"); pa = p.add_subparsers(dest="assistant_cmd")
     q = pa.add_parser("log"); q.add_argument("text", help="one line: what changed, which file or plugin")
     q = pa.add_parser("idea"); qi = q.add_subparsers(dest="idea_cmd", required=True)
@@ -408,10 +482,10 @@ def _main():
     q = pk.add_parser("update"); q.add_argument("name", nargs="?", help="the installed skill to update")
     q.add_argument("--check", action="store_true", help="list skills with a newer upstream commit and change nothing")
     q.add_argument("--json", action="store_true", help="with --check: machine-readable"); q.add_argument("--yes", action="store_true", help="do not ask first")
-    q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
-    q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
+    q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES)); q.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all"); q.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     q = pk.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
-    q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
     q = pc.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, without any secret")
     q = pc.add_parser("add"); q.add_argument("name"); q.add_argument("command", nargs="*"); q.add_argument("--url"); q.add_argument("--pin", help="the server version you expect; another version counts as a tool change")
@@ -523,60 +597,8 @@ def _main():
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     q = pb.add_parser("end"); q.add_argument("conv")
     q = pb.add_parser("undo"); q.add_argument("conv")
+    p = sub.add_parser("help"); p.add_argument("--json", action="store_true", help="every command with its flags and JSON shape name")
+    p = sub.add_parser("jobs"); p.add_argument("--json", action="store_true", help="print one JSON document")
     p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "init", "now"]); p.add_argument("--json", action="store_true")
     p.add_argument("--from-github", action="store_true"); p.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-    is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
-    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
-        raise BadInput(NO_PROFILE)
-    if not a.cmd:
-        if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
-            return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False, open=None, tab=None))
-        ap.print_help()
-        return
-    if getattr(a, "dry_run", False) and a.cmd in BOARD_WRITES and (a.cmd != "board" or a.action == "init"):
-        trackers.set_dry_run()
-    from pl import ghquota
-    ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
-    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in assistant.PL_WRITES and a.cmd != "idea":
-        raise BadInput("pl: read-only loop: file the action as an idea")
-    if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
-        events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
-    if os.environ.get("PL_SOURCE"):
-        card_id = getattr(a, "id", None) or getattr(a, "card", None)
-        events.emit("remote_action", card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
-        try:
-            from pl import audit
-            audit.record("remote_action", card=card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
-        except Exception:
-            pass
-    {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
-     "outbox": cmd_outbox,
-     "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
-     "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
-     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
-     "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
-     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
-     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
-     "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
-     "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
-     "forget": retention.cmd_forget,
-     "memory": lambda a: __import__("pl.recall").recall.cmd_memory(a),
-     "pipelines": lambda a: __import__("pl.pipeline").pipeline.cmd_pipelines(a),
-     "sync": cmd_sync,
-     "depends": cmd_depends,
-     "titles": titles.cmd_titles,
-     "hook": hooks.cmd_hook,
-     "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
-     "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
-     "sandbox": lambda a: __import__("pl.sandbox").sandbox.cmd_sandbox(a),
-     "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
-     "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
-     "update": lambda a: __import__("pl.update").update.cmd_update(a),
-     "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
-     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
-     "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
-                          else __import__("pl.local_jobs").local_jobs.cmd_models)(a),
-     "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
-     "kill-switch": outward.cmd_kill_switch}[a.cmd](a)
+    return ap

@@ -12,7 +12,7 @@ import time
 import urllib.parse
 
 from pl import config as C
-from pl import events
+from pl import events, jobs
 from pl.board import col_name, update
 from pl.trackers import github
 from pl.util import now_iso, short_id
@@ -133,5 +133,7 @@ def cmd_rework(a):
     from pl.board import cards
     if not rounds():
         raise SystemExit("pl rework: auto-rework is off ([dispatch] rework_rounds = 0)")
-    print(f"looking for pull requests labeled {labels()['rework']} on cards in PR open")
-    sweep(cards(), a.dry_run, force=True)
+    with jobs.track("rework"):
+        jobs.progress(f"looking for pull requests labeled {labels()['rework']} on cards in PR open")
+        sent = sweep(cards(), a.dry_run, force=True)
+        jobs.result(f"{len(sent or [])} card(s) sent back")

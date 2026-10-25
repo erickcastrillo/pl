@@ -167,6 +167,9 @@ def listing(all=False):
 
 
 def cmd_alerts(a):
+    if a.ack and getattr(a, "dry_run", False):
+        print(f"would acknowledge {a.ack}: no more reminders until it clears")
+        return
     if a.ack:
         if not ack(a.ack):
             raise SystemExit(f"pl: no open alert {a.ack} (pl alerts lists them)")

@@ -32,7 +32,7 @@ MEANING = {
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
-    "hold": "hold", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
+    "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
     "open_window": "open window", "jump": "open window", "drop": "remove", "discard": "remove", "delete": "remove",
     "revoke": "remove", "retry": "try again", "move_agent": "move to account", "move_column": "move to column",
     "only_mine": "filter", "plan_filter": "filter", "next_filter": "filter", "done": "done", "show_done": "show done", "undrop": "undo",

@@ -544,6 +544,9 @@ def cmd_profiles(a):
     if getattr(a, "check_trust", False):
         return _check_trust()
     st = profile_state()
+    if a.reset and getattr(a, "dry_run", False):
+        print(f"would un-park {a.reset}")
+        return
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):
             st.pop(p, None)
@@ -1026,6 +1029,9 @@ def cmd_pause(a):
     if paused():
         print(f"already paused since {paused().get('since', '?')[:16]} UTC")
         return
+    if getattr(a, "dry_run", False):
+        print("would pause: no new agents would start from the next dispatcher pass")
+        return
     C.ATTN.mkdir(exist_ok=True)
     C.PAUSE_FILE.write_text(json.dumps({"since": now_iso(), "host": C.HOST}))
     print("paused: no new agents start from the next dispatcher pass; working agents finish their step (pl resume)")
@@ -1034,6 +1040,9 @@ def cmd_pause(a):
 def cmd_resume(a):
     if not paused():
         print("not paused")
+        return
+    if getattr(a, "dry_run", False):
+        print("would resume: the next dispatcher pass would start waiting cards again")
         return
     C.PAUSE_FILE.unlink()
     print("resumed: the next dispatcher pass starts waiting cards again")
@@ -1135,13 +1144,21 @@ def clear_bootstrap_failure(card_ref):
         update(c["id"], metadata={"bootstrap_error": None})
 
 
-def _sync_now(r, as_json):
-    if r["stopped_because"] == "error":
-        print(f"pl sync: {r['error']}", file=sys.stderr)
-        raise SystemExit(1)
+def _sync_now(p, r, as_json):
+    for got in (p, r):
+        if got["stopped_because"] == "error":
+            print(f"pl sync: {got['error']}", file=sys.stderr)
+            raise SystemExit(1)
+    if p["stopped_because"] == "reserve":
+        r = {**r, "stopped_because": "reserve"}
     if as_json:
-        print(json.dumps({k: r[k] for k in ("sent", "remaining", "stopped_because", "next_window")}))
+        print(json.dumps({**{k: r[k] for k in ("sent", "remaining", "stopped_because", "next_window")},
+                          "pulled": p["pulled"], "conflicts": p["conflicts"]}))
         return
+    n, c = p["pulled"], p["conflicts"]
+    print(f"{n} card{'' if n == 1 else 's'} pulled")
+    if c:
+        print(f"{len(c)} conflict(s): {', '.join(c)}: see pl alerts")
     print(f"{r['sent']} changes sent, {r['remaining']} remain")
     if r["stopped_because"] in ("reserve", "half-budget") and r["next_window"]:
         print("next GitHub window: " + datetime.fromisoformat(r["next_window"]).astimezone().strftime("%H:%M"))
@@ -1155,7 +1172,10 @@ def cmd_sync(a):
     if a.action == "init":
         return sync.cmd_init(a)
     if a.action == "now":
-        return _sync_now(sync.replay(), getattr(a, "json", False))
+        p = sync.pull()
+        if p["stopped_because"] == "error":   # conflicts could not be checked: replaying could overwrite a person's edit
+            return _sync_now(p, p, False)
+        return _sync_now(p, sync.replay(), getattr(a, "json", False))
     n = outbox.count()
     led = ghquota.ledger()
     reset = led.get("reset")

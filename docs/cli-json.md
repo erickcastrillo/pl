@@ -125,3 +125,13 @@ a failed rule: `"add needs-person and comment"`, `"already commented on this hea
 ```
 {"version", "enabled": bool, "latest": "vX.Y.Z" | null, "update_available": bool}
 ```
+
+## Self-description and jobs
+`pl help --json` prints every command, and `pl jobs --json` the long jobs running now. Neither has a shape name in `SHAPES`.
+
+```
+{"commands": [{"name", "shape", "flags": [{"name", "type", "choices", "required", "help"}], "commands": [...]}]}
+{"jobs": [{"id", "name", "pid", "argv": [], "started", "progress"}]}
+```
+`shape` is the name in `SHAPES` or null. Commands parsed before the profile loads carry `"own_parser": true` and no flags.
+A job prints progress lines and ends with `result: <path or id>`; a job file whose process has died is dropped by `pl jobs`.
