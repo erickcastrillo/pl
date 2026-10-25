@@ -247,6 +247,8 @@ def load(profile: str | None = None, config_dir: str | None = None) -> None:
     g["STATE_DIR"].mkdir(parents=True, exist_ok=True, mode=0o700)
     g["STATE_DIR"].chmod(0o700)
     _state_paths(g)
+    from pl import connectors
+    connectors.check()
 
 
 def gh_env() -> dict | None:

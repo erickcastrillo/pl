@@ -40,6 +40,7 @@ Status and the board:
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
+- `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
 

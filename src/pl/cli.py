@@ -88,6 +88,9 @@
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
+  pl connectors list [--json]
+                          the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
+                          status; a custom adapter is warned about; no token ever shows
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
                           a harness account, a tracker board or a tmux session
   pl setup [--yes ...]    create a profile by answering a few questions (or give every answer as a flag); its
@@ -246,6 +249,8 @@ def _main():
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
+    q = pc.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, without any secret")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
@@ -278,6 +283,7 @@ def _main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
+     "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
