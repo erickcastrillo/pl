@@ -94,6 +94,8 @@
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl sync status [--json]
                           how many changes are queued for the GitHub board and when the next window opens
+  pl sync init --from-github [--dry-run]
+                          copy the [sync] github board into the empty local board once, and write sync-ids.json
   pl sync now [--json]  send queued changes to the GitHub board now, within the budget
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
@@ -473,7 +475,8 @@ def _main():
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     q = pb.add_parser("end"); q.add_argument("conv")
     q = pb.add_parser("undo"); q.add_argument("conv")
-    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "now"]); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "init", "now"]); p.add_argument("--json", action="store_true")
+    p.add_argument("--from-github", action="store_true"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
