@@ -1361,3 +1361,122 @@ def test_the_budget_is_asked_of_graphql_never_of_rest_rate_limit(gh):
         trackers.get("tracker").test()
     assert gh.count("api", "rate_limit") == 0
     assert any(a[:2] == ["api", "graphql"] and a[3].startswith("query={rateLimit") for a in gh.calls())
+
+
+# ---------- a held call is loud: one stderr line, exit 3 ----------
+
+from pl import cli  # noqa: E402
+
+
+def _pl(monkeypatch, capsys, *argv):
+    monkeypatch.setenv("PL_CONFIG_DIR", str(C.CONFIG_DIR))
+    monkeypatch.setattr(sys, "argv", ["pl", *argv])
+    with pytest.raises(SystemExit) as e:
+        cli.main()
+    out, err = capsys.readouterr()
+    return e.value.code, out, err
+
+
+@pytest.mark.parametrize("argv", [("idea", "x"), ("list",), ("card", "acme/app#3"), ("section", "acme/app#3", "SPEC"),
+                                  ("move", "acme/app#3", "Approved"), ("approve", "acme/app#3")])
+def test_a_held_command_says_so_on_stderr_and_exits_3(gh, monkeypatch, capsys, argv):
+    reset = _ledger(10, {})
+    code, out, err = _pl(monkeypatch, capsys, *argv)
+    assert code == 3 and out == ""
+    assert len(err.strip().splitlines()) == 1
+    assert "GitHub budget held: " in err and "10 of 5000" in err
+    assert time.strftime("%H:%M", time.localtime(reset)) in err
+
+
+def test_a_held_move_changes_nothing_and_runs_again_after_the_reset(gh, monkeypatch, capsys):
+    reset = _ledger(10, {})
+    code, _, _ = _pl(monkeypatch, capsys, "move", "acme/app#3", "Approved")
+    assert code == 3
+    assert gh.count("project", "item-edit") == 0 and gh.count("issue", "edit") == 0
+    monkeypatch.setattr(github, "_clock", lambda: reset + 120)
+    gh.set(remaining=5000, reset=reset + 3600)
+    monkeypatch.setenv("PL_CONFIG_DIR", str(C.CONFIG_DIR))
+    monkeypatch.setattr(sys, "argv", ["pl", "move", "acme/app#3", "Approved"])
+    cli.main()
+    assert gh.count("project", "item-edit") == 1
+
+
+def test_overbudget_exit_code_is_not_zero():
+    e = github.OverBudget(time.time() + 60, "why")
+    assert isinstance(e.code, str) and e.code
+
+
+def test_list_prints_nothing_when_held_even_while_paused(gh, monkeypatch, capsys):
+    _ledger(10, {})
+    monkeypatch.setattr("pl.commands.paused", lambda: {"since": "2026-10-24T00:00:00Z"})
+    code, out, _ = _pl(monkeypatch, capsys, "list")
+    assert code == 3 and out == ""
+
+
+# ---------- a stale reading is checked against GitHub before a call is held ----------
+
+def _old_ledger(remaining, age=300):
+    reset = _ledger(remaining, {})
+    led = ghquota.ledger()
+    ghquota._write(ghquota._path(), {**led, "at": time.time() - age})
+    return reset
+
+
+def _gap_events():
+    return [e for e in events._read() if e["kind"] == "github_budget_gap"]
+
+
+def test_a_stale_low_reading_is_refreshed_before_a_command_is_held(gh, role):
+    role("pl card")
+    reset = _old_ledger(199)
+    gh.set(remaining=3287, reset=reset)
+    trackers.get("tracker").card("acme/app#3")
+    assert ghquota.ledger()["remaining"] >= 3287 - 2
+    gap = _gap_events()
+    assert len(gap) == 1 and gap[0]["ledger"] == 199 and gap[0]["github"] == 3287
+    assert not github.TOKEN_RE.search(str(gap[0]))
+
+
+def test_a_fresh_low_reading_is_not_asked_again(gh, role):
+    role("pl card")
+    _ledger(199, {})
+    with pytest.raises(github.OverBudget):
+        trackers.get("tracker").card("acme/app#3")
+    assert budget_asks(gh) == 0
+
+
+def test_a_refresh_that_confirms_the_low_budget_still_holds(gh, role):
+    role("pl card")
+    reset = _old_ledger(199)
+    gh.set(remaining=199, reset=reset)
+    with pytest.raises(github.OverBudget):
+        trackers.get("tracker").card("acme/app#3")
+    assert budget_asks(gh) == 1 and _gap_events() == []
+
+
+def test_console_header_says_the_board_is_held_until_the_reset(gh):
+    import asyncio
+
+    async def run():
+        app = PlApp(snapshot_provider=tui_app.default_provider, interval=3600)
+        async with app.run_test(size=(176, 48)) as pilot:
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if app.data is not None:
+                    break
+            first = app.data
+            assert first is not None
+            await app.workers.wait_for_complete()
+            reset = _ledger(10, {})
+            trackers.reset()
+            app.error = None
+            app.refresh_data()
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if app.error:
+                    break
+            header = str(app.query_one("#header").render())
+            assert "GitHub budget held" in header
+            assert time.strftime("%H:%M", time.localtime(reset)) in header
+            assert app.data is first
+    asyncio.run(run())

@@ -1152,7 +1152,7 @@ async def test_the_tab_keys_are_digits_in_strip_order():
     from pl.tui.chrome import TAB_KEYS, TABS
     assert [(TAB_KEYS[tid], name) for tid, name in TABS] == [
         ("0", "Dashboard"), ("1", "Assistant"), ("2", "Ideas"), ("3", "Pipeline"), ("4", "Pull requests"),
-        ("5", "Loops"), ("6", "Alerts"), ("7", "Activity"), ("8", "Settings"), ("9", "Background")]
+        ("5", "Loops"), ("6", "Alerts"), ("7", "Activity"), ("8", "Settings"), ("9", "Background"), ("b", "Brain")]
     assert dict(TABS)["cards"] == "Pipeline" and dict(TABS)["subagents"] == "Background"
 
 

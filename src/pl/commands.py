@@ -99,6 +99,9 @@ def _list_json(a):
 def cmd_list(a):
     if getattr(a, "json", False):
         return _list_json(a)
+    share("read")   # the dispatcher's board read, while it is young
+    pipeline = cards()   # before any output: a held read leaves stdout empty
+    reg = registry()
     bad = exhausted_profiles()
     if bad:
         print("PROFILES parked (out of usage credits): " + ", ".join(f"{p} until {(parking(p).get('until') or '')[11:16]} UTC"
@@ -107,9 +110,6 @@ def cmd_list(a):
         n = busy_agents(registry())
         print(f"DISPATCHER PAUSED since {paused().get('since', '?')[:16]} UTC: no new agents start   (pl resume)   "
               + (f"draining: {n} agent(s) still working" if n else "DRAINED: safe to shut down"))
-    reg = registry()
-    share("read")   # the dispatcher's board read, while it is young
-    pipeline = cards()
     if not a.product:
         by_col = {}
         for c in pipeline:

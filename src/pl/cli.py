@@ -190,8 +190,12 @@ class VersionAction(argparse.Action):
 
 
 def main():
+    from pl.trackers.github import RateLimited
     try:
         return _main()
+    except RateLimited as e:   # held, not failed: try again after the reset
+        print(f"pl: {e.note}", file=sys.stderr)
+        raise SystemExit(3) from None
     except SystemExit as e:
         if not isinstance(e.code, str):
             raise

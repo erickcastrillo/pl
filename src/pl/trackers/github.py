@@ -50,10 +50,9 @@ class OverBudget(RateLimited):
     """pl's own GraphQL budget says wait (ghquota.check): no gh call until `until`. Nothing failed on GitHub."""
 
     def __init__(self, until, why):
-        SystemExit.__init__(self)
         self.until, self.resource, self.err = until, "budget", why
-        self.note = f"GitHub budget: {why}; next try at {time.strftime('%H:%M', time.localtime(until))}"
-        self.args = (f"pl: {self.note}",)
+        self.note = f"GitHub budget held: {why}, resets {time.strftime('%H:%M', time.localtime(until))}"
+        SystemExit.__init__(self, f"pl: {self.note}")
 
 
 WRITES = {("issue", "create"), ("issue", "edit"), ("issue", "close"), ("project", "item-add"), ("project", "item-edit"),
@@ -125,6 +124,15 @@ def _jitter(until):
     return _JIT["wait"]
 
 
+def _budget_wait(kind):
+    """ghquota.check, but a stale hold is first compared with a fresh (free) rateLimit reading from GitHub."""
+    wait = ghquota.check(kind)
+    if wait and ghquota.stale() and (budget := _graphql_budget()) and budget[1]:
+        ghquota.refresh(*budget)
+        wait = ghquota.check(kind)
+    return wait
+
+
 def limited(resource="graphql"):
     """The RateLimited error while this profile backs off from GitHub, else None. A search call also waits out
     the general back-off; other calls ignore a search back-off. A back-off ends for each process a random few
@@ -132,8 +140,8 @@ def limited(resource="graphql"):
     until = max(_LIMIT["until"], _shared()[1])
     if until and _clock() < until + _jitter(until):
         until += _jitter(until)
-    if resource != "search" and _clock() >= until and (spent := ghquota.check("write")):
-        return RateLimited(spent[0], spent[1])   # another profile of the same GitHub user saw the budget run out
+    if resource != "search" and _clock() >= until and (spent := _budget_wait("write")):
+        return OverBudget(*spent)   # another profile of the same GitHub user saw the budget run out
     if resource == "search" and _clock() >= until:
         until = max(_LIMIT_SEARCH["until"], _shared("search")[1])
         return RateLimited(until, resource="search") if _clock() < until else None
@@ -261,7 +269,7 @@ def _gh(args):
     resource = "search" if _is_search(args) else "graphql"
     if hit := limited(resource):
         raise hit
-    if resource != "search" and (wait := ghquota.check("write" if _writes(args) else "read")):
+    if resource != "search" and (wait := _budget_wait("write" if _writes(args) else "read")):
         raise OverBudget(*wait)
     r = _run(args)
     if r.returncode:
