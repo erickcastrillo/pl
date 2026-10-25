@@ -68,6 +68,7 @@ def _defaults():
     CODE_HOST = {"owner": None, "labels": {}}  # [code_host] owner, labels = {review, ready, merge_ready, rework, failed}
     GH_CONFIG_DIR = None                       # [code_host] gh_config_dir: this profile's own gh sign-in folder
     PR_LIMITS = {"pr_max_lines": 300, "pr_max_files": 10, "pr_auto_merge_lines": 150, "pr_auto_merge_files": 6}
+    AUTO_MERGE = {}   # [loops.auto-merge]: the built-in merge loop's rules (merges.py); off unless enabled = true
     STAGES = {}
     # memory: agents start only while min_free_memory is free; a window past max_agent_processes/_memory is stopped
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
@@ -191,14 +192,16 @@ def _apply(g, t):
     g["PRODUCT_INTAKE_COLUMNS"], g["PRODUCT_SKIP_TAGS"] = [it["columns"]] if isinstance(it["columns"], str) else list(it["columns"]), set(it["skip_tags"])
     g["STAGES"] = dict(t.get("stages", {}))
     g["PROMPTS"] = {**g["PROMPTS"], **{s: v["prompt"] for s, v in g["STAGES"].items() if "prompt" in v}}
+    loops = {n: v for n, v in t.get("loops", {}).items() if n != "auto-merge"}
+    g["AUTO_MERGE"] = dict(t.get("loops", {}).get("auto-merge", {}))
     if "loops" in t:
         g["SERVICES"] = {n: {"prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""), "profile": v.get("account"),
                              **({"max_context": v["max_context"]} if "max_context" in v else {}),
                              **({"pinned_only": True} if v.get("fallback") is False else {}),
                              **{k: v[k] for k in ("every", "hours", "skill", "team") if k in v},
                              **({"writes": v.get("writes", False)} if "every" in v or "writes" in v else {})}
-                         for n, v in t["loops"].items() if v.get("enabled", True) is not False}
-        g["LOOPS_OFF"] = {n: dict(v) for n, v in t["loops"].items() if v.get("enabled", True) is False}
+                         for n, v in loops.items() if v.get("enabled", True) is not False}
+        g["LOOPS_OFF"] = {n: dict(v) for n, v in loops.items() if v.get("enabled", True) is False}
     ch = t.get("code_host", {})
     repos = [r for r in (ch.get("repos") if isinstance(ch.get("repos"), list) else []) if isinstance(r, str) and r]
     g["CODE_HOST"] = {"owner": ch.get("owner") or None, "labels": dict(ch.get("labels") or {}), **({"repos": repos} if repos else {})}
@@ -444,7 +447,7 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: max_context must be a whole percent from 0 (off) to 100")
             if table == "loops" and not isinstance(v.get("fallback", True), bool):
                 errs.append(f"loops.{name}: fallback must be true or false")
-            if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or v.get("skill") or "").strip():
+            if table == "loops" and name != "auto-merge" and v.get("enabled", True) is not False and not str(v.get("prompt") or v.get("skill") or "").strip():
                 errs.append(f"loops.{name}: prompt or skill is required")
             if table == "loops":
                 errs += _loop_schedule_errors(name, v)

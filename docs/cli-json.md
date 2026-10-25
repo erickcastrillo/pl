@@ -37,3 +37,11 @@ not yet in Done (or dropped); both are empty when there are none. `intake` is em
 ```
 {"alerts": [{"key", "severity", "title", "fix", "first_seen", "count", ...}]}
 ```
+
+## merges
+`pl merges --dry-run --json`
+
+```
+{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
+```
+`ok` is `true`, `false`, or `null` for a rule not checked yet.

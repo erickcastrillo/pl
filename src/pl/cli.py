@@ -53,6 +53,9 @@
   pl rework [--dry-run]    send cards in PR open whose pull request the review labeled for rework back to a run
                           agent now (the dispatcher does this every 10 min); after [dispatch] rework_rounds rounds
                           (3) the PR gets the failed label for a person
+  pl merges --dry-run [--json]
+                          each pull request ready to merge, every merge rule's result and what the merge loop would
+                          do (nothing is merged)
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
@@ -177,7 +180,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, loops, outward, pods, profiles, retention, rework, setup, skills, titles
+from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -320,6 +323,7 @@ def _main():
     p.add_argument("--summary", action="store_true", help="add a 2-3 sentence summary from the local model ([local_model])")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     p = sub.add_parser("rework"); p.add_argument("--dry-run", action="store_true", help="say what would be sent back")
+    p = sub.add_parser("merges"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("retention"); ps = p.add_subparsers(dest="retention_cmd")
     q = ps.add_parser("run")
     q.add_argument("--dry-run", action="store_true", help="say what would be retained")
@@ -443,7 +447,7 @@ def _main():
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
-     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
+     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
