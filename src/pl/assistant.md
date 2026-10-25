@@ -38,6 +38,7 @@ Status and the board:
 - `pl alerts` (`--all`, `--ack KEY`): open alerts and their fix line; `--ack` stops reminders until it clears.
 - `pl watch --once`: one text frame of the console board.
 - `pl forget --contact ID_OR_EMAIL --yes`: remove one contact from cards, logs and memory (rule 1 applies: ask first; `--dry-run` counts only).
+- `pl sandbox create|status|start|stop|destroy`: the optional Multipass VM for this profile's stage agents (rule 1 applies; ask first).
 - `pl audit` (`--since 7d`, `--json`, `--verify`): the profile's append-only log of who did what; `--verify` checks its hash chain.
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.

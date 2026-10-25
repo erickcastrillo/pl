@@ -87,6 +87,9 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
+  pl sandbox create|status|start|stop|destroy [--yes]
+                          manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
+                          work folder and worktrees folder; --yes destroys the VM without asking
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -320,6 +323,8 @@ def _main():
     p.add_argument("--yes", action="store_true", help="confirm without prompting")
     p.add_argument("--dry-run", action="store_true", help="count what would be removed without changing anything")
     p.add_argument("--json", action="store_true", help="output counts as JSON")
+    p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
+    p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -353,6 +358,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "sandbox": lambda a: __import__("pl.sandbox").sandbox.cmd_sandbox(a),
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),

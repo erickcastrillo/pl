@@ -86,6 +86,7 @@ def _defaults():
     MODELS = {}           # [models.local] host, allow_lan, timeout, route/summarise/title/embed, [models.local.fallback]
     PODS = {}             # [pods.<name>] file, knowledge, skills, plugins, budgets
     POD = None            # [pipeline] pod: the pipeline's pod (default the profile name)
+    SANDBOX = {}          # [sandbox] enabled, cpus, memory, disk: optional Multipass VM for stage agents
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     TRIGGERS = {}         # [triggers.<name>]
     CONNECTORS = {}       # [connectors.<name>]
@@ -195,6 +196,7 @@ def _apply(g, t):
     g["TRIGGERS"] = dict(t.get("triggers", {}))
     g["CONNECTORS"] = dict(t.get("connectors", {}))
     g["RETENTION"] = {**g["RETENTION"], **t.get("retention", {})}
+    g["SANDBOX"] = dict(t.get("sandbox", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -362,6 +364,7 @@ def validate(doc) -> list[str]:
     ed = doc.get("retention", {}).get("email_days")
     if ed is not None and (isinstance(ed, bool) or not isinstance(ed, int) or ed < 0):
         errs.append("retention.email_days must be a whole number of at least 0")
+    errs += _sandbox_errors(doc.get("sandbox", {}))
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
@@ -583,6 +586,25 @@ def _models_local_errors(ml, accounts) -> list[str]:
             errs.append(f"models.local.fallback.{job} is not a job; the jobs are {', '.join(local_model.JOBS)}")
         elif v not in ("skip", "person") and v not in accounts:
             errs.append(f"models.local.fallback.{job} must be skip, person or an account name, not {v!r}")
+    return errs
+
+
+def _sandbox_errors(sb) -> list[str]:
+    """[sandbox]: enabled, cpus, memory, disk."""
+    from pl import sandbox
+    errs = [f"sandbox.{k} is not a setting; the keys are {', '.join(sandbox.DEFAULTS)}"
+            for k in sb if k not in sandbox.DEFAULTS]
+    if "enabled" in sb and not isinstance(sb["enabled"], bool):
+        errs.append("sandbox.enabled must be true or false")
+    if "cpus" in sb:
+        c = sb["cpus"]
+        if isinstance(c, bool) or not isinstance(c, int) or c < 1:
+            errs.append("sandbox.cpus must be a whole number of at least 1")
+    for key in ("memory", "disk"):
+        if key in sb:
+            v = sb[key]
+            if not (isinstance(v, str) and sandbox.SIZE_RE.fullmatch(v)):
+                errs.append(f'sandbox.{key} must be a size like "4G" or "512M"')
     return errs
 
 
