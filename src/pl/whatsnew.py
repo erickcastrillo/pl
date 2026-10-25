@@ -139,6 +139,8 @@ ENTRIES = [
        "pl answer <id> \"text\""),
     _e("2026-10-25.05", "Home across pipelines, ctrl+k switcher and new Settings panels",
        "Home tab; ctrl+k; Settings", "pl pipelines list"),
+    _e("2026-10-25.06", "Connectors whose tools change lose write access until you approve them",
+       "Alerts tab; pl connectors approve-tools <name>", "pl connectors approve-tools <name>"),
 ]
 
 
