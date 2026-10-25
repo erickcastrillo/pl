@@ -8,6 +8,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -338,6 +339,51 @@ def headless_argv(h, account, prompt, stage=None):
     template, values = _with_model(h.headless, h, account, stage)
     return skills.with_plugin(_argv(template, {**values, "prompt": skills.library_prompt(h, account, prompt, pdir)}),
                               pdir), env
+
+
+def write_run_record(log_path, record_path, started_at, ended_at, exit_code):
+    """What a headless loop run leaves for the dispatcher: the last non-empty output line as its one-line result, and
+    the tokens from the last JSON line that carries a usage object ("n/a" when the harness gives none)."""
+    lines = [ln.strip() for ln in Path(log_path).read_text(errors="replace").splitlines() if ln.strip()]
+    tokens = "n/a"
+    for ln in reversed(lines):
+        try:
+            usage = json.loads(ln).get("usage")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(usage, dict):
+            tokens = sum(v for k, v in usage.items() if k in ("input_tokens", "output_tokens") and isinstance(v, int))
+            break
+    fd = os.open(record_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"started_at": started_at, "ended_at": ended_at, "result": (lines[-1] if lines else "")[:200],
+                   "tokens": tokens, "exit": int(exit_code)}, f)
+
+
+def headless_script(h, account, prompt, name, log_path, record_path):
+    """The sh script a scheduled loop's window runs: the harness once, headless and unattended, its output in a 0600
+    log, then a 0600 run record (start, end, result, tokens, exit status). It deletes itself first."""
+    argv, _ = headless_argv(unattended_headless(h), account, prompt)
+    lines = ["#!/bin/sh", 'rm -f -- "$0"', "umask 077"]
+    if h.env_var and C.PROFILES.get(account):
+        lines.append(f"export {h.env_var}={shlex.quote(_typeable(C.PROFILES[account]))}")
+    if C.GH_CONFIG_DIR:
+        lines.append(f"export GH_CONFIG_DIR={shlex.quote(_typeable(C.GH_CONFIG_DIR))}")
+    now = "date -u +%Y-%m-%dT%H:%M:%S+00:00"
+    log, record = (shlex.quote(str(p)) for p in (log_path, record_path))
+    lines += [f"started=$({now})", " ".join(shlex.quote(_typeable(a)) for a in argv) + f" > {log} 2>&1 < /dev/null", "code=$?",
+              f"ended=$({now})",
+              f"{shlex.quote(sys.executable)} -I -c 'import sys; from pl.harnesses import write_run_record as w; w(*sys.argv[1:])' "
+              f"{log} {record} \"$started\" \"$ended\" \"$code\""]
+    return "\n".join(lines) + "\n"
+
+
+def unattended_headless(h):
+    """h with its unattended flags after the program name in its headless argv, unless it already sets a permission flag."""
+    flags = UNATTENDED.get(h.name) if h.unattended and C.PERMISSIONS.get("unattended", True) is not False else None
+    if not flags or any(PERMISSION_FLAG_RE.search(t) for t in h.headless):
+        return h
+    return dataclasses.replace(h, headless=[*h.headless[:1], *flags, *h.headless[1:]])
 
 
 def available(h):
