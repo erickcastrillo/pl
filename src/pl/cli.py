@@ -132,6 +132,8 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
+  pl mcp serve --brain|--memory
+                          serve the brain tools, or memory_search over the agent memory, to an MCP client
   pl memory search Q [--card ID] [--pod P] [--limit N] | add TEXT --kind K [--card ID] [--client C] [--contact C]
                           [--replaces ID] | show ID  (each takes --json)
                           what agents remember: run summaries, approval reasons, decisions; says when search is

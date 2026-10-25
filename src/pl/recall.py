@@ -75,6 +75,49 @@ def _db():
     return con
 
 
+class McpMemory:
+    """The memory tools of an MCP server (a connector with role "memory"), returning what the local store returns."""
+
+    def __init__(self, connector):
+        self.connector = connector
+
+    def _call(self, tool, args):
+        from pl import connectors
+        text = connectors.call(self.connector, tool, args, mode="memory")
+        if not isinstance(text, str):
+            raise RuntimeError(f"pl: memory tool {tool} failed: no text reply")
+        try:
+            return json.loads(text) if text.strip() else None
+        except ValueError:
+            raise RuntimeError(f"pl: memory tool {tool} failed: reply is not JSON") from None
+
+    def search(self, q, limit, pod, card):
+        args = {"query": q, "limit": limit, **{k: v for k, v in (("pod", pod), ("card", card)) if v}}
+        found = self._call("memory_search", args)
+        return found.get("results", []) if isinstance(found, dict) else found or []
+
+    def add(self, entry):
+        return self._call("memory_add", entry)["id"]
+
+    def get(self, entry_id):
+        return self._call("memory_get", {"id": entry_id})
+
+    def forget(self, entry_id):
+        return int(self._call("memory_forget", {"id": entry_id}).get("deleted", 0)) > 0
+
+    def forget_contact(self, contact):
+        return int(self._call("memory_forget", {"contact": contact}).get("deleted", 0))
+
+
+def backend():
+    """The MCP memory server when a connector has role "memory"; None means the local store."""
+    from pl import connectors
+    for name, c in connectors.load().items():
+        if c["enabled"] and "memory" in c.get("role", []):
+            return McpMemory(name)
+    return None
+
+
 def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, contact=None, author=None,
         replaces=None, link=None):
     if kind not in KINDS:
@@ -84,6 +127,9 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
     text = _clean(text)
     pipeline = pipeline or C.PROFILE_NAME
     pod = pod or pipeline
+    if (remote := backend()):
+        return remote.add({"text": text, "kind": kind, "source": source, "card": card, "pipeline": pipeline, "pod": pod,
+                           "client": client, "contact": contact, "author": author, "replaces": replaces, "link": link})
     entry_id = "m-" + secrets.token_hex(4)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     con = _db()
@@ -101,6 +147,8 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
 
 
 def get(entry_id):
+    if (remote := backend()):
+        return remote.get(entry_id)
     con = _db()
     try:
         row = con.execute("SELECT * FROM entries WHERE id=?", (entry_id,)).fetchone()
@@ -188,6 +236,8 @@ def _full_text(con, q, pod, card=None):
 
 def search_with_mode(q, limit=10, pod=None, card=None):
     """(entries, mode): mode is "full-text+semantic" when the embed model answered for the query, else "full-text"."""
+    if (remote := backend()):
+        return remote.search(q, limit, pod, card), "memory server"
     got = _embed([q]) if q.strip() else None
     con = _db()
     try:
@@ -292,6 +342,8 @@ def for_prompt(card, pod, cap=8, max_tokens=1500):
 def forget(entry_id) -> bool:
     """Delete one entry (the Brain tab's undo of what a conversation saved)."""
     try:
+        if (remote := backend()):
+            return remote.forget(entry_id)
         con = _db()
         try:
             with con:
@@ -316,6 +368,8 @@ def count_contact(contact) -> int:
 
 def forget_contact(contact) -> int:
     """Delete every entry linked to the contact, the older entries they replaced, and their vectors."""
+    if (remote := backend()):
+        return remote.forget_contact(contact)
     con = _db()
     try:
         with con:

@@ -202,6 +202,9 @@ ENTRIES = [
        "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert", "pl alerts"),
     _e("2026-10-25.31", "JSON for manager status, the local model, what's new, skills and the update check",
        "CLI: pl manager status, local-model, whatsnew, skills list and update --check take --json", "pl whatsnew --json"),
+    _e("2026-10-25.32", "Memory: run summaries and approval reasons, searchable",
+       "pl mcp serve --memory (tool memory_search); [connectors.<name>] role = [\"memory\"]",
+       "pl memory search \"split into 3 PRs\""),
 ]
 
 
