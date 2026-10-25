@@ -123,6 +123,8 @@ ENTRIES = [
        "manager posts waiting gates to Telegram/chat with Approve and Send back buttons", "pl manager status"),
     _e("2026-10-23.05", "Send back notes and /stop guard from chat",
        "chat approvals: reply with notes to send back, /stop pauses outward actions", "pl"),
+    _e("2026-10-23.06", "Discord chat connector: approve, edit and send back gates from Discord",
+       "machine.toml [connectors.discord]; buttons and Send back modal", "pl chat test discord"),
 ]
 
 

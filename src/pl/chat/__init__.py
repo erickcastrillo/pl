@@ -169,3 +169,4 @@ def cmd_chat(argv: list[str]) -> int:
         return 0
     ap.print_help(file=sys.stderr)
     raise SystemExit(2)
+"""Chat adapters for pl messaging connectors."""
