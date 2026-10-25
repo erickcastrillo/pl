@@ -328,7 +328,7 @@ def cmd_connectors(a):
         add_cmd(a)
     elif sub == "serve":
         from pl import connectors_proxy
-        connectors_proxy.serve(a.name)
+        connectors_proxy.serve(a.name, a.card, a.stage)
     else:
         raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | import --from claude [--add NAME] | approve-tools NAME | test NAME [--json] | revoke NAME --yes | serve NAME --card ID --stage S")
 
@@ -612,6 +612,8 @@ def tools(name: str) -> list[dict]:
 def call(name: str, tool_name: str, args: dict | None = None, mode: str | None = None):   # mode: who calls (trigger, stage); reads and writes are told apart by the tool, not the mode
     if is_write_forbidden(name, tool_name):
         raise PermissionError(f"Connector {name}: write tool {tool_name} forbidden while tools are unapproved")
+    if mode in ("trigger", "reader") and is_write_tool(name, tool_name):
+        raise PermissionError(f"Connector {name}: write tool {tool_name} is never called in {mode} mode")
     cfg = load_config().get(name, {})
     async def _call(auth):
         from mcp import ClientSession

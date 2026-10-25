@@ -283,7 +283,9 @@ def _at_gate(c, verb):
 
 def _approve_gate(c):
     name, stage = _at_gate(c, "approve")
-    gates = {**((c.get("metadata") or {}).get("gates") or {}), name: {"approved_by": C.USER_EMAIL, "approved_at": now_iso()}}
+    m = c.get("metadata") or {}
+    approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0)}
+    gates = {**(m.get("gates") or {}), name: approval}
     target = pipeline.approved_column(stage)
     update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None})
     events.emit("gate_approved", c["id"])
