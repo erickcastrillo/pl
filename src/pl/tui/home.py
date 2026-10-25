@@ -105,8 +105,12 @@ class HomeView(Widget):
                 t.move_cursor(row=min(max(keep, 0), len(self.rows) - 1))
 
     def action_select(self):
+        """Enter opens the pipeline: this profile's board, or another profile's console (as ctrl+k does)."""
         if r := self.selected():
-            self.app.notify(f"switch to {r['name']} (restart in slice 3)", markup=False)
+            if r["name"] == C.PROFILE_NAME:
+                self.app.action_tab("cards")
+            else:
+                self.app.switch_to(r["name"])
 
     def on_data_table_row_selected(self, _):
         self.action_select()
