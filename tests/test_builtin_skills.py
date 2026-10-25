@@ -205,11 +205,12 @@ def test_a_loop_prompt_of_a_library_skill_gets_the_plugin_name_on_claude(lib, mo
 
 def test_the_builtin_review_loop_uses_pl_review(tmp_path, monkeypatch):
     lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    p = C._review_prompt("acme/app", lab, {"harness": "claude"})
-    assert p == "/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready rework=pl:rework failed=pl:failed"
-    assert C._review_prompt("acme/app", lab, {"harness": "codex"}).startswith("/pl-review repo=acme/app ")
+    p = C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS)
+    assert p == ("/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready rework=pl:rework failed=pl:failed "
+                 "auto_lines=150 auto_files=6")
+    assert C._review_prompt("acme/app", lab, {"harness": "codex"}, C.PR_LIMITS).startswith("/pl-review repo=acme/app ")
     text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge"):
+    for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge directly"):
         assert rule in text
 
 
@@ -345,7 +346,7 @@ def test_a_failed_install_never_stops_the_dispatcher(lib, monkeypatch):
 
 def test_the_review_loop_falls_back_to_the_inline_prompt_while_pl_review_is_missing(lib, monkeypatch):
     lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    svc = {"prompt": C._review_prompt("acme/app", lab, {"harness": "claude"}),
+    svc = {"prompt": C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS),
            "fallback": C._review_text("acme/app", lab, {"harness": "claude"}), "builtin": True}
     assert svc["fallback"].startswith("/loop 30m Review pull requests on acme/app.")
     assert "Never merge" in svc["fallback"]
@@ -533,8 +534,9 @@ def test_pl_run_never_force_pushes_and_takes_the_label_as_an_argument():
 
 def test_review_loop_quotes_labels_with_spaces():
     lab = {"review": "needs review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    p = C._review_prompt("acme/app", lab, {"harness": "claude"})
-    assert p == "/loop 30m /pl-review repo=acme/app review='needs review' ready=pl:ready rework=pl:rework failed=pl:failed"
+    p = C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS)
+    assert p == ("/loop 30m /pl-review repo=acme/app review='needs review' ready=pl:ready rework=pl:rework failed=pl:failed "
+                 "auto_lines=150 auto_files=6")
     assert "quote" in (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
 
 
@@ -664,9 +666,29 @@ def test_pl_plan_splits_into_independent_slices():
     assert "pl-builtin-version: 5" in text
 
 
+def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
+    lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed",
+           "merge_ready": "ship it"}
+    limits = {"pr_auto_merge_lines": 100, "pr_auto_merge_files": 4}
+    p = C._review_prompt("acme/app", lab, {"harness": "codex"}, limits)
+    assert p.endswith("failed=pl:failed merge_ready='ship it' auto_lines=100 auto_files=4")
+    del lab["merge_ready"]
+    p = C._review_prompt("acme/app", lab, {"harness": "codex"}, limits)
+    assert "merge_ready=" not in p and p.endswith("failed=pl:failed auto_lines=100 auto_files=4")
+
+
+def test_pl_review_has_one_merge_rule():
+    text = _shipped("pl-review")
+    for gone in ("Never merges.", "pl:merge-ready", "150 lines", "6 files"):
+        assert gone not in text
+    for phrase in ("<merge_ready>", "<auto_lines>", "--auto --squash", "auto-merge is off", "do not retry",
+                   "Never merge directly"):
+        assert phrase in text
+
+
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     text = _shipped("pl-review")
     for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 4" in text
+    assert "pl-builtin-version: 5" in text

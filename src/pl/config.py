@@ -124,12 +124,15 @@ def _review_text(repo, lab, account):
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
-def _review_prompt(repo, lab, account):
-    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo and the
-    labels. Claude repeats it with /loop."""
+def _review_prompt(repo, lab, account, limits):
+    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo, the
+    labels and the auto-merge size limits. Claude repeats it with /loop."""
     rework, failed = lab.get("rework") or "pl:needs-rework", lab.get("failed") or "pl:review-failed"
     q = shlex.quote   # a label with spaces stays one value
     text = f"/pl-review repo={q(repo)} review={q(lab['review'])} ready={q(lab['ready'])} rework={q(rework)} failed={q(failed)}"
+    if lab.get("merge_ready"):
+        text += f" merge_ready={q(lab['merge_ready'])}"
+    text += f" auto_lines={limits['pr_auto_merge_lines']} auto_files={limits['pr_auto_merge_files']}"
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
@@ -209,7 +212,7 @@ def _apply(g, t):
         lab = g["CODE_HOST"]["labels"]
         if "auto-review" not in t.get("loops", {}) and g["ACCOUNTS"] and lab.get("review") and lab.get("ready"):
             first, acct = next(iter(g["ACCOUNTS"].items()))
-            g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct), "profile": first,
+            g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct, g["PR_LIMITS"]), "profile": first,
                                                              "fallback": _review_text(tr["repo"], lab, acct),
                                                              "builtin": True}}
     if isinstance(ch.get("gh_config_dir"), str) and ch["gh_config_dir"]:
