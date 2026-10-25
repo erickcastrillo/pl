@@ -291,6 +291,7 @@ def _main():
     q = pt.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pt.add_parser("pause"); q.add_argument("name")
     q = pt.add_parser("resume"); q.add_argument("name")
+    q = pt.add_parser("test"); q.add_argument("name"); q.add_argument("--replay", metavar="WINDOW", help="search this far back, like 7d"); q.add_argument("--json", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):

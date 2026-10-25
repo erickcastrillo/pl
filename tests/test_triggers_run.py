@@ -1,6 +1,7 @@
 """Tests for trigger runner and dedupe."""
 import copy
 from datetime import datetime, timezone
+import json
 import pytest
 
 from pl import config as C
@@ -369,3 +370,135 @@ def test_the_21st_card_pauses_the_trigger_and_opens_an_alert(fake_env2, monkeypa
     dispatch.check_alerts([], set())
     assert alerts._load()["trigger_cap:sales_mail"].get("resolved_at") is not None
 
+
+def test_replay_rejects_a_bad_window_with_exit_2(fake_env2, monkeypatch):
+    from pl import triggers
+    import argparse
+
+    for bad in ["bad", "-5d", "0d", "10x", "", None]:
+        with pytest.raises(SystemExit) as exc:
+            triggers.cmd_triggers(argparse.Namespace(triggers_cmd="test", name="sales_mail", replay=bad, json=False))
+        assert exc.value.code == 2
+
+
+def test_replay_lists_cards_it_would_create_and_writes_nothing(fake_env2, monkeypatch, capsys):
+    from pl import triggers
+    import argparse
+
+    # 1. Setup existing cards on tracker:
+    # An open card with contact_emails set to client@example.com (for attach)
+    card_client = {
+        "id": "your-org/your-repo#10",
+        "title": "Existing Client Deal",
+        "description": "## INPUT\nClient info",
+        "tags": ["client"],
+        "metadata": {
+            "pipeline_mode": "auto",
+            "contact_emails": ["client@example.com"],
+            "refs": {},
+        },
+        "list_id": "col-sales",
+        "column": "Inbox",
+    }
+    # An existing card already created from email msg-old-123 (for dedupe)
+    card_old = {
+        "id": "your-org/your-repo#11",
+        "title": "Old inquiry",
+        "description": "## INPUT\nInquiry",
+        "tags": ["email"],
+        "metadata": {
+            "pipeline_mode": "auto",
+            "refs": {"email": "msg-old-123"},
+        },
+        "list_id": "col-sales",
+        "column": "Inbox",
+    }
+    fake_env2.items[card_client["id"]] = card_client
+    fake_env2.items[card_old["id"]] = card_old
+
+    # 2. Setup triggers.json with recent_ids (second dedupe layer)
+    state_file = C.STATE_DIR / "triggers.json"
+    state_data = {"recent_ids": ["msg-recent-456"], "cards_today": {}}
+    state_file.write_text(json.dumps(state_data))
+    before_state = state_file.read_text()
+
+    # 3. Mock connector call_tool
+    tool_calls = []
+
+    def fake_call(connector, tool, args, mode="trigger"):
+        tool_calls.append((connector, tool, args, mode))
+        return {
+            "messages": [
+                # 1. New lead -> would create
+                {
+                    "id": "msg-new-1",
+                    "from": "New Lead <lead@example.com>",
+                    "subject": "Inquiry about enterprise tier",
+                    "date": "2026-10-20T10:00:00Z",
+                    "snippet": "We want to buy licenses.",
+                },
+                # 2. Existing client -> would attach to card #10
+                {
+                    "id": "msg-attach-2",
+                    "from": "Client Person <client@example.com>",
+                    "subject": "Follow up on contract",
+                    "date": "2026-10-21T11:00:00Z",
+                    "snippet": "Can you check the draft?",
+                },
+                # 3. Already on board (refs.email) -> deduped
+                {
+                    "id": "msg-old-123",
+                    "from": "Stranger <stranger@example.com>",
+                    "subject": "Already handled",
+                    "date": "2026-10-19T09:00:00Z",
+                    "snippet": "Old message.",
+                },
+                # 4. In recent_ids -> deduped
+                {
+                    "id": "msg-recent-456",
+                    "from": "Other <other@example.com>",
+                    "subject": "Recent message",
+                    "date": "2026-10-22T08:00:00Z",
+                    "snippet": "Already seen.",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(triggers, "call_tool", fake_call)
+
+    # Run replay via CLI handler
+    triggers.cmd_triggers(argparse.Namespace(triggers_cmd="test", name="sales_mail", replay="7d", json=False))
+
+    captured = capsys.readouterr()
+    out = captured.out
+
+    # Output asserts
+    assert "would create" in out
+    assert "New Lead: Inquiry about enterprise tier" in out or "Inquiry about enterprise tier" in out
+    assert "would attach to" in out
+    assert "your-org/your-repo#10" in out
+    assert "msg-old-123" not in out
+    assert "msg-recent-456" not in out
+
+    # Assert search called with mode="trigger" and query
+    assert len(tool_calls) == 1
+    assert tool_calls[0][0] == "email"
+    assert tool_calls[0][1] == "search"
+    assert tool_calls[0][2]["query"] == "label:sales is:unread"
+    assert "since" in tool_calls[0][2]
+    assert tool_calls[0][3] == "trigger"
+
+    # Writes nothing asserts
+    assert len(fake_env2.created) == 0, "must not create cards on tracker"
+    assert len(fake_env2.updates) == 0, "must not update cards on tracker"
+    assert state_file.read_text() == before_state, "triggers.json must be unchanged"
+
+    # Test --json as well
+    triggers.cmd_triggers(argparse.Namespace(triggers_cmd="test", name="sales_mail", replay="7d", json=True))
+    json_out = capsys.readouterr().out
+    data = json.loads(json_out)
+    assert any("would create" in str(v).lower() for v in data.values()) or "would_create" in data
+    assert any("would attach" in str(v).lower() for v in data.values()) or "would_attach" in data
+    assert len(fake_env2.created) == 0
+    assert len(fake_env2.updates) == 0
+    assert state_file.read_text() == before_state
