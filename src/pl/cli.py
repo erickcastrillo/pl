@@ -154,7 +154,7 @@
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | update --check [--json] | update NAME [--yes] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | update --check [--json] | update NAME [--yes] | remove NAME [--yes] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
@@ -163,7 +163,9 @@
                           and installs into the library only after a yes; a Claude Code plugin or marketplace entry
                           (--plugin NAME) installs its skills and lists its hooks and MCP servers, not enabled;
                           update --check lists newer upstream commits; update NAME [--yes] shows the diff, asks, and keeps
-                          an edited copy under .pl-edited/
+                          an edited copy under .pl-edited/;
+                          remove deletes a skill installed from GitHub, unlinks it and names the stages and loops
+                          that used it (install, update and remove: pl skills --help)
   pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
@@ -405,6 +407,7 @@ def _main():
     q.add_argument("--json", action="store_true", help="with --check: machine-readable"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
+    q = pk.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
     q = pc.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, without any secret")

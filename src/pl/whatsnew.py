@@ -210,6 +210,9 @@ ENTRIES = [
     _e("2026-10-25.34", "No command waits for an answer without a terminal; adding what exists is a no-op",
        "scripts and agent sessions: exit 2 names the flag (--yes); a repeated add says already exists, unchanged",
        "pl skills reset <name> < /dev/null"),
+    _e("2026-10-25.35", "pl skills remove: take out a skill installed from GitHub",
+       "unlinks it, moves the folder to a trash folder and names the stages and loops that used it",
+       "pl skills remove NAME"),
 ]
 
 
