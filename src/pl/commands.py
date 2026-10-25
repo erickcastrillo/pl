@@ -97,7 +97,28 @@ def _list_json(a):
     emit(rows)
 
 
+def _list_plan(pipeline, plan, reg):
+    """pl list --plan N: that plan's cards (Done too), by slice, then by card id."""
+    def key(c):
+        s = str((c.get("metadata") or {}).get("slice", ""))
+        head, _, num = str(c["id"]).rpartition("#")
+        return (int(s) if s.isdigit() else 10**9, head, int(num) if num.isdigit() else 0, str(c["id"]))
+    rows = sorted((c for c in pipeline if str((c.get("metadata") or {}).get("plan")) == str(plan)), key=key)
+    if not rows:
+        print(f"no cards in plan {plan}")
+        return
+    print(f"PLAN {plan}  ({len(rows)} cards)")
+    for c in rows:
+        col = col_name(c["list_id"])
+        s = (c.get("metadata") or {}).get("slice", "?")
+        print(f"  {short_id(c['id'])}  slice {s!s:<3} {c['title'][:56]:<56}  {col:<16} "
+              f"{approved_label(c, col, reg, pipeline) or worker_view(c, reg):<28} {age(parse_iso(c.get('updated_at') or ''))}")
+
+
 def cmd_list(a):
+    plan = getattr(a, "plan", None)
+    if plan and a.product:
+        raise SystemExit("pl list: --plan and --product do not go together")
     if getattr(a, "json", False):
         return _list_json(a)
     share("read")   # the dispatcher's board read, while it is young
@@ -111,6 +132,8 @@ def cmd_list(a):
         n = busy_agents(registry())
         print(f"DISPATCHER PAUSED since {paused().get('since', '?')[:16]} UTC: no new agents start   (pl resume)   "
               + (f"draining: {n} agent(s) still working" if n else "DRAINED: safe to shut down"))
+    if plan:
+        return _list_plan(pipeline, plan, reg)
     if not a.product:
         by_col = {}
         for c in pipeline:

@@ -4,8 +4,10 @@
                           drop an idea (and files) into Triage on the intake board, unassigned, to be
                           assessed; --start assigns it to you so the pipeline pulls it in;
                           --plan/--slice title the card 'Plan N slice M: <--title or first line>' and record both in its metadata
-  pl list [--all]         both boards: the Feature Pipeline by column with agent state, then the intake board's
+  pl list [--all] [--plan N]
+                          both boards: the Feature Pipeline by column with agent state, then the intake board's
                           cards assigned to you (5 per column; --product shows them all; --all includes Done)
+                          --plan N lists only plan N's cards, ordered by slice, Done included
   pl inbox [--json]       every gate waiting on you, in every profile (--json: one document)
   pl review [id|slug]     open a plan in Neovim in a NEW iTerm window (--here: this terminal / a tmux window);
                           a card id pulls its plan into the plans folder first
@@ -205,6 +207,12 @@ class VersionAction(argparse.Action):
         raise SystemExit(0)
 
 
+def _plan_number(s):
+    if not s.isdigit() or int(s) < 1:
+        raise argparse.ArgumentTypeError("--plan takes a whole number from 1")
+    return int(s)
+
+
 def main():
     from pl.trackers.github import RateLimited
     try:
@@ -256,7 +264,7 @@ def _main():
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int)
-    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you")
+    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")
     p.add_argument("--reason", help="why you approve; saved to memory with the card")
