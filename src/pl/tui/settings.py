@@ -8,7 +8,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Input, Label, Select, Static
 
 from pl import config as C
-from pl import harnesses, trackers
+from pl import harnesses, stage_models, trackers
 from pl.trackers import github
 from pl.tui.connectors import ConnectorsPanel
 from pl.tui.extensions import ExtensionsView, missing_skill
@@ -48,6 +48,14 @@ def _set(doc, path, value):
             t[k] = tomlkit.table()
         t = t[k]
     t[path[-1]] = value
+
+
+def _is_stage_model(path):
+    return path[0] == "stages" and len(path) in (4, 5) and "models" in path
+
+
+def _set_stage_model(doc, path, value):
+    stage_models.set_stage_model(doc, path[1], path[-1], value or "", small=len(path) == 5)
 
 
 def _model_options(models, current):
@@ -92,20 +100,20 @@ class ProjectScreen(ModalScreen):
 
 
 class ModelScreen(ModalScreen):
-    """Asks for a model id the account's harness list does not show."""
+    """Asks for a model id the harness list does not show."""
     DEFAULT_CSS = """
     ModelScreen { align: center middle; }
     ModelScreen > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     """
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, account, harness):
+    def __init__(self, who, harness):
         super().__init__()
-        self.account, self.harness = account, harness
+        self.who, self.harness = who, harness
 
     def compose(self):
         with Vertical():
-            yield Static(Text(f"Model id for account {self.account} ({self.harness}), as its CLI's --model takes it"))
+            yield Static(Text(f"Model id for {self.who} ({self.harness}), as its CLI's --model takes it"))
             yield Input(placeholder="model id", id="model-id")
             yield Static(Text("enter use it · esc cancel", style="dim"))
 
@@ -124,6 +132,7 @@ class SettingsView(Widget):
     SettingsView .field { height: 1; }
     SettingsView .field Label { width: 28; color: $text-muted; }
     SettingsView .field Input, SettingsView .field Select { width: 1fr; }
+    SettingsView .field .na { width: 1fr; }
     #settings-hint { height: 1; margin: 0 1; }
     """
     BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("T", "test", "test connections")]
@@ -131,24 +140,48 @@ class SettingsView(Widget):
     def __init__(self):
         super().__init__()
         self.fields = {}      # widget id -> (toml path, initial value, kind)
-        self.models = {}      # model Select id -> (account, harness name)
+        self.models = {}      # model Select id -> (who it is for, harness name)
         self.picked = {}      # model Select id -> its value before custom… was chosen
 
     # ---------- building the screen ----------
 
-    def _field(self, label, path, value, kind="str", options=None, prompt="Select"):
+    def _cell(self, path, value, kind="str", options=None, prompt="Select"):
         wid = f"set-{len(self.fields)}"
         if options is not None and value not in options:
             value = None    # shown blank, so only a real pick counts as a change
         self.fields[wid] = (path, value, kind)
         ro = C.path() is None
+        if options is not None:
+            return Select([(o, o) for o in options], value=Select.NULL if value is None else value,
+                          allow_blank=True, compact=True, id=wid, disabled=ro, prompt=prompt)
+        return Input(value="" if value is None else str(value), compact=True, id=wid, disabled=ro)
+
+    def _field(self, label, path, value, kind="str", options=None, prompt="Select"):
         with Horizontal(classes="field"):
             yield Label(label)
-            if options is not None:
-                yield Select([(o, o) for o in options], value=Select.NULL if value is None else value,
-                             allow_blank=True, compact=True, id=wid, disabled=ro, prompt=prompt)
-            else:
-                yield Input(value="" if value is None else str(value), compact=True, id=wid, disabled=ro)
+            yield self._cell(path, value, kind, options, prompt)
+
+    def _stage_model_rows(self):
+        used = [h for h in harnesses.MODEL_FLAGS if any((a.get("harness") or "claude") == h for a in C.ACCOUNTS.values())]
+        for stage in C.PROMPTS:
+            st = C.STAGES.get(stage) or {}
+            for h in used:
+                base = harnesses.models("claude") if h == "claude" else []
+                with Horizontal(classes="field"):
+                    yield Label(f"{stage} · {h}")
+                    m = (st.get("models") or {}).get(h)
+                    self.models[f"set-{len(self.fields)}"] = (f"stage {stage}", h)
+                    yield self._cell(("stages", stage, "models", h), m, options=_model_options(base, m), prompt="account's")
+                    if stage == "run":
+                        sm = ((st.get("small") or {}).get("models") or {}).get(h)
+                        self.models[f"set-{len(self.fields)}"] = (f"stage {stage} small changes", h)
+                        yield self._cell(("stages", stage, "small", "models", h), sm, options=_model_options(base, sm),
+                                         prompt="normal")
+                    else:
+                        yield Static(Text("n/a", style="dim"), classes="na")
+                err = Static("", id=f"stage-err-{stage}-{h}", classes="stage-warning stage-err")
+                err.display = False
+                yield err
 
     def _panel(self, title):
         v = Vertical(classes="panel")
@@ -205,12 +238,13 @@ class SettingsView(Widget):
                     warn.display = False
                     yield warn
             with self._panel("Models and effort (blank = the harness's default)"):
+                yield from self._stage_model_rows()
                 for name, a in C.ACCOUNTS.items():
                     hname = a.get("harness") or "claude"
                     if hname in harnesses.MODEL_FLAGS:
                         model = a.get("model")
                         opts = _model_options(harnesses.models("claude") if hname == "claude" else [], model)
-                        self.models[f"set-{len(self.fields)}"] = (name, hname)
+                        self.models[f"set-{len(self.fields)}"] = (f"account {name}", hname)
                         yield from self._field(f"{name} model ({hname})", ("accounts", name, "model"), model,
                                                options=opts, prompt="default")
                     if hname in harnesses.EFFORT_LEVELS:
@@ -305,7 +339,7 @@ class SettingsView(Widget):
         if m.value != CUSTOM:
             self.picked[wid] = m.value
             return
-        account, hname = self.models[wid]
+        who, hname = self.models[wid]
 
         def typed(model):
             sel = self.query_one(f"#{wid}", Select)
@@ -316,7 +350,17 @@ class SettingsView(Widget):
             opts = [v for _, v in sel._options if v is not Select.NULL and v != CUSTOM]
             sel.set_options([(o, o) for o in _model_options(opts, model)])
             sel.value = model
-        self.app.push_screen(ModelScreen(account, hname), typed)
+        self.app.push_screen(ModelScreen(who, hname), typed)
+
+    def _row_error(self, path, raw, value):
+        """Show why this one stage model is refused: validate the file with only this change applied."""
+        one = tomlkit.parse(raw)
+        _set_stage_model(one, path, value)
+        errs = C.validate(one)
+        if errs:
+            w = self.query_one(f"#stage-err-{path[1]}-{path[-1]}", Static)
+            w.update("pl: not saved: " + "; ".join(errs))
+            w.display = True
 
     def _warn(self, stage, text):
         w = self.query_one(f"#warn-{stage}", Static)
@@ -359,10 +403,17 @@ class SettingsView(Widget):
         if p is None:
             self.app.notify(LEGACY_HINT, severity="warning", markup=False)
             return
+        for err in self.query(".stage-err"):
+            err.display = False
+        raw = p.read_text()
+        changed = []
         try:
-            doc = tomlkit.parse(p.read_text())
+            doc = tomlkit.parse(raw)
             changed = self.changes()
             for path, v in changed:
+                if _is_stage_model(path):
+                    _set_stage_model(doc, path, v)
+                    continue
                 if path[0] == "loops" and "loops" not in doc:   # [loops] replaces every default loop: write them all
                     doc["loops"] = {n: {"prompt": s["prompt"], **({"account": s["profile"]} if s.get("profile") else {})}
                                     for n, s in C.SERVICES.items() if not s.get("builtin")}
@@ -376,6 +427,9 @@ class SettingsView(Widget):
             warns = C.save(doc) or []
             C.load(config_dir=str(C.CONFIG_DIR))
         except (SystemExit, Exception) as e:
+            for path, v in changed:
+                if _is_stage_model(path):
+                    self._row_error(path, raw, v)
             self.app.notify(str(e), severity="error", markup=False)
             return
         for wid, (path, initial, kind) in list(self.fields.items()):
