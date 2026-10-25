@@ -4,8 +4,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 
 from pl import config as C
@@ -340,10 +342,61 @@ def load_manifest(repo_root):
     return manifest
 
 
-def bootstrap_worktree(main_repo, worktree_path, dry_run=False):
-    """Apply the manifest to a worktree and return one line per path; nothing is staged, and no file contents are logged."""
+DEFAULT_SETUP_TIMEOUT = 300
+TAIL_LINES = 20
+_popen = subprocess.Popen
+
+
+def parse_timeout(value):
+    if value is None:
+        return DEFAULT_SETUP_TIMEOUT
+    if isinstance(value, int) and value > 0:
+        return value
+    raise ValueError(f"invalid timeout '{value}': timeout must be a positive integer")
+
+
+def log_tail(log_path, lines=TAIL_LINES):
+    try:
+        with open(log_path, errors="replace") as f:
+            return "".join(deque(f, maxlen=lines)).rstrip("\n")
+    except OSError:
+        return ""
+
+
+def _stop_group(proc):
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=3)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_setup(command, timeout, worktree_path, log_path):
+    """Run the setup command in the worktree with stdout and stderr in log_path; return the failure reason, or None."""
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "w") as log:
+        proc = _popen(["sh", "-c", command], cwd=str(worktree_path), stdout=log, stderr=subprocess.STDOUT,
+                      start_new_session=True)
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _stop_group(proc)
+            return f"Bootstrap setup timed out after {timeout}s"
+    return None if code == 0 else f"Bootstrap setup failed with exit code {code}"
+
+
+def bootstrap_worktree(main_repo, worktree_path, dry_run=False, log_path=None, failures=None):
+    """Apply the manifest to a worktree and return one line per path; nothing is staged, and no file contents are logged.
+    A failed setup command adds {"reason", "output"} to `failures`; it does not raise."""
     main_repo, worktree_path = Path(main_repo), Path(worktree_path)
     manifest = load_manifest(main_repo)
+    timeout = parse_timeout(manifest["timeout"])
     notes = []
     for action in LISTS:
         for rel in manifest[action]:
@@ -365,6 +418,16 @@ def bootstrap_worktree(main_repo, worktree_path, dry_run=False):
                     notes.append(f"skip {rel}: {e.strerror or e}")
                     continue
                 notes.append(f"copy {rel}" if action == "copy" else f"link {rel} -> {src}")
+    command = manifest["setup"]
+    if not command or not str(command).strip():
+        return notes
+    if dry_run:
+        notes.append(f'setup: "{command}" (timeout: {timeout}s)')
+        return notes
+    log_path = log_path or worktree_path / ".pl-setup.log"
+    reason = run_setup(str(command), timeout, worktree_path, log_path)
+    if reason and failures is not None:
+        failures.append({"reason": reason, "output": log_tail(log_path)})
     return notes
 
 
