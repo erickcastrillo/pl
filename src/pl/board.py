@@ -205,3 +205,22 @@ def render(parts):
         if k:
             out.append(f"# PIPELINE: {k}\n{v.rstrip()}\n")
     return "\n".join(out).rstrip() + "\n"
+
+
+def _whole(v):
+    if isinstance(v, int) and not isinstance(v, bool):
+        return v
+    return int(v.strip()) if isinstance(v, str) and re.fullmatch(r"[0-9]+", v.strip()) else None
+
+
+def plan_slice(c):
+    """(plan, slice) of a card's metadata as whole numbers; None for what is missing or not a whole number."""
+    m = c.get("metadata") or {}
+    return _whole(m.get("plan")), _whole(m.get("slice"))
+
+
+def plan_order(c):
+    """Sort key: the one rule `pl list --plan` and the console's plan filter share (slice, then card id)."""
+    s = plan_slice(c)[1]
+    head, _, num = str(c.get("id") or "").rpartition("#")
+    return (s is None, s or 0, head, int(num) if num.isdigit() else 0, str(c.get("id") or ""))
