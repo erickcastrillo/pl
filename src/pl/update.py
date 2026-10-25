@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pl import __version__
 from pl import config as C
+from pl import jsonout
 
 REPO = "https://github.com/erickcastrillo/pl"
 DAY, TIMEOUT = 86400, 3
@@ -185,6 +186,10 @@ def version_text():
 
 
 def cmd_update(a):
+    if getattr(a, "check", False) and getattr(a, "json", False):
+        latest = check()
+        jsonout.emit({"version": __version__, "enabled": enabled(), "latest": latest, "update_available": notice(latest) is not None})
+        return 0
     if getattr(a, "check", False):
         if not enabled():
             print(f"pl {__version__}\nthe update check is off (PL_NO_UPDATE_CHECK, or [updates] check = false)")
