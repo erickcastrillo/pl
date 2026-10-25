@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Static
 
-from pl import agents, merges, util
+from pl import agents, util
 from pl import config as C
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
@@ -84,6 +84,7 @@ def loop_rows(data):
 
 
 def _auto_merge_row():
+    from pl import merges   # merges -> merge_check -> tui.prs would loop back into this package
     s = util.load_state().get("services", {}).get("auto-merge", {})
     last, nxt = (s.get("last_run") or {}), s.get("next_at")
     on, waits = C.AUTO_MERGE.get("enabled") is True, s.get("waits")

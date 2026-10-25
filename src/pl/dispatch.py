@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, local_jobs, manager, memory, merges, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -681,6 +681,7 @@ def _auto_merge(st, all_cards, dry):
     """The built-in merge loop (merges.py): no agent window; runs on its every, waits like other loops."""
     if C.AUTO_MERGE.get("enabled") is not True:
         return
+    from pl import merges   # merges -> merge_check -> commands imports dispatch
     svc = st.setdefault("services", {})
     s, now = svc.setdefault("auto-merge", {}), _local_now()
     if s.get("next_at") and now < datetime.fromisoformat(s["next_at"]):

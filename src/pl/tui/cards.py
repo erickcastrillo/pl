@@ -1,5 +1,6 @@
 """Pipeline tab: every card as a list grouped by board column (Done hidden; z shows it), its full text beside it, and
 actions. Cards that need a person carry a red ! and n shows only those."""
+import re
 import shutil
 
 from rich.text import Text
@@ -11,7 +12,7 @@ from textual.widgets import DataTable, Footer, Input, Markdown, OptionList, Stat
 from pl import config as C
 from pl import move_agent, trackers
 from pl.agents import jump_to_window
-from pl.board import card, sections
+from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import show_first_heading, skip_headings
 from pl.tui.loops import COPIERS, _copy_run
@@ -390,14 +391,14 @@ class ReasonScreen(ModalScreen):
     """
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, message):
+    def __init__(self, message, placeholder="reason (optional)"):
         super().__init__()
-        self.message = message
+        self.message, self.placeholder = message, placeholder
 
     def compose(self):
         with Vertical():
             yield Static(Text(self.message))
-            yield Input(placeholder="reason (optional)")
+            yield Input(placeholder=self.placeholder)
             yield Static(Text("enter next · esc cancel", style="dim"))
 
     def on_input_submitted(self, m):
@@ -426,13 +427,15 @@ class CardsView(CardActions, Horizontal):
                 Binding("o", "answer", "answer questions"), Binding("d", "drop", "drop"), Binding("h", "hand_off", "to Manual"),
                 Binding("F", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
                 Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
-                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold")]
+                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold"),
+                Binding("P", "plan_filter", "plan filter")]
 
     def __init__(self):
         super().__init__()
         self._rows, self._built, self._now, self._data = {}, [], {}, None
         self.only_mine = False   # f: list only the cards that wait on a person
         self.show_done = False   # z: a Done group from the last refresh's Done cards (no extra board read)
+        self.plan = None   # P: only this plan's cards, ordered by slice
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
         self._last = None   # the cursor row before the last move: which way it travels
@@ -456,7 +459,16 @@ class CardsView(CardActions, Horizontal):
         if self.show_done and (finished := [r for r in data["snapshot"].get("done") or [] if r.get("card")]):
             groups = [*groups, ("Done", finished)]
         t = self.query_one(DataTable)
-        if self.only_mine:
+        if self.plan is not None:
+            finished = data["snapshot"].get("done") or []
+            here = sorted((r for r in [*data["snapshot"]["rows"], *finished]
+                           if r.get("card") and plan_slice(r["card"])[0] == self.plan and (not self.only_mine or needs_me(r))),
+                          key=lambda r: plan_order(r["card"]))
+            groups = [(f"plan {self.plan}", here)] if here else []
+            needs = " · needs you only" if self.only_mine else ""
+            t.border_title = (f"Pipeline · plan {self.plan}{needs} · {len(here)} cards · P clears" if here
+                              else f"Pipeline · no cards in plan {self.plan} · P clears")
+        elif self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
             t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} cards · f shows all"
         else:
@@ -478,11 +490,15 @@ class CardsView(CardActions, Horizontal):
                     label, colour = (r["approved"], "red" if r.get("blocked") or r.get("failed") else "green") if r.get("approved") else STATE[card_state(r)]
                 state = Text.assemble(("! ", "bold red") if needs_me(r) else "  ", (label, colour))   # ! = waits on a person
                 line = str(m.get("drop_reason") or "") if r.get("col") == "Done" else (self._now.get(cid) or {}).get("line") or ""
+                if self.plan is not None:
+                    line = f"{r.get('col')} · {line}" if line else str(r.get("col"))
                 built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"), state,
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
-        if not built:
-            empty = "Nothing needs you." if self.only_mine else "No cards on the board."
-            built.append(("group:empty", (Text("■", style="dim"), Text(empty, style="dim"), Text(""), Text(""))))
+        if not built:   # the title column is narrow, so the message takes one short line per row
+            lines = ([f"No cards in plan {self.plan}."] if self.plan is not None else ["Nothing needs you."] if self.only_mine
+                     else ["No cards yet.", "Add one with n on the Ideas tab,", 'or pl idea "..."'])
+            for i, line in enumerate(lines):
+                built.append((f"group:empty{i}", (Text("■" if i == 0 else "", style="dim"), Text(line, style="dim"), Text(""), Text(""))))
         rebuilt = [k for k, _ in built] != [k for k, _ in self._built]
         if not rebuilt:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, self._built):
@@ -585,6 +601,25 @@ class CardsView(CardActions, Horizontal):
         cid = next((k for k, r in self._rows.items() if group and needs_groups([r])[group]), None)
         if cid is not None:
             t.move_cursor(row=t.get_row_index(cid))
+
+    def action_plan_filter(self):
+        """P: ask for a plan number and list only that plan's cards by slice; P again shows everything."""
+        if self.plan is not None:
+            self.plan = None
+        else:
+            def picked(v):
+                if v is None:
+                    return
+                if not re.fullmatch(r"[0-9]+", v.strip()) or int(v) == 0:
+                    self.app.notify("the plan must be a whole number from 1", markup=False)
+                    return
+                self.plan = int(v)
+                if self._data is not None:
+                    self.show(self._data)
+            self.app.push_screen(ReasonScreen("Show one plan: its number (esc cancels)", placeholder="plan number, e.g. 21"), picked)
+            return
+        if self._data is not None:
+            self.show(self._data)
 
     def action_answer(self):
         self.review("answer")

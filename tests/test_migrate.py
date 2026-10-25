@@ -9,6 +9,7 @@ import tomlkit
 
 from pl import agents, boardcheck, migrate, trackers
 from pl import config as C
+from pl.util import BadInput
 
 
 class Board:
@@ -207,7 +208,7 @@ def test_migrate_without_yes_and_no_tty_exits_2(boards, profile, monkeypatch, ca
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     with pytest.raises(SystemExit) as e:
         migrate.cmd_migrate(args(yes=False))
-    assert e.value.code == 2 and "--yes" in capsys.readouterr().err
+    assert isinstance(e.value, BadInput) and "--yes" in str(e.value)
     assert boards[1].cards() == []
 
 

@@ -8,6 +8,7 @@ import tomlkit
 
 from pl import cli, harnesses, pods, skills
 from pl import config as C
+from pl.util import BadInput
 
 
 @pytest.fixture(autouse=True)
@@ -144,7 +145,7 @@ def test_without_a_terminal_and_without_yes_exits_2(profile, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     with pytest.raises(SystemExit) as e:
         pods.cmd_pods(args(pods_cmd="rule", text="x", yes=False))
-    assert e.value.code == 2
+    assert isinstance(e.value, BadInput) and "--yes" in str(e.value)
     assert not pods.pod_file("billing").exists()
 
 
@@ -246,7 +247,7 @@ def test_enabling_hooks_without_a_terminal_needs_yes(fake_env, monkeypatch, caps
 
     with pytest.raises(SystemExit) as exc:
         cli.main()
-    assert exc.value.code == 1   # cli.main prints the reason on stderr and exits 1
+    assert exc.value.code == 2   # cli.main prints the reason on stderr and exits 2
     assert "--yes" in capsys.readouterr().err
 
     # With --yes, it succeeds without a terminal

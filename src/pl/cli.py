@@ -57,9 +57,9 @@
   pl rework [--dry-run]    send cards in PR open whose pull request the review labeled for rework back to a run
                           agent now (the dispatcher does this every 10 min); after [dispatch] rework_rounds rounds
                           (3) the PR gets the failed label for a person
-  pl merges --dry-run [--json]
-                          each pull request ready to merge, every merge rule's result and what the merge loop would
-                          do (nothing is merged)
+  pl merges [--dry-run] [--json]
+                          judge each pull request ready to merge; one that fails a rule gets the needs-person label
+                          and one comment per head commit (nothing is merged; --dry-run changes nothing)
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
@@ -130,6 +130,8 @@
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
                           test JOB [--json] runs the job's sample 3 times (answer, schema pass|fail, ms);
                           set JOB MODEL [--yes] writes [models.local]; JOB is route, summarise, title or embed
+  pl models set-stage <stage> <harness> <model> [--small]
+                          set (or, with "", remove) the model a stage uses on one harness
   pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
                           turn matching incoming messages into cards; list [--json] shows status;
                           pause/resume NAME toggles whether it runs
@@ -154,14 +156,19 @@
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | update --check [--json] | update NAME [--yes] | remove NAME [--yes] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
                           install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
-                          and installs into the library only after a yes
-  pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | revoke NAME
+                          and installs into the library only after a yes; a Claude Code plugin or marketplace entry
+                          (--plugin NAME) installs its skills and lists its hooks and MCP servers, not enabled;
+                          update --check lists newer upstream commits; update NAME [--yes] shows the diff, asks, and keeps
+                          an edited copy under .pl-edited/;
+                          remove deletes a skill installed from GitHub, unlinks it and names the stages and loops
+                          that used it (install, update and remove: pl skills --help)
+  pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | test NAME [--json] | revoke NAME --yes
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
@@ -183,7 +190,8 @@
                           are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
-  pl loops list [--json] | add NAME (--skill S | --prompt P) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
+  pl loops list [--json] | add NAME (--skill S | --prompt P | --template T) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
+          | edit NAME [--every E] [--prompt P] [--skill S] [--hours H] [--account A] [--writes|--no-writes] [--convert]
           | pause NAME | resume NAME | rm NAME [--yes]
                           manage the profile's [loops.NAME] tables; --every is 30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>
   pl assistant log "text" | idea save ... | idea file <idea-id>
@@ -202,7 +210,8 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles
+from pl import stage_models
+from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles, trackers
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -228,6 +237,9 @@ class VersionAction(argparse.Action):
         from pl import update
         print(update.version_text())
         raise SystemExit(0)
+
+
+BOARD_WRITES = {"idea", "approve", "reject", "done", "drop", "undrop", "hold", "unhold", "move", "adopt", "section", "retry", "restart", "card", "board"}
 
 
 def _plan_number(s):
@@ -286,25 +298,25 @@ def _main():
     p = sub.add_parser("idea"); p.add_argument("text"); p.add_argument("--doc", action="append", default=[])
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
-    p.add_argument("--plan", type=int); p.add_argument("--slice", type=int)
+    p.add_argument("--plan", type=int); p.add_argument("--slice", type=int); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")
-    p.add_argument("--reason", help="why you approve; saved to memory with the card")
-    p = sub.add_parser("reject"); p.add_argument("id"); p.add_argument("notes")
+    p.add_argument("--reason", help="why you approve; saved to memory with the card"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("reject"); p.add_argument("id"); p.add_argument("notes"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("outbox"); p.add_argument("action", choices=["cancel"]); p.add_argument("id")
     p = sub.add_parser("dispatch"); p.add_argument("--once", action="store_true"); p.add_argument("--interval", type=int, default=None)
     p.add_argument("--max-runs", type=int, default=None); p.add_argument("--dry-run", action="store_true")
     p.add_argument("--max-prep", type=int, default=None, help="max spec/design/plan agents in flight"); p.add_argument("--no-pull", action="store_true", help="do not pull from the Product board")
     p = sub.add_parser("pull"); p.add_argument("id", nargs="?"); p.add_argument("--list", action="store_true"); p.add_argument("--dry-run", action="store_true")
-    p = sub.add_parser("adopt"); p.add_argument("id"); p.add_argument("--account", choices=list(C.PROFILES))
-    p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'")
-    p = sub.add_parser("drop"); p.add_argument("id"); p.add_argument("--reason", help="why it is no longer needed (kept on the card)")
-    p = sub.add_parser("undrop"); p.add_argument("id")
-    p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)")
-    p = sub.add_parser("unhold"); p.add_argument("id")
+    p = sub.add_parser("adopt"); p.add_argument("id"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("drop"); p.add_argument("id"); p.add_argument("--reason", help="why it is no longer needed (kept on the card)"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("undrop"); p.add_argument("id"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("unhold"); p.add_argument("id"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("depends"); p.add_argument("id", nargs="?"); p.add_argument("--on", nargs="+", default=[], metavar="ID", help="cards this card depends on"); p.add_argument("--clear", action="store_true", help="remove every dependency"); p.add_argument("--from-plans", action="store_true", help="record the Depends on line of every PLAN for cards with no dependencies yet"); p.add_argument("--dry-run", action="store_true", help="with --from-plans: show what it would record")
-    p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
+    p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("link"); p.add_argument("id"); p.add_argument("target", metavar="PIPELINE:ID")
     p.add_argument("--relation", default="related"); p.add_argument("--one-side", action="store_true", help="write only this card, not the other")
     p.add_argument("--json", action="store_true")
@@ -322,8 +334,8 @@ def _main():
     p.add_argument("--yes", action="store_true", help="migrate: do not ask before copying and switching")
     p.add_argument("--dry-run", action="store_true", help="migrate: print what would be copied and write nothing")
     p.add_argument("--skip-check", action="store_true", help="migrate: do not run pl board check on the target first (for a board you already checked)")
-    p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
-    p = sub.add_parser("section"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
+    p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("section"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
@@ -335,8 +347,8 @@ def _main():
     p = sub.add_parser("caps"); pc = p.add_subparsers(dest="caps_cmd", required=True)
     q = pc.add_parser("set"); q.add_argument("id"); q.add_argument("--minutes"); q.add_argument("--tokens", help="2M, 500k or a number")
     q = pc.add_parser("reset"); q.add_argument("id")
-    p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
-    p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
+    p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"]); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"]); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("profiles"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
     q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
@@ -392,8 +404,13 @@ def _main():
     q = pk.add_parser("install"); q.add_argument("source", help="github:owner/repo[/path][@ref]")
     q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="list the files and stop")
     q.add_argument("--name", help="the library name (default: the skill's folder name)")
+    q.add_argument("--plugin", help="the plugin to install from a marketplace")
+    q = pk.add_parser("update"); q.add_argument("name", nargs="?", help="the installed skill to update")
+    q.add_argument("--check", action="store_true", help="list skills with a newer upstream commit and change nothing")
+    q.add_argument("--json", action="store_true", help="with --check: machine-readable"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
+    q = pk.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
     q = pc.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, without any secret")
@@ -404,16 +421,23 @@ def _main():
     q = pc.add_parser("import"); q.add_argument("--from", dest="source", choices=["claude", "codex"], default="claude")
     q.add_argument("--add", metavar="NAME"); q.add_argument("--team", action="append"); q.add_argument("--role", action="append")
     q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
-    q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
+    q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pc.add_parser("test"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pc.add_parser("serve"); q.add_argument("name"); q.add_argument("--card", required=True); q.add_argument("--stage", required=True)
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
     q = pl_.add_parser("list"); q.add_argument("--json", action="store_true")
-    q = pl_.add_parser("add"); q.add_argument("name"); g = q.add_mutually_exclusive_group(required=True)
+    q = pl_.add_parser("add"); q.add_argument("name"); g = q.add_mutually_exclusive_group()
     g.add_argument("--skill"); g.add_argument("--prompt")
+    q.add_argument("--template", help="start from a ready-made loop: auto-review, daily-standup, inbox-triage, overdue-invoices, dependency-updates, stale-cards")
     q.add_argument("--every", help="30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>"); q.add_argument("--hours", help="HH:MM-HH:MM [weekdays]")
-    q.add_argument("--account"); q.add_argument("--team"); q.add_argument("--writes", action="store_true", help="let the loop write (default: read-only)")
+    q.add_argument("--account"); q.add_argument("--team"); q.add_argument("--writes", action=argparse.BooleanOptionalAction, help="let the loop write (default: read-only)")
     q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="say what would be added, add nothing")
+    q = pl_.add_parser("edit"); q.add_argument("name")
+    q.add_argument("--skill"); q.add_argument("--prompt"); q.add_argument("--every", help="30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>")
+    q.add_argument("--hours", help="HH:MM-HH:MM [weekdays]"); q.add_argument("--account")
+    q.add_argument("--writes", action=argparse.BooleanOptionalAction, help="let the loop write, or not")
+    q.add_argument("--convert", action="store_true", help="turn a leading /loop 30m in the prompt into --every")
     for verb in ("pause", "resume"):
         q = pl_.add_parser(verb); q.add_argument("name")
     q = pl_.add_parser("rm"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
@@ -447,6 +471,9 @@ def _main():
     q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")
     q = pm.add_parser("set"); q.add_argument("job"); q.add_argument("model")
     q.add_argument("--yes", action="store_true", help="write without asking")
+    q = pm.add_parser("set-stage"); q.add_argument("stage"); q.add_argument("harness")
+    q.add_argument("model", help='a model id, or "" to remove the key')
+    q.add_argument("--small", action="store_true", help="the small-change model ([stages.<stage>.small.models])")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
@@ -507,6 +534,8 @@ def _main():
             return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False, open=None, tab=None))
         ap.print_help()
         return
+    if getattr(a, "dry_run", False) and a.cmd in BOARD_WRITES and (a.cmd != "board" or a.action == "init"):
+        trackers.set_dry_run()
     from pl import ghquota
     ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
     if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in assistant.PL_WRITES and a.cmd != "idea":
@@ -547,6 +576,7 @@ def _main():
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
-     "models": lambda a: __import__("pl.local_jobs").local_jobs.cmd_models(a),
+     "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
+                          else __import__("pl.local_jobs").local_jobs.cmd_models)(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
      "kill-switch": outward.cmd_kill_switch}[a.cmd](a)

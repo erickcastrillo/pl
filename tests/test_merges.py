@@ -1,7 +1,9 @@
-"""The merge judge (which pull requests are candidates, and every rule's result) and the merge pass that merges what passes."""
+"""The merge judge: which pull requests are candidates, in what order, and every rule's result; the merge loop labels
+and comments on a failed rule once per head commit; the merge pass merges what passes."""
 import json
 import types
 from datetime import datetime, timedelta
+import urllib.parse
 
 import pytest
 
@@ -28,8 +30,10 @@ def fake_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def host(monkeypatch):
-    """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call."""
-    ns = types.SimpleNamespace(prs={}, cards=[], calls=[], refuse={}, default="main", events=[], updates=[], done_fails=0)
+    """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call;
+    ns.comments: {number: [comment body]}; ns.repo_labels: the labels the repository already has."""
+    ns = types.SimpleNamespace(prs={}, cards=[], calls=[], refuse={}, default="main", events=[], updates=[], done_fails=0, update_error=None,
+                               comments={}, repo_labels=set())
 
     def fake_gh(args):
         ns.calls.append(args)
@@ -37,12 +41,21 @@ def host(monkeypatch):
             if msg := ns.refuse.get(int(args[2])):
                 raise SystemExit(msg)
             return ""
-        if args[0] == "api":
-            return json.dumps({"default_branch": ns.default})
-        assert args[:2] == ["pr", "view"], args
-        return json.dumps(ns.prs[int(args[2])])
+        if args[:2] == ["pr", "view"]:
+            return json.dumps(ns.prs[int(args[2])])
+        assert args[0] in ("api", "label"), args
+        if args[:2] == ["label", "create"]:
+            ns.repo_labels.add(args[2])
+        elif args[0] == "api" and "--jq" in args:
+            return "\n".join(ns.comments.get(int(args[2].split("/issues/")[1].split("/")[0]), []))
+        elif args[0] == "api" and "/labels/" in args[1] and "-X" not in args:
+            if urllib.parse.unquote(args[1].rsplit("/", 1)[1]) not in ns.repo_labels:
+                raise SystemExit("gh: Not Found (HTTP 404)")
+        return ""
 
     def fake_update(cid, **fields):
+        if ns.update_error:
+            raise ns.update_error
         ns.updates.append((cid, fields))
         next(c for c in ns.cards if c["id"] == cid)["metadata"].update(fields.get("metadata") or {})
 
@@ -56,15 +69,20 @@ def host(monkeypatch):
     monkeypatch.setattr(commands, "done", fake_done)
     monkeypatch.setattr(merges.events, "emit", lambda kind, cid=None, **d: ns.events.append((kind, cid, d)))
     monkeypatch.setattr(merges.github, "_gh", fake_gh)
+    monkeypatch.setattr(merges, "_LABELS", set())
     monkeypatch.setattr(merges.board, "cards", lambda: ns.cards)
+    ns.checks = [{"rule": "conflicts", "ok": True, "why": "merges cleanly onto main"}, {"rule": "tests", "ok": True, "why": "local tests passed; CI: none"}]
+    monkeypatch.setattr(merges.merge_check, "default_branch", lambda repo: ns.default)
+    monkeypatch.setattr(merges.merge_check, "check", lambda pr, base: ns.checks)
     monkeypatch.setattr(merges, "col_name", lambda lid: lid)
     monkeypatch.setattr(agents, "col_name", lambda lid: lid)
     return ns
 
 
-def _pr(n, files=(("src/a.py", 10, 5),), labels=("pl:ready",), body="", state="OPEN", draft=False):
-    return {"number": n, "url": URL.format(n), "state": state, "isDraft": draft, "baseRefName": "main", "headRefOid": f"sha{n}", "body": body,
-            "labels": [{"name": x} for x in labels],
+def _pr(n, files=(("src/a.py", 10, 5),), labels=("pl:ready",), body="", state="OPEN", draft=False, head="abc"):
+    return {"number": n, "url": URL.format(n), "state": state, "isDraft": draft, "baseRefName": "main", "body": body,
+            "headRefOid": head,
+            "labels": [{"name": x} for x in labels], "statusCheckRollup": [],
             "files": [{"path": p, "additions": a, "deletions": d} for p, a, d in files]}
 
 
@@ -81,7 +99,7 @@ def _add(host, card, pr):
 
 
 def _rules(host, card):
-    j = merges.judge(card, host.prs[int(card["metadata"]["pr_urls"][0].rsplit("/", 1)[1])], host.cards)
+    j = merges.judge(card, host.prs[int(card["metadata"]["pr_urls"][0].rsplit("/", 1)[1])], host.cards, "main")
     return {r["rule"]: r for r in j["rules"]}, j
 
 
@@ -106,8 +124,8 @@ def test_small_clean_pr_passes_size_sensitive_and_deps(host):
     card, _ = _add(host, _card("c1"), _pr(1))
     rules, j = _rules(host, card)
     assert [rules[r]["ok"] for r in ("size", "sensitive", "dependencies")] == [True, True, True]
-    assert rules["tests"]["ok"] is None and rules["conflicts"]["ok"] is None
-    assert j["action"] == "would merge once tests and conflicts pass"
+    assert rules["tests"]["ok"] is True and rules["conflicts"]["ok"] is True
+    assert j["action"] == "would merge"
 
 
 def test_too_big_fails_size_and_tests_lines_do_not_count(host):
@@ -180,9 +198,9 @@ def test_dry_run_prints_every_rule_and_writes_nothing(host, capsys):
     merges.cmd_merges(types.SimpleNamespace(dry_run=True, json=False))
     out = capsys.readouterr().out
     assert "#1 Plan 1 slice 1: ok" in out and "  ok  size:" in out and "  FAIL  size: 400 lines outside tests" in out
-    assert "  —  tests: not checked yet (later slice)" in out
-    assert "  -> would merge once tests and conflicts pass" in out and "  -> needs a person: size" in out
-    assert host.calls and all(c[:2] == ["pr", "view"] for c in host.calls)
+    assert "  ok  conflicts: merges cleanly onto main" in out
+    assert "  -> would merge" in out and "  -> needs a person: size" in out
+    assert host.calls and not _writes(host)
 
 
 def test_dry_run_json_is_one_document(host, capsys):
@@ -191,8 +209,26 @@ def test_dry_run_json_is_one_document(host, capsys):
     doc = json.loads(capsys.readouterr().out)
     (cand,) = doc["candidates"]
     assert cand["card"] == "c1" and cand["pr"] == URL.format(1)
-    assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "tests", "conflicts"]
-    assert cand["action"] == "would merge once tests and conflicts pass"
+    assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "conflicts", "tests"]
+    assert all(r["ok"] in (True, False, None) and r["why"] for r in cand["rules"])
+    assert cand["action"] == "would merge this pass"
+
+
+def test_conflict_reads_needs_a_person_conflicts(host, capsys):
+    host.checks = [{"rule": "conflicts", "ok": False, "why": "conflicts with main: a.py"},
+                   {"rule": "tests", "ok": None, "why": "not run: conflicts"}]
+    _add(host, _card("c1"), _pr(1))
+    merges.cmd_merges(types.SimpleNamespace(dry_run=True, json=False))
+    out = capsys.readouterr().out
+    assert "  FAIL  conflicts: conflicts with main: a.py" in out and "  —  tests: not run: conflicts" in out
+    assert "  -> needs a person: conflicts" in out
+
+
+def test_a_rule_that_did_not_run_is_never_would_merge(host):
+    host.checks = [{"rule": "conflicts", "ok": None, "why": "not run: git fetch failed: x"},
+                   {"rule": "tests", "ok": None, "why": "not run: git fetch failed"}]
+    card, _ = _add(host, _card("c1"), _pr(1))
+    assert _rules(host, card)[1]["action"] == "needs a person: conflicts, tests not run"
 
 
 def test_dry_run_with_no_candidates_says_so(host, capsys):
@@ -200,10 +236,130 @@ def test_dry_run_with_no_candidates_says_so(host, capsys):
     assert capsys.readouterr().out.strip() == "no pull requests are ready to merge"
 
 
-def test_without_dry_run_refuses(host):
-    with pytest.raises(SystemExit, match="only --dry-run exists so far"):
-        merges.cmd_merges(types.SimpleNamespace(dry_run=False, json=False))
-    assert host.calls == []
+def _run(dry_run=False, json_out=False):
+    merges.cmd_merges(types.SimpleNamespace(dry_run=dry_run, json=json_out))
+
+
+def _writes(host):
+    return [c for c in host.calls if c[:2] == ["label", "create"] or "-X" in c]
+
+
+def _comment_posts(host):
+    return [c for c in host.calls if c[:2] == ["api", "-X"] and c[2] == "POST" and c[3].endswith("/comments")]
+
+
+def _big(host, n=1, **kw):
+    return _add(host, _card(f"c{n}"), _pr(n, files=(("src/a.py", 200, 12),), **kw))
+
+
+def test_failed_rule_adds_label_creates_it_and_comments_once(host):
+    _big(host)
+    _run()
+    assert ["label", "create", "needs-person", "--repo", "acme/app", "--color", "D93F0B",
+            "--description", "added by pl: a person decides whether to merge"] in host.calls
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=needs-person"] in host.calls
+    (post,) = _comment_posts(host)
+    body = post[5].removeprefix("body=")
+    assert body.startswith("pl merge loop: this pull request is not merged automatically, because:\n")
+    assert "- size: 212 lines outside tests (limit 150), 1 files (limit 6)" in body
+    assert "A person should decide" in body and body.endswith("<!-- pl:merge-loop head=abc -->")
+
+
+def test_configured_needs_person_label_is_used(host):
+    C.AUTO_MERGE = {"needs_person_label": "pl:merge-me"}
+    _big(host)
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=pl:merge-me"] in host.calls
+    assert ["label", "create", "pl:merge-me"] == host.calls[[c[:2] for c in host.calls].index(["label", "create"])][:3]
+
+
+def test_existing_label_is_not_created_again(host):
+    host.repo_labels.add("needs-person")
+    _big(host)
+    _run()
+    assert not [c for c in host.calls if c[:2] == ["label", "create"]]
+    assert len(_comment_posts(host)) == 1
+
+
+def test_same_head_already_commented_posts_nothing(host):
+    host.comments[1] = ["a person's note", "pl merge loop: x\n\n<!-- pl:merge-loop head=abc -->"]
+    _big(host, labels=("pl:ready", "needs-person"))
+    _run()
+    assert not _writes(host)
+
+
+def test_same_head_already_commented_but_label_removed_puts_it_back_without_comment(host):
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    host.repo_labels.add("needs-person")
+    _big(host)
+    _run()
+    assert _writes(host) == [["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=needs-person"]]
+
+
+def test_comment_without_the_marker_does_not_count(host):
+    host.comments[1] = ["pl merge loop: dry run said size", "<!-- pl:merge-loop head=def -->"]
+    _big(host)
+    _run()
+    assert len(_comment_posts(host)) == 1
+
+
+def test_new_head_still_failing_comments_again(host):
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    _big(host, labels=("pl:ready", "needs-person"), head="def")
+    _run()
+    (post,) = _comment_posts(host)
+    assert post[5].endswith("<!-- pl:merge-loop head=def -->")
+
+
+def test_new_head_passing_removes_label_without_comment(host):
+    _add(host, _card("c1"), _pr(1, labels=("pl:ready", "needs-person"), head="def"))
+    _run()
+    assert _writes(host) == [["api", "-X", "DELETE", "repos/acme/app/issues/1/labels/needs-person"]]
+
+
+def test_unchecked_rules_do_not_count_as_failed(host):
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert merges.NOT_CHECKED["ok"] is None and not _writes(host) and not _comment_posts(host)
+
+
+def test_passing_pr_without_label_gets_nothing(host):
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert not _writes(host) and not [c for c in host.calls if "--jq" in c]
+
+
+def test_dry_run_says_would_and_writes_nothing(host, capsys):
+    _big(host)
+    _run(dry_run=True)
+    assert "  -> loop: would add needs-person and comment" in capsys.readouterr().out
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    _run(dry_run=True)
+    assert "  -> loop: already commented on this head" in capsys.readouterr().out
+    host.calls.clear()
+    _run(dry_run=True, json_out=True)
+    (cand,) = json.loads(capsys.readouterr().out)["candidates"]
+    assert cand["loop"] == "already commented on this head"
+    assert not _writes(host)
+
+
+def test_dry_run_json_loop_is_null_for_a_passing_pr(host, capsys):
+    _add(host, _card("c1"), _pr(1))
+    _run(dry_run=True, json_out=True)
+    assert json.loads(capsys.readouterr().out)["candidates"][0]["loop"] is None
+
+
+def test_without_dry_run_merges_nothing(host):
+    _big(host)
+    _run()
+    assert not [c for c in host.calls if c[:2] == ["pr", "merge"]]
+
+
+def test_cli_routes_merges_without_dry_run(host, capsys, monkeypatch):
+    _big(host)
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "merges"])
+    cli.main()
+    assert "  -> loop: add needs-person and comment" in capsys.readouterr().out
 
 
 def test_cli_routes_merges_dry_run(host, capsys, monkeypatch):
@@ -221,9 +377,11 @@ def passing(host, monkeypatch):
     """Every candidate passes every rule, except the cards in host.failing (a callable may decide at judge time)."""
     host.failing = lambda cid: False
     host.needs = []
+    host.on_judge = lambda cid: None
 
-    def judge(card, pr, all_cards):
+    def judge(card, pr, all_cards, base):
         host.calls.append(["judge", card["id"]])
+        host.on_judge(card["id"])
         ok = not host.failing(card["id"])
         return {"card": card["id"], "pr": pr["url"], "title": card["title"], "rules": [{"rule": "size", "ok": ok, "why": ""}],
                 "action": ""}
@@ -265,7 +423,7 @@ def test_pass_merges_passing_candidate_with_configured_method(passing, method):
     C.AUTO_MERGE = {"enabled": True, "merge_method": method}
     _ready(passing, 123)
     assert merges.run_pass(passing.cards, dry=False) == [URL.format(123)]
-    assert _merges_in(passing) == [["pr", "merge", "123", "--repo", "acme/app", f"--{method}", "--match-head-commit", "sha123"]]
+    assert _merges_in(passing) == [["pr", "merge", "123", "--repo", "acme/app", f"--{method}", "--match-head-commit", "abc"]]
 
 
 def test_merged_card_goes_to_done_with_note_and_one_event(passing):
@@ -345,6 +503,39 @@ def test_done_move_failure_retries_next_pass_without_merging_again(passing):
     assert card["list_id"] == "Done" and len(_merges_in(passing)) == 1
 
 
+def _labelled(host, n, name):
+    host.prs[n]["labels"].append({"name": name})
+
+
+@pytest.mark.parametrize("change", [
+    lambda pr: pr["labels"].append({"name": "hold"}),
+    lambda pr: pr["labels"].append({"name": "pl:needs-rework"}),
+    lambda pr: pr["labels"].append({"name": "pl:review-failed"}),
+    lambda pr: pr["labels"].clear(),
+    lambda pr: pr.update(isDraft=True),
+    lambda pr: pr.update(state="CLOSED"),
+])
+def test_pr_changed_after_listing_is_not_merged(passing, change):
+    _ready(passing, 1, 2)
+    passing.on_judge = lambda cid: change(passing.prs[1]) if cid == "c1" else None
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(2)]
+    assert [m[2] for m in _merges_in(passing)] == ["2"]
+
+
+def test_merge_record_lost_to_a_budget_error_is_written_next_pass(passing):
+    _ready(passing, 1)
+    passing.update_error = merges.OverBudget(0, "low")
+    with pytest.raises(merges.OverBudget):
+        merges.run_pass(passing.cards, dry=False)
+    (card,) = passing.cards
+    assert len(_merges_in(passing)) == 1 and "auto_merged" not in card["metadata"]
+    passing.update_error = None
+    passing.prs[1]["state"] = "MERGED"
+    assert merges.run_pass(passing.cards, dry=False) == []
+    assert card["list_id"] == "Done" and card["metadata"]["auto_merged"]["pr"] == URL.format(1)
+    assert len(_merges_in(passing)) == 1
+
+
 def test_dry_pass_merges_nothing(passing):
     _ready(passing, 1)
     assert merges.run_pass(passing.cards, dry=True) == [URL.format(1)]
@@ -374,7 +565,7 @@ def due(monkeypatch):
         if isinstance(t.result, BaseException):
             raise t.result
         return []
-    monkeypatch.setattr(dispatch.merges, "run_pass", run_pass)
+    monkeypatch.setattr(merges, "run_pass", run_pass)
     C.AUTO_MERGE = {"enabled": True, "every": "15m"}
     return t
 

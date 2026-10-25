@@ -180,7 +180,7 @@ def test_connectors_commands_audit(monkeypatch):
     def ns(**kw):
         return type("A", (), kw)()
     connectors.cmd_connectors(ns(connectors_cmd="add", name="slack", command=None, url="https://x.example", pin=None, yes=True))
-    connectors.cmd_connectors(ns(connectors_cmd="revoke", name="slack"))
+    connectors.cmd_connectors(ns(connectors_cmd="revoke", name="slack", yes=True))
     connectors.cmd_connectors(ns(connectors_cmd="approve-tools", name="slack", yes=True))
 
     entries = _audit_lines()

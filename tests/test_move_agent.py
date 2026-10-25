@@ -546,6 +546,7 @@ def _manual(monkeypatch, c, answer=None):
             raise AssertionError("no confirm expected")
         return answer
     monkeypatch.setattr("builtins.input", ask)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     return asked
 
 

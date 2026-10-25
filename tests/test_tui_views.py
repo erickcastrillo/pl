@@ -1038,6 +1038,8 @@ def test_the_pipeline_keys_do_not_clash_with_the_console_keys():
     assert len(view_keys) == len(set(view_keys))
     assert not ({"d", "h", "f", "F", "z", "u", "e"} & app_keys) and {"d", "h", "f", "F", "z", "u", "e"} <= set(view_keys)
     assert "D" in app_keys and "D" not in view_keys   # D stays the dispatcher's key
+    assert "P" in view_keys and "P" not in app_keys
+    assert {b.key: b.description for b in tui_cards.CardsView.BINDINGS}["P"] == "plan filter"
     assert {"ctrl+k", "exclamation_mark"} <= app_keys and not ({"ctrl+k", "exclamation_mark"} & set(view_keys))
 
 
@@ -1957,10 +1959,6 @@ def _with_controls():
     return data
 
 
-def _notes(app):
-    return " | ".join(str(n.message) for n in app._notifications)
-
-
 def test_the_new_pipeline_keys_do_not_clash():
     app_keys = {b.key for b in PlApp.BINDINGS}
     view_keys = [b.key for b in tui_cards.CardsView.BINDINGS]
@@ -2273,3 +2271,171 @@ async def test_three_prs_and_two_gates_give_5_everywhere(monkeypatch):
         await pilot.press("3")
         await settle(pilot)
         assert "5 need you" in app.query_one("#prs-table").border_title
+
+
+# ---------- plan 21 slice 6: the P plan filter on the Pipeline tab ----------
+
+def _with_plan():
+    data = _with_done()
+    for cid, plan, slice_no in (("spec0001aaaa", 21, 5), ("c0000003aaaa", 21, 1), ("f0000001aaaa", 21, 2), ("d0000004aaaa", 3, 1)):
+        row = next(r for r in [*data["snapshot"]["rows"], *data["snapshot"]["done"]] if r.get("card") and r["card"]["id"] == cid)
+        row["card"]["metadata"].update(plan=plan, slice=slice_no)
+    return data
+
+
+async def _filter_plan(pilot, text):
+    await pilot.press("P")
+    await pilot.pause()
+    await pilot.press(*text, "enter")
+    await settle(pilot)
+
+
+async def test_P_shows_one_plan_ordered_by_slice_with_done_and_columns(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        before = {k: [c.plain for c in app.query_one("#cards-table").get_row(k)] for k in view._rows}
+        await _filter_plan(pilot, "21")
+        t = app.query_one("#cards-table")
+        assert list(view._rows) == ["c0000003aaaa", "f0000001aaaa", "spec0001aaaa"]
+        assert "plan 21 · 3 cards · P clears" in t.border_title
+        for k in view._rows:
+            cells = [c.plain for c in t.get_row(k)]
+            assert cells[:3] == before[k][:3] if k in before else True
+        assert t.get_row("f0000001aaaa")[3].plain.startswith("Done")
+        assert t.get_row("spec0001aaaa")[3].plain.startswith("Spec ready")
+
+
+async def test_P_equal_slices_sit_together_by_card_id(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    data = _with_plan()
+    for r in data["snapshot"]["rows"]:
+        if r.get("card") and r["card"]["id"] in ("4a000001aaaa", "60000002aaaa"):
+            r["card"]["metadata"].update(plan=21, slice=2)
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        await _filter_plan(pilot, "21")
+        assert list(view._rows) == ["c0000003aaaa", "4a000001aaaa", "60000002aaaa", "f0000001aaaa", "spec0001aaaa"]
+
+
+async def test_P_unknown_plan_shows_empty_list_without_crashing(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        await _filter_plan(pilot, "7")
+        assert view._rows == {} and "no cards in plan 7" in app.query_one("#cards-table").border_title
+        assert "No cards in plan 7." in screen_text(app)
+
+
+@pytest.mark.parametrize("typed", ["abc", "0", ""])
+async def test_P_rejects_bad_numbers_and_esc_changes_nothing(monkeypatch, typed):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        rows = list(view._rows)
+        await _filter_plan(pilot, typed)
+        assert view.plan is None and list(view._rows) == rows
+        assert any("whole number from 1" in str(n.message) for n in app._notifications)
+        await pilot.press("P")
+        await pilot.pause()
+        await pilot.press("escape")
+        await settle(pilot)
+        assert view.plan is None and list(view._rows) == rows and len(app.screen_stack) == 1
+
+
+async def test_P_again_clears_the_filter(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        rows, title = list(view._rows), app.query_one("#cards-table").border_title
+        await _filter_plan(pilot, "21")
+        await pilot.press("P")
+        await settle(pilot)
+        assert view.plan is None and list(view._rows) == rows and app.query_one("#cards-table").border_title == title
+
+
+async def test_plan_filter_survives_refresh(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    provider = Provider(_with_plan())
+    app = PlApp(snapshot_provider=provider)
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        await _filter_plan(pilot, "21")
+        calls = len(provider.threads)
+        await pilot.press("r")
+        await settle(pilot)
+        assert len(provider.threads) > calls and view.plan == 21
+        assert list(view._rows) == ["c0000003aaaa", "f0000001aaaa", "spec0001aaaa"]
+
+
+async def test_card_keys_act_on_the_selected_plan_card(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    got = _called(monkeypatch, "move_to", "spec0001aaaa")
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        await _filter_plan(pilot, "21")
+        t = app.query_one("#cards-table")
+        t.move_cursor(row=t.get_row_index("spec0001aaaa"))
+        await settle(pilot)
+        await pilot.press("v")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(pilot)
+    assert [g[0][0] for g in got] == ["spec0001aaaa"]
+
+
+async def test_plan_filter_and_needs_you_combine(monkeypatch):
+    from pl.tui.needs import needs_me
+    _fake_card_read(monkeypatch, [])
+    data = _with_plan()
+    for r in data["snapshot"]["rows"]:
+        if r.get("card") and r["card"]["id"] == "spec0001aaaa":
+            r["kind"] = "review"
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        await _filter_plan(pilot, "21")
+        await pilot.press("f")
+        await settle(pilot)
+        assert "spec0001aaaa" in view._rows and "f0000001aaaa" not in view._rows and "d0000004aaaa" not in view._rows
+        assert all(needs_me(r) for r in view._rows.values()) and "needs you only" in app.query_one("#cards-table").border_title
+
+
+async def test_an_empty_board_says_no_cards_and_how_to_add_one():
+    data = fake_data()
+    data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"] if r.get("card") is None and not r.get("pr")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        text = screen_text(app)
+    assert "No cards yet." in text and "Add one with n on the Ideas tab," in text and 'or pl idea "..."' in text
+    assert "loading" not in text and "not reachable" not in text
+
+
+async def test_a_failed_refresh_shows_last_good_time_and_what_failed(monkeypatch):
+    prov = Provider()
+    app = PlApp(snapshot_provider=prov)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        good = app.last_good_at
+        assert good is not None and "data from" not in screen_text(app)
+        prov.fail = SystemExit("pl: board API answered Rate exceeded")
+        app.refresh_data()
+        await settle(pilot)
+        text = screen_text(app)
+        assert f"data from {good}" in text
+        assert "refresh failed: pl: board API answered Rate exceeded" in text
+        assert app.query_one("#cards-table").border_subtitle.startswith("refresh failed: ")
+        assert app.query_one("#prs-table").border_subtitle.startswith("refresh failed: ")
+        prov.fail = None
+        app.refresh_data()
+        await settle(pilot)
+        assert not app.query_one("#cards-table").border_subtitle

@@ -12,7 +12,7 @@ import tomlkit
 from pl import agents, board, boardcheck, trackers
 from pl import config as C
 from pl.boardserve import _is_loopback
-from pl.util import parse_iso
+from pl.util import ask, parse_iso
 
 MARK = "migrated_from"
 
@@ -162,9 +162,7 @@ def cmd_migrate(a):
             _fail(f"{a.to} fails pl board check; nothing copied:\n  " + "\n  ".join(_rule_lines(failed)), 1)
     state_file = C.STATE_DIR / "board-migrate.json"
     if not (a.dry_run or a.yes):
-        if not sys.stdin.isatty():
-            _fail("this copies every card; pass --yes to confirm", 2)
-        if input(f"Copy {len(cards)} cards to {a.to} and switch? [y/N]: ").strip().lower() not in ("y", "yes"):
+        if ask("board migrate", f"Copy {len(cards)} cards to {a.to} and switch? [y/N]: ").strip().lower() not in ("y", "yes"):
             _fail("nothing copied", 1)
     todo = copy(src, dst, state_path=state_file, dry=a.dry_run, progress=log, src_key=str(C.TRACKER.get("type", "")))
     switched = False
