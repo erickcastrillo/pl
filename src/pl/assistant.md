@@ -49,6 +49,7 @@ Status and the board:
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
 - `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.
+- `pl models list|test JOB` (`--json`): the local-model jobs, which models are pulled, and a three-run sample check. Read-only. `pl models set JOB MODEL` changes the config (it asks).
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
 - `pl worktrees list` | `gc` (`--yes`, `--json`): the worktrees pl-run made, and which are safe to remove; `gc --yes` removes them (it asks).
@@ -68,6 +69,7 @@ Moving work (rule 1 applies):
   (the dispatcher also does this daily).
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
 - `pl caps set <id> [--minutes M] [--tokens 4M]` / `pl caps reset <id>`: give one card its own caps; `pl retry <id>` then restarts a card stopped at a cap.
+- `pl loops run <name> [--wait] [--json]`: run a scheduled loop (one with `every`) once now; the dispatcher starts it on its next pass.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
 - `pl link <id> <pipeline>:<id>` (`--relation`): link a card to a card in another pipeline's profile.
