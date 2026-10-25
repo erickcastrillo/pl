@@ -21,7 +21,7 @@ class FakeGitHub:
         return [
             {"id": "o/r#7", "item_id": "PVTI_7", "title": "seven", "description": "d7", "tags": ["a", "b"],
              "metadata": {"worker": {"pane": "%1"}, "pr_urls": ["https://github.com/o/r/pull/9"], "pipeline_mode": "auto"},
-             "list_id": "o2", "assigned_to": "erick"},
+             "list_id": "o2", "assigned_to": "alice"},
             {"id": "o/r#8", "item_id": "PVTI_8", "title": "eight", "description": "", "tags": [], "metadata": {},
              "list_id": "o1", "assigned_to": None},
             {"id": "o/r#9", "item_id": "PVTI_9", "title": "nine", "description": "d9", "tags": ["c"], "metadata": {"x": 1},
@@ -89,7 +89,7 @@ def test_init_copies_cards_columns_and_metadata(monkeypatch):
     assert set(got) == {"seven", "eight", "nine"}
     seven = got["seven"]
     assert names[seven["list_id"]] == "Approved"
-    assert (seven["description"], seven["tags"], seven["assigned_to"]) == ("d7", ["a", "b"], "erick")
+    assert (seven["description"], seven["tags"], seven["assigned_to"]) == ("d7", ["a", "b"], "alice")
     assert seven["metadata"] == FakeGitHub().cards()[0]["metadata"]
     assert names[got["eight"]["list_id"]] == "Inbox"
 
