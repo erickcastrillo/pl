@@ -248,6 +248,14 @@ def main():
     ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
+    if os.environ.get("PL_SOURCE"):
+        card_id = getattr(a, "id", None) or getattr(a, "card", None)
+        events.emit("remote_action", card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
+        try:
+            from pl import audit
+            audit.record("remote_action", card=card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
+        except Exception:
+            pass
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,

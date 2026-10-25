@@ -442,6 +442,11 @@ def tick(state):
     except Exception:  # noqa: BLE001
         pass
     try:
+        from pl.chat import inbound
+        inbound.poll()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         live, cap, pct, hold, per = state["caps"] = _caps(state, profs)
     except Exception as e:  # noqa: BLE001 - a tmux or ps problem keeps the last counts, never stops the tick
         print(f"caps failed: {type(e).__name__}: {e}", flush=True)
