@@ -3,7 +3,7 @@ import json
 import shlex
 from datetime import datetime
 
-from pl import alerts, board, harnesses
+from pl import alerts, board, events, harnesses
 from pl import config as C
 from pl.util import now_iso, notify
 
@@ -45,6 +45,7 @@ def _record(c, w, a):
     else:
         w["finished_turn"] = True
     board.update(c["id"], metadata={"worker": w})
+    events.emit("state_transition", c["id"], source="hook", event=a.event)
     if a.event == "Notification" and (why := alerts.open(
             f"permission_wait:{c['id']}", "warn", f"agent waiting for permission: {c['title'][:40]}",
             f"answer it in the agent window (pl card {a.card}); README: Permissions")):

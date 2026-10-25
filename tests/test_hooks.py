@@ -159,7 +159,7 @@ def test_dispatch_reconciliation_picks_newer_timestamp(monkeypatch):
     assert hooks.hook_permission(_hook_worker("Stop", now)) is None
 
 
-def _pass(monkeypatch, c):
+def _pass(monkeypatch, c, ask=None):
     writes = []
     monkeypatch.setattr(dispatch, "registry", lambda: {})
     monkeypatch.setattr(dispatch, "cards", lambda: [c])
@@ -170,7 +170,7 @@ def _pass(monkeypatch, c):
     monkeypatch.setattr(dispatch, "notify", lambda *a: None)
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w["session_id"]))
     monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: None)
-    monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: None)
+    monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ask)
     monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
     for name in ("mirror_to_product", "ensure_services"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
@@ -203,3 +203,37 @@ def test_dispatch_reconciliation_prefers_limit_over_hook(monkeypatch):
     monkeypatch.setattr(dispatch, "healthy_profile", lambda *a, **k: None)
     writes = _pass(monkeypatch, _hooked_card())
     assert asked == [] and any(f["metadata"]["worker"].get("limit_hit") for _, f in writes if "worker" in f.get("metadata", {}))
+
+
+def _emitted(monkeypatch):
+    seen = []
+    monkeypatch.setattr(hooks.events, "emit", lambda kind, card=None, **d: seen.append((kind, card, d)))
+    return seen
+
+
+@pytest.mark.parametrize("event", ["Notification", "Stop"])
+def test_hook_emits_state_transition_event(board, monkeypatch, event):
+    seen = _emitted(monkeypatch)
+    _run(event)
+    assert seen == [("state_transition", CARD, {"source": "hook", "event": event})]
+
+
+def test_a_foreign_hook_emits_nothing(board, monkeypatch):
+    seen = _emitted(monkeypatch)
+    with pytest.raises(SystemExit):
+        _run("Stop", window="@99")
+    assert seen == []
+
+
+def test_screen_permission_wait_emits_one_screen_transition(monkeypatch):
+    seen = []
+    monkeypatch.setattr(dispatch.events, "emit", lambda kind, card=None, **d: seen.append((kind, card, d)))
+    _alive(monkeypatch, activity=time.time() - 60)
+    monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)
+    c = _hooked_card()
+    c["metadata"]["worker"].pop("permission_wait")
+    c["metadata"]["worker"].pop("hook_event")
+    _pass(monkeypatch, c, ask="waiting: permission")
+    assert [s for s in seen if s[0] == "state_transition"] == [
+        ("state_transition", CARD, {"source": "screen", "transition": "permission_wait"})]
+

@@ -958,6 +958,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                                       f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions"):
                     notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
             if bool(ask) != bool(w.get("permission_wait")):
+                if ask and not hooks.hook_permission(w):
+                    events.emit("state_transition", c["id"], source="screen", transition="permission_wait")
                 w = {**w, "permission_wait": ask} if ask else {k: v for k, v in w.items() if k != "permission_wait"}
                 update(c["id"], metadata={"worker": w})
         if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
@@ -975,6 +977,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 idle_for = screen_quiet(st, w["pane"])
             if (idle_for > 300 or w.get("finished_turn")) and w.get("window"):
                 print(f"{short_id(c['id'])}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
+                if not w.get("finished_turn") and not dry:
+                    events.emit("state_transition", c["id"], source="screen", transition="idle_finish")
                 if not dry:
                     tmux("kill-window", "-t", w["window"], check=False)
                     update(c["id"], metadata={"worker": None})
