@@ -47,12 +47,12 @@ def test_the_store_is_created_0600_with_version_1():
 
 def test_add_then_get_returns_every_field():
     i = recall.add("split into 3 PRs", "rejection", "run:abc", card="42", pipeline="p", pod="eng",
-                   client="acme", contact="c1", author="erick")
+                   client="acme", contact="c1", author="ana")
     assert i.startswith("m-") and len(i) == 10
     e = recall.get(i)
     assert (e["kind"], e["text"], e["source"], e["card"], e["pipeline"], e["pod"], e["client"],
             e["contact"], e["author"]) == ("rejection", "split into 3 PRs", "run:abc", "42", "p", "eng",
-                                           "acme", "c1", "erick")
+                                           "acme", "c1", "ana")
     assert e["created_at"] and e["replaced_by"] is None
     assert recall.get("m-00000000") is None
 
