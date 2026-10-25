@@ -97,6 +97,8 @@
   pl sandbox create|status|start|stop|destroy [--yes]
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
                           work folder and worktrees folder; --yes destroys the VM without asking
+  pl worktrees bootstrap PATH [--dry-run]
+                          copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -305,9 +307,10 @@ def _main():
     q = pk.add_parser("enable"); q.add_argument("name", nargs="?", help="skill name"); q.add_argument("--plugin", help="plugin name")
     q.add_argument("--pod", required=True, help="pod name"); q.add_argument("--hooks", action="store_true", help="enable plugin hooks")
     q.add_argument("--yes", action="store_true", help="do not ask first")
-    p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc"])
+    p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc", "bootstrap"])
+    p.add_argument("path", nargs="?", help="bootstrap: the new worktree")
     p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
-    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default)")
+    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied and linked")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")

@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, ideas, move_agent, pods, recall, trackers
+from pl import audit, events, ideas, move_agent, pods, recall, trackers, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -828,3 +828,11 @@ def cmd_outbox(a):
 
 
 
+
+
+def cmd_worktrees_bootstrap(a):
+    try:
+        for note in worktrees.bootstrap_worktree(worktrees.main_checkout(Path.cwd()), Path(a.path).expanduser().resolve(), a.dry_run):
+            print(note)
+    except ValueError as e:
+        raise SystemExit(f"pl worktrees bootstrap: {e}")
