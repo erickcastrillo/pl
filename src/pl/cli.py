@@ -171,7 +171,8 @@
                           are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
-  pl loops list [--json] | add NAME (--skill S | --prompt P) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
+  pl loops list [--json] | add NAME (--skill S | --prompt P | --template T) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
+          | edit NAME [--every E] [--prompt P] [--skill S] [--hours H] [--account A] [--writes|--no-writes] [--convert]
           | pause NAME | resume NAME | rm NAME [--yes]
                           manage the profile's [loops.NAME] tables; --every is 30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>
   pl assistant log "text" | idea save ... | idea file <idea-id>
@@ -386,11 +387,17 @@ def _main():
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
     q = pl_.add_parser("list"); q.add_argument("--json", action="store_true")
-    q = pl_.add_parser("add"); q.add_argument("name"); g = q.add_mutually_exclusive_group(required=True)
+    q = pl_.add_parser("add"); q.add_argument("name"); g = q.add_mutually_exclusive_group()
     g.add_argument("--skill"); g.add_argument("--prompt")
+    q.add_argument("--template", help="start from a ready-made loop: auto-review, daily-standup, inbox-triage, overdue-invoices, dependency-updates, stale-cards")
     q.add_argument("--every", help="30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>"); q.add_argument("--hours", help="HH:MM-HH:MM [weekdays]")
-    q.add_argument("--account"); q.add_argument("--team"); q.add_argument("--writes", action="store_true", help="let the loop write (default: read-only)")
+    q.add_argument("--account"); q.add_argument("--team"); q.add_argument("--writes", action=argparse.BooleanOptionalAction, help="let the loop write (default: read-only)")
     q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="say what would be added, add nothing")
+    q = pl_.add_parser("edit"); q.add_argument("name")
+    q.add_argument("--skill"); q.add_argument("--prompt"); q.add_argument("--every", help="30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>")
+    q.add_argument("--hours", help="HH:MM-HH:MM [weekdays]"); q.add_argument("--account")
+    q.add_argument("--writes", action=argparse.BooleanOptionalAction, help="let the loop write, or not")
+    q.add_argument("--convert", action="store_true", help="turn a leading /loop 30m in the prompt into --every")
     for verb in ("pause", "resume"):
         q = pl_.add_parser(verb); q.add_argument("name")
     q = pl_.add_parser("rm"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
