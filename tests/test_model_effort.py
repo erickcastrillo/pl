@@ -302,6 +302,31 @@ def test_validation_never_runs_a_subprocess(fake_home):
     assert C.validate(_doc(fake_home, rest='model = "anything-new"\n[stages.plan.models]\nantigravity = "gemini-future"\n')) == []
 
 
+SMALL = '[stages.run.small]\nmax_lines = 60\nmax_files = 3\n[stages.run.small.models]\nclaude = "haiku"\n'
+
+
+def test_a_valid_small_table_loads(fake_home):
+    rest = ('[stages.run.small]\nmax_lines = 60\nmax_files = 3\n'
+            '[stages.run.small.models]\nclaude = "haiku"\nantigravity = "gemini-3.8-flash-low"\n')
+    assert C.validate(_doc(fake_home, rest=rest)) == []
+
+
+@pytest.mark.parametrize("rest,path", [
+    ("[stages.run.small]\nmax_files = 3\n", "stages.run.small.max_lines"),
+    ("[stages.run.small]\nmax_lines = 60\nmax_files = 0\n", "stages.run.small.max_files"),
+    ("[stages.run.small]\nmax_lines = true\nmax_files = 3\n", "stages.run.small.max_lines"),
+    ('[stages.run.small]\nmax_lines = "60"\nmax_files = 3\n', "stages.run.small.max_lines"),
+    (SMALL + 'bogus = "x"\n', "stages.run.small.models.bogus"),
+    (SMALL + 'antigravity = "-x"\n', "stages.run.small.models.antigravity"),
+    (SMALL + 'antigravity = "haiku"\n', "stages.run.small.models.antigravity"),
+    ("[stages.run]\nsmall = 5\n", "stages.run.small"),
+    ("[stages.plan.small]\nmax_lines = 60\nmax_files = 3\n", "stages.plan.small"),
+])
+def test_bad_small_settings_are_refused_with_the_key_path(fake_home, rest, path):
+    errs = C.validate(_doc(fake_home, rest=rest))
+    assert any(path in e for e in errs), errs
+
+
 # ---------- Settings ----------
 
 CONFIG = """[accounts.main]
@@ -393,3 +418,92 @@ async def test_a_pool_of_harnesses_without_shared_levels_offers_only_the_shared_
     async with app.run_test(size=(176, 60)) as pilot:
         view = await _settings(pilot)
         assert _options(view, ("stages", "run", "effort")) == ["low", "high"]
+
+
+# ---------- small-change model ----------
+
+SMALL_PLAN = "budget: 2 files changed / 1 test file / about 42 lines"
+SMALL_TOML = ('[stages.run.small]\nmax_lines = 60\nmax_files = 3\n'
+              '[stages.run.small.models]\nclaude = "haiku"\nantigravity = "gemini-3.8-flash-low"\n'
+              '[stages.run.models]\nclaude = "opus"\nantigravity = "normal-m"\n')
+
+
+def _run_launch(home, fake_tmux, monkeypatch, harness, plan, rework=False, toml=SMALL_TOML, account_extra=""):
+    """The argv of a run agent whose card's PLAN section holds plan."""
+    desc = f"# PIPELINE: PLAN\n{plan}\n" if plan is not None else "# PIPELINE: SPEC\nx\n"
+    monkeypatch.setattr(dispatch, "card", lambda cid: {"id": cid, "description": desc})
+    _profile(home, f'[accounts.a]\nharness = "{harness}"\nconfig_dir = "~"\n{account_extra}\n{toml}')
+    C.PROMPTS = {"run": "/run {id}"}
+    meta = {"profile": "a", **({"rework": {"active": True, "round": 1}} if rework else {})}
+    dispatch.start_worker({"id": "abc", "title": "t", "metadata": meta}, "run", 1, False)
+    return shlex.split(fake_tmux[-1])
+
+
+@pytest.mark.parametrize("harness,model", [("claude", "haiku"), ("antigravity", "gemini-3.8-flash-low")])
+def test_a_small_plan_starts_the_run_agent_on_the_small_model(fake_home, fake_tmux, monkeypatch, harness, model):
+    argv = _run_launch(fake_home, fake_tmux, monkeypatch, harness, SMALL_PLAN)
+    assert argv[1:3] == ["--model", model]
+
+
+@pytest.mark.parametrize("plan,model", [
+    ("budget: 4 files changed / 1 test file / about 42 lines", "opus"),
+    ("budget: 2 files changed / 1 test file / about 61 lines", "opus"),
+    ("budget: 3 files changed / 1 test file / about 60 lines", "haiku"),
+])
+def test_a_plan_over_either_limit_uses_the_normal_model(fake_home, fake_tmux, monkeypatch, plan, model):
+    assert _run_launch(fake_home, fake_tmux, monkeypatch, "claude", plan)[1:3] == ["--model", model]
+
+
+@pytest.mark.parametrize("plan", [
+    "no budget here", "budget: 2 files changed / 1 test file / about 40-60 lines", None])
+def test_a_plan_without_a_readable_budget_uses_the_normal_model(fake_home, fake_tmux, monkeypatch, plan):
+    assert _run_launch(fake_home, fake_tmux, monkeypatch, "claude", plan)[1:3] == ["--model", "opus"]
+
+
+def test_a_card_that_cannot_be_fetched_uses_the_normal_model(fake_home, fake_tmux, monkeypatch):
+    def boom(cid):
+        raise github.RateLimited(0)
+
+    monkeypatch.setattr(dispatch, "card", boom)
+    _profile(fake_home, '[accounts.a]\nharness = "claude"\nconfig_dir = "~"\n' + SMALL_TOML)
+    C.PROMPTS = {"run": "/run {id}"}
+    dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "run", 1, False)
+    assert shlex.split(fake_tmux[-1])[1:3] == ["--model", "opus"]
+
+
+def test_a_rework_round_never_uses_the_small_model(fake_home, fake_tmux, monkeypatch):
+    argv = _run_launch(fake_home, fake_tmux, monkeypatch, "claude", SMALL_PLAN, rework=True)
+    assert argv[1:3] == ["--model", "opus"]
+
+
+def test_a_small_run_without_a_model_for_its_harness_uses_the_normal_model(fake_home, fake_tmux, monkeypatch):
+    toml = ('[stages.run.small]\nmax_lines = 60\nmax_files = 3\n[stages.run.small.models]\nantigravity = "gemini-3.8-flash-low"\n'
+            '[stages.run.models]\nclaude = "opus"\n')
+    assert _run_launch(fake_home, fake_tmux, monkeypatch, "claude", SMALL_PLAN, toml=toml)[1:3] == ["--model", "opus"]
+    toml = '[stages.run.small]\nmax_lines = 60\nmax_files = 3\n[stages.run.small.models]\nantigravity = "gemini-3.8-flash-low"\n'
+    argv = _run_launch(fake_home, fake_tmux, monkeypatch, "claude", SMALL_PLAN, toml=toml, account_extra='model = "acct-m"')
+    assert argv[1:3] == ["--model", "acct-m"]
+
+
+def test_without_small_the_card_is_not_refetched(fake_home, fake_tmux, monkeypatch):
+    def boom(cid):
+        pytest.fail("card refetched")
+
+    monkeypatch.setattr(dispatch, "card", boom)
+    _profile(fake_home, '[accounts.a]\nharness = "claude"\nconfig_dir = "~"\n[stages.run.models]\nclaude = "opus"\n')
+    C.PROMPTS = {"run": "/run {id}"}
+    dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "run", 1, False)
+    assert shlex.split(fake_tmux[-1])[1:3] == ["--model", "opus"]
+
+
+def test_a_small_model_is_only_for_the_run_stage_launch(fake_home):
+    _profile(fake_home, '[accounts.a]\nharness = "claude"\nconfig_dir = "~"\n' + SMALL_TOML)
+    argv, _ = harnesses.headless_argv(harnesses.get("claude"), "a", "hi", stage="run")
+    assert argv[1:3] == ["--model", "opus"]
+
+
+def test_plan_budget_reads_files_and_lines():
+    assert harnesses.plan_budget("x\nbudget: 6 files changed / 1 test file / about 75 lines\n") == (6, 75)
+    assert harnesses.plan_budget("budget: 1 file changed, about 10 lines") == (1, 10)
+    assert harnesses.plan_budget("budget: 6 files changed / about 40-60 lines") is None
+    assert harnesses.plan_budget(None) is None

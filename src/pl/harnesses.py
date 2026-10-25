@@ -152,13 +152,28 @@ def models(name):
     return list(out)
 
 
-def model_effort(h, account, stage=None):
+BUDGET_RE = re.compile(r"^budget:\s*(\d+)\s+files?\s+changed\b.*?\babout\s+(\d+)\s+lines?\b", re.M | re.I)
+
+
+def plan_budget(text):
+    """(files, lines) of a PLAN's budget line, None when it has none pl can read."""
+    m = BUDGET_RE.search(text or "")
+    return (int(m[1]), int(m[2])) if m else None
+
+
+def model_effort(h, account, stage=None, small=False):
     """(model, effort) a launch of h under account passes, None for each that is unset or that h does not take.
-    The model is the stage's for h's harness, else the account's (only when h is the account's own harness);
-    the effort is the stage's, else the account's."""
+    The model is the stage's small-change one for h's harness when small, else the stage's for h's harness, else
+    the account's (only when h is the account's own harness); the effort is the stage's, else the account's."""
     a = C.ACCOUNTS.get(account) or {}
-    sm = (C.STAGES.get(stage) or {}).get("models") if stage else None
+    cfg = C.STAGES.get(stage) or {}
+    sm = cfg.get("models") if stage else None
     sm = sm.get(h.name) if isinstance(sm, dict) else None
+    if small and h.name in MODEL_FLAGS:
+        small_models = (cfg.get("small") or {}).get("models")
+        pick = small_models.get(h.name) if isinstance(small_models, dict) else None
+        if isinstance(pick, str) and MODEL_RE.fullmatch(pick):
+            sm = pick
     if h.name in MODEL_FLAGS and isinstance(sm, str) and MODEL_RE.fullmatch(sm):
         model = sm
     else:
@@ -181,10 +196,10 @@ def worktrees_dir():
     return Path(d)
 
 
-def _with_model(template, h, account, stage, worktrees=None):
+def _with_model(template, h, account, stage, worktrees=None, small=False):
     """(template, values): the model, effort and worktrees folder flags after the program name, unless the template
     sets that flag."""
-    model, effort = model_effort(h, account, stage)
+    model, effort = model_effort(h, account, stage, small)
     add = []
     if model and not any(MODEL_FLAG_RE.search(t) for t in template):
         add += MODEL_FLAGS[h.name]
@@ -320,18 +335,19 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
     plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins.
+    small: the stage's small-change model for h's harness wins over its normal one.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
     hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook."""
     from pl import hooks as pl_hooks, skills
     pdir = skills.launch_plugin(h, plugin)
     prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
-    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt)
+    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
                               pdir)
     if hooks and stage and h.name == "claude" and pl_hooks.enabled():
