@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import tomlkit
 
-from pl import agents, board, trackers
+from pl import agents, board, boardcheck, trackers
 from pl import config as C
 from pl.boardserve import _is_loopback
 from pl.util import parse_iso
@@ -137,6 +137,11 @@ def _fail(message, code):
     raise SystemExit(code)
 
 
+def _rule_lines(results):
+    return [f"{'PASS' if r['ok'] else 'FAIL'} {r['id']} {r['text']}" + (f": {r['reason']}" if r["reason"] and not r["ok"] else "")
+            for r in results]
+
+
 def cmd_migrate(a):
     if not a.to:
         _fail("give --to local, a URL, or a server name", 2)
@@ -147,6 +152,14 @@ def cmd_migrate(a):
         _fail(f"agents are working on {', '.join(live)}: wait for these agents or pl restart them", 1)
     dst = _build(dst_cfg)
     log = (lambda line: print(line, file=sys.stderr)) if a.json else print
+    if not a.skip_check:
+        results = boardcheck.check(dst)
+        failed = [r for r in results if not r["ok"]]
+        if a.dry_run:
+            for line in _rule_lines(results):
+                log(line)
+        elif failed:
+            _fail(f"{a.to} fails pl board check; nothing copied:\n  " + "\n  ".join(_rule_lines(failed)), 1)
     state_file = C.STATE_DIR / "board-migrate.json"
     if not (a.dry_run or a.yes):
         if not sys.stdin.isatty():
