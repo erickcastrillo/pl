@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
-from pl import events, ideas, move_agent, recall, trackers
+from pl import events, ideas, move_agent, pods, recall, trackers
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -250,6 +250,10 @@ def cmd_approve(a):
         if at:
             print(f"already approved at {datetime.fromtimestamp(parse_iso(at)).strftime('%H:%M')} \u2014 the planner starts on its own")
             return
+        draft_p = pods.draft_path(c["id"], "SPEC")
+        draft = draft_p.read_text() if draft_p.is_file() else (sections(c.get("description")).get("SPEC") or "")
+        approved = sections(c.get("description")).get("SPEC") or ""
+        pods.learn(c["id"], "SPEC", draft, approved)
         update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL})
         events.emit("spec_approved", c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
@@ -257,6 +261,8 @@ def cmd_approve(a):
     if col != "Plan for review" and not a.force:
         raise BadInput(f"pl approve: card is in '{col}', not 'Plan for review' (use --force to override)")
     parts = sections(c.get("description"))
+    draft_p = pods.draft_path(c["id"], "PLAN")
+    draft = draft_p.read_text() if draft_p.is_file() else (parts.get("PLAN") or "")
     path = plan_path(c)
     edited = edited_plan(c, path)
     if edited is not None:
@@ -268,6 +274,8 @@ def cmd_approve(a):
                              f"written. Trim it to this card's work packages, then approve again ({e})")
         update(c["id"], description=desc)
         print(f"synced your edits from {path} to the card")
+    approved = parts.get("PLAN") or ""
+    pods.learn(c["id"], "PLAN", draft, approved)
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
     events.emit("approved", c["id"])

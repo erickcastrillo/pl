@@ -261,6 +261,8 @@ def _main():
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("rule"); qa = q.add_subparsers(dest="rule_cmd", required=True)
     r = qa.add_parser("add"); r.add_argument("pod"); r.add_argument("text"); r.add_argument("--note"); r.add_argument("--yes", action="store_true", help="do not ask first")
+    r = qa.add_parser("accept"); r.add_argument("id"); r.add_argument("--yes", action="store_true", help="do not ask first")
+    r = qa.add_parser("dismiss"); r.add_argument("id")
     q = pp.add_parser("rollback"); q.add_argument("pod"); q.add_argument("--to", type=int, required=True); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pp.add_parser("history"); q.add_argument("pod"); q.add_argument("--json", action="store_true")
     q = pk.add_parser("enable"); q.add_argument("name", nargs="?", help="skill name"); q.add_argument("--plugin", help="plugin name")
