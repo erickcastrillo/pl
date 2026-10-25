@@ -1,53 +1,168 @@
 {
+ "accounts": {
+  "accounts": [
+   {
+    "dir": "str",
+    "name": "str",
+    "parked": "bool",
+    "reason": "str",
+    "until": "str"
+   }
+  ]
+ },
  "alerts": {
   "alerts": [
    {
+    "count": "int",
+    "first_seen": "float",
+    "fix": "str",
     "key": "str",
     "severity": "str",
-    "title": "str",
-    "fix": "str",
-    "first_seen": "float",
-    "count": "int"
+    "title": "str"
    }
   ]
  },
  "card": {
-  "id": "str",
-  "title": "str",
+  "caps": {},
   "column": "str",
-  "tags": [
-   "str"
-  ],
-  "updated_at": "str",
+  "id": "str",
   "metadata": {
    "pipeline_mode": "str"
   },
   "sections": {
    "SPEC": "int"
   },
-  "caps": {},
   "spent": {
    "minutes": "int",
    "tokens": "int"
-  }
+  },
+  "tags": [
+   "str"
+  ],
+  "title": "str",
+  "updated_at": "str"
  },
- "list": {
-  "pipeline": [
+ "intent": {
+  "cards": [
    {
     "id": "str",
-    "title": "str",
-    "column": "str",
-    "agent": "str",
-    "depends_on": [],
-    "waiting_on": [],
-    "age_seconds": "int"
+    "plan_scope": "str",
+    "spec": "str",
+    "title": "str"
    }
   ],
-  "intake": []
+  "pr": "str"
+ },
+ "list": {
+  "intake": [],
+  "pipeline": [
+   {
+    "age_seconds": "int",
+    "agent": "str",
+    "column": "str",
+    "depends_on": [],
+    "id": "str",
+    "title": "str",
+    "waiting_on": []
+   }
+  ]
+ },
+ "profiles": {
+  "profiles": [
+   {
+    "accounts": {
+     "work": "str"
+    },
+    "board_id": "str",
+    "dir": "str",
+    "holder": "str",
+    "name": "str",
+    "running": "bool",
+    "tmux_session": "str",
+    "tracker": "str"
+   }
+  ],
+  "warnings": []
  },
  "section": {
   "card": "str",
   "name": "str",
   "text": "str"
+ },
+ "standup": {
+  "errors": [
+   {
+    "count": "int",
+    "message": "str"
+   }
+  ],
+  "needs_you": [],
+  "pipeline": {
+   "cards done": "int",
+   "cards dropped": "int",
+   "ideas added": "int",
+   "plans approved": "int",
+   "plans written": "int",
+   "sent back": "int",
+   "specs approved": "int",
+   "specs written": "int"
+  },
+  "prs": {
+   "closed": {
+    "items": [
+     {
+      "number": "int",
+      "repo": "str",
+      "title": "str",
+      "url": "str",
+      "yours": "bool"
+     }
+    ],
+    "total": "int"
+   },
+   "merged": {
+    "items": [
+     {
+      "number": "int",
+      "repo": "str",
+      "title": "str",
+      "url": "str",
+      "yours": "bool"
+     }
+    ],
+    "total": "int"
+   },
+   "opened": {
+    "items": [
+     {
+      "number": "int",
+      "repo": "str",
+      "title": "str",
+      "url": "str",
+      "yours": "bool"
+     }
+    ],
+    "total": "int"
+   }
+  },
+  "since": "str"
+ },
+ "usage": {
+  "by": "str",
+  "since": "str",
+  "state_transitions": {
+   "hook": "int",
+   "screen": "int"
+  },
+  "usage": {
+   "work": {
+    "cache_read": "int",
+    "cache_write": "int",
+    "cost": "float",
+    "input": "int",
+    "output": "int",
+    "unpriced": "bool"
+   }
+  }
  }
 }

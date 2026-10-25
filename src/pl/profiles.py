@@ -11,6 +11,7 @@ from pathlib import Path
 import tomlkit
 
 from pl import config as C
+from pl.jsonout import emit
 
 def _tilde(p):
     s = str(p)
@@ -354,6 +355,9 @@ def cmd_new(argv: list[str], profile: str | None = None):
 
 def cmd_profiles(a):
     rows = list_profiles()
+    if getattr(a, "json", False):
+        emit({"profiles": rows, "warnings": shared_warnings(rows)})
+        return
     if not rows:
         print("no profiles yet: create one with pl profiles new <name>")
         return
