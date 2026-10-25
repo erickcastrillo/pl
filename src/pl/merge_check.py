@@ -1,5 +1,7 @@
 """The merge judge's conflicts and tests rules: merge a pull request onto the default branch in a throwaway worktree,
-run the configured test command there, and read the pull request's CI checks. Nothing is pushed, merged or commented."""
+run the configured test command there, and read the pull request's CI checks. Nothing is pushed, merged or commented.
+`[loops.auto-merge] test_command` runs the pull request's own code on this host, with only the `test_env` variables and a private HOME."""
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -33,22 +35,38 @@ def _failed(c):
     return checks([c])[1] == 1
 
 
-def ci(pr, ignore):
-    """(ok, text) for the pull request's CI checks: pending and missing checks never block; a failing one not in `ignore` does."""
+def ci(pr, settings):
+    """(ok, text) for the pull request's CI checks: a failing one not in `ignore_checks` blocks; unfinished checks leave it undecided;
+    no checks at all block unless `require_ci` is false."""
+    ignore = settings.get("ignore_checks", [])
     rollup = pr.get("statusCheckRollup") or []
     failed = [_name(c) for c in rollup if _failed(c)]
     blocking = [n for n in failed if n not in ignore]
     if blocking:
         return False, f"CI check failed: {', '.join(blocking)}"
     passed, _, pending = checks(rollup)
+    if pending:
+        return None, f"CI pending ({pending} of {len(rollup)}), not decided"
     if not rollup:
+        if settings.get("require_ci", True):
+            return False, "CI: none, and require_ci is on"
         return True, "CI: none"
-    text = f"CI: {passed} passed" + (f", {pending} pending" if pending else "")
-    return True, text + (f", ignored failing: {', '.join(failed)}" if failed else "")
+    return True, f"CI: {passed} passed" + (f", ignored failing: {', '.join(failed)}" if failed else "")
 
 
-def run_tests(path, cmd, timeout):
-    proc = _popen(shlex.split(cmd), cwd=path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+_BASE_ENV = ("PATH", "LANG", "LC_ALL", "TERM", "TZ")
+
+
+def _test_env(settings):
+    """The pull request's code runs unattended, so it gets a private HOME and only the named variables, never pl's secrets."""
+    home = Path(C.STATE_DIR) / "merge-check" / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    keep = (*_BASE_ENV, *settings.get("test_env", []))
+    return {**{k: os.environ[k] for k in keep if k in os.environ}, "HOME": str(home)}
+
+
+def run_tests(path, cmd, timeout, env):
+    proc = _popen(shlex.split(cmd), cwd=path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = proc.communicate(timeout=timeout * 60)
     except subprocess.TimeoutExpired:
@@ -64,10 +82,10 @@ def _tests_rule(pr, path):
     cmd = settings.get("test_command")
     if not cmd:
         return {"ok": False, "why": "no test_command configured"}
-    ok, why = run_tests(path, cmd, settings.get("test_timeout", 15))
+    ok, why = run_tests(path, cmd, settings.get("test_timeout", 15), _test_env(settings))
     if not ok:
         return {"ok": False, "why": why}
-    ci_ok, ci_why = ci(pr, settings.get("ignore_checks", []))
+    ci_ok, ci_why = ci(pr, settings)
     return {"ok": ci_ok, "why": f"local tests passed; {ci_why}"}
 
 

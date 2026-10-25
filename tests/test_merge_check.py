@@ -126,14 +126,36 @@ def test_tests_pass_with_green_ci(env):
     assert env.rules(pr)["tests"] == {"rule": "tests", "ok": True, "why": "local tests passed; CI: 3 passed"}
 
 
-def test_tests_pass_with_no_ci(env):
-    assert env.rules()["tests"]["why"] == "local tests passed; CI: none"
+def test_no_ci_is_not_ok_by_default(env):
+    r = env.rules()["tests"]
+    assert r["ok"] is False and r["why"] == "local tests passed; CI: none, and require_ci is on"
 
 
-def test_pending_ci_does_not_block(env):
-    pr = {**PR, "statusCheckRollup": _checks(("a", "SUCCESS"), ("b", "")) }
+def test_no_ci_is_ok_when_require_ci_is_off(env, monkeypatch):
+    monkeypatch.setattr(C, "AUTO_MERGE", {"test_command": "x", "require_ci": False})
+    assert env.rules()["tests"] == {"rule": "tests", "ok": True, "why": "local tests passed; CI: none"}
+
+
+def test_pending_ci_is_not_decided(env):
+    pr = {**PR, "statusCheckRollup": _checks(("a", "SUCCESS"), ("b", ""))}
     r = env.rules(pr)["tests"]
-    assert r["ok"] is True and r["why"] == "local tests passed; CI: 1 passed, 1 pending"
+    assert r["ok"] is None and r["why"] == "local tests passed; CI pending (1 of 2), not decided"
+
+
+def test_failing_ci_beats_pending(env):
+    pr = {**PR, "statusCheckRollup": _checks(("a", "FAILURE"), ("b", ""))}
+    assert env.rules(pr)["tests"]["ok"] is False
+
+
+def test_test_command_gets_only_an_allow_listed_environment(env, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "secret")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("MY_TOOLCHAIN", "yes")
+    monkeypatch.setattr(C, "AUTO_MERGE", {"test_command": "x", "test_env": ["MY_TOOLCHAIN"]})
+    env.rules()
+    e = env.popen[0][1]["env"]
+    assert "GH_TOKEN" not in e and e["PATH"] == "/usr/bin" and e["MY_TOOLCHAIN"] == "yes"
+    assert e["HOME"] != os.environ["HOME"] and e["HOME"].startswith(str(env.path.parent))
 
 
 def test_failing_tests_give_exit_code_and_last_line(env):
