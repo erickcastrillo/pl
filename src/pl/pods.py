@@ -44,7 +44,13 @@ def current():
     pod = find(C.POD or C.PROFILE_NAME)
     if pod is None and C.POD:
         raise SystemExit(f"pl: [pipeline] pod names {C.POD!r}, which is not in [pods]")
-    return pod or _builtin()
+    return pod or find("engineering")
+
+
+def launch_pod():
+    """The pod whose skills a launch is limited to: only one the profile configures with a `skills` key, so a profile without pods, or a pod table that sets only file or knowledge, keeps the whole library."""
+    name = next((n for n in (C.POD or C.PROFILE_NAME, "engineering") if n in C.PODS), None)
+    return find(name) if name and "skills" in C.PODS[name] else None
 
 
 def names():

@@ -59,3 +59,23 @@ def _outward(stage, connectors) -> bool:
     if stage.get("outward") is True:
         return True
     return any((connectors or {}).get(c, {}).get("access") == "read-write" for c in stage.get("connectors") or [])
+
+
+def is_config() -> bool:
+    """True for a profile whose [pipeline] is not the engineering one; unloaded settings count as engineering."""
+    return (C.PIPELINE or {}).get("template", "engineering") != "engineering"
+
+
+def stage_at(col) -> str | None:
+    return next((n for n, s in C.PIPELINE["stages"].items() if s.get("column") == col), None)
+
+
+def complete(col, stage) -> bool:
+    cols = C.PIPELINE["columns"]
+    return cols.index(col) >= cols.index(C.PIPELINE["stages"][stage]["done"])
+
+
+def prompt(stage, card_id) -> str:
+    if override := C.PROMPTS.get(stage):
+        return override.format(id=card_id, worktrees_dir=C.WORKTREES_DIR or "")
+    return f"/{C.PIPELINE['stages'][stage]['skill']} {card_id} stage={stage}"

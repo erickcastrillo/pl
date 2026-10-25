@@ -37,10 +37,15 @@
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
-  pl titles check [--json]
+  pl titles check [--json] [--fix [--dry-run]]
                           list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
-                          one side, or share a pair with another card (Done left out); changes nothing; exits 1
-                          when it finds any (2: the board could not be read); --json prints them as a list
+                          one side, or share a pair with another card (Done left out); exits 1 when it finds
+                          any (2: the board could not be read); --json prints them as a list; --fix adds the
+                          missing prefix or metadata and leaves clashes for a person (exit 1 if any are left);
+                          --dry-run says what it would change
+  pl titles next          the next free plan number on the board (Done cards count)
+  pl titles set <id> --plan N --slice M
+                          title the card "Plan N slice M: ..." (any old prefix replaced) and record both in its metadata
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
@@ -120,7 +125,7 @@
   pl sandbox create|status|start|stop|destroy [--yes]
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
                           work folder and worktrees folder; --yes destroys the VM without asking
-  pl worktrees bootstrap PATH [--dry-run]
+  pl worktrees bootstrap PATH [--dry-run] [--card ID]
                           copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
@@ -286,6 +291,10 @@ def _main():
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
     q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
+    q.add_argument("--fix", action="store_true", help="add the missing title prefix or plan/slice metadata; clashes are left for a person")
+    q.add_argument("--dry-run", action="store_true", help="with --fix: say what would change, change nothing")
+    pt.add_parser("next")
+    q = pt.add_parser("set"); q.add_argument("id"); q.add_argument("--plan", type=int, required=True); q.add_argument("--slice", type=int, required=True)
     p = sub.add_parser("caps"); pc = p.add_subparsers(dest="caps_cmd", required=True)
     q = pc.add_parser("set"); q.add_argument("id"); q.add_argument("--minutes"); q.add_argument("--tokens", help="2M, 500k or a number")
     q = pc.add_parser("reset"); q.add_argument("id")
@@ -350,10 +359,13 @@ def _main():
     q = pk.add_parser("enable"); q.add_argument("name", nargs="?", help="skill name"); q.add_argument("--plugin", help="plugin name")
     q.add_argument("--pod", required=True, help="pod name"); q.add_argument("--hooks", action="store_true", help="enable plugin hooks")
     q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pk.add_parser("disable"); q.add_argument("name"); q.add_argument("--pod", required=True, help="pod name")
+    q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc", "bootstrap"])
     p.add_argument("path", nargs="?", help="bootstrap: the new worktree")
     p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
-    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied and linked")
+    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
+    p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")

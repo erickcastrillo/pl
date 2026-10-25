@@ -31,7 +31,7 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 ## pl commands and when to use them
 
 Status and the board:
-- `pl list` (`--all`, `--product`): what is where and what each agent is doing. Start here for "what is stuck?".
+- `pl list` (`--all`, `--product`, `--json`: cards with depends_on and waiting_on): what is where and what each agent is doing. Start here for "what is stuck?".
 - `pl card <id>`: one card's sections and metadata. Use it to explain why a card is stuck.
 - `pl section <id> NAME` (`--from FILE`): one section in full; `--from` replaces SPEC, DESIGN or PLAN (it asks).
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
@@ -49,6 +49,7 @@ Status and the board:
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
 - `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.
+- `pl models list|test JOB` (`--json`): the local-model jobs, which models are pulled, and a three-run sample check. Read-only. `pl models set JOB MODEL` changes the config (it asks).
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
 - `pl worktrees list` | `gc` (`--yes`, `--json`): the worktrees pl-run made, and which are safe to remove; `gc --yes` removes them (it asks).
