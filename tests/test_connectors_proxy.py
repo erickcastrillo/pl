@@ -99,6 +99,9 @@ def gated(monkeypatch, machine):
     """billing as a read-write connector; `card` is what the board returns at call time."""
     connectors.path().write_text(TOML.replace('teams = ["billing"]', 'teams = ["billing"]\naccess = "read-write"', 1))
     calls, card = [], {"id": "c1", "metadata": {}}
+    C.PIPELINE = {"columns": ["Inbox", "Draft review", "Sent"], "stages": {
+        "draft": {"column": "Inbox", "done": "Draft review", "gate": "owner"},
+        "run": {"column": "Draft review", "done": "Sent", "gate": "none", "connectors": ["billing"]}}}
     monkeypatch.setattr(connectors, "tools", lambda name: TOOLS)
     monkeypatch.setattr(connectors, "call", lambda name, tool, args=None, mode=None: calls.append(tool) or "sent")
     monkeypatch.setattr(board, "fresh_next", lambda: None)
@@ -133,18 +136,39 @@ def test_the_same_call_goes_through_after_the_gate_is_approved(gated):
     calls, card = gated
     with pytest.raises(connectors_proxy.Forbidden):
         write_call()
-    card["metadata"]["gates"] = {"run": {"approved_by": "me"}}
+    card["metadata"]["gates"] = {"draft": {"approved_by": "me", "review_round": 0}}
     assert write_call() == "sent"
     assert calls == ["send_draft"]
 
 
-def test_the_kill_switch_queues_an_approved_write_call_instead_of_running_it(gated, monkeypatch):
+def test_the_kill_switch_refuses_an_approved_write_call_and_queues_nothing(gated, monkeypatch):
     calls, card = gated
-    card["metadata"]["gates"] = {"run": {"approved_by": "me"}}
+    card["metadata"]["gates"] = {"draft": {"approved_by": "me", "review_round": 0}}
     monkeypatch.setattr(outward, "state", lambda: {"on": True})
-    assert "queued" in write_call()
+    with pytest.raises(connectors_proxy.Forbidden, match="kill_switch"):
+        write_call()
     assert calls == []
-    assert [(i["connector"], i["tool"], i["status"]) for i in outbound._load(outbound.queue_path())] == [("billing", "send_draft", "queued")]
+    assert not outbound.queue_path().exists() or outbound._load(outbound.queue_path()) == []
+
+
+def test_a_stage_own_gate_does_not_approve_its_write(gated):
+    calls, card = gated
+    card["metadata"]["gates"] = {"run": {"approved_by": "me", "review_round": 0}}
+    with pytest.raises(connectors_proxy.Forbidden, match="gate_required"):
+        write_call()
+    assert calls == []
+
+
+def test_approve_reject_rerun_write_needs_a_new_approval(gated):
+    calls, card = gated
+    card["metadata"]["gates"] = {"draft": {"approved_by": "me", "review_round": 0}}
+    assert write_call() == "sent"
+    card["metadata"]["review_round"] = 1
+    with pytest.raises(connectors_proxy.Forbidden, match="gate_required"):
+        write_call()
+    card["metadata"]["gates"] = {"draft": {"approved_by": "me", "review_round": 1}}
+    assert write_call() == "sent"
+    assert calls == ["send_draft", "send_draft"]
 
 
 @pytest.mark.parametrize("mode", ["trigger", "reader"])
@@ -157,3 +181,17 @@ def test_trigger_mode_never_calls_a_write_tool(monkeypatch, mode):
     assert ran == []
     connectors.call("billing", "payments_since", {}, mode=mode)
     assert len(ran) == 1
+
+
+def test_pl_approve_records_the_review_round_with_the_gate(monkeypatch):
+    from pl import commands
+    C.PIPELINE = {"columns": ["Inbox", "Draft review", "Sent"], "stages": {
+        "draft": {"column": "Inbox", "done": "Draft review", "gate": "owner"}}}
+    updates = []
+    monkeypatch.setattr(commands, "update", lambda cid, **kw: updates.append(kw))
+    monkeypatch.setattr(commands, "col_name", lambda lid: "Draft review")
+    monkeypatch.setattr(commands, "col_id", lambda name: name)
+    monkeypatch.setattr(commands.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(commands.audit, "append", lambda *a, **k: None)
+    commands._approve_gate({"id": "c1", "title": "t", "list_id": "x", "metadata": {"review_round": 2}})
+    assert updates[0]["metadata"]["gates"]["draft"]["review_round"] == 2

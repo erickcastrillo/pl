@@ -10,8 +10,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pl import alerts, audit, connectors, outbound, outward
-from pl.util import now_iso
+from pl import alerts, audit, connectors, outward
+from pl import config as C
 
 
 def is_write_forbidden(connector: str, tool: str) -> bool:
@@ -183,19 +183,25 @@ def visible_tools(name: str) -> list[dict]:
     return [t for t in connectors.tools(name) if write_ok or not t.get("write")]
 
 
+def _gate_before(stage: str) -> str | None:
+    """The owner-gated stage nearest before `stage`: the person approved its output, which `stage` then sends."""
+    names = list(((C.PIPELINE or {}).get("stages") or {}))
+    if stage not in names:
+        return None
+    gated = [n for n in names[:names.index(stage)] if C.PIPELINE["stages"][n].get("gate") == "owner"]
+    return gated[-1] if gated else None
+
+
 def _gate_approved(card_id: str | None, stage: str | None) -> bool:
+    """True when the gate before `stage` was approved in the card's current review round; a reject starts a new one."""
     from pl import board
-    if not (card_id and stage):
+    gate = _gate_before(stage) if (card_id and stage) else None
+    if not gate:
         return False
     board.fresh_next()
-    return stage in ((board.find_card(card_id).get("metadata") or {}).get("gates") or {})
-
-
-def _queue(name: str, tool: str, args: dict | None, card_id: str | None) -> str:
-    with outbound._locked_queue() as items:
-        items.append({"id": f"out-{name}-{tool}-{len(items)}", "card": card_id, "connector": name, "tool": tool,
-                      "args": args or {}, "not_before": 0, "status": "queued", "created_at": now_iso()})
-    return "queued: the kill switch is on"
+    meta = board.find_card(card_id).get("metadata") or {}
+    approval = (meta.get("gates") or {}).get(gate)
+    return bool(approval) and approval.get("review_round", 0) == int(meta.get("review_round") or 0)
 
 
 def proxy_call(name: str, tool: str, args: dict | None, card: str | None = None, stage: str | None = None):
@@ -211,7 +217,7 @@ def proxy_call(name: str, tool: str, args: dict | None, card: str | None = None,
     if not _gate_approved(card, stage):
         raise Forbidden("gate_required: approve the card's gate first")
     if outward.state().get("on"):
-        return _queue(name, tool, args, card)
+        raise Forbidden("kill_switch: outward writes are paused; turn the kill switch off and call again")
     return connectors.call(name, tool, args, mode="stage")
 
 
