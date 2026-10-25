@@ -343,6 +343,7 @@ def start_worker(c, stage, attempts, dry):
     win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(C.WORK_DIR),
                "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
     tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
+    tmux("set-option", "-w", "-t", win, MARK, "1")   # pl's own agent window: counted, and tidied when untracked
     sid = str(uuid.uuid4())
     pane, script = tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0], launch_path(name)
     # the record first, then the agent: a Ctrl-C after it leaves a record the next pass counts ("starting", then
@@ -577,60 +578,104 @@ def _context_restart(name, svc, sid, s, ust, dry):
     return f"its context is {pct}%, over max_context {limit}%"
 
 
+MARK = "@pl_agent"     # tmux window option on every agent window pl starts; a restored or hand-made window has none
+MARKED = "@pl_marks"   # tmux session option: the dispatcher marks this session's agent windows (pl manager trusts it)
+STAGE_PREFIXES = ("spec-", "design-", "plan-", "run-")
+
+
 def sweep_untracked(all_cards, reg, dry, st=None):
-    """Close agent windows that no card tracks any more (a same-stage restart, pl approve, a card moved by hand or a
-    lost worker or finished_workers write leaves them behind), once idle: a registered session idle for 5 minutes,
-    else no window activity or (st given) no change on screen for 10 minutes. Such a window would otherwise block
-    its card's next agent of that stage forever (live_agent_window). A run window stays while its screen shows a
-    human gate (a person still has to act there) or a usage limit (the agent resumes itself after the reset).
-    Returns how many untracked prep windows with a live process it left open: they still hold a prep slot (run
-    windows hold none)."""
-    tracked = set()
+    """Tidy the stage windows (spec-, design-, plan-, run-) no card tracks any more, by one rule:
+    - only a shell in it (an agent that exited, or a window tmux-resurrect restored): never counted; closed once its
+      window has had no activity for 10 minutes;
+    - running something pl did not start (no pl mark; e.g. a restored `claude --resume` picker): maybe yours, so
+      never counted and never closed; reported once as an alert (st given), resolved when the window goes;
+    - pl's own spec/design/plan agent (a same-stage restart, pl approve or a lost finished_workers write leaves them
+      behind): closed once idle, i.e. a registered session idle for 5 minutes, else no window activity or (st given)
+      no change on screen for 10 minutes. pl's own run agent is closed the same way, except while its screen shows a human gate (a person still has to act
+      there) or a usage limit (the agent resumes itself after the reset).
+    A tracked agent window from before marks gets pl's mark (its own pane, started in this tmux server); then the
+    session is marked. Returns how many untracked prep windows of pl's with a live process it left open: they still
+    hold a prep slot (run windows hold none)."""
+    tracked = {}
     for c in all_cards:
         m = c.get("metadata") or {}
         for w in ([m["worker"]] if m.get("worker") else []) + (m.get("finished_workers") or []):
             if w.get("window"):
-                tracked.add(w["window"])
-    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{window_activity} #{window_name} #{pane_current_command}"],
+                tracked[w["window"]] = w
+    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{window_activity} "
+                          f"#{{?#{{{MARK}}},pl,-}} #{{start_time}} #{{window_name}} #{{pane_current_command}}"],
                          capture_output=True, text=True).stdout
-    live = 0
+    live, foreign = 0, {}
     for line in out.splitlines():
-        parts = line.split(" ", 3)
-        if len(parts) < 4:
+        parts = line.split(" ", 5)
+        if len(parts) < 6:
             continue
-        wid, pane, activity, name = parts
+        wid, pane, activity, mark, start, name = parts
         name, _, cmd = name.rpartition(" ") if " " in name else (name, "", "")   # the command is last; a bare name has none
-        if wid in tracked or not name.startswith(("spec-", "design-", "plan-", "run-")):
+        if not name.startswith(STAGE_PREFIXES):
             continue
-        prep = not name.startswith("run-")
-        rec = next((r for r in reg.values() if (r.get("tmux") or "").endswith(pane)), None)
-        if rec:
-            if rec.get("status") != "idle" or time.time() - rec.get("statusUpdatedAt", 0) / 1000 <= 300:
-                live += prep   # a session is registered on it: really running
+        shell = cmd in harnesses.SHELLS
+        if wid in tracked:
+            w = tracked[wid]
+            since = max(parse_iso(w.get("started_at") or ""), parse_iso(w.get("moved_at") or ""))
+            if mark != "pl" and not shell and w.get("pane") == pane and since >= int(start if start.isdigit() else 0) and not dry:
+                tmux("set-option", "-w", "-t", wid, MARK, "1", check=False)
+            continue
+        if shell:
+            if time.time() - int(activity or 0) <= 600:
                 continue
-        elif time.time() - int(activity or 0) <= 600 and (cmd in harnesses.SHELLS or st is None or screen_quiet(st, pane) <= 600):
-            live += prep and cmd not in harnesses.SHELLS
+        elif mark != "pl":
+            foreign[wid] = (name, cmd)
             continue
-        if not prep:
-            screen = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-60"]).stdout or ""
-            if any(g in HUMAN_GATES for g in GATE_RE.findall(screen)) \
-                    or any(harnesses.limit_hit(h, screen) for h in harnesses.BUILTINS.values()):
-                continue   # an idle run agent waiting for a person, or for its usage limit to reset (it resumes itself)
+        else:
+            prep = not name.startswith("run-")
+            rec = next((r for r in reg.values() if (r.get("tmux") or "").endswith(pane)), None)
+            if rec:
+                if rec.get("status") != "idle" or time.time() - rec.get("statusUpdatedAt", 0) / 1000 <= 300:
+                    live += prep   # a session is registered on it: really running
+                    continue
+            elif time.time() - int(activity or 0) <= 600 and (st is None or screen_quiet(st, pane) <= 600):
+                live += prep
+                continue
+            if not prep:
+                screen = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-60"]).stdout or ""
+                if any(g in HUMAN_GATES for g in GATE_RE.findall(screen)) \
+                        or any(harnesses.limit_hit(h, screen) for h in harnesses.BUILTINS.values()):
+                    continue   # an idle run agent waiting for a person, or for its usage limit to reset (it resumes itself)
         print(f"closing untracked {name} agent window {wid}")
         if not dry:
             tmux("kill-window", "-t", wid, check=False)
+    if not dry:
+        tmux("set-option", "-t", f"={C.TMUX_SESSION}", MARKED, "1", check=False)
+    _report_foreign(foreign, st, dry)
     return live
 
 
+def _report_foreign(foreign, st, dry):
+    """One alert per stage window running something pl did not start, opened once and resolved when it goes."""
+    seen = set((st or {}).get("foreign") or ())
+    for wid, (name, cmd) in foreign.items():
+        if wid in seen:
+            continue
+        print(f"tmux window {name} ({wid}) runs {cmd}, which pl did not start: not counted as an agent, left open")
+        if st is not None and not dry:
+            alerts.open(f"foreign_window:{wid}", "warn", f"tmux window {wid} in {C.TMUX_SESSION} runs {cmd[:40]}, which pl did not start",
+                        f"pl does not count it as an agent or close it; if you do not need it: tmux kill-window -t {wid}")
+    if st is not None and not dry:
+        for wid in seen - set(foreign):
+            alerts.resolve(f"foreign_window:{wid}")
+        st["foreign"] = sorted(foreign)
+
+
 def live_agent_window(name, own=None):
-    """True when a tmux window of this name runs something other than a shell, and it is not the card's own recorded
-    window (own): an agent exists that the card's record does not show."""
-    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_current_command} #{window_name}"],
+    """True when a tmux window of this name that pl started (its mark) runs something other than a shell, and it is
+    not the card's own recorded window (own): an agent exists that the card's record does not show."""
+    out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F",
+                          f"#{{window_id}} #{{?#{{{MARK}}},pl,-}} #{{pane_current_command}} #{{window_name}}"],
                          capture_output=True, text=True).stdout
     for line in out.splitlines():
-        wid, _, rest = line.partition(" ")
-        cmd, _, wname = rest.partition(" ")
-        if wname == name and wid != own and cmd not in ("", *harnesses.SHELLS):
+        wid, mark, cmd, wname = (line.split(" ", 3) + ["", "", ""])[:4]
+        if wname == name and wid != own and mark == "pl" and cmd not in ("", *harnesses.SHELLS):
             return True
     return False
 

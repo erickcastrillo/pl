@@ -157,6 +157,9 @@ ENTRIES = [
     _e("2026-10-25.13", "Plans split work into slices that merge in any order",
        "pl-plan: each later slice says independent or after <slice>; pl-review labels a PR for rework when it "
        "depends on another unmerged PR", "pl section <id> PLAN"),
+    _e("2026-10-25.14", "A window that only runs a shell, or one pl did not start, is not counted as an agent",
+       "pl closes its stage windows left holding a shell; a restored window running something else (a resume picker) "
+       "is left open and opens one alert", "pl manager status"),
 ]
 
 

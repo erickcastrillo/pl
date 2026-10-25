@@ -161,7 +161,7 @@ def _screens(monkeypatch, panes, now):
     def run(argv, *a, **kw):
         calls.append(list(argv))
         if "list-panes" in argv:
-            out = "".join(f"@{i} %{i} {now} {name} {cmd}\n" for i, (name, cmd, _) in panes.items())
+            out = "".join(f"@{i} %{i} {now} pl 0 {name} {cmd}\n" for i, (name, cmd, _) in panes.items())
         elif "capture-pane" in argv:
             out = panes[int(argv[argv.index("-t") + 1].lstrip("%"))][2]
         else:

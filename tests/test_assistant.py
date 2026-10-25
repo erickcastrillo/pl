@@ -312,7 +312,7 @@ def test_every_subcommand_is_in_the_guide():
 def test_sweep_untracked_leaves_the_assistant_window_alone(tmux, monkeypatch):
     def run(argv, *a, **kw):
         tmux.calls.append([str(x) for x in argv])
-        return subprocess.CompletedProcess(argv, 0, "@3 %3 0 assistant\n@4 %4 0 spec-old\n", "")
+        return subprocess.CompletedProcess(argv, 0, "@3 %3 0 - 0 assistant zsh\n@4 %4 0 - 0 spec-old zsh\n", "")
     monkeypatch.setattr(subprocess, "run", run)
     dispatch.sweep_untracked([], {}, False)
     kills = [c for c in tmux.calls if c[1:2] == ["kill-window"]]
