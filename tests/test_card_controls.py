@@ -180,7 +180,7 @@ def test_adopt_returns_the_lines_pl_adopt_prints(board, monkeypatch):
 
 # ---------- the CLI ----------
 
-@pytest.mark.parametrize("cmd, want", [("restart", "--stage"), ("hold", "--reason"), ("unhold", "id"), ("depends", "--on")])
+@pytest.mark.parametrize("cmd, want", [("restart", "--stage"), ("hold", "--reason"), ("unhold", "id"), ("depends", "--on"), ("list", "--plan N")])
 def test_the_new_commands_have_help(tmp_path, cmd, want):
     prof = tmp_path / ".pl-help"
     prof.mkdir()
@@ -188,6 +188,25 @@ def test_the_new_commands_have_help(tmp_path, cmd, want):
     r = subprocess.run([sys.executable, "-m", "pl", cmd, "--help"], capture_output=True, text=True, timeout=30,
                        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "PL_CONFIG_DIR": str(prof), "PL_NO_UPDATE_CHECK": "1"})
     assert r.returncode == 0 and want in r.stdout
+
+
+def _pl(tmp_path, *args):
+    prof = tmp_path / ".pl-help"
+    prof.mkdir(exist_ok=True)
+    (prof / "config.toml").write_text("")
+    return subprocess.run([sys.executable, "-m", "pl", *args], capture_output=True, text=True, timeout=30,
+                          env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "PL_CONFIG_DIR": str(prof), "PL_NO_UPDATE_CHECK": "1"})
+
+
+def test_pl_help_lists_plan(tmp_path):
+    r = _pl(tmp_path, "--help")
+    assert r.returncode == 0 and "--plan N" in r.stdout
+
+
+@pytest.mark.parametrize("value", ["abc", "0"])
+def test_pl_list_plan_must_be_a_whole_number_from_1(tmp_path, value):
+    r = _pl(tmp_path, "list", "--plan", value)
+    assert r.returncode == 2 and "whole number from 1" in r.stderr
 
 
 def test_the_assistant_asks_before_the_new_commands():
