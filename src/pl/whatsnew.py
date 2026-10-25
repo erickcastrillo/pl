@@ -207,6 +207,8 @@ ENTRIES = [
        "pl memory search \"split into 3 PRs\""),
     _e("2026-10-25.33", "pl usage --github shows GitHub's own budget next to pl's and marks a gap",
        "pl usage --github", "pl usage --github"),
+    _e("2026-10-25.34", "pl help --json lists every command; pl jobs shows the long jobs running",
+       "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
 ]
 
 
