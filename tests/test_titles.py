@@ -60,15 +60,19 @@ def board(monkeypatch):
     return fake
 
 
-def check(capsys, json_out=False):
+def ns(cmd="check", **kw):
+    return argparse.Namespace(titles_cmd=cmd, json=False, fix=False, dry_run=False, **kw)
+
+
+def check(capsys, json_out=False, **kw):
     with pytest.raises(SystemExit) as e:
-        titles.cmd_titles(argparse.Namespace(titles_cmd="check", json=json_out))
+        titles.cmd_titles(argparse.Namespace(**{**vars(ns()), "json": json_out, **kw}))
     out = capsys.readouterr()
     return e.value.code, out.out, out.err
 
 
-def check_ok(capsys, json_out=False):
-    titles.cmd_titles(argparse.Namespace(titles_cmd="check", json=json_out))
+def check_ok(capsys, json_out=False, **kw):
+    titles.cmd_titles(argparse.Namespace(**{**vars(ns()), "json": json_out, **kw}))
     out = capsys.readouterr()
     return out.out
 
@@ -151,3 +155,80 @@ def test_help_shows_titles_check(tmp_path):
     r = subprocess.run([sys.executable, "-m", "pl", "--help"], capture_output=True, text=True, timeout=30,
                        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "PL_CONFIG_DIR": str(prof), "PL_NO_UPDATE_CHECK": "1"})
     assert "pl titles check [--json]" in r.stdout and "exits 1" in r.stdout
+
+
+# ---------- --fix ----------
+
+def test_fix_renames_a_card_whose_metadata_has_plan_and_slice(board, capsys):
+    board.items = [mk(1, "kill switch, CLI and dispatcher", plan=3, slice=2)]
+    out = check_ok(capsys, fix=True)
+    new = "Plan 3 slice 2: kill switch, CLI and dispatcher"
+    assert board.writes == [("update", (board.items[0]["id"],), {"title": new})]
+    assert out.count("\n") == 1 and "renamed" in out and "kill switch, CLI and dispatcher" in out and new in out
+
+
+def test_fix_writes_metadata_for_a_prefixed_title(board, capsys):
+    board.items = [mk(1, "Plan 4 slice 1: worktrees gc")]
+    out = check_ok(capsys, fix=True)
+    (_, args, kw), = board.writes
+    assert kw == {"metadata": {"plan": 4, "slice": 1}}
+    assert all(type(v) is int for v in kw["metadata"].values())
+    assert out.count("\n") == 1 and "wrote metadata Plan 4 slice 1" in out
+
+
+def test_fix_skips_disagreeing_and_duplicate_cards_and_exits_1(board, capsys):
+    board.items = [mk(1, "Plan 3 slice 2: x", plan=3, slice=1),
+                   mk(2, "Plan 5 slice 2: a", plan=5, slice=2), mk(3, "Plan 5 slice 2: b", plan=5, slice=2)]
+    code, out, _ = check(capsys, fix=True)
+    assert code == 1 and board.writes == []
+    assert out.count("fix by hand with pl titles set") == 3
+    assert "title says Plan 3 slice 2, metadata says Plan 3 slice 1" in out
+    assert "Plan 5 slice 2 is used by more than one card" in out
+
+
+def test_fix_dry_run_prints_would_and_writes_nothing(board, capsys):
+    board.items = [mk(1, "kill switch", plan=3, slice=2), mk(2, "Plan 4 slice 1: gc")]
+    before = copy.deepcopy(board.items)
+    out = check_ok(capsys, fix=True, dry_run=True)
+    lines = out.splitlines()
+    assert len(lines) == 2 and all(line.startswith("would") for line in lines)
+    assert board.writes == [] and board.cards() == before
+
+
+def test_fix_json_adds_action_and_new_title(board, capsys):
+    board.items = [mk(1, "kill switch", plan=3, slice=2), mk(2, "Plan 4 slice 1: gc"),
+                   mk(3, "Plan 6 slice 1: x", plan=6, slice=2)]
+    code, out, _ = check(capsys, json_out=True, fix=True)
+    rows = {r["id"][:8]: r for r in json.loads(out)}
+    assert code == 1
+    assert [rows[k]["action"] for k in ("00000001", "00000002", "00000003")] == ["rename", "write metadata", "skipped"]
+    assert rows["00000001"]["new_title"] == "Plan 3 slice 2: kill switch"
+    assert rows["00000002"]["new_title"] is None and rows["00000003"]["new_title"] is None
+    assert {"id", "title", "plan", "slice", "title_plan", "title_slice", "reason"} <= set(rows["00000001"])
+
+
+def test_fix_json_exits_0_when_everything_was_fixed(board, capsys):
+    board.items = [mk(1, "kill switch", plan=3, slice=2)]
+    assert json.loads(check_ok(capsys, json_out=True, fix=True))[0]["action"] == "rename"
+
+
+def test_fix_does_not_rename_into_a_slot_another_card_holds(board, capsys):
+    board.items = [mk(1, "kill switch", plan=3, slice=2), mk(2, "Plan 3 slice 2: other", plan=3, slice=2)]
+    code, out, _ = check(capsys, fix=True)
+    assert code == 1 and board.writes == []
+    assert "00000001" in out and "fix by hand" in out
+
+
+def test_fix_rename_keeps_80_chars_and_whole_words(board, capsys):
+    words = ("alpha " * 17).split()
+    board.items = [mk(1, " ".join(words), plan=3, slice=2)]
+    check_ok(capsys, fix=True)
+    new = board.writes[0][2]["title"]
+    assert len(new) <= 80 and new.startswith("Plan 3 slice 2: ") and new.split()[-1] == "alpha"
+
+
+def test_dry_run_without_fix_is_refused(board):
+    board.items = [mk(1, "kill switch", plan=3, slice=2)]
+    with pytest.raises(SystemExit, match="--dry-run goes with --fix"):
+        titles.cmd_titles(argparse.Namespace(**{**vars(ns()), "dry_run": True}))
+    assert board.writes == []
