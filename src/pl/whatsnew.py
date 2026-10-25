@@ -112,6 +112,9 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-24.01", "Plans split work into slices that merge in any order",
+       "pl-plan: each later slice says independent or after <slice>; pl-review labels a PR for rework when it "
+       "depends on another unmerged PR", "pl section <id> PLAN"),
 ]
 
 
