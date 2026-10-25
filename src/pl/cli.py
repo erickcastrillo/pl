@@ -71,6 +71,8 @@
                           ones are still restarted and finished windows still closed. resume: back to normal
   pl kill-switch on|off|status [--json]
                           machine-wide kill switch: holds approved cards with outward actions; off releases them
+  pl chat add|list|remove|test
+                          messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
   pl manager start|stop [--all]|status|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
@@ -153,6 +155,9 @@ def main():
     if pre_a.rest[:1] == ["whatsnew"]:         # the package's own list: no profile needed
         from pl import whatsnew
         return whatsnew.cmd_whatsnew(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["chat"]:             # machine-wide: no profile of its own
+        from pl import chat
+        return chat.cmd_chat(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])
