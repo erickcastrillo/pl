@@ -117,6 +117,9 @@
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
+  pl question <id> "text"
+                          ask the owner a question; ends the agent's step and waits for an answer
+  pl answer <id> "text"   answer a card's open question so its stage restarts
 
 Settings come from a profile: pl --profile NAME, or PL_CONFIG_DIR. Boards are reached through the tracker
 set in its config.toml ([tracker], [intake]). Card contract: sections open with a line `# PIPELINE: <NAME>`.
@@ -293,6 +296,8 @@ def _main():
     q = pt.add_parser("pause"); q.add_argument("name")
     q = pt.add_parser("resume"); q.add_argument("name")
     q = pt.add_parser("test"); q.add_argument("name"); q.add_argument("--replay", metavar="WINDOW", help="search this far back, like 7d"); q.add_argument("--json", action="store_true")
+    p = sub.add_parser("question"); p.add_argument("id"); p.add_argument("text"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("answer"); p.add_argument("id"); p.add_argument("text"); p.add_argument("--json", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -316,6 +321,8 @@ def _main():
             pass
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "outbox": cmd_outbox,
+     "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
+     "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
