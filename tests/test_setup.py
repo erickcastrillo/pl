@@ -967,7 +967,7 @@ def test_a_new_profile_uses_the_builtin_stage_skills_and_setup_installs_them(fak
     assert {s: v["account"] for s, v in t["stages"].items()} == {s: "claude" for s in BUILTIN}
     lib = fake_home / ".local" / "share" / "pl" / "skills"
     assert sorted(p.name for p in lib.iterdir() if not p.name.startswith(".")) == \
-        ["pl-design", "pl-plan", "pl-read-mail", "pl-review", "pl-run", "pl-spec"]
+        ["pl-design", "pl-plan", "pl-read-mail", "pl-review", "pl-run", "pl-spec", "pl-stage"]
     assert "installed built-in pl-spec" in capsys.readouterr().out
 
 
