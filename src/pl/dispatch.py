@@ -1298,6 +1298,7 @@ def check_alerts(all_cards, failed, st=None):
     try:
         from pl import connectors
         alerts.sweep("connector_tools:", connectors.active_tools_alerts(), notify)
+        alerts.sweep("connector_signin:", connectors.active_signin_alerts(), notify)
     except (ImportError, AttributeError):
         pass
     waiting, now = set(), alerts._clock()
