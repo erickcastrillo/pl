@@ -15,6 +15,7 @@ from pl import config as C
 from pl import standup
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.cards import CardsView
+from pl.tui.chrome import status_sentence
 from pl.tui.needs import needs_groups, needs_you_count
 from pl.tui.prs import pr_groups
 from pl.usage import human
@@ -114,7 +115,7 @@ def health(data, window=1):
              if act else "GitHub not reachable")
     lines = [("agents running", f"{sum(1 for r in rows if r.get('kind') == 'working')} working"),
              ("loops", f"{sum(1 for r in loops if r.get('kind') != 'loop_off')} of {len(loops)} on"),
-             ("harness accounts", data["snapshot"]["prof"]),
+             ("harness accounts", status_sentence(data["snapshot"])),
              ("last dispatcher error", f"{err.get('message', err.get('kind'))} · {(err.get('ts') or '')[11:16]}" if err else "none"),
              ("PR review cycle", cycle),
              health_tokens(data, window)]
