@@ -387,13 +387,13 @@ def _main():
     p.add_argument("--yes", action="store_true", help="confirm without prompting")
     p.add_argument("--dry-run", action="store_true", help="count what would be removed without changing anything")
     p.add_argument("--json", action="store_true", help="output counts as JSON")
-    p = sub.add_parser("memory"); msub = p.add_subparsers(dest="action", required=True)
-    m = msub.add_parser("search"); m.add_argument("query"); m.add_argument("--card"); m.add_argument("--pod")
+    p = sub.add_parser("memory"); pm = p.add_subparsers(dest="action", required=True)
+    m = pm.add_parser("search"); m.add_argument("query"); m.add_argument("--card"); m.add_argument("--pod")
     m.add_argument("--limit", type=int, default=10)
-    m = msub.add_parser("add"); m.add_argument("text"); m.add_argument("--kind", required=True, choices=__import__("pl.recall").recall.KINDS)
+    m = pm.add_parser("add"); m.add_argument("text"); m.add_argument("--kind", required=True, choices=__import__("pl.recall").recall.KINDS)
     m.add_argument("--card"); m.add_argument("--client"); m.add_argument("--contact"); m.add_argument("--replaces", help="id of the entry this one contradicts")
-    m = msub.add_parser("show"); m.add_argument("id")
-    for m in msub.choices.values():
+    m = pm.add_parser("show"); m.add_argument("id")
+    for m in pm.choices.values():
         m.add_argument("--json", action="store_true")
     p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
     p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
