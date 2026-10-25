@@ -170,54 +170,68 @@ def _table_for(doc, name: str):
     return doc["loops"][name]
 
 
-def _cmd_edit(a) -> int:
+def edit(name: str, skill=None, prompt=None, every=None, hours=None, account=None, writes=None, convert=False):
     doc = _document()
-    entry = _table_for(doc, a.name)
-    if a.skill and not a.prompt:
+    entry = _table_for(doc, name)
+    if skill and not prompt:
         entry.pop("prompt", None)
-    if a.prompt and not a.skill:
+    if prompt and not skill:
         entry.pop("skill", None)
-    for key, value in (("skill", a.skill), ("prompt", a.prompt), ("every", a.every), ("hours", a.hours), ("account", a.account)):
+    for key, value in (("skill", skill), ("prompt", prompt), ("every", every), ("hours", hours), ("account", account)):
         if value is not None:
             entry[key] = value
-    if a.writes is not None:
-        entry["writes"] = a.writes
-    if a.convert:
-        every, entry["prompt"] = _converted(entry.get("prompt"))
-        entry["every"] = a.every or every
-    elif not any(v is not None for v in (a.skill, a.prompt, a.every, a.hours, a.account, a.writes)):
+    if writes is not None:
+        entry["writes"] = writes
+    if convert:
+        converted, entry["prompt"] = _converted(entry.get("prompt"))
+        entry["every"] = every or converted
+    elif not any(v is not None for v in (skill, prompt, every, hours, account, writes)):
         _fail("nothing to change; give a field to set or --convert")
     if "every" in entry:
         try:
             schedule.parse_every(entry["every"])
         except ValueError as e:
             _fail(str(e))
-    if a.skill:
-        _warn_if_skill_is_unknown(a.skill)
+    if skill:
+        _warn_if_skill_is_unknown(skill)
     if errors := C.validate(tomlkit.parse(tomlkit.dumps(doc))):
         _fail("; ".join(errors))
     _save(doc)
+
+
+def _cmd_edit(a) -> int:
+    edit(a.name, a.skill, a.prompt, a.every, a.hours, a.account, a.writes, a.convert)
     print(f"edited loop {a.name}")
     return 0
 
 
-def _cmd_toggle(a, enabled: bool) -> int:
+def set_enabled(name: str, enabled: bool):
     doc = _document()
-    if a.name not in doc.get("loops", {}):
-        _fail(f"no loop {a.name} in config.toml")
-    doc["loops"][a.name]["enabled"] = enabled
+    if name not in doc.get("loops", {}):
+        _fail(f"no loop {name} in config.toml")
+    doc["loops"][name]["enabled"] = enabled
     _save(doc)
+
+
+def _cmd_toggle(a, enabled: bool) -> int:
+    set_enabled(a.name, enabled)
     print(f"loop {a.name} {'resumed' if enabled else 'paused'}")
     return 0
 
 
-def _cmd_rm(a) -> int:
+def remove(name: str):
     doc = _document()
-    if a.name not in doc.get("loops", {}):
+    if name not in doc.get("loops", {}):
+        _fail(f"no loop {name} in config.toml")
+    del doc["loops"][name]
+    _save(doc)
+
+
+def _cmd_rm(a) -> int:
+    if a.name not in _document().get("loops", {}):
         _fail(f"no loop {a.name} in config.toml")
     _confirm(f"Remove loop {a.name}?", a.yes)
-    del doc["loops"][a.name]
-    _save(doc)
+    remove(a.name)
     print(f"removed loop {a.name}")
     return 0
 

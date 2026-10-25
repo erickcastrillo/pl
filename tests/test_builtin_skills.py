@@ -746,3 +746,10 @@ def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
                    "even when the tests pass"):
         assert phrase in text
     assert "pl-builtin-version: 5" in text
+
+
+def test_pl_run_assigns_the_pull_request_to_you():
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    create = next(l for l in text.splitlines() if "gh pr create" in l)
+    assert "--assignee @me" in create
+    assert int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 8
