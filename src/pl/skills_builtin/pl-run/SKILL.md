@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 7
+pl-builtin-version: 8
 ---
 
 # pl-run: build the approved plan for one card
@@ -80,7 +80,7 @@ such choice in the pull request description.
 
    ```
    git push -u origin pl/<short-name>
-   gh pr create --base <default branch> --title "<card title>" --body-file <file> --label <review label>
+   gh pr create --base <default branch> --title "<card title>" --body-file <file> --assignee @me --label <review label>
    ```
 
    `<review label>` is the `review=<label>` argument; leave out `--label` when there is none. The body says what
