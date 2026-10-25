@@ -1,20 +1,25 @@
-"""Skills installed from GitHub: parse a source, pin its commit, fetch it into a temporary folder and list its files.
-Nothing fetched is executed, imported or installed here."""
+"""Skills installed from GitHub: parse a source, pin its commit, fetch it into a temporary folder, list its files and,
+after a yes, copy the skill into the library. Nothing fetched is executed or imported."""
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 from pl import config as C
 from pl import harnesses
+from pl import skills
 
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 CODE_EXT = {".sh", ".py", ".js", ".ts", ".rb", ".ps1"}
 JSON_FLAGS = {"hooks": "hook", "mcpServers": "mcp"}   # a key in plugin or settings JSON -> the flag it raises
 KIND_ORDER = {"script": 0, "hook": 1, "mcp": 2}
+SOURCES_FILE = ".pl-sources.json"   # in the library: {name: {source, repo, path, ref, sha, files, installed_at, plugin}}
 
 
 class Refused(Exception):
@@ -62,7 +67,7 @@ def resolve(src):
     ref = src["ref"]
     if SHA_RE.fullmatch(ref):
         return ref
-    out = _git(["git", "ls-remote", _url(src), ref or "HEAD"])
+    out = _git(["git", "ls-remote", "--", _url(src), ref or "HEAD"])
     for line in out.splitlines():
         sha = line.split("\t")[0]
         if SHA_RE.fullmatch(sha):
@@ -75,9 +80,13 @@ def fetch(src, sha):
     if not SHA_RE.fullmatch(sha):
         raise Refused(f"{sha!r} is not a commit sha")
     root = Path(tempfile.mkdtemp(prefix="skill-src-", dir=C.STATE_DIR))
-    for argv in (["git", "init", "-q"], ["git", "remote", "add", "origin", _url(src)],
-                 ["git", "fetch", "-q", "--depth", "1", "origin", sha], ["git", "checkout", "-q", "FETCH_HEAD"]):
-        _git(argv, cwd=root, timeout=300 if argv[1] == "fetch" else 60)
+    try:
+        for argv in (["git", "init", "-q"], ["git", "remote", "add", "origin", _url(src)],
+                     ["git", "fetch", "-q", "--depth", "1", "origin", sha], ["git", "checkout", "-q", "FETCH_HEAD"]):
+            _git(argv, cwd=root, timeout=300 if argv[1] == "fetch" else 60)
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
     return root
 
 
@@ -99,7 +108,9 @@ def _json_flags(p):
 def inventory(root, path):
     """Every file under root/path, the code in them flagged by kind, and what kind of source it is."""
     root = Path(root).resolve()
-    base = root / path if path else root
+    base = Path(os.path.realpath(root / path)) if path else root
+    if not base.is_relative_to(root):
+        raise Refused(f"{path} leads outside the source")
     if not base.exists():
         raise Refused(f"no such path at the pinned commit: {path}")
     files, flags, skills = [], [], []
@@ -107,7 +118,7 @@ def inventory(root, path):
         dirs[:] = sorted(x for x in dirs if x != ".git")
         for n in sorted(names) + [x for x in dirs if os.path.islink(os.path.join(d, x))]:
             p = Path(d, n)
-            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(root)):
+            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(base)):
                 raise Refused(f"{p.relative_to(root)} is a credential file or a link out of the source")
             if p.is_dir():
                 continue
@@ -129,3 +140,129 @@ def inventory(root, path):
     kind = ("marketplace" if (base / ".claude-plugin" / "marketplace.json").is_file()
             else "plugin" if (base / ".claude-plugin" / "plugin.json").is_file() else "skill")
     return {"kind": kind, "files": sorted(files), "flags": flags, "skills": sorted(skills)}
+
+
+def _sole_skill_path(inv, path):
+    """The path of the one skill folder in a source that is not itself a skill folder."""
+    if "SKILL.md" in inv["files"]:
+        return path
+    if inv["kind"] != "skill" or len(inv["skills"]) != 1:
+        raise Refused("this source is not a single skill; name the skill's folder: github:owner/repo/path/to/skill")
+    sub = next(f for f in inv["files"] if f.endswith("/SKILL.md"))[:-len("/SKILL.md")]
+    return f"{path}/{sub}" if path else sub
+
+
+def _print_listing(root, path, inv, out, show_text):
+    base = Path(root) / path if path else Path(root)
+    if inv["flags"]:
+        counts = {k: sum(f["kind"] == k for f in inv["flags"]) for k in KIND_ORDER}
+        print("Runs code: " + ", ".join(f"{k} x{n}" for k, n in counts.items() if n), file=out)
+        for f in inv["flags"]:
+            print(f"  {f['kind']}  {f['file']}", file=out)
+    else:
+        print("Runs code: none found", file=out)
+    print("Files:", file=out)
+    for rel in inv["files"]:
+        print(f"  {rel}  ({(base / rel).stat().st_size} bytes)", file=out)
+    if not show_text:
+        return
+    for rel in inv["files"]:
+        print(f"\n===== {rel} =====", file=out)
+        try:
+            print((base / rel).read_text(encoding="utf-8"), file=out)
+        except (OSError, ValueError):
+            print("(binary or unreadable)", file=out)
+
+
+def _record(lib, name, entry):
+    path = lib / SOURCES_FILE
+    with skills._install_lock(lib) as held:
+        if not held:
+            raise RuntimeError("another install holds the library lock; try again")
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, ValueError):
+            rec = {}
+        rec = rec if isinstance(rec, dict) else {}
+        rec[name] = entry
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(rec, indent=1, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+
+
+def records():
+    """{name: record} of the skills installed from GitHub; no record counts as {}."""
+    try:
+        rec = json.loads((skills.library() / SOURCES_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in rec.items() if isinstance(v, dict)} if isinstance(rec, dict) else {}
+
+
+def _fail(msg):
+    print(f"pl skills install: {msg}", file=sys.stderr)
+    return 2
+
+
+def install(text, yes, out, dry_run=False, name=None):
+    """Show every file of the source, ask, then copy the skill into the library and record where it came from.
+    Returns the exit code: 0 done (or declined, or a dry run), 2 refused."""
+    tty = sys.stdin.isatty()
+    if not yes and not dry_run and not tty:
+        return _fail("no terminal to confirm on; add --yes")
+    root = stage = None
+    try:
+        src = parse(text)
+        sha = resolve(src)
+        root = fetch(src, sha)
+        inv = inventory(root, src["path"])
+        path = _sole_skill_path(inv, src["path"])
+        if path != src["path"]:
+            inv = inventory(root, path)
+        name = name or (path.rsplit("/", 1)[-1] if path else src["repo"])
+        skills._check_name(name)
+        lib = skills.library()
+        if os.path.lexists(lib / name):
+            return _fail(f"{lib / name} already exists; pl never overwrites")
+        _print_listing(root, path, inv, out, show_text=tty)
+        if dry_run:
+            return 0
+        if not yes:
+            try:
+                ok = input(f"Install {name} from {src['owner']}/{src['repo']}@{sha[:7]}? [y/N]: ")
+            except EOFError:
+                ok = ""
+            if ok.strip().lower() not in ("y", "yes"):
+                print("nothing installed", file=out)
+                return 0
+        lib.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=".install-", dir=lib))
+        base = Path(root) / path if path else Path(root)
+        shutil.copytree(base, stage / name, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        with skills._install_lock(lib) as held:
+            if not held:
+                raise RuntimeError("another install holds the library lock; try again")
+            if os.path.lexists(lib / name):
+                return _fail(f"{lib / name} already exists; pl never overwrites")
+            os.replace(stage / name, lib / name)
+        _record(lib, name, {
+            "source": "github", "repo": f"{src['owner']}/{src['repo']}", "path": path, "ref": src["ref"], "sha": sha,
+            "files": {rel: skills._sha256((lib / name / rel).read_bytes()) for rel in inv["files"]},
+            "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "plugin": None})
+    except Refused as e:
+        return _fail(str(e))
+    except SystemExit as e:
+        return _fail(str(e).removeprefix("pl: "))
+    except RuntimeError as e:
+        print(f"pl skills install: {e}", file=sys.stderr)
+        return 1
+    finally:
+        for d in (root, stage):
+            if d:
+                shutil.rmtree(d, ignore_errors=True)
+    print(f"installed {name} into {skills.library() / name}", file=out)
+    for line in skills.install_in_all_harnesses(name):
+        print(line, file=out)
+    return 0

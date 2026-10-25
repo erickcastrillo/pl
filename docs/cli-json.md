@@ -79,3 +79,11 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 {"pr", "cards": [{"id", "title", "spec", "plan_scope"}]}
 ```
 `plan_scope` is the plan's scope sections (minimum change, acceptance, non-goals), joined; empty when there is no plan.
+
+## merges
+`pl merges --dry-run --json`
+
+```
+{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
+```
+`ok` is `true`, `false`, or `null` for a rule not checked yet.

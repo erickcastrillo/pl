@@ -4,8 +4,10 @@
                           drop an idea (and files) into Triage on the intake board, unassigned, to be
                           assessed; --start assigns it to you so the pipeline pulls it in;
                           --plan/--slice title the card 'Plan N slice M: <--title or first line>' and record both in its metadata
-  pl list [--all]         both boards: the Feature Pipeline by column with agent state, then the intake board's
+  pl list [--all] [--plan N]
+                          both boards: the Feature Pipeline by column with agent state, then the intake board's
                           cards assigned to you (5 per column; --product shows them all; --all includes Done)
+                          --plan N lists only plan N's cards, ordered by slice, Done included
   pl inbox [--json]       every gate waiting on you, in every profile (--json: one document)
   pl review [id|slug]     open a plan in Neovim in a NEW iTerm window (--here: this terminal / a tmux window);
                           a card id pulls its plan into the plans folder first
@@ -55,6 +57,9 @@
   pl rework [--dry-run]    send cards in PR open whose pull request the review labeled for rework back to a run
                           agent now (the dispatcher does this every 10 min); after [dispatch] rework_rounds rounds
                           (3) the PR gets the failed label for a person
+  pl merges --dry-run [--json]
+                          each pull request ready to merge, every merge rule's result and what the merge loop would
+                          do (nothing is merged)
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
@@ -144,11 +149,13 @@
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
-                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
+                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
+                          install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
+                          and installs into the library only after a yes
   pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
@@ -190,7 +197,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, loops, outward, pods, profiles, retention, rework, setup, skills, titles, trackers
+from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles, trackers
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -219,6 +226,12 @@ class VersionAction(argparse.Action):
 
 
 BOARD_WRITES = {"idea", "approve", "reject", "done", "drop", "undrop", "hold", "unhold", "move", "adopt", "section", "retry", "restart", "card", "board"}
+
+
+def _plan_number(s):
+    if not s.isdigit() or int(s) < 1:
+        raise argparse.ArgumentTypeError("--plan takes a whole number from 1")
+    return int(s)
 
 
 def main():
@@ -272,7 +285,7 @@ def _main():
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you")
+    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")
     p.add_argument("--reason", help="why you approve; saved to memory with the card"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
@@ -349,6 +362,7 @@ def _main():
     p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("rework"); p.add_argument("--dry-run", action="store_true", help="say what would be sent back")
+    p = sub.add_parser("merges"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("retention"); ps = p.add_subparsers(dest="retention_cmd")
     q = ps.add_parser("run")
     q.add_argument("--dry-run", action="store_true", help="say what would be retained")
@@ -372,7 +386,11 @@ def _main():
     r.add_argument("--brief", required=True, help="JSON: problem, who, outcome, in_scope, out_of_scope, repos, open_questions")
     r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
-    pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
+    q = pk.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, with the source of installed skills")
+    q = pk.add_parser("install"); q.add_argument("source", help="github:owner/repo[/path][@ref]")
+    q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="list the files and stop")
+    q.add_argument("--name", help="the library name (default: the skill's folder name)")
+    q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
@@ -508,7 +526,7 @@ def _main():
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
-     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
+     "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
