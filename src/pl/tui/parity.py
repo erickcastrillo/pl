@@ -72,6 +72,7 @@ NAV = {
     # Refresh and lifecycle
     "refresh",
     "restart_console",
+    "revoke",   # Connectors panel: no pl connectors revoke command exists in any merged slice yet
     "quit",
     "help",
     # Filters and display toggles
