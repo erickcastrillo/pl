@@ -468,6 +468,13 @@ def validate(doc) -> list[str]:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    am = doc.get("loops", {}).get("auto-merge")
+    am = am if isinstance(am, dict) else {}
+    if am.get("merge_method", "squash") not in ("squash", "merge", "rebase"):
+        errs.append('loops.auto-merge.merge_method must be "squash", "merge" or "rebase"')
+    mp = am.get("max_per_pass", 5)
+    if isinstance(mp, bool) or not isinstance(mp, int) or mp < 1:
+        errs.append("loops.auto-merge.max_per_pass must be a whole number, 1 or more")
     errs += _pod_errors(doc.get("pods", {}), globals()["CONFIG_DIR"])
     from pl import triggers
     errs += triggers.validate(doc)

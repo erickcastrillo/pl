@@ -14,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Checkbox, DataTable, Input, Label, Static
 
-from pl import agents, loops, schedule
+from pl import agents, loops, schedule, util
 from pl import config as C
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
@@ -104,6 +104,8 @@ def loop_rows(data):
                     "account": v.get("account") or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-", "last": "-",
                     "next": "-", "output": ((runs.get(name) or {}).get("last_run") or {}).get("result") or "not reported",
                     "pane": None, "window": None})
+    if C.TRACKER.get("type") == "github-project":
+        out.append(_auto_merge_row())
     return out
 
 
@@ -161,6 +163,17 @@ class EditLoopScreen(ModalScreen):
 
     def action_cancel(self):
         self.dismiss(None)
+
+
+def _auto_merge_row():
+    from pl import merges   # merges -> merge_check -> tui.prs would loop back into this package
+    s = util.load_state().get("services", {}).get("auto-merge", {})
+    last, nxt = (s.get("last_run") or {}), s.get("next_at")
+    on, waits = C.AUTO_MERGE.get("enabled") is True, s.get("waits")
+    return {"name": "auto-merge", "state": "waiting" if on and waits else "on" if on else "off",
+            "prompt": "built in: merges what passes every rule", "account": merges.account() or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-",
+            "last": util.ago(last.get("at")), "next": nxt[11:16] if nxt else "-",
+            "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
 
 
 class LoopsView(Widget):

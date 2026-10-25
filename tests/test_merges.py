@@ -1,12 +1,13 @@
 """The merge judge: which pull requests are candidates, in what order, and every rule's result; the merge loop labels
-and comments on a failed rule once per head commit. Nothing is merged."""
+and comments on a failed rule once per head commit; the merge pass merges what passes."""
 import json
 import types
+from datetime import datetime, timedelta
 import urllib.parse
 
 import pytest
 
-from pl import agents, cli, merges
+from pl import accounts, agents, cli, commands, dispatch, merges
 from pl import config as C
 
 URL = "https://github.com/acme/app/pull/{}"
@@ -31,10 +32,15 @@ def fake_home(tmp_path, monkeypatch):
 def host(monkeypatch):
     """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call;
     ns.comments: {number: [comment body]}; ns.repo_labels: the labels the repository already has."""
-    ns = types.SimpleNamespace(prs={}, cards=[], calls=[], comments={}, repo_labels=set())
+    ns = types.SimpleNamespace(prs={}, cards=[], calls=[], refuse={}, default="main", events=[], updates=[], done_fails=0, update_error=None,
+                               comments={}, repo_labels=set())
 
     def fake_gh(args):
         ns.calls.append(args)
+        if args[:2] == ["pr", "merge"]:
+            if msg := ns.refuse.get(int(args[2])):
+                raise SystemExit(msg)
+            return ""
         if args[:2] == ["pr", "view"]:
             return json.dumps(ns.prs[int(args[2])])
         assert args[0] in ("api", "label"), args
@@ -46,11 +52,27 @@ def host(monkeypatch):
             if urllib.parse.unquote(args[1].rsplit("/", 1)[1]) not in ns.repo_labels:
                 raise SystemExit("gh: Not Found (HTTP 404)")
         return ""
+
+    def fake_update(cid, **fields):
+        if ns.update_error:
+            raise ns.update_error
+        ns.updates.append((cid, fields))
+        next(c for c in ns.cards if c["id"] == cid)["metadata"].update(fields.get("metadata") or {})
+
+    def fake_done(cid, cs=None):
+        if ns.done_fails:
+            ns.done_fails -= 1
+            raise SystemExit("pl done: boom")
+        next(c for c in ns.cards if c["id"] == cid)["list_id"] = "Done"
+        return []
+    monkeypatch.setattr(merges.board, "update", fake_update)
+    monkeypatch.setattr(commands, "done", fake_done)
+    monkeypatch.setattr(merges.events, "emit", lambda kind, cid=None, **d: ns.events.append((kind, cid, d)))
     monkeypatch.setattr(merges.github, "_gh", fake_gh)
     monkeypatch.setattr(merges, "_LABELS", set())
     monkeypatch.setattr(merges.board, "cards", lambda: ns.cards)
     ns.checks = [{"rule": "conflicts", "ok": True, "why": "merges cleanly onto main"}, {"rule": "tests", "ok": True, "why": "local tests passed; CI: none"}]
-    monkeypatch.setattr(merges.merge_check, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(merges.merge_check, "default_branch", lambda repo: ns.default)
     monkeypatch.setattr(merges.merge_check, "check", lambda pr, base: ns.checks)
     monkeypatch.setattr(merges, "col_name", lambda lid: lid)
     monkeypatch.setattr(agents, "col_name", lambda lid: lid)
@@ -189,7 +211,7 @@ def test_dry_run_json_is_one_document(host, capsys):
     assert cand["card"] == "c1" and cand["pr"] == URL.format(1)
     assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "conflicts", "tests"]
     assert all(r["ok"] in (True, False, None) and r["why"] for r in cand["rules"])
-    assert cand["action"] == "would merge"
+    assert cand["action"] == "would merge this pass"
 
 
 def test_conflict_reads_needs_a_person_conflicts(host, capsys):
@@ -346,3 +368,274 @@ def test_cli_routes_merges_dry_run(host, capsys, monkeypatch):
     cli.main()
     out = capsys.readouterr().out
     assert "#1 card c1" in out and "  ok  size:" in out
+
+
+# --- the merge pass ---
+
+@pytest.fixture
+def passing(host, monkeypatch):
+    """Every candidate passes every rule, except the cards in host.failing (a callable may decide at judge time)."""
+    host.failing = lambda cid: False
+    host.needs = []
+    host.on_judge = lambda cid: None
+
+    def judge(card, pr, all_cards, base):
+        host.calls.append(["judge", card["id"]])
+        host.on_judge(card["id"])
+        ok = not host.failing(card["id"])
+        return {"card": card["id"], "pr": pr["url"], "title": card["title"], "rules": [{"rule": "size", "ok": ok, "why": ""}],
+                "action": ""}
+    monkeypatch.setattr(merges, "judge", judge)
+    return host
+
+
+def _merges_in(host):
+    return [c for c in host.calls if c[:2] == ["pr", "merge"]]
+
+
+def _ready(host, *ns):
+    for n in ns:
+        _add(host, _card(f"c{n}", submitted=f"2026-10-0{n}T00:00:00+00:00"), _pr(n))
+
+
+def test_config_merge_method_defaults_and_allowed_values_pass():
+    for tbl in ({}, {"merge_method": "squash"}, {"merge_method": "merge"}, {"merge_method": "rebase"}):
+        assert not [e for e in C.validate({"loops": {"auto-merge": tbl}}) if "auto-merge" in e]
+
+
+def test_config_bad_merge_method_names_key_and_values():
+    (err,) = [e for e in C.validate({"loops": {"auto-merge": {"merge_method": "fast-forward"}}}) if "merge_method" in e]
+    assert all(w in err for w in ("loops.auto-merge.merge_method", "squash", "merge", "rebase"))
+
+
+@pytest.mark.parametrize("bad", [0, -1, 2.5, "3", True])
+def test_config_bad_max_per_pass(bad):
+    assert any("loops.auto-merge.max_per_pass" in e for e in C.validate({"loops": {"auto-merge": {"max_per_pass": bad}}}))
+
+
+@pytest.mark.parametrize("ok", [1, 5])
+def test_config_good_max_per_pass(ok):
+    assert not any("max_per_pass" in e for e in C.validate({"loops": {"auto-merge": {"max_per_pass": ok}}}))
+
+
+@pytest.mark.parametrize("method", ["squash", "merge", "rebase"])
+def test_pass_merges_passing_candidate_with_configured_method(passing, method):
+    C.AUTO_MERGE = {"enabled": True, "merge_method": method}
+    _ready(passing, 123)
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(123)]
+    assert _merges_in(passing) == [["pr", "merge", "123", "--repo", "acme/app", f"--{method}", "--match-head-commit", "abc"]]
+
+
+def test_merged_card_goes_to_done_with_note_and_one_event(passing):
+    _ready(passing, 123)
+    merges.run_pass(passing.cards, dry=False)
+    (card,) = passing.cards
+    assert card["list_id"] == "Done"
+    assert card["metadata"]["auto_merged"]["note"] == "merged by auto-merge: acme/app#123"
+    assert passing.events == [("auto_merged", "c123", {"pr": 123, "repo": "acme/app", "method": "squash"})]
+
+
+def test_second_candidate_is_judged_after_first_merge(passing):
+    _ready(passing, 1, 2)
+    passing.failing = lambda cid: cid == "c2" and bool(_merges_in(passing))
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(1)]
+    order = [c[:2] if c[0] == "judge" else c[:3] for c in passing.calls if c[0] in ("judge", "pr") and c[1] != "view"]
+    assert order == [["judge", "c1"], ["pr", "merge", "1"], ["judge", "c2"]]
+
+
+def test_max_per_pass_caps_merges_in_candidate_order(passing):
+    C.AUTO_MERGE = {"enabled": True, "max_per_pass": 2}
+    _ready(passing, 1, 2, 3)
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(1), URL.format(2)]
+    assert ["judge", "c3"] not in passing.calls
+
+
+def test_merge_refused_by_github_is_logged_and_pass_continues(passing):
+    passing.refuse = {1: 'Required status check "ci" is failing'}
+    _ready(passing, 1, 2)
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(2)]
+    a, b = passing.cards
+    assert a["list_id"] == "PR open" and "auto_merged" not in a["metadata"] and b["list_id"] == "Done"
+    (failed,) = [e for e in passing.events if e[0] == "auto_merge_failed"]
+    assert failed[1] == "c1" and 'Required status check "ci" is failing' in failed[2]["message"]
+
+
+def test_pr_not_on_default_branch_is_never_merged(passing):
+    passing.default = "main"
+    _add(passing, _card("c1"), {**_pr(1), "baseRefName": "release"})
+    assert merges.run_pass(passing.cards, dry=False) == []
+    assert _merges_in(passing) == []
+    assert [e[0] for e in passing.events] == ["auto_merge_failed"]
+
+
+def test_failing_rule_is_not_merged(passing):
+    _ready(passing, 1)
+    passing.failing = lambda cid: True
+    assert merges.run_pass(passing.cards, dry=False) == []
+    assert _merges_in(passing) == []
+
+
+def test_unchecked_rule_never_passes():
+    assert not merges.passes({"rules": [{"rule": "tests", "ok": None}]})
+    assert merges.passes({"rules": [{"rule": "size", "ok": True}]})
+
+
+def test_no_command_uses_admin_force_or_push(passing):
+    passing.refuse = {2: "refused"}
+    _ready(passing, 1, 2, 3, 4)
+    passing.prs[3]["baseRefName"] = "release"
+    passing.failing = lambda cid: cid == "c4"
+    merges.run_pass(passing.cards, dry=False)
+    assert _merges_in(passing)
+    for argv in passing.calls:
+        assert not {"--admin", "--auto", "--delete-branch", "--force", "--force-with-lease", "push"} & set(argv)
+    assert all("--match-head-commit" in m for m in _merges_in(passing))
+
+
+def test_done_move_failure_retries_next_pass_without_merging_again(passing):
+    _ready(passing, 1)
+    passing.done_fails = 1
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(1)]
+    (card,) = passing.cards
+    assert card["list_id"] == "PR open" and "auto_merged" in card["metadata"]
+    passing.prs[1]["state"] = "MERGED"
+    merges.run_pass(passing.cards, dry=False)
+    assert card["list_id"] == "Done" and len(_merges_in(passing)) == 1
+
+
+def _labelled(host, n, name):
+    host.prs[n]["labels"].append({"name": name})
+
+
+@pytest.mark.parametrize("change", [
+    lambda pr: pr["labels"].append({"name": "hold"}),
+    lambda pr: pr["labels"].append({"name": "pl:needs-rework"}),
+    lambda pr: pr["labels"].append({"name": "pl:review-failed"}),
+    lambda pr: pr["labels"].clear(),
+    lambda pr: pr.update(isDraft=True),
+    lambda pr: pr.update(state="CLOSED"),
+])
+def test_pr_changed_after_listing_is_not_merged(passing, change):
+    _ready(passing, 1, 2)
+    passing.on_judge = lambda cid: change(passing.prs[1]) if cid == "c1" else None
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(2)]
+    assert [m[2] for m in _merges_in(passing)] == ["2"]
+
+
+def test_merge_record_lost_to_a_budget_error_is_written_next_pass(passing):
+    _ready(passing, 1)
+    passing.update_error = merges.OverBudget(0, "low")
+    with pytest.raises(merges.OverBudget):
+        merges.run_pass(passing.cards, dry=False)
+    (card,) = passing.cards
+    assert len(_merges_in(passing)) == 1 and "auto_merged" not in card["metadata"]
+    passing.update_error = None
+    passing.prs[1]["state"] = "MERGED"
+    assert merges.run_pass(passing.cards, dry=False) == []
+    assert card["list_id"] == "Done" and card["metadata"]["auto_merged"]["pr"] == URL.format(1)
+    assert len(_merges_in(passing)) == 1
+
+
+def test_dry_pass_merges_nothing(passing):
+    _ready(passing, 1)
+    assert merges.run_pass(passing.cards, dry=True) == [URL.format(1)]
+    assert _merges_in(passing) == [] and passing.events == [] and passing.updates == []
+
+
+def test_dry_run_marks_this_pass_and_next_pass(passing, capsys):
+    C.AUTO_MERGE = {"max_per_pass": 2}
+    _ready(passing, 1, 2, 3)
+    merges.cmd_merges(types.SimpleNamespace(dry_run=True, json=True))
+    acts = [c["action"] for c in json.loads(capsys.readouterr().out)["candidates"]]
+    assert acts == ["would merge this pass"] * 2 + ["passes; waits for the next pass (max_per_pass = 2)"]
+    assert all(c[:2] == ["pr", "view"] or c[0] == "judge" for c in passing.calls)
+
+
+# --- the dispatcher's call ---
+
+@pytest.fixture
+def due(monkeypatch):
+    t = types.SimpleNamespace(now=datetime(2026, 10, 25, 12, 0, 0), runs=0, wait=None, parked=set(), result=None)
+    monkeypatch.setattr(dispatch, "_local_now", lambda: t.now)
+    monkeypatch.setattr(dispatch.ghquota, "check", lambda kind="read": t.wait)
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: t.parked)
+
+    def run_pass(all_cards, dry):
+        t.runs += 1
+        if isinstance(t.result, BaseException):
+            raise t.result
+        return []
+    monkeypatch.setattr(merges, "run_pass", run_pass)
+    C.AUTO_MERGE = {"enabled": True, "every": "15m"}
+    return t
+
+
+def test_no_table_means_no_pass(due):
+    C.AUTO_MERGE = {}
+    st = {}
+    dispatch._auto_merge(st, [], False)
+    assert due.runs == 0 and "auto-merge" not in st.get("services", {})
+
+
+def test_pass_runs_at_most_once_per_every(due):
+    st = {}
+    dispatch._auto_merge(st, [], False)
+    assert due.runs == 1 and st["services"]["auto-merge"]["next_at"]
+    due.now += timedelta(minutes=5)
+    dispatch._auto_merge(st, [], False)
+    assert due.runs == 1
+    due.now += timedelta(minutes=11)
+    dispatch._auto_merge(st, [], False)
+    assert due.runs == 2
+
+
+def test_low_budget_waits_and_says_so(due):
+    due.wait = (due.now.timestamp() + 600, "spent")
+    st = {}
+    dispatch._auto_merge(st, [], False)
+    assert due.runs == 0 and st["services"]["auto-merge"]["waits"].startswith("GitHub budget low (until ")
+
+
+def test_parked_run_account_waits(due):
+    C.STAGES = {"run": {"account": "alice"}}
+    C.PROFILES = {"alice": {}}
+    due.parked = {"alice"}
+    st = {}
+    dispatch._auto_merge(st, [], False)
+    assert due.runs == 0 and st["services"]["auto-merge"]["waits"] == "its account alice is parked"
+
+
+def test_failed_pass_is_recorded_and_next_due_set(due):
+    due.result = SystemExit("pl: gh api: boom")
+    st = {}
+    dispatch._auto_merge(st, [], False)
+    s = st["services"]["auto-merge"]
+    assert s["last_run"]["result"].startswith("failed:") and s["next_at"]
+
+
+# --- the Loops tab ---
+
+def _row(monkeypatch, state):
+    from pl.tui import loops
+    C.TRACKER = {"type": "github-project", "repo": "acme/app"}
+    monkeypatch.setattr(loops.util, "load_state", lambda: state)
+    return next(r for r in loops.loop_rows({}) if r["name"] == "auto-merge")
+
+
+def test_loops_tab_shows_auto_merge_off_without_table(monkeypatch):
+    C.AUTO_MERGE = {}
+    assert _row(monkeypatch, {})["state"] == "off"
+
+
+def test_loops_tab_shows_last_and_next(monkeypatch):
+    C.AUTO_MERGE = {"enabled": True}
+    row = _row(monkeypatch, {"services": {"auto-merge": {"last_run": {"at": "2026-10-25T11:00:00+00:00", "result": "merged 2"},
+                                                         "next_at": "2026-10-25T14:05:00"}}})
+    assert row["state"] == "on" and row["next"] == "14:05" and row["output"] == "merged 2" and row["last"] != "-"
+
+
+def test_loops_tab_shows_budget_and_parked_waits(monkeypatch):
+    C.AUTO_MERGE = {"enabled": True}
+    for why in ("GitHub budget low (until 14:05)", "its account alice is parked"):
+        row = _row(monkeypatch, {"services": {"auto-merge": {"waits": why}}})
+        assert row["state"] == "waiting" and row["output"] == f"waiting: {why}"

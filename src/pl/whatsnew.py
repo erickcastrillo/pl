@@ -216,6 +216,8 @@ ENTRIES = [
     _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
     _e("2026-10-25.37", "pl help --json lists every command; pl jobs shows the long jobs running",
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
+    _e("2026-10-25.38", "Auto-merge loop: pl merges what passes every rule",
+       "Loops tab: auto-merge; [loops.auto-merge] enabled, every, merge_method, max_per_pass", "pl merges --dry-run"),
 ]
 
 
