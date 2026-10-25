@@ -376,6 +376,11 @@ def _main():
     p.add_argument("--yes", action="store_true", help="confirm without prompting")
     p.add_argument("--dry-run", action="store_true", help="count what would be removed without changing anything")
     p.add_argument("--json", action="store_true", help="output counts as JSON")
+    p = sub.add_parser("memory"); pm = p.add_subparsers(dest="memory_cmd", required=True)
+    q = pm.add_parser("forget"); q.add_argument("--contact", required=True, help="contact id to forget")
+    q.add_argument("--yes", action="store_true", help="confirm without prompting")
+    q.add_argument("--dry-run", action="store_true", help="count the entries without deleting")
+    q.add_argument("--json", action="store_true")
     p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
     p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
     p = sub.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
@@ -417,6 +422,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "memory": lambda a: __import__("pl.recall").recall.cmd_memory(a),
      "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,

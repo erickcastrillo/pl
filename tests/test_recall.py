@@ -1,4 +1,5 @@
 """Agent memory store: SQLite with full-text search in the profile's state folder."""
+import hashlib
 import sqlite3
 import stat
 
@@ -91,3 +92,64 @@ def test_fts_syntax_in_a_query_is_treated_as_words():
         recall.search(q)
     assert recall.search("alpha OR zzz") == []
     assert len(recall.search("alpha beta")) == 1
+
+
+def _forget_args(**kw):
+    import argparse
+    return argparse.Namespace(memory_cmd="forget", contact="c1", yes=True, dry_run=False, json=False, **kw)
+
+
+def test_forget_contact_deletes_every_linked_entry_and_prints_the_count(capsys):
+    old = recall.add("old line", "fact", "s", contact="c1")
+    recall.add("new line", "fact", "s", contact="c1", replaces=old)
+    older = recall.add("history of a kept entry", "fact", "s")
+    mine = recall.add("replaces history", "fact", "s", contact="c1", replaces=older)
+    con = recall._db()
+    con.execute("INSERT INTO vectors VALUES (?, 'm', 1, x'00')", (mine,))
+    con.commit()
+    con.close()
+    assert recall.forget_contact("c1") == 4
+    assert recall.get(old) is None and recall.get(older) is None
+    assert recall.search("line") == [] and recall.search("history") == []
+    con = recall._db()
+    assert con.execute("SELECT count(*) FROM vectors").fetchone()[0] == 0
+    con.close()
+    recall.add("again", "fact", "s", contact="c1")
+    recall.cmd_memory(_forget_args())
+    assert capsys.readouterr().out.strip() == "deleted 1 entries"
+
+
+def test_forget_leaves_other_contacts_entries():
+    keep = recall.add("keep me", "fact", "s", contact="c2")
+    none = recall.add("no contact", "fact", "s")
+    recall.add("drop me", "fact", "s", contact="c1")
+    recall.forget_contact("c1")
+    assert recall.get(keep) and recall.get(none)
+    assert [e["id"] for e in recall.search("keep")] == [keep]
+
+
+def test_forget_without_a_terminal_needs_yes(monkeypatch):
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    i = recall.add("stays", "fact", "s", contact="c1")
+    a = _forget_args()
+    a.yes = False
+    with pytest.raises(SystemExit) as e:
+        recall.cmd_memory(a)
+    assert e.value.code == 2 and recall.get(i)
+
+
+def test_forget_dry_run_counts_and_deletes_nothing(capsys):
+    i = recall.add("stays", "fact", "s", contact="c1")
+    a = _forget_args()
+    a.dry_run = True
+    recall.cmd_memory(a)
+    assert capsys.readouterr().out.strip() == "would delete 1 entries" and recall.get(i)
+
+
+def test_forget_records_an_event_without_the_contact_id(monkeypatch):
+    from pl import events
+    seen = []
+    monkeypatch.setattr(events, "emit", lambda kind, card_id=None, **d: seen.append((kind, d)))
+    recall.add("x", "fact", "s", contact="c1")
+    recall.cmd_memory(_forget_args())
+    assert seen == [("memory_forgot", {"contact_hash": hashlib.sha256(b"c1").hexdigest()[:12], "count": 1})]
