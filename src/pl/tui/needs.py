@@ -37,7 +37,7 @@ def needs_you(data):
     """The one rule for "needs you": rows at a gate, Manual cards, PRs to decide or merge, and cards whose agent needs
     you, died or is blocked, each once. Rework PRs are not counted: the run agent fixes them."""
     out = []
-    for r in data["snapshot"]["rows"]:
+    for r in ((data or {}).get("snapshot") or {}).get("rows") or []:   # none before the first board read
         if r.get("pr"):
             if r["pr"]["state"] in ("decide", "merge"):
                 out.append(r)
