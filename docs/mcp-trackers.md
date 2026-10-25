@@ -68,6 +68,31 @@ Other keys: `timeout` (seconds per call, default 60) and `card_url` (a link temp
 
 `[intake]` takes the same keys, for a second board whose cards assigned to you become ideas.
 
+### Servers that speak the pl protocol need no mapping
+
+When an MCP board server answers `pl_protocol` (or `[tracker] protocol = "pl"`), pl knows the standard tool names and argument shapes automatically. No `[tracker.tools.*]` mapping tables are needed:
+
+```toml
+[tracker]
+type = "mcp"
+mcp_config = "~/project/.mcp.json"
+server = "boards"
+board_id = "YOUR-BOARD-ID"
+```
+
+See [docs/board-protocol.md](board-protocol.md) for the complete protocol specification.
+
+### Keeping metadata in the description
+
+Boards without a native JSON metadata field can store pl's metadata in the card description by setting:
+
+```toml
+[tracker]
+metadata = "description"
+```
+
+In this mode, pl appends its metadata keys to the end of the card description in a fenced JSON block preceded by `<!-- pl:metadata -->`. The card content above the marker is left intact, and pl hides the metadata block in the console and `pl section` commands.
+
 ## 3. The tools mapping
 
 Each action gets a table `[tracker.tools.<action>]`:
