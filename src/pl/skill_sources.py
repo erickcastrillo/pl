@@ -19,6 +19,8 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 CODE_EXT = {".sh", ".py", ".js", ".ts", ".rb", ".ps1"}
 JSON_FLAGS = {"hooks": "hook", "mcpServers": "mcp"}   # a key in plugin or settings JSON -> the flag it raises
 KIND_ORDER = {"script": 0, "hook": 1, "mcp": 2}
+PLUGINS_DIR = ".pl-plugins"   # in the library: a plugin's whole tree, kept and never run, as <plugin>@<sha7>
+PLUGIN_CODE_DIRS = {"hooks", "commands", "agents"}
 SOURCES_FILE = ".pl-sources.json"   # in the library: {name: {source, repo, path, ref, sha, files, installed_at, plugin}}
 
 
@@ -150,6 +152,52 @@ def _sole_skill_path(inv, path):
     return f"{path}/{sub}" if path else sub
 
 
+def _marketplace_entry(root, src, path, name, roots):
+    """(src, sha, root, path) of plugin `name` of the marketplace at root/path, fetching its repo when it is another one."""
+    base = Path(root) / path if path else Path(root)
+    try:
+        entries = {e["name"]: e["source"] for e in json.loads((base / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))["plugins"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Refused("marketplace.json has no usable plugins list")
+    if name not in entries:
+        raise Refused(f"no plugin named {name!r} here; " if name else "a marketplace needs --plugin NAME; "
+                      f"it lists: {', '.join(sorted(entries))}")
+    source = entries[name]
+    if isinstance(source, str) and source.startswith("./"):
+        sub = _src(src["owner"], src["repo"], "/".join(x for x in (path, source[2:].strip("/")) if x), src["ref"])
+        return src, resolve(src), root, sub["path"]
+    if isinstance(source, dict) and source.get("source") == "github" and isinstance(source.get("repo"), str):
+        other = parse(f"github:{source['repo']}" + (f"@{source['ref']}" if source.get("ref") else ""))
+        sha = resolve(other)
+        roots.append(fetch(other, sha))
+        return other, sha, roots[-1], other["path"]
+    raise Refused(f"plugin {name!r}: only a GitHub repo or a path in this repo is supported as its source")
+
+
+def _plugin_name(base, fallback):
+    try:
+        name = json.loads((base / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("name")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    return name if isinstance(name, str) else fallback
+
+
+def _plugin_skills(inv):
+    return sorted({f.split("/")[1] for f in inv["files"] if re.fullmatch(r"skills/[^/]+/SKILL\.md", f)})
+
+
+def _print_plugin_listing(inv, plugin, out):
+    print(f"Plugin {plugin}", file=out)
+    print("Skills (installed):", file=out)
+    for n in _plugin_skills(inv):
+        print(f"  {n}", file=out)
+    print("Hooks and MCP servers (listed, not enabled):", file=out)
+    flagged = {f["file"] for f in inv["flags"] if f["kind"] in ("hook", "mcp")}
+    held = [f for f in inv["files"] if f.split("/")[0] in PLUGIN_CODE_DIRS or f == ".mcp.json" or f in flagged]
+    for f in held or ["none"]:
+        print(f"  {f}", file=out)
+
+
 def _print_listing(root, path, inv, out, show_text):
     base = Path(root) / path if path else Path(root)
     if inv["flags"]:
@@ -204,32 +252,56 @@ def _fail(msg):
     return 2
 
 
-def install(text, yes, out, dry_run=False, name=None):
-    """Show every file of the source, ask, then copy the skill into the library and record where it came from.
-    Returns the exit code: 0 done (or declined, or a dry run), 2 refused."""
+def install(text, yes, out, dry_run=False, name=None, plugin=None):
+    """Show every file of the source, ask, then copy the skill (or each skill of a plugin) into the library and record
+    where it came from. Returns the exit code: 0 done (or declined, or a dry run), 2 refused."""
     tty = sys.stdin.isatty()
     if not yes and not dry_run and not tty:
         return _fail("no terminal to confirm on; add --yes")
-    root = stage = None
+    roots, stage = [], None
     try:
         src = parse(text)
         sha = resolve(src)
         root = fetch(src, sha)
+        roots.append(root)
         inv = inventory(root, src["path"])
-        path = _sole_skill_path(inv, src["path"])
-        if path != src["path"]:
-            inv = inventory(root, path)
-        name = name or (path.rsplit("/", 1)[-1] if path else src["repo"])
-        skills._check_name(name)
+        path = src["path"]
+        if inv["kind"] == "marketplace":
+            src, sha, root, path = _marketplace_entry(root, src, path, plugin, roots)
+            inv = dict(inventory(root, path), kind="plugin")
+            plugin_name = plugin
+        elif inv["kind"] == "plugin":
+            plugin_name = _plugin_name(Path(root) / path, src["repo"])
+        if inv["kind"] == "plugin":
+            if name:
+                raise Refused("--name names one skill; a plugin installs all of its skills")
+            picks = [(n, f"{path}/skills/{n}".lstrip("/")) for n in _plugin_skills(inv)]
+            if not picks:
+                raise Refused("the plugin has no skills/<name>/SKILL.md")
+            skills._check_name(plugin_name)
+        else:
+            plugin_name = None
+            one = _sole_skill_path(inv, path)
+            if one != path:
+                inv = inventory(root, one)
+            picks = [(name or (one.rsplit("/", 1)[-1] if one else src["repo"]), one)]
         lib = skills.library()
-        if os.path.lexists(lib / name):
-            return _fail(f"{lib / name} already exists; pl never overwrites")
-        _print_listing(root, path, inv, out, show_text=tty)
+        kept = lib / PLUGINS_DIR / f"{plugin_name}@{sha[:7]}"
+        for n, _ in picks:
+            skills._check_name(n)
+            if os.path.lexists(lib / n):
+                return _fail(f"{lib / n} already exists; pl never overwrites")
+        if plugin_name and os.path.lexists(kept):
+            return _fail(f"{kept} already exists; pl never overwrites")
+        if plugin_name:
+            _print_plugin_listing(inv, plugin_name, out)
+        _print_listing(root, path if plugin_name else picks[0][1], inv, out, show_text=tty)
         if dry_run:
             return 0
+        what = f"{plugin_name} ({len(picks)} skills)" if plugin_name else picks[0][0]
         if not yes:
             try:
-                ok = input(f"Install {name} from {src['owner']}/{src['repo']}@{sha[:7]}? [y/N]: ")
+                ok = input(f"Install {what} from {src['owner']}/{src['repo']}@{sha[:7]}? [y/N]: ")
             except EOFError:
                 ok = ""
             if ok.strip().lower() not in ("y", "yes"):
@@ -237,18 +309,27 @@ def install(text, yes, out, dry_run=False, name=None):
                 return 0
         lib.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix=".install-", dir=lib))
-        base = Path(root) / path if path else Path(root)
-        shutil.copytree(base, stage / name, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        copies = [(n, stage / n, Path(root) / sub if sub else Path(root)) for n, sub in picks]
+        if plugin_name:
+            copies.append((None, stage / "plugin", Path(root) / path if path else Path(root)))
+        for _, dest, base in copies:
+            shutil.copytree(base, dest, symlinks=True, ignore=shutil.ignore_patterns(".git"))
         with skills._install_lock(lib) as held:
             if not held:
                 raise RuntimeError("another install holds the library lock; try again")
-            if os.path.lexists(lib / name):
-                return _fail(f"{lib / name} already exists; pl never overwrites")
-            os.replace(stage / name, lib / name)
-        _record(lib, name, {
-            "source": "github", "repo": f"{src['owner']}/{src['repo']}", "path": path, "ref": src["ref"], "sha": sha,
-            "files": {rel: skills._sha256((lib / name / rel).read_bytes()) for rel in inv["files"]},
-            "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "plugin": None})
+            for n, _ in picks:
+                if os.path.lexists(lib / n):
+                    return _fail(f"{lib / n} already exists; pl never overwrites")
+            if plugin_name:
+                kept.parent.mkdir(exist_ok=True)
+                os.replace(stage / "plugin", kept)
+            for n, _ in picks:
+                os.replace(stage / n, lib / n)
+        for n, sub in picks:
+            _record(lib, n, {
+                "source": "github", "repo": f"{src['owner']}/{src['repo']}", "path": sub, "ref": src["ref"], "sha": sha,
+                "files": {rel: skills._sha256((lib / n / rel).read_bytes()) for rel in inventory(root, sub)["files"]},
+                "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "plugin": plugin_name})
     except Refused as e:
         return _fail(str(e))
     except SystemExit as e:
@@ -257,10 +338,11 @@ def install(text, yes, out, dry_run=False, name=None):
         print(f"pl skills install: {e}", file=sys.stderr)
         return 1
     finally:
-        for d in (root, stage):
+        for d in (*roots, stage):
             if d:
                 shutil.rmtree(d, ignore_errors=True)
-    print(f"installed {name} into {skills.library() / name}", file=out)
-    for line in skills.install_in_all_harnesses(name):
-        print(line, file=out)
+    for n, _ in picks:
+        print(f"installed {n} into {skills.library() / n}", file=out)
+        for line in skills.install_in_all_harnesses(n):
+            print(line, file=out)
     return 0

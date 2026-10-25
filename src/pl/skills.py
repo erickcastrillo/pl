@@ -779,7 +779,7 @@ def cmd_skills(a):
         return _cmd_reset(a)
     if a.skills_cmd == "install":
         from pl import skill_sources
-        return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name)
+        return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name, plugin=a.plugin)
     if a.skills_cmd == "share":
         print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":

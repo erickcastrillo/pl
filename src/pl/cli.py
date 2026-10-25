@@ -123,13 +123,14 @@
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
                           install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
-                          and installs into the library only after a yes
+                          and installs into the library only after a yes; a Claude Code plugin or marketplace entry
+                          (--plugin NAME) installs its skills and lists its hooks and MCP servers, not enabled
   pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
@@ -325,6 +326,7 @@ def _main():
     q = pk.add_parser("install"); q.add_argument("source", help="github:owner/repo[/path][@ref]")
     q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="list the files and stop")
     q.add_argument("--name", help="the library name (default: the skill's folder name)")
+    q.add_argument("--plugin", help="the plugin to install from a marketplace")
     q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
