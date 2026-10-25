@@ -8,6 +8,8 @@ COMMANDS = {
     "PlApp.whatsnew": "pl whatsnew",
     "PlApp.update": "pl update",
     "HomeView.select": "pl profiles",
+    "PlApp.switcher": "pl list --json",
+    "PlApp.oldest": "pl inbox --json",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardsView.drop": "pl drop <id>",
     "CardsView.undrop": "pl undrop <id>",
