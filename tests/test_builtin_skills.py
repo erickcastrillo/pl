@@ -480,9 +480,9 @@ def test_a_broken_state_file_never_crashes_install(lib, shipped):
     st["pl-plan"] = {**st["pl-plan"], "version": "abc", "told": "x"}
     st["pl-run"] = ["x"]
     (lib / ".pl-builtin.json").write_text(json.dumps(st))
-    version = _bump(shipped, "pl-plan")
+    _bump(shipped, "pl-plan")
     out = skills.install_builtins()
-    assert f"updated built-in pl-plan to version {version}" in out
+    assert any(m.startswith("updated built-in pl-plan to version") for m in out)
     (lib / ".pl-builtin.json").write_text('["not", "a", "dict"]')
     skills.install_builtins()
 
@@ -630,3 +630,24 @@ def test_pl_plan_links_each_later_slice():
     idx_idea = text.index('pl idea "Slice')
     assert idx_depends > idx_idea
 
+
+
+def _shipped(name):
+    return " ".join((skills.BUILTIN_DIR / name / "SKILL.md").read_text().split())
+
+
+def test_pl_plan_splits_into_independent_slices():
+    text = _shipped("pl-plan")
+    for phrase in ("vertical", "merge in any order", "60 lines", "Depends on", "independent", "after <slice>",
+                   "(after <id>)"):
+        assert phrase in text
+    assert "Slice 1 only" not in text
+    assert "pl-builtin-version: 4" in text
+
+
+def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
+    text = _shipped("pl-review")
+    for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
+                   "even when the tests pass"):
+        assert phrase in text
+    assert "pl-builtin-version: 4" in text

@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed. Never merges. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 3
+pl-builtin-version: 4
 ---
 
 # pl-review: review labelled pull requests
@@ -44,6 +44,7 @@ the label. Use exactly those labels. Never create, rename or edit a label.
       - bugs: wrong logic, missing error handling, edge cases the spec names but the code skips;
       - security: unchecked input, secrets in code or logs, missing permission checks, unsafe shell or SQL;
       - scope: files or features the description does not explain;
+      - dependencies: a module, function, file or config key the change imports, calls or edits that is not on `origin/<baseRefName>`. Check with `git grep` on `origin/<baseRefName>`; when it is missing, look for it on the other open pull requests (`gh pr list --repo <repo> --state open --json number,headRefName`, then `git fetch origin <headRefName>` and `git grep` on it). Found on another open pull request: report "depends on unmerged PR #N" as a finding. Every pull request must build on the base branch alone;
       - tests: changed behaviour with no test that would fail without the change;
       - comments that restate what the code does. List these only when the review already finds other
         problems. A comment alone never makes a pull request need rework.
@@ -62,6 +63,8 @@ the label. Use exactly those labels. Never create, rename or edit a label.
       | Review passes & Requires Human Review (Contains migrations, data changes, security sensitivity, or exceeds auto-merge size) | remove `<review>`, add `<ready>`, comment why manual approval is required before merging |
       | Review finds problems | post problems as one PR comment in plain words, remove `<review>`, add both `<ready>` and `<rework>` |
       | Review cannot run | comment why, remove `<review>`, add `<failed>`; a person decides, then adds `<review>` back |
+
+      A "depends on unmerged PR #N" finding is a problem: use the "Review finds problems" row, even when the tests pass.
 
       ```
       gh pr edit <number> --repo <repo> --remove-label <review> --add-label <ready>

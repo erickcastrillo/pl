@@ -154,6 +154,9 @@ ENTRIES = [
        "pl titles check", "pl titles check --json"),
     _e("2026-10-25.12", "Plans say what they depend on; pl depends --from-plans records it",
        "pl-plan skill, pl depends", "pl depends --from-plans --dry-run"),
+    _e("2026-10-25.13", "Plans split work into slices that merge in any order",
+       "pl-plan: each later slice says independent or after <slice>; pl-review labels a PR for rework when it "
+       "depends on another unmerged PR", "pl section <id> PLAN"),
 ]
 
 
