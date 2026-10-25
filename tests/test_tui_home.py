@@ -171,3 +171,22 @@ def test_oldest_wait_as_written_by_summary_py_is_an_iso_time():
     assert home_rows([s])[0]["oldest_wait"] == "10m"
     s["oldest_wait"] = {"card": "pl#1", "since": "not a time"}
     assert home_rows([s])[0]["oldest_wait"] == "-"
+
+
+def test_enter_on_home_opens_the_pipeline(monkeypatch):
+    calls = []
+    view = HomeView()
+    monkeypatch.setattr(C, "PROFILE_NAME", "eng")
+
+    class _App:
+        def switch_to(self, profile, card=None, tab=None):
+            calls.append(("switch", profile))
+
+        def action_tab(self, tid):
+            calls.append(("tab", tid))
+
+    monkeypatch.setattr(HomeView, "app", property(lambda self: _App()))
+    for name in ("sales", "eng"):
+        monkeypatch.setattr(view, "selected", lambda name=name: {"name": name})
+        view.action_select()
+    assert calls == [("switch", "sales"), ("tab", "cards")]
