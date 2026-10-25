@@ -150,6 +150,8 @@ ENTRIES = [
        "fresh worktrees bootstrapped by pl-run; README: Worktrees folder", "pl worktrees bootstrap <path> --dry-run"),
     _e("2026-10-25.10", "Plan cards: pl idea --plan N --slice M titles the card 'Plan N slice M: ...'",
        "pl idea", "pl idea \"...\" --plan 3 --slice 2 --title \"...\""),
+    _e("2026-10-25.11", "pl titles check lists plan cards whose 'Plan N slice M' title and metadata disagree",
+       "pl titles check", "pl titles check --json"),
 ]
 
 

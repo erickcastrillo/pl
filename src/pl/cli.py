@@ -32,6 +32,10 @@
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
+  pl titles check [--json]
+                          list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
+                          one side, or share a pair with another card (Done left out); changes nothing; exits 1
+                          when it finds any (2: the board could not be read); --json prints them as a list
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
@@ -150,7 +154,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, outward, pods, profiles, retention, rework, setup, skills
+from pl import alerts, assistant, config, events, hooks, links, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -254,6 +258,8 @@ def _main():
     p.add_argument("--json", action="store_true", help="output JSON")
     p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
     p = sub.add_parser("section"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
+    p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
+    q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
@@ -392,6 +398,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "titles": titles.cmd_titles,
      "hook": hooks.cmd_hook,
      "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
      "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
