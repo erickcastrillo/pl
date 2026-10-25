@@ -6,6 +6,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
 from pl import events, ideas, move_agent, trackers
+from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stop_worker
@@ -67,7 +69,30 @@ def cmd_idea(a):
 
 
 
+def _list_json(a):
+    def row(c, col, agent):
+        return {"id": c["id"], "title": c["title"], "column": col, "agent": agent,
+                "age_seconds": int(time.time() - parse_iso(c.get("updated_at") or "")) if c.get("updated_at") else 0}
+    reg = registry()
+    share("read")
+    pipeline = cards()
+    rows = {"pipeline": [], "intake": []}
+    if not a.product:
+        for c in pipeline:
+            if (col := col_name(c["list_id"])) != "Done" or a.all:
+                rows["pipeline"].append(row(c, col, approved_label(c, col, reg) or worker_view(c, reg)))
+    if intake_configured():
+        linked = {(c.get("metadata") or {}).get("product_card"): c for c in pipeline if (c.get("metadata") or {}).get("product_card")}
+        for c in product_cards_mine():
+            if (col := product_col(c["list_id"])) != "Done" or a.all:
+                f = linked.get(c["id"])
+                rows["intake"].append(row(c, col, f"funnel {short_id(f['id'])}:{col_name(f['list_id'])}" if f else ""))
+    emit(rows)
+
+
 def cmd_list(a):
+    if getattr(a, "json", False):
+        return _list_json(a)
     bad = exhausted_profiles()
     if bad:
         print("PROFILES parked (out of usage credits): " + ", ".join(f"{p} until {(parking(p).get('until') or '')[11:16]} UTC"
@@ -437,6 +462,11 @@ def cmd_card(a):
         trackers.get("tracker").delete(c["id"])
         print(f"deleted {short_id(c['id'])}  {c['title']}")
         return
+    if getattr(a, "json", False):
+        emit({"id": c["id"], "title": c["title"], "column": col_name(c["list_id"]), "tags": c.get("tags") or [],
+              "updated_at": c.get("updated_at"), "metadata": c.get("metadata") or {},
+              "sections": {k: len(v) for k, v in sections(c.get("description")).items()}})
+        return
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
     print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
     for k, v in sections(c.get("description")).items():
@@ -488,9 +518,12 @@ def cmd_section(a):
     An approved PLAN or SPEC is refused unless --force (a person's yes)."""
     name = " ".join(a.name.split()).upper()
     if a.from_ is None:
-        text = sections(find_card(a.id).get("description")).get(name)
+        c = find_card(a.id)
+        text = sections(c.get("description")).get(name)
         if text is None:
-            print(f"pl: card {short_id(a.id)} has no {name} section", file=sys.stderr)
+            raise SystemExit(f"pl: card {short_id(a.id)} has no {name} section")
+        if getattr(a, "json", False):
+            emit({"card": c["id"], "name": name, "text": text.rstrip("\n")})
         else:
             print(text.rstrip("\n"))
         return

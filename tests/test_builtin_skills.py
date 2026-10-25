@@ -230,9 +230,9 @@ def _section(id_, name, from_=None):
 def test_section_prints_one_section_in_full(card, capsys):
     _section("cccccccc", "INPUT")
     assert capsys.readouterr().out == "the idea\n"
-    _section("cccccccc", "DESIGN")
-    r = capsys.readouterr()
-    assert r.out == "" and "no DESIGN section" in r.err
+    with pytest.raises(SystemExit) as e:
+        _section("cccccccc", "DESIGN")
+    assert capsys.readouterr().out == "" and "no DESIGN section" in e.value.code
 
 
 def test_section_writes_one_section_and_keeps_the_others(card, tmp_path):
