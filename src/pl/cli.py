@@ -417,7 +417,7 @@ def _main():
         return
     from pl import ghquota
     ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
-    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in ASSISTANT_ACTIONS and a.cmd != "idea":
+    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in assistant.PL_WRITES and a.cmd != "idea":
         raise BadInput("pl: read-only loop: file the action as an idea")
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)

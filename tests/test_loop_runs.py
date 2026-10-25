@@ -158,7 +158,7 @@ def test_a_read_only_loop_cannot_move_or_approve_a_card(profile, read_only_loop,
     (profile / ".pl-t").mkdir()
     (profile / ".pl-t" / "config.toml").write_text("")
     monkeypatch.setenv("PL_CONFIG_DIR", str(profile / ".pl-t"))
-    for argv in (["pl", "move", "1", "Done"], ["pl", "approve", "1"]):
+    for argv in (["pl", "move", "1", "Done"], ["pl", "approve", "1"], ["pl", "section", "1", "PLAN"], ["pl", "caps", "set", "1", "--minutes", "5"]):
         monkeypatch.setattr("sys.argv", argv)
         with pytest.raises(SystemExit) as e:
             cli.main()

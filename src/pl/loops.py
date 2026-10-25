@@ -9,6 +9,9 @@ def cmd_loops(a):
         return dry_run(a)
 
 
+DRY_RUN_TIMEOUT = 600
+
+
 def dry_run(a):
     """Run a loop once in the foreground with the harness's read-only flags and PL_DRY_RUN=1, then print its result and
     the "would file" lines. Nothing is recorded as a run."""
@@ -24,7 +27,11 @@ def dry_run(a):
     if h is None:
         raise BadInput(f"pl loops run: {harnesses.account_harness(account).name} has no read-only mode")
     argv, env = harnesses.headless_argv(h, account, dispatch.loop_prompt(svc))
-    r = harnesses._run(argv, env={**env, **harnesses.loop_env(a.name, False, dry_run=True)}, stdin=harnesses.subprocess.DEVNULL)
+    try:
+        r = harnesses._run(argv, env={**env, **harnesses.loop_env(a.name, False, dry_run=True)}, stdin=harnesses.subprocess.DEVNULL,
+                           timeout=DRY_RUN_TIMEOUT)
+    except harnesses.subprocess.TimeoutExpired:
+        raise BadInput(f"pl loops run: {a.name} timed out after {DRY_RUN_TIMEOUT}s")
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     for ln in lines:
         if ln.startswith("would file:"):

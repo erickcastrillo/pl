@@ -44,6 +44,16 @@ def test_dry_run_runs_read_only_and_prints_what_it_would_do(monkeypatch, capsys)
     assert not (C.STATE_DIR / "loops").exists()
 
 
+def test_dry_run_times_out_with_a_message(monkeypatch):
+    def run(argv, **kw):
+        assert kw["timeout"] == loops.DRY_RUN_TIMEOUT
+        raise harnesses.subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(harnesses, "_run", run)
+    with pytest.raises(BadInput, match="timed out"):
+        loops.cmd_loops(_args())
+
+
 def test_dry_run_needs_a_known_loop_and_the_flag():
     with pytest.raises(BadInput, match="no loop named"):
         loops.cmd_loops(types.SimpleNamespace(loops_cmd="run", name="nope", dry_run=True))
