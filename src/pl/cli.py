@@ -161,7 +161,7 @@
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
                           install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
                           and installs into the library only after a yes
-  pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | revoke NAME
+  pl connectors list [--json] | add NAME (URL | COMMAND... | --url URL) [--team T...] [--role R...] [--access A] [--tier T] [--pin VERSION] [--yes] [--json] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | test NAME [--json] | revoke NAME --yes
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
@@ -404,7 +404,8 @@ def _main():
     q = pc.add_parser("import"); q.add_argument("--from", dest="source", choices=["claude", "codex"], default="claude")
     q.add_argument("--add", metavar="NAME"); q.add_argument("--team", action="append"); q.add_argument("--role", action="append")
     q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
-    q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
+    q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pc.add_parser("test"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pc.add_parser("serve"); q.add_argument("name"); q.add_argument("--card", required=True); q.add_argument("--stage", required=True)
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)

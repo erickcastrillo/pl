@@ -107,12 +107,11 @@ def provider(name: str, url: str, interactive: bool):
     storage = Storage(name)
     known = storage._read().get("client")
     port = urllib.parse.urlsplit(known["redirect_uris"][0]).port if known else 0
-    server = http.server.HTTPServer(("127.0.0.1", port), _Callback)
+    server = http.server.HTTPServer(("127.0.0.1", port), _Callback) if interactive else None   # a session that cannot sign in holds no port
     waiting = concurrent.futures.Future()
 
     async def redirect_handler(auth_url):
         if not interactive:
-            server.server_close()
             raise NeedsSignIn(f"connector {name} needs sign in: run pl connectors add {name}")
         pool = concurrent.futures.ThreadPoolExecutor(1)
         waiting.set_running_or_notify_cancel()
@@ -127,7 +126,7 @@ def provider(name: str, url: str, interactive: bool):
         return code, state
 
     meta = OAuthClientMetadata(
-        client_name="pl", redirect_uris=[f"http://127.0.0.1:{server.server_address[1]}/callback"],
+        client_name="pl", redirect_uris=[f"http://127.0.0.1:{server.server_address[1] if server else port}/callback"],
         grant_types=["authorization_code", "refresh_token"], response_types=["code"], token_endpoint_auth_method="none")
     class Provider(OAuthClientProvider):
         async def _initialize(self):
@@ -137,6 +136,28 @@ def provider(name: str, url: str, interactive: bool):
                 self.context.update_token_expiry(self.context.current_tokens)
 
     return Provider(url, meta, storage, redirect_handler, callback_handler, timeout=CALLBACK_WAIT)
+
+
+async def revoke_at_server(url: str, stored: dict) -> str:
+    """RFC 7009 on the server's revocation_endpoint, best effort: a one-line result, never an exception."""
+    parts = urllib.parse.urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    try:
+        async with http_client() as http:
+            resource = await http.get(f"{origin}/.well-known/oauth-protected-resource")
+            issuers = resource.json().get("authorization_servers") if resource.status_code == 200 else None
+            issuer = (issuers or [origin])[0].rstrip("/")
+            endpoint = (await http.get(f"{issuer}/.well-known/oauth-authorization-server")).json().get("revocation_endpoint")
+            if not endpoint:
+                return "server: no revocation endpoint"
+            client_id = (stored.get("client") or {}).get("client_id")
+            codes = [(await http.post(endpoint, data={"token": stored[hint], "token_type_hint": hint, **({"client_id": client_id} if client_id else {})})).status_code
+                     for hint in ("refresh_token", "access_token") if stored.get(hint)]
+    except Exception as e:
+        return f"server: not reached ({type(e).__name__})"
+    if not codes:
+        return "server: no tokens to revoke"
+    return "server: revoked" if all(c < 300 for c in codes) else f"server: refused (HTTP {max(codes)})"
 
 
 def _settle(future, done):
