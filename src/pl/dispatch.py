@@ -104,6 +104,7 @@ RELEASE_BACKOFF = (30, 60, 120)   # minutes a released run card waits before its
 # /run-plan gates a person must act on (approve the plan, allow the push, allow work outside the worktree): a
 # fresh agent would stop at the same gate, so an agent waiting there keeps its window
 HUMAN_GATES = ("not-approved", "before-push", "outside-worktree")
+NEAR_CAP = 0.8   # share of a cap at which the owner gets one alert
 API_RESTARTS = 3   # automatic restarts after an API error per card in 24 h; then an alert and a person decides
 
 
@@ -147,29 +148,49 @@ def cap_spent(c, w, st, now):
     return max(0.0, now - started - rec["parked"]) / 60, tokens
 
 
+def effective_caps(c, stage):
+    """The stage's caps with the card's own overrides (pl caps set) laid over the profile's."""
+    return {**(C.CAPS.get(stage) or {}), **((c.get("metadata") or {}).get("caps") or {})}
+
+
 def card_caps(c, st, now, col=None):
     """{"caps": the stage's caps, "spent": {"minutes", "tokens"}} for pl card; spent is 0 minutes without an agent."""
     w = (c.get("metadata") or {}).get("worker") or {}
     stage = w.get("stage") or stage_for(c, col or col_name(c["list_id"]))
     minutes, tokens = cap_spent(c, w, st, now) if w else (0.0, 0)
-    return {"caps": C.CAPS.get(stage) or {}, "spent": {"minutes": round(minutes), "tokens": tokens}}
+    return {"caps": effective_caps(c, stage), "spent": {"minutes": round(minutes), "tokens": tokens}}
 
 
 def _check_caps(c, w, st, now):
-    """The note for an agent at its stage's time or token cap, else None."""
-    caps = C.CAPS.get(w.get("stage")) or {}
+    """The note for an agent at its stage's time or token cap, else None. Alerts once when it is past NEAR_CAP of one."""
+    caps = effective_caps(c, w.get("stage"))
     minutes, tokens = cap_spent(c, w, st, now)
     if caps.get("minutes") and minutes >= caps["minutes"]:
         return f"stopped at the {caps['minutes']}-minute cap"
     if caps.get("tokens") and tokens is not None and tokens >= caps["tokens"]:
         return f"stopped at the {usage.human(caps['tokens'])}-token cap"
+    near = []
+    if caps.get("minutes") and minutes >= NEAR_CAP * caps["minutes"]:
+        near.append(f"{round(minutes)}/{caps['minutes']} min")
+    if caps.get("tokens") and tokens is not None and tokens >= NEAR_CAP * caps["tokens"]:
+        near.append(f"{usage.human(tokens)}/{usage.human(caps['tokens'])} tokens")
+    if near:
+        _warn_near_cap(c, w, ", ".join(near))
     return None
+
+
+def _warn_near_cap(c, w, spent):
+    stage = w.get("stage")
+    title = f"Card {short_id(c['id'])}: its {stage} agent is near its cap ({spent})"
+    if why := alerts.open(f"near_cap:{c['id']}:{stage}", "warn", title, f"pl caps set {cmd_id(c['id'])} --minutes M --tokens T raises it"):
+        if why == "open":
+            notify(alerts.headline(why, f"Near its cap: {c['title'][:40]}"), f"the {stage} agent has used {spent}")
 
 
 def stop_at_cap(c, w, note):
     """Stop the agent the way pl drop does (its worktree and branch stay) and move the card to Manual with the note.
     True when stopped."""
-    if no := stop_worker(c, w, {"cap_note": note, "manual_reason": note}):
+    if no := stop_worker(c, w, {"cap_note": note, "manual_reason": note, "cap_stopped": True, "manual_from_column": col_name(c["list_id"])}):
         print(f"{short_id(c['id'])}  {w.get('stage')} agent is {note}; could not stop it ({no})")
         return False
     update(c["id"], column="Manual", description=f"{(c.get('description') or '').rstrip()}\n\n## Stopped at a cap\n{note}\n")
@@ -899,7 +920,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
                 and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh
             m, w, status = c["metadata"], {}, "none"
-        if w and status == "alive" and not busy and not dry and w.get("stage") == stage and C.CAPS \
+        if w and status == "alive" and not busy and not dry and w.get("stage") == stage and (C.CAPS or m.get("caps")) \
                 and (note := _check_caps(c, w, st, time.time())) and stop_at_cap(c, w, note):
             continue
         # a worker for an earlier stage that finished its job: clean its window once it has gone idle
