@@ -2,15 +2,18 @@
 import json
 import os
 import re
+import math
 import secrets
 import sqlite3
+import struct
 import sys
 from datetime import datetime, timezone
 
 from pl import config as C
-from pl import util
+from pl import local_jobs, local_model, util
 from pl.board import sections
 
+SEMANTIC_MIN = 0.55
 KINDS = ("run", "approval", "rejection", "decision", "fact", "preference", "commitment")
 
 
@@ -142,6 +145,7 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
                 con.execute("UPDATE entries SET replaced_by=? WHERE id=?", (entry_id, replaces))
     finally:
         con.close()
+    _store_vectors([(entry_id, text)])
     return entry_id
 
 
@@ -160,13 +164,69 @@ def _match(q):
     return " ".join('"' + w.replace('"', '""') + '"' for w in q.split())
 
 
-def search(q, limit=10, pod=None, card=None):
+def _embed(texts):
+    """(model, vectors) from the local embed model, or None when none is set, it fails or it answers oddly."""
+    model = local_model.job_settings()["models"].get("embed")
+    if not model:
+        return None
+    try:
+        vectors = local_jobs.embed(texts)
+    except Exception:  # noqa: BLE001 - a missing vector never blocks a save or a search
+        return None
+    ok = isinstance(vectors, list) and len(vectors) == len(texts) and all(isinstance(v, list) and v for v in vectors)
+    return (model, vectors) if ok else None
+
+
+def _store_vectors(pairs):
+    got = _embed([t for _, t in pairs]) if pairs else None
+    if not got:
+        return 0
+    model, vectors = got
+    con = _db()
+    try:
+        with con:
+            con.executemany("INSERT OR REPLACE INTO vectors(id, model, dim, blob) VALUES (?,?,?,?)",
+                            [(i, model, len(v), struct.pack(f"{len(v)}f", *v)) for (i, _), v in zip(pairs, vectors)])
+    finally:
+        con.close()
+    return len(pairs)
+
+
+def reindex() -> int:
+    """Give every entry without a vector one; returns how many were filled in."""
+    con = _db()
+    try:
+        pairs = [(r["id"], r["text"]) for r in con.execute(
+            "SELECT id, text FROM entries WHERE id NOT IN (SELECT id FROM vectors)")]
+    finally:
+        con.close()
+    return _store_vectors(pairs)
+
+
+def _cosine(a, b):
+    na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(x * x for x in b))
+    return sum(x * y for x, y in zip(a, b)) / (na * nb) if na and nb else 0.0
+
+
+def _semantic(con, query, model, pod, card):
+    """{id: cosine} of the live entries whose vector, made by the same model, is close to the query vector."""
+    sql = ("SELECT v.id, v.dim, v.blob FROM vectors v JOIN entries e ON e.id = v.id "
+           "WHERE v.model = ? AND e.replaced_by IS NULL" + (" AND e.pod = ?" if pod else "")
+           + (" AND e.card = ?" if card else ""))
+    scores = {}
+    for r in con.execute(sql, (model, *([pod] if pod else []), *([card] if card else []))):
+        if r["dim"] == len(query):
+            c = _cosine(query, struct.unpack(f"{r['dim']}f", r["blob"]))
+            if c > SEMANTIC_MIN:
+                scores[r["id"]] = c
+    return scores
+
+
+def _full_text(con, q, pod, card):
     match = _match(q)
     if not match:
         return []
-    if (remote := backend()):
-        return remote.search(q, limit, pod, card)
-    sql = ("SELECT e.* FROM entries_fts f JOIN entries e ON e.rowid = f.rowid "
+    sql = ("SELECT e.*, bm25(entries_fts) AS rank FROM entries_fts f JOIN entries e ON e.rowid = f.rowid "
            "WHERE entries_fts MATCH ? AND e.replaced_by IS NULL")
     args = [match]
     if pod:
@@ -175,12 +235,34 @@ def search(q, limit=10, pod=None, card=None):
     if card:
         sql += " AND e.card = ?"
         args.append(card)
+    return con.execute(sql + " ORDER BY rank", args).fetchall()
+
+
+def search_with_mode(q, limit=10, pod=None, card=None):
+    """(entries, mode): mode is "full-text+semantic" when the embed model answered for the query, else "full-text"."""
+    if (remote := backend()):
+        return remote.search(q, limit, pod, card), "memory server"
+    got = _embed([q]) if q.strip() else None
     con = _db()
     try:
-        rows = con.execute(sql + " ORDER BY bm25(entries_fts) LIMIT ?", (*args, limit)).fetchall()
+        hits = _full_text(con, q, pod, card)
+        best, worst = (hits[0]["rank"], hits[-1]["rank"]) if hits else (0, 0)
+        scores = {r["id"]: ((worst - r["rank"]) / (worst - best) if worst != best else 1.0) for r in hits}
+        rows = {r["id"]: dict(r) for r in hits}
+        if got:
+            for i, c in _semantic(con, got[1][0], got[0], pod, card).items():
+                scores[i] = max(scores.get(i, 0.0), c)
+                if i not in rows:
+                    rows[i] = dict(con.execute("SELECT * FROM entries WHERE id = ?", (i,)).fetchone())
     finally:
         con.close()
-    return [dict(r) for r in rows]
+    ranked = sorted(rows, key=lambda i: -scores[i])[:limit]
+    return [{k: v for k, v in rows[i].items() if k != "rank"} for i in ranked], \
+        "full-text+semantic" if got else "full-text"
+
+
+def search(q, limit=10, pod=None, card=None):
+    return search_with_mode(q, limit, pod, card)[0]
 
 
 def _already(source, card, author):
@@ -269,6 +351,7 @@ def forget(entry_id) -> bool:
         con = _db()
         try:
             with con:
+                con.execute("DELETE FROM vectors WHERE id = ?", (entry_id,))
                 return con.execute("DELETE FROM entries WHERE id = ?", (entry_id,)).rowcount > 0
         finally:
             con.close()
