@@ -281,6 +281,14 @@ def release_run(c, w, why, dry):
     return True
 
 
+def stage_servers(team, stage):
+    """The connector names a stage agent of this team gets; [stages.<stage>] connectors can only narrow them."""
+    from pl import connectors
+    names = [n for n, _ in connectors.for_team(team)]
+    only = (C.STAGES.get(stage) or {}).get("connectors")
+    return names if only is None else [n for n in names if n in only]
+
+
 def launch_path(name):
     """<profile>/state/launch/<window name>-<random>.sh, new for every launch (two cards can share a window name);
     the name is made safe for a file name (card slugs are card data)."""
@@ -450,7 +458,8 @@ def start_worker(c, stage, attempts, dry):
         connectors_proxy.write_mcp_config(host_mcp, connectors_proxy.make_mcp_config(f"http://{bridge}:{srv.port}", scope.bearer))
         sandbox.transfer_in(sandbox.vm_name(), host_mcp, f"/tmp/mcp-{sid}.json")
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
-                                                         stage=stage, hooks=(c["id"], win), small=small), script)
+                                                         stage=stage, hooks=(c["id"], win), small=small,
+                                                         servers=None if C.SANDBOX.get("enabled") else stage_servers(profile, stage)), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)

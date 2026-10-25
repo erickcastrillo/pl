@@ -1,4 +1,5 @@
 """WP7: agents run under Claude Code, Codex or Antigravity; every command is built from quoted template tokens."""
+import json
 import re
 import shlex
 import subprocess
@@ -877,3 +878,18 @@ def test_a_loop_whose_template_bypasses_permissions_is_refused(fake_home, fake_t
         dispatch.ensure_services({}, [], {}, False, None)
     assert not sent
 
+
+
+def test_claude_launch_uses_strict_mcp_config_with_only_team_servers(fake_home, fake_tmux, monkeypatch):
+    from pl import connectors
+    monkeypatch.setenv("PL_MACHINE_DIR", str(fake_home / "machine"))
+    (fake_home / "machine").mkdir()
+    connectors.path().write_text('[connectors.docs]\ncommand = "docs-mcp"\nteams = ["acme"]\n'
+                                 '[connectors.billing]\ncommand = "b-mcp"\nteams = ["billing"]\n')
+    c = {"id": "abc", "title": "T", "metadata": {"profile": "acme"}}
+    dispatch.start_worker(c, "spec", 1, False)
+    argv = shlex.split(fake_tmux[0][0])
+    mcp = [a for a in argv if a.startswith("--mcp-config=")]
+    assert len(mcp) == 1 and "--strict-mcp-config" in argv
+    servers = json.loads(open(mcp[0].split("=", 1)[1]).read())["mcpServers"]
+    assert list(servers) == ["docs"]
