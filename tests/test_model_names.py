@@ -51,18 +51,20 @@ def test_a_stage_agy_model_not_listed_is_refused_and_a_listed_one_passes():
     assert C.check_models(_doc(rest='[stages.plan.models]\nantigravity = "claude-opus-5-5-high"\n')) == ([], [])
 
 
-def test_claude_names_are_checked_against_pls_list(monkeypatch):
+def test_a_claude_name_outside_pls_list_only_warns_and_a_listed_one_is_silent(monkeypatch):
     monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: pytest.fail("claude needs no CLI"))
-    errs, _ = C.check_models(_doc('model = "opsu"', '[stages.run.models]\nclaude = "opsu"\n'))
-    assert len(errs) == 2 and "accounts.main.model" in errs[0] and "stages.run.models.claude" in errs[1]
-    assert all("opus" in e and "claude-sonnet-5-5" in e for e in errs)
+    errs, warns = C.check_models(_doc('model = "claude-sonnet-4-1"', '[stages.run.models]\nclaude = "sonnet[1m]"\n'))
+    assert errs == [] and len(warns) == 2
+    assert "accounts.main.model" in warns[0] and "claude-sonnet-4-1" in warns[0]
+    assert "stages.run.models.claude" in warns[1] and "sonnet[1m]" in warns[1]
+    assert all("claude-sonnet-5-5" in w for w in warns)
     assert C.check_models(_doc('model = "claude-sonnet-5-5"', '[stages.run.models]\nclaude = "opus"\n')) == ([], [])
 
 
 def test_small_change_models_are_checked_too():
-    errs, _ = C.check_models(_doc(rest='[stages.run.small]\nmax_lines = 60\nmax_files = 3\n'
-                                       '[stages.run.small.models]\nclaude = "opsu"\n'))
-    assert len(errs) == 1 and "stages.run.small.models.claude" in errs[0]
+    errs, warns = C.check_models(_doc(rest='[stages.run.small]\nmax_lines = 60\nmax_files = 3\n'
+                                           '[stages.run.small.models]\nclaude = "opsu"\n'))
+    assert errs == [] and len(warns) == 1 and "stages.run.small.models.claude" in warns[0]
 
 
 @pytest.mark.parametrize("how", ["missing", "timeout", "exit", "empty"])
@@ -74,10 +76,10 @@ def test_an_unreadable_agy_list_warns_per_key_and_never_refuses(monkeypatch, how
     assert all("could not be read" in w for w in warns)
 
 
-def test_each_bad_name_gets_its_own_error():
+def test_each_bad_agy_name_gets_its_own_error():
     errs, _ = C.check_models(_doc('model = "opsu"', 'model = "bad-a"\n[stages.plan.models]\nantigravity = "bad-b"\n'))
-    assert len(errs) == 3
-    for key, e in zip(("accounts.main.model", "accounts.agy.model", "stages.plan.models.antigravity"), errs):
+    assert len(errs) == 2
+    for key, e in zip(("accounts.agy.model", "stages.plan.models.antigravity"), errs):
         assert key in e
 
 
@@ -97,7 +99,7 @@ def profile(tmp_path):
     d = tmp_path / ".pl-t"
     d.mkdir()
     (tmp_path / "acct").mkdir()
-    text = f'[accounts.main]\nharness = "claude"\nconfig_dir = "{tmp_path}/acct"\nmodel = "opus"\n'
+    text = f'[accounts.main]\nharness = "antigravity"\nconfig_dir = "{tmp_path}/acct"\nmodel = "gemini-3.8-flash-medium"\n'
     (d / "config.toml").write_text(text)
     C.load(config_dir=str(d))
     yield d / "config.toml"
@@ -107,10 +109,10 @@ def profile(tmp_path):
 def test_save_refuses_a_bad_name_and_leaves_the_file_untouched(profile):
     before = profile.read_text()
     doc = tomlkit.parse(before)
-    doc["accounts"]["main"]["model"] = "opsu"
+    doc["accounts"]["main"]["model"] = "nope"
     with pytest.raises(SystemExit) as e:
         C.save(doc)
-    assert "accounts.main.model" in str(e.value) and "opsu" in str(e.value)
+    assert "accounts.main.model" in str(e.value) and "nope" in str(e.value)
     assert profile.read_text() == before
 
 
@@ -119,15 +121,15 @@ def test_save_returns_the_warnings_and_writes(profile, monkeypatch):
     doc = tomlkit.parse(profile.read_text())
     doc["accounts"]["agy"] = {"harness": "antigravity", "config_dir": str(profile.parent), "model": "gemini-x"}
     warns = C.save(doc)
-    assert len(warns) == 1 and "accounts.agy.model" in warns[0]
+    assert len(warns) == 2 and "accounts.agy.model" in warns[1]
     assert "gemini-x" in profile.read_text()
 
 
 def test_reload_keeps_previous_settings_on_a_bad_model_name(profile, capsys):
     kept = dict(C.ACCOUNTS)
-    profile.write_text(profile.read_text().replace('"opus"', '"opsu"'))
+    profile.write_text(profile.read_text().replace('"gemini-3.8-flash-medium"', '"nope"'))
     dispatch.reload_config()
-    assert C.ACCOUNTS == kept and C.ACCOUNTS["main"].get("model") == "opus"
+    assert C.ACCOUNTS == kept and C.ACCOUNTS["main"].get("model") == "gemini-3.8-flash-medium"
     out = capsys.readouterr().out
     assert "keeping the previous ones" in out and "accounts.main.model" in out
 
@@ -141,7 +143,7 @@ def test_reload_prints_an_unchecked_warning_once(profile, monkeypatch, capsys):
 
 
 def test_dispatch_start_refuses_a_bad_model_name(profile, monkeypatch):
-    profile.write_text(profile.read_text().replace('"opus"', '"opsu"'))
+    profile.write_text(profile.read_text().replace('"gemini-3.8-flash-medium"', '"nope"'))
     monkeypatch.setattr(dispatch, "dispatch_once", lambda *a, **kw: pytest.fail("a pass ran"))
     with pytest.raises(SystemExit) as e:
         dispatch.cmd_dispatch(types.SimpleNamespace(dry_run=True, interval=None, max_runs=None, max_prep=None,

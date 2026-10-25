@@ -517,8 +517,9 @@ def _loop_schedule_errors(name, v) -> list[str]:
 
 
 def check_models(doc) -> tuple[list[str], list[str]]:
-    """(errors, warnings) for every set claude or antigravity model name: an error when the harness does not offer
-    it, a warning when its list could not be read. It runs a CLI, so validate never calls it."""
+    """(errors, warnings) for every set claude or antigravity model name: an error when antigravity does not offer
+    it, a warning when a claude name is outside pl's fixed list or antigravity's list could not be read. It runs
+    a CLI, so validate never calls it."""
     from pl import harnesses
     named = [(f"accounts.{n}.model", a.get("harness") or "claude", a["model"])
              for n, a in doc.get("accounts", {}).items() if isinstance(a, dict) and isinstance(a.get("model"), str)]
@@ -538,7 +539,11 @@ def check_models(doc) -> tuple[list[str], list[str]]:
         if not names:
             warns.append(f"{key}: {m!r} not checked; the {h} model list could not be read (agy models)")
         elif m not in names:
-            errs.append(f"{key}: {m!r} is not a model {h} offers; accepted: {', '.join(names)}")
+            msg = f"{key}: {m!r} is not a model {h} offers; accepted: {', '.join(names)}"
+            if h == "claude":   # pl's list is fixed, not read from the CLI, so an older id, alias or newer model may be valid
+                warns.append(msg.replace("is not a model claude offers", "is not in pl's claude list, passed on as given"))
+            else:
+                errs.append(msg)
     return errs, warns
 
 
