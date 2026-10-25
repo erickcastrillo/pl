@@ -14,6 +14,7 @@ from pl.setup import LABELS
 from pl.trackers import github
 from pl.tui.cards import FitTable
 from pl.tui.chrome import skip_headings
+from pl.tui.needs import needs_you_count
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run   # the one subprocess runner here (gh, argv only); tests fake it
@@ -191,6 +192,7 @@ class PrsView(Horizontal):
 
     def show(self, data):
         g = pr_groups(data["snapshot"]["rows"])
+        self.query_one("#prs-table").border_title = f"Pull requests · {needs_you_count(data)} need you"
         built, self._prs = [], {}
         for key, title, colour in GROUPS:
             built.append((f"group:{key}", Text(f"■ {title} {len(g[key])}", style=f"bold {colour}")))

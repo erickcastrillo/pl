@@ -13,6 +13,8 @@ import time
 import tomllib
 from pathlib import Path
 
+from pl import jsonout
+
 TICK = 5                      # seconds between ticks, as the dispatcher's fast guard
 STALE = 3 * TICK              # a status older than this is ignored: a dead manager never freezes the pipeline
 BACKOFF = (10, 30, 120, 300)  # seconds before restarting a dispatcher that exited: 1st, 2nd, 3rd, 4th+ time
@@ -768,6 +770,7 @@ def cmd_manager(argv):
     ap.add_argument("profile", nargs="?", help="restart: start this profile's dispatcher again; stop: stop only "
                     "this profile's dispatcher, not restarted until restart")
     ap.add_argument("--all", action="store_true", help="stop: also stop every managed dispatcher")
+    ap.add_argument("--json", action="store_true", help="status: print one JSON document (shape in docs/cli-json.md)")
     a = ap.parse_args(argv)
     if a.action == "run":
         return _run_loop()
@@ -777,6 +780,10 @@ def cmd_manager(argv):
             print(f"pl manager {a.action}: give a profile name", file=sys.stderr)
             return 2
         print(note)
+        return 0
+    if a.json and a.action == "status":
+        st = read_status(max_age=float("inf"))
+        jsonout.emit({"running": True, **st} if running() and st else {"running": False})
         return 0
     print({"start": start, "status": show}.get(a.action, lambda: stop(a.all))())
     return 0

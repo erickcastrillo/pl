@@ -15,7 +15,7 @@ from pl.board import card, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import show_first_heading, skip_headings
 from pl.tui.loops import COPIERS, _copy_run
-from pl.tui.needs import detail, needs_groups, needs_me, review_kind, start_review
+from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
 from pl.tui.subagents import TODO_MARK
 from pl.util import ago, short_id
@@ -356,11 +356,6 @@ def card_count(data):
     return sum(len(here) for _, here in card_rows(data))
 
 
-def attention_count(data):
-    """Cards on the Pipeline list (Done hidden) that wait on a person."""
-    return sum(needs_me(r) for _, here in card_rows(data) for r in here)
-
-
 class ColumnPicker(ModalScreen):
     """The board's columns but the card's own; enter picks one, esc cancels."""
     DEFAULT_CSS = """
@@ -457,13 +452,13 @@ class CardsView(CardActions, Horizontal):
     def show(self, data):
         self._now, self._data = data.get("now") or {}, data
         groups = card_rows(data)
-        total, mine = sum(len(h) for _, h in groups), attention_count(data)
+        total, mine = sum(len(h) for _, h in groups), needs_you_count(data)
         if self.show_done and (finished := [r for r in data["snapshot"].get("done") or [] if r.get("card")]):
             groups = [*groups, ("Done", finished)]
         t = self.query_one(DataTable)
         if self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
-            t.border_title = f"Pipeline · needs you only · {mine} of {total} cards · f shows all"
+            t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} cards · f shows all"
         else:
             t.border_title = f"Pipeline · {total} cards · {mine} need you (f only those) · " + (
                 "z hides Done" if self.show_done else "Done is hidden (z shows it)")
