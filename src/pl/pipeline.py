@@ -99,3 +99,12 @@ def past_gate(col, section) -> bool:
 def gate_for(col) -> tuple | None:
     """(name, stage) of the owner-gated stage that finishes in column `col`."""
     return next(((n, s) for n, s in C.PIPELINE["stages"].items() if s.get("gate") == "owner" and s.get("done") == col), None)
+
+
+def approved_column(stage) -> str:
+    """Where approval sends a card: the stage's `next`, else the column after `done`, else `done` itself."""
+    if stage.get("next"):
+        return stage["next"]
+    cols = C.PIPELINE["columns"]
+    i = cols.index(stage["done"])
+    return cols[min(i + 1, len(cols) - 1)]

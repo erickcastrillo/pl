@@ -156,6 +156,21 @@ def test_approve_at_an_owner_gate_moves_to_next(store, monkeypatch):
     assert store["list_id"] == "Done" and gate["approved_at"] and "approved_by" in gate
 
 
+def test_approve_at_an_owner_gate_without_next_moves_to_the_column_after_done(store):
+    C.PIPELINE = {**SALES, "stages": {"prepare": {k: v for k, v in SALES["stages"]["prepare"].items() if k != "next"}}}
+    store["list_id"] = "Review"
+    commands.cmd_approve(argparse.Namespace(id="o/r#1", force=False))
+    assert store["list_id"] == "Done" and store["metadata"]["gates"]["prepare"]["approved_at"]
+
+
+def test_approve_at_a_last_column_gate_without_next_stays_put(store):
+    C.PIPELINE = {**SALES, "stages": {"prepare": {"column": "Inbox", "done": "Done", "skill": "pl-stage",
+                                                  "section": "PROPOSAL", "gate": "owner"}}}
+    store["list_id"] = "Done"
+    commands.cmd_approve(argparse.Namespace(id="o/r#1", force=False))
+    assert store["list_id"] == "Done" and store["metadata"]["gates"]["prepare"]["approved_at"]
+
+
 def test_send_back_reruns_the_stage_and_it_returns_to_the_gate(store, monkeypatch, tmp_path):
     _sales()
     _write("o/r#1", "PROPOSAL", "first offer", tmp_path)

@@ -257,10 +257,11 @@ def _at_gate(c, verb):
 def _approve_gate(c):
     name, stage = _at_gate(c, "approve")
     gates = {**((c.get("metadata") or {}).get("gates") or {}), name: {"approved_by": C.USER_EMAIL, "approved_at": now_iso()}}
-    update(c["id"], list_id=col_id(stage["next"]), metadata={"gates": gates, "worker": None})
+    target = pipeline.approved_column(stage)
+    update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None})
     events.emit("gate_approved", c["id"])
     audit.append("gate_approved", card=c["id"], stage=name)
-    print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {stage['next']}")
+    print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
 
 
 def cmd_approve(a):
