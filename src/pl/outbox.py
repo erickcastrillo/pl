@@ -73,17 +73,38 @@ def append(card_id, op, fields) -> dict:
         return rec
 
 
+def _rewrite(keep):
+    p = path()
+    tmp = p.with_name(p.name + ".tmp")
+    fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, "".join(json.dumps(e, default=str) + "\n" for e in keep).encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, p)
+
+
 def drop_through(seq) -> int:
     """Remove the entries up to and including seq; returns how many are left."""
     with _lock():
         keep = [e for e in entries() if e.get("seq", 0) > seq]
-        p = path()
-        tmp = p.with_name(p.name + ".tmp")
-        fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-        try:
-            os.write(fd, "".join(json.dumps(e, default=str) + "\n" for e in keep).encode("utf-8"))
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, p)
+        _rewrite(keep)
         return len(keep)
+
+
+def strip(card, fields) -> int:
+    """Take these fields out of the card's queued updates (a column move is `list_id`); returns how many entries changed."""
+    gone = set(fields) | ({"list_id"} if "column" in fields else set())
+    with _lock():
+        keep, changed = [], 0
+        for e in entries():
+            if e.get("card") == str(card) and e.get("op") == "update" and gone & set(e["fields"]):
+                changed += 1
+                e = {**e, "fields": {k: v for k, v in e["fields"].items() if k not in gone}}
+                if not e["fields"]:
+                    continue
+            keep.append(e)
+        if changed:
+            _rewrite(keep)
+        return changed
