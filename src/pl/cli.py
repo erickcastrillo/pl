@@ -116,7 +116,8 @@
                           [updates] check = false turns it off)
   pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
-                          and model, and whether Ollama answers with that model pulled
+                          and model, and whether Ollama answers with that model pulled; [models.local] sets a
+                          model per small job (route, summarise, title, embed), each checked with a fallback
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
                           test JOB [--json] runs the job's sample 3 times (answer, schema pass|fail, ms);
                           set JOB MODEL [--yes] writes [models.local]; JOB is route, summarise, title or embed
