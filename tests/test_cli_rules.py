@@ -42,6 +42,7 @@ def profile(tmp_path, monkeypatch):
     C.load("t")
     monkeypatch.setattr(commands, "registry", lambda: {})
     yield
+    trackers.set_dry_run(False)
     for k, v in saved.items():
         setattr(C, k, v)
 
