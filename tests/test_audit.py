@@ -174,12 +174,12 @@ def test_audit_cli_verify(capsys):
 
 def test_connectors_commands_audit(monkeypatch):
     from pl import connectors
-    monkeypatch.setattr(connectors, "add", lambda *a, **k: {})
+    monkeypatch.setattr(connectors, "add", lambda *a, **k: {"approved_snapshot": {}})
     monkeypatch.setattr(connectors, "revoke", lambda name: None)
     monkeypatch.setattr(connectors, "approve_tools", lambda name, **k: audit.append("connectors.approve_tools", target=name))
     def ns(**kw):
         return type("A", (), kw)()
-    connectors.cmd_connectors(ns(connectors_cmd="add", name="slack", command=None, url="https://x.example", pin=None))
+    connectors.cmd_connectors(ns(connectors_cmd="add", name="slack", command=None, url="https://x.example", pin=None, yes=True))
     connectors.cmd_connectors(ns(connectors_cmd="revoke", name="slack"))
     connectors.cmd_connectors(ns(connectors_cmd="approve-tools", name="slack", yes=True))
 
