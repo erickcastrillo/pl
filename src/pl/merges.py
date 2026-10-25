@@ -1,8 +1,9 @@
 """The merge judge: which open pull requests are ready to merge, in what order, and every merge rule's result.
-Nothing here merges, labels or comments on a pull request."""
+A failed rule gets the needs-person label and one comment per head commit. Nothing here merges a pull request."""
 import fnmatch
 import json
 import re
+import urllib.parse
 
 from pl import agents, board, jsonout, rework
 from pl import config as C
@@ -15,10 +16,13 @@ SENSITIVE = ["**/migrations/**", "**/*.sql", "**/*.designer.cs", "**/schema*", "
 HUMAN_TAG = "Requires Human Review"
 TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*$|_test\.[^/]+$")
 NOT_CHECKED = {"ok": None, "why": "not checked yet (later slice)"}
+MARK = "<!-- pl:merge-loop head={} -->"
+_LABELS = set()
 
 
 def settings():
-    return {"hold": C.AUTO_MERGE.get("hold_label", "hold"), "sensitive": C.AUTO_MERGE.get("sensitive", SENSITIVE)}
+    return {"hold": C.AUTO_MERGE.get("hold_label", "hold"), "sensitive": C.AUTO_MERGE.get("sensitive", SENSITIVE),
+            "needs_person": C.AUTO_MERGE.get("needs_person_label", "needs-person")}
 
 
 def _match(path, globs):
@@ -29,7 +33,7 @@ def _match(path, globs):
 
 def _pr(repo, num):
     return json.loads(github._gh(["pr", "view", str(num), "--repo", repo, "--json",
-                                  "number,url,state,isDraft,baseRefName,body,labels,files"]))
+                                  "number,url,state,isDraft,baseRefName,headRefOid,body,labels,files"]))
 
 
 def candidates(all_cards):
@@ -84,13 +88,67 @@ def judge(card, pr, all_cards):
             "action": f"needs a person: {', '.join(failed)}" if failed else "would merge once tests and conflicts pass"}
 
 
+def _said(repo, num, head):
+    bodies = github._gh(["api", "--paginate", f"repos/{repo}/issues/{num}/comments?per_page=100", "--jq", ".[].body"])
+    return MARK.format(head) in bodies
+
+
+def _ensure_label(repo, name):
+    if (repo, name) in _LABELS:
+        return
+    try:
+        github._gh(["api", f"repos/{repo}/labels/{urllib.parse.quote(name, safe='')}"])
+    except SystemExit:
+        github._gh(["label", "create", name, "--repo", repo, "--color", "D93F0B",
+                    "--description", "added by pl: a person decides whether to merge"])
+    _LABELS.add((repo, name))
+
+
+def _note(failed, head):
+    lines = "\n".join(f"- {r['rule']}: {r['why']}" for r in failed)
+    return ("pl merge loop: this pull request is not merged automatically, because:\n" + lines + "\n\n"
+            "A person should decide: merge it by hand, change it, or close it. "
+            "pl comments again only when the pull request gets a new commit.\n\n" + MARK.format(head))
+
+
+def act(pr, v, dry):
+    """Label and comment on a pull request whose judgement `v` has a failed rule, once per head commit; take the label off
+    when none fails. Sets and returns v["loop"], what was (or with dry, would be) done."""
+    repo, num = rework.PR_URL.match(pr["url"]).groups()
+    failed = [r for r in v["rules"] if r["ok"] is False]
+    lab = settings()["needs_person"]
+    has = lab in {x["name"] for x in pr.get("labels") or []}
+    api = f"repos/{repo}/issues/{num}"
+    if not failed:
+        v["loop"] = f"remove {lab}" if has else None
+        if has and not dry:
+            github._gh(["api", "-X", "DELETE", f"{api}/labels/{urllib.parse.quote(lab, safe='')}"])
+        return v["loop"]
+    head = pr["headRefOid"]
+    if _said(repo, num, head):
+        v["loop"] = "already commented on this head"
+        if not has and not dry:
+            _ensure_label(repo, lab)
+            github._gh(["api", "-X", "POST", f"{api}/labels", "-f", f"labels[]={lab}"])
+        return v["loop"]
+    v["loop"] = f"add {lab} and comment"
+    if not dry:
+        _ensure_label(repo, lab)
+        if not has:
+            github._gh(["api", "-X", "POST", f"{api}/labels", "-f", f"labels[]={lab}"])
+        github._gh(["api", "-X", "POST", f"{api}/comments", "-f", f"body={_note(failed, head)}"])
+    return v["loop"]
+
+
 def cmd_merges(a):
-    if not a.dry_run:
-        raise SystemExit("pl merges: only --dry-run exists so far")
     if C.TRACKER.get("type") != "github-project" or not C.TRACKER.get("repo"):
         raise SystemExit("pl merges: needs a github-project tracker with a repo")
     all_cards = board.cards()
-    judged = [judge(c, pr, all_cards) for c, pr in candidates(all_cards)]
+    judged = []
+    for c, pr in candidates(all_cards):
+        v = judge(c, pr, all_cards)
+        act(pr, v, a.dry_run)
+        judged.append(v)
     if a.json:
         return jsonout.emit({"candidates": judged})
     if not judged:
@@ -101,3 +159,6 @@ def cmd_merges(a):
         for r in j["rules"]:
             print(f"  {mark[r['ok']]}  {r['rule']}: {r['why']}")
         print(f"  -> {j['action']}")
+        if j["loop"]:
+            would = "would " if a.dry_run and not j["loop"].startswith("already") else ""
+            print(f"  -> loop: {would}{j['loop']}")

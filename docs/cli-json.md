@@ -81,12 +81,13 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 `plan_scope` is the plan's scope sections (minimum change, acceptance, non-goals), joined; empty when there is no plan.
 
 ## merges
-`pl merges --dry-run --json`
+`pl merges [--dry-run] --json`
 
 ```
-{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
+{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action", "loop"}]}
 ```
-`ok` is `true`, `false`, or `null` for a rule not checked yet.
+`ok` is `true`, `false`, or `null` for a rule not checked yet. `loop` is what the merge loop did (with `--dry-run`, would do) about
+a failed rule: `"add needs-person and comment"`, `"already commented on this head"`, `"remove needs-person"`, or `null`.
 
 ## manager-status
 `pl manager status --json`

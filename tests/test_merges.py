@@ -1,6 +1,8 @@
-"""The merge judge: which pull requests are candidates, in what order, and every rule's result. Nothing is merged."""
+"""The merge judge: which pull requests are candidates, in what order, and every rule's result; the merge loop labels
+and comments on a failed rule once per head commit. Nothing is merged."""
 import json
 import types
+import urllib.parse
 
 import pytest
 
@@ -27,22 +29,34 @@ def fake_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def host(monkeypatch):
-    """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call."""
-    ns = types.SimpleNamespace(prs={}, cards=[], calls=[])
+    """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call;
+    ns.comments: {number: [comment body]}; ns.repo_labels: the labels the repository already has."""
+    ns = types.SimpleNamespace(prs={}, cards=[], calls=[], comments={}, repo_labels=set())
 
     def fake_gh(args):
         ns.calls.append(args)
-        assert args[:2] == ["pr", "view"], args
-        return json.dumps(ns.prs[int(args[2])])
+        if args[:2] == ["pr", "view"]:
+            return json.dumps(ns.prs[int(args[2])])
+        assert args[0] in ("api", "label"), args
+        if args[:2] == ["label", "create"]:
+            ns.repo_labels.add(args[2])
+        elif args[0] == "api" and "--jq" in args:
+            return "\n".join(ns.comments.get(int(args[2].split("/issues/")[1].split("/")[0]), []))
+        elif args[0] == "api" and "/labels/" in args[1] and "-X" not in args:
+            if urllib.parse.unquote(args[1].rsplit("/", 1)[1]) not in ns.repo_labels:
+                raise SystemExit("gh: Not Found (HTTP 404)")
+        return ""
     monkeypatch.setattr(merges.github, "_gh", fake_gh)
+    monkeypatch.setattr(merges, "_LABELS", set())
     monkeypatch.setattr(merges.board, "cards", lambda: ns.cards)
     monkeypatch.setattr(merges, "col_name", lambda lid: lid)
     monkeypatch.setattr(agents, "col_name", lambda lid: lid)
     return ns
 
 
-def _pr(n, files=(("src/a.py", 10, 5),), labels=("pl:ready",), body="", state="OPEN", draft=False):
+def _pr(n, files=(("src/a.py", 10, 5),), labels=("pl:ready",), body="", state="OPEN", draft=False, head="abc"):
     return {"number": n, "url": URL.format(n), "state": state, "isDraft": draft, "baseRefName": "main", "body": body,
+            "headRefOid": head,
             "labels": [{"name": x} for x in labels],
             "files": [{"path": p, "additions": a, "deletions": d} for p, a, d in files]}
 
@@ -161,7 +175,7 @@ def test_dry_run_prints_every_rule_and_writes_nothing(host, capsys):
     assert "#1 Plan 1 slice 1: ok" in out and "  ok  size:" in out and "  FAIL  size: 400 lines outside tests" in out
     assert "  —  tests: not checked yet (later slice)" in out
     assert "  -> would merge once tests and conflicts pass" in out and "  -> needs a person: size" in out
-    assert host.calls and all(c[:2] == ["pr", "view"] for c in host.calls)
+    assert host.calls and not _writes(host)
 
 
 def test_dry_run_json_is_one_document(host, capsys):
@@ -179,10 +193,130 @@ def test_dry_run_with_no_candidates_says_so(host, capsys):
     assert capsys.readouterr().out.strip() == "no pull requests are ready to merge"
 
 
-def test_without_dry_run_refuses(host):
-    with pytest.raises(SystemExit, match="only --dry-run exists so far"):
-        merges.cmd_merges(types.SimpleNamespace(dry_run=False, json=False))
-    assert host.calls == []
+def _run(dry_run=False, json_out=False):
+    merges.cmd_merges(types.SimpleNamespace(dry_run=dry_run, json=json_out))
+
+
+def _writes(host):
+    return [c for c in host.calls if c[:2] == ["label", "create"] or "-X" in c]
+
+
+def _comment_posts(host):
+    return [c for c in host.calls if c[:2] == ["api", "-X"] and c[2] == "POST" and c[3].endswith("/comments")]
+
+
+def _big(host, n=1, **kw):
+    return _add(host, _card(f"c{n}"), _pr(n, files=(("src/a.py", 200, 12),), **kw))
+
+
+def test_failed_rule_adds_label_creates_it_and_comments_once(host):
+    _big(host)
+    _run()
+    assert ["label", "create", "needs-person", "--repo", "acme/app", "--color", "D93F0B",
+            "--description", "added by pl: a person decides whether to merge"] in host.calls
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=needs-person"] in host.calls
+    (post,) = _comment_posts(host)
+    body = post[5].removeprefix("body=")
+    assert body.startswith("pl merge loop: this pull request is not merged automatically, because:\n")
+    assert "- size: 212 lines outside tests (limit 150), 1 files (limit 6)" in body
+    assert "A person should decide" in body and body.endswith("<!-- pl:merge-loop head=abc -->")
+
+
+def test_configured_needs_person_label_is_used(host):
+    C.AUTO_MERGE = {"needs_person_label": "pl:merge-me"}
+    _big(host)
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=pl:merge-me"] in host.calls
+    assert ["label", "create", "pl:merge-me"] == host.calls[[c[:2] for c in host.calls].index(["label", "create"])][:3]
+
+
+def test_existing_label_is_not_created_again(host):
+    host.repo_labels.add("needs-person")
+    _big(host)
+    _run()
+    assert not [c for c in host.calls if c[:2] == ["label", "create"]]
+    assert len(_comment_posts(host)) == 1
+
+
+def test_same_head_already_commented_posts_nothing(host):
+    host.comments[1] = ["a person's note", "pl merge loop: x\n\n<!-- pl:merge-loop head=abc -->"]
+    _big(host, labels=("pl:ready", "needs-person"))
+    _run()
+    assert not _writes(host)
+
+
+def test_same_head_already_commented_but_label_removed_puts_it_back_without_comment(host):
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    host.repo_labels.add("needs-person")
+    _big(host)
+    _run()
+    assert _writes(host) == [["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=needs-person"]]
+
+
+def test_comment_without_the_marker_does_not_count(host):
+    host.comments[1] = ["pl merge loop: dry run said size", "<!-- pl:merge-loop head=def -->"]
+    _big(host)
+    _run()
+    assert len(_comment_posts(host)) == 1
+
+
+def test_new_head_still_failing_comments_again(host):
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    _big(host, labels=("pl:ready", "needs-person"), head="def")
+    _run()
+    (post,) = _comment_posts(host)
+    assert post[5].endswith("<!-- pl:merge-loop head=def -->")
+
+
+def test_new_head_passing_removes_label_without_comment(host):
+    _add(host, _card("c1"), _pr(1, labels=("pl:ready", "needs-person"), head="def"))
+    _run()
+    assert _writes(host) == [["api", "-X", "DELETE", "repos/acme/app/issues/1/labels/needs-person"]]
+
+
+def test_unchecked_rules_do_not_count_as_failed(host):
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert merges.NOT_CHECKED["ok"] is None and not _writes(host) and not _comment_posts(host)
+
+
+def test_passing_pr_without_label_gets_nothing(host):
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert not _writes(host) and not [c for c in host.calls if "--jq" in c]
+
+
+def test_dry_run_says_would_and_writes_nothing(host, capsys):
+    _big(host)
+    _run(dry_run=True)
+    assert "  -> loop: would add needs-person and comment" in capsys.readouterr().out
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    _run(dry_run=True)
+    assert "  -> loop: already commented on this head" in capsys.readouterr().out
+    host.calls.clear()
+    _run(dry_run=True, json_out=True)
+    (cand,) = json.loads(capsys.readouterr().out)["candidates"]
+    assert cand["loop"] == "already commented on this head"
+    assert not _writes(host)
+
+
+def test_dry_run_json_loop_is_null_for_a_passing_pr(host, capsys):
+    _add(host, _card("c1"), _pr(1))
+    _run(dry_run=True, json_out=True)
+    assert json.loads(capsys.readouterr().out)["candidates"][0]["loop"] is None
+
+
+def test_without_dry_run_merges_nothing(host):
+    _big(host)
+    _run()
+    assert not [c for c in host.calls if c[:2] == ["pr", "merge"]]
+
+
+def test_cli_routes_merges_without_dry_run(host, capsys, monkeypatch):
+    _big(host)
+    monkeypatch.setattr("sys.argv", ["pl", "--profile", "t", "merges"])
+    cli.main()
+    assert "  -> loop: add needs-person and comment" in capsys.readouterr().out
 
 
 def test_cli_routes_merges_dry_run(host, capsys, monkeypatch):
