@@ -383,6 +383,33 @@ def trust_command(h, account, folder):
     return f"cd {_shown(folder)} && {env}{h.bin}"
 
 
+def claude_json(account):
+    d = config_dir(account)
+    return (d or C.HOME) / ".claude.json"
+
+
+def folder_trust(account, folder):
+    """(trusted, reason): Claude's saved trust for folder or a parent, read from the account's .claude.json; reads only that file."""
+    f = claude_json(account)
+    if SECRET_RE.fullmatch(f.name):
+        return False, "unreadable"
+    try:
+        projects = json.loads(f.read_text()).get("projects")
+    except FileNotFoundError:
+        return False, "file missing"
+    except (OSError, ValueError, AttributeError):
+        return False, "unreadable"
+    if not isinstance(projects, dict):
+        return False, "unreadable"
+    given = Path(folder).expanduser()
+    resolved = given.resolve()
+    for q in (given, resolved, *resolved.parents):
+        entry = projects.get(str(q))
+        if isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True:
+            return True, None
+    return False, None
+
+
 def claude_trusts(account, folder):
     """True only when the account's Claude config marks exactly this folder trusted. pl only reads this one file and
     keeps nothing from it but the answer; it never writes it."""
