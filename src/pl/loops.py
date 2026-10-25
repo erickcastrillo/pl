@@ -8,7 +8,7 @@ import tomlkit
 
 from pl import config as C
 from pl import schedule
-from pl.util import load_state, save_state
+from pl.util import BadInput, load_state, save_state
 
 WAIT_POLLS = 150
 
@@ -136,6 +136,8 @@ def _cmd_rm(a) -> int:
 
 def cmd_loops(a):
     if a.loops_cmd == "run":
+        if getattr(a, "dry_run", False):
+            return dry_run(a)
         return run(a.name, wait=a.wait, as_json=a.json)
     return {"list": _cmd_list, "add": _cmd_add, "rm": _cmd_rm,
             "pause": lambda a: _cmd_toggle(a, False), "resume": lambda a: _cmd_toggle(a, True)}[a.loops_cmd](a)
@@ -162,3 +164,34 @@ def run(name, wait=False, as_json=False):
     else:
         raise SystemExit(f"pl loops run: the dispatcher has not picked it up; is it running? ({name} stays queued)")
     print(json.dumps(record) if as_json else f"exit {record.get('exit')}: {record.get('result')} (tokens {record.get('tokens')})")
+
+
+DRY_RUN_TIMEOUT = 600
+
+
+def dry_run(a):
+    """Run a loop once in the foreground with the harness's read-only flags and PL_DRY_RUN=1, then print its result and
+    the "would file" lines. Nothing is recorded as a run."""
+    from pl import dispatch, harnesses
+    svc = C.SERVICES.get(a.name)
+    if svc is None:
+        raise BadInput(f"pl loops run: no loop named {a.name}")
+    account = svc["profile"] or next(iter(C.ACCOUNTS), None)
+    if account is None:
+        raise BadInput("pl loops run: no account to run it under")
+    h = harnesses.read_only_headless(harnesses.account_harness(account))
+    if h is None:
+        raise BadInput(f"pl loops run: {harnesses.account_harness(account).name} has no read-only mode")
+    argv, env = harnesses.headless_argv(h, account, dispatch.loop_prompt(svc))
+    try:
+        r = harnesses._run(argv, env={**env, **harnesses.loop_env(a.name, False, dry_run=True)}, stdin=harnesses.subprocess.DEVNULL,
+                           timeout=DRY_RUN_TIMEOUT)
+    except harnesses.subprocess.TimeoutExpired:
+        raise BadInput(f"pl loops run: {a.name} timed out after {DRY_RUN_TIMEOUT}s")
+    lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    for ln in lines:
+        if ln.startswith("would file:"):
+            print(ln)
+    print(f"result: {lines[-1] if lines else '(no output)'}")
+    if r.returncode:
+        raise SystemExit(r.returncode)

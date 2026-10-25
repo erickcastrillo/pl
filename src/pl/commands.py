@@ -35,6 +35,10 @@ def cmd_idea(a):
         if plan is None or slice_no is None or plan < 1 or slice_no < 1:
             raise SystemExit("pl idea: --plan and --slice go together, both whole numbers from 1")
         title = ideas.plan_title(plan, slice_no, a.title or line)
+    from_loop = os.environ.get("PL_LOOP_WRITES") == "0"   # a read-only loop only proposes: unstarted, tagged
+    if os.environ.get("PL_DRY_RUN") == "1":
+        print(f"would file: {title}")
+        return
     body, docs = [text, ""], []
     for d in a.doc:
         p = Path(d).expanduser().resolve()
@@ -62,8 +66,8 @@ def cmd_idea(a):
         desc, title = render({"INPUT": ideas._plain(desc)}), ideas.clean_title(title)
     check_size(desc)
     t = trackers.get("tracker" if direct else "intake")
-    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo),
-                    metadata=meta, assigned_to=trackers.me(t) if a.start else None)
+    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []),
+                    metadata=meta, assigned_to=trackers.me(t) if a.start and not from_loop else None)
     if not item.get("id"):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
     events.emit("idea_approved", item["id"])

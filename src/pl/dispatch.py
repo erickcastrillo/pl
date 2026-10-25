@@ -620,12 +620,16 @@ def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
     if use is None:
         _loop_waits(st["services"], name, "no account is free to run it")
         return
+    writes = svc.get("writes", True)
+    if not writes and harnesses.read_only_headless(harnesses.account_harness(use)) is None:
+        _loop_waits(st["services"], name, f"{harnesses.account_harness(use).name} has no read-only mode, so a loop with writes = false cannot run on {use}")
+        return
     print(f"starting {name} loop run under {use}: {svc['prompt']}")
     if dry:
         return
     runs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     script = harnesses.headless_script(harnesses.account_harness(use), use, loop_prompt(svc), name,
-                                       runs_dir / f"{name}.log", record)
+                                       runs_dir / f"{name}.log", record, writes)
     _launch(_loop_pane(name), name, script)
     s.update(profile=use, started_at=now_iso(), ran_at=now_iso(), next_at=upcoming)
     s.pop("run_now", None)
