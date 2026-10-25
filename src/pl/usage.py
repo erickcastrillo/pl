@@ -414,4 +414,8 @@ def cmd_usage(a):
     if a.by == "card" and getattr(a, "json", False):
         print(json.dumps(card_report(scan(), since, cards or [])))
         return
+    if getattr(a, "json", False):
+        from pl import local_jobs
+        print(json.dumps({"tokens": totals(scan(), since, a.by or "account", cards), "local_jobs": local_jobs.stats(since)}))
+        return
     print(table(scan(), since, a.by or "account", cards))
