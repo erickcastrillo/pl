@@ -48,6 +48,7 @@ Status and the board:
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
+- `pl loops list` (`--json`): the profile's loops with state, schedule, next run and account. `pl loops add|pause|resume|rm` change `[loops.NAME]`; they ask first.
 - `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.

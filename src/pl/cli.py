@@ -156,6 +156,9 @@
                           under the other one); --reset un-parks a profile by hand
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
+  pl loops list [--json] | add NAME (--skill S | --prompt P) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
+          | pause NAME | resume NAME | rm NAME [--yes]
+                          manage the profile's [loops.NAME] tables; --every is 30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
@@ -172,7 +175,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, outward, pods, profiles, retention, rework, setup, skills, titles
+from pl import alerts, assistant, config, events, hooks, links, loops, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -344,6 +347,16 @@ def _main():
     q.add_argument("--yes", action="store_true")
     q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
+    p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
+    q = pl_.add_parser("list"); q.add_argument("--json", action="store_true")
+    q = pl_.add_parser("add"); q.add_argument("name"); g = q.add_mutually_exclusive_group(required=True)
+    g.add_argument("--skill"); g.add_argument("--prompt")
+    q.add_argument("--every", help="30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>"); q.add_argument("--hours", help="HH:MM-HH:MM [weekdays]")
+    q.add_argument("--account"); q.add_argument("--team"); q.add_argument("--writes", action="store_true", help="let the loop write (default: read-only)")
+    q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="say what would be added, add nothing")
+    for verb in ("pause", "resume"):
+        q = pl_.add_parser(verb); q.add_argument("name")
+    q = pl_.add_parser("rm"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
@@ -432,7 +445,7 @@ def _main():
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
-     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
+     "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods, "loops": loops.cmd_loops,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,

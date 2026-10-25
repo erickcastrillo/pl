@@ -1,0 +1,135 @@
+"""pl loops list|add|pause|resume|rm: manage [loops.<name>] in the profile's config.toml."""
+import json
+import sys
+from datetime import datetime
+
+import tomlkit
+
+from pl import config as C
+from pl import schedule
+
+
+def _fail(message: str):
+    print(f"pl loops: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _confirm(question: str, yes: bool):
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        _fail("no terminal to confirm on; add --yes")
+    try:
+        answer = input(f"{question} [y/N]: ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        print("nothing changed")
+        raise SystemExit(0)
+
+
+def _document():
+    path = C.path()
+    if path is None:
+        raise SystemExit(C.READ_ONLY)
+    return tomlkit.parse(path.read_text())
+
+
+def _save(doc):
+    C.save(doc)
+    C.load(config_dir=str(C.CONFIG_DIR))
+
+
+def _row(name: str, loop: dict, paused: bool, now: datetime) -> dict:
+    every = loop.get("every")
+    next_run = None
+    if every and not paused:
+        next_run = schedule.next_run(schedule.parse_every(every), now).isoformat(timespec="minutes")
+    return {"name": name, "state": "paused" if paused else "on", "every": every, "next_run": next_run,
+            "account": loop.get("account") or loop.get("profile"), "skill": loop.get("skill"), "prompt": loop.get("prompt")}
+
+
+def _rows() -> list[dict]:
+    now = datetime.now()
+    on = [_row(n, v, False, now) for n, v in C.SERVICES.items()]
+    off = [_row(n, v, True, now) for n, v in C.LOOPS_OFF.items()]
+    return sorted(on + off, key=lambda r: r["name"])
+
+
+def _cmd_list(a) -> int:
+    rows = _rows()
+    if a.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    for r in rows:
+        what = f"/{r['skill']}" if r["skill"] else (r["prompt"] or "").splitlines()[0][:50] if r["prompt"] else ""
+        print(f"{r['name']:<24} {r['state']:<7} {r['every'] or '-':<16} {r['next_run'] or '-':<17} {r['account'] or '-':<10} {what}")
+    return 0
+
+
+def _warn_if_skill_is_unknown(skill: str):
+    from pl import skills
+    try:
+        known = {item["name"] for item in skills.scan()}
+    except SystemExit:
+        return
+    if skill not in known:
+        print(f"pl loops: warning: skill {skill} is not in the library or any account", file=sys.stderr)
+
+
+def _cmd_add(a) -> int:
+    doc = _document()
+    if a.name in doc.get("loops", {}):
+        print(f"loop {a.name} exists, nothing changed")
+        return 0
+    entry = tomlkit.table()
+    for key, value in (("skill", a.skill), ("prompt", a.prompt), ("every", a.every), ("hours", a.hours),
+                       ("account", a.account), ("team", a.team)):
+        if value:
+            entry[key] = value
+    entry["writes"] = bool(a.writes)
+    if "every" in entry:
+        try:
+            schedule.parse_every(entry["every"])
+        except ValueError as e:
+            _fail(str(e))
+    if a.skill:
+        _warn_if_skill_is_unknown(a.skill)
+    checked = tomlkit.parse(tomlkit.dumps(doc))
+    checked.setdefault("loops", tomlkit.table())[a.name] = entry
+    if errors := C.validate(checked):
+        _fail("; ".join(errors))
+    _confirm(f"Add loop {a.name}?", a.yes)
+    if a.dry_run:
+        print(f"would add loop {a.name}")
+        return 0
+    doc.setdefault("loops", tomlkit.table())[a.name] = entry
+    _save(doc)
+    print(f"added loop {a.name}")
+    return 0
+
+
+def _cmd_toggle(a, enabled: bool) -> int:
+    doc = _document()
+    if a.name not in doc.get("loops", {}):
+        _fail(f"no loop {a.name} in config.toml")
+    doc["loops"][a.name]["enabled"] = enabled
+    _save(doc)
+    print(f"loop {a.name} {'resumed' if enabled else 'paused'}")
+    return 0
+
+
+def _cmd_rm(a) -> int:
+    doc = _document()
+    if a.name not in doc.get("loops", {}):
+        _fail(f"no loop {a.name} in config.toml")
+    _confirm(f"Remove loop {a.name}?", a.yes)
+    del doc["loops"][a.name]
+    _save(doc)
+    print(f"removed loop {a.name}")
+    return 0
+
+
+def cmd_loops(a) -> int:
+    return {"list": _cmd_list, "add": _cmd_add, "rm": _cmd_rm,
+            "pause": lambda a: _cmd_toggle(a, False), "resume": lambda a: _cmd_toggle(a, True)}[a.loops_cmd](a)
