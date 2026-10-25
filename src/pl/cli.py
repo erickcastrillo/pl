@@ -81,7 +81,8 @@
                           max_context = 60 sets another percent, 0 turns it off; one loop interval apart, at most
                           3 an hour; background shells or agents the session started end with it). --github
                           shows GitHub's GraphQL budget this hour instead: points left, the reset, what each
-                          profile and caller spent and each profile's fair share
+                          profile and caller spent and each profile's fair share; it also asks GitHub for a fresh
+                          reading of this process's token and prints it next to pl's, marking a GAP past 10%
   pl hook <Notification|Stop> --card ID --window W
                           what a Claude Code stage agent's hooks run (pl adds them at launch; [dispatch] hooks = false
                           turns them off): a permission wait or a finished turn reaches the card at once. Exits 2
@@ -355,7 +356,7 @@ def _main():
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
-    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
+    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller, beside GitHub's own reading")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
     p = sub.add_parser("alerts"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include resolved alerts")

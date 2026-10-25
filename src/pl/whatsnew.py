@@ -195,6 +195,8 @@ ENTRIES = [
        "pl sandbox login <account>"),
     _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
        "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
+    _e("2026-10-25.29", "pl usage --github shows GitHub's own budget next to pl's and marks a gap",
+       "pl usage --github", "pl usage --github"),
 ]
 
 
