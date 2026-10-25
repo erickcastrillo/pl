@@ -182,6 +182,9 @@ ENTRIES = [
        "Pull requests: M merges (a PR that is not ready asks 'Merge anyway?'). Dashboard: [ and ] change the window. "
        "Pipeline: f only mine, F done. Settings: T tests connections. Ideas: F2 rename, H harness, ctrl+n skip question. "
        "Home: space opens details", "pl"),
+    _e("2026-10-25.23", "Small jobs on local models, checked, with fallbacks",
+       "[models.local]: a model per job (route, summarise, title, embed); setup writes it for a new profile",
+       "pl models test summarise"),
 ]
 
 

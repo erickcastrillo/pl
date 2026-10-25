@@ -440,6 +440,7 @@ def ask_attention(answers, flags):
 
 LOCAL_MODEL_PROMPT = ("Use a local model (Gemma 4 on Ollama) for small jobs like the standup summary? "
                       "Data stays on this machine. [Y/n]: ")
+EMBED_MODEL = "nomic-embed-text"
 OLLAMA_DOWNLOAD = "https://ollama.com/download"
 
 
@@ -542,7 +543,18 @@ def build_doc(a):
         doc["code_host"].pop("labels", None)
     if a.get("local_model"):
         doc["local_model"] = dict(a["local_model"])
+        if a["local_model"].get("enabled") is True:
+            doc["models"] = {"local": models_local(a["local_model"])}
     return doc
+
+
+def models_local(lm):
+    """[models.local] for a new profile: summarise on today's model, embed once its model is pulled."""
+    from pl import local_model
+    table = {"summarise": lm.get("model") or local_model.DEFAULTS["model"]}
+    if local_model.pulled(EMBED_MODEL, local_model.models(lm) or set()):
+        table["embed"] = EMBED_MODEL
+    return table
 
 
 def merged_doc(a):

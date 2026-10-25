@@ -1156,7 +1156,7 @@ def test_a_stopped_server_installed_by_brew_is_started_with_brew_services(fake_h
     ollama.which["brew"] = "/opt/homebrew/bin/brew"
     ollama.platform = "darwin"
     ollama.results["brew list"] = (0, "ollama 0.12.0\n")
-    ollama.models = [None, {"gemma4:latest"}]
+    ollama.models = [None, None, {"gemma4:latest"}]
     _pl(monkeypatch, *GITHUB_ISSUES)
     assert _argvs(ollama) == ["brew list --versions ollama", "brew services start ollama"]
 
@@ -1262,3 +1262,29 @@ def test_setup_with_a_github_remote_still_asks_for_the_tracker(fake_home, monkey
 
 
 
+
+
+def test_setup_writes_models_local_for_a_new_profile(fake_home, monkeypatch, capsys, ollama):
+    ollama.models = [{"gemma4:latest", "nomic-embed-text:latest"}]
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    t = _cfg(fake_home, "work-acme")
+    assert t["models"]["local"] == {"summarise": "gemma4", "embed": "nomic-embed-text"} and C.validate(t) == []
+
+
+def test_setup_leaves_embed_out_when_it_is_not_pulled(fake_home, monkeypatch, capsys, ollama):
+    _pl(monkeypatch, *GITHUB_ISSUES)
+    assert _cfg(fake_home, "work-acme")["models"]["local"] == {"summarise": "gemma4"}
+
+
+def test_setup_keeps_an_existing_local_model_table(fake_home, monkeypatch, capsys, ollama):
+    _existing(fake_home, monkeypatch, capsys, "--no-local-model")
+    p = fake_home / ".pl-work-acme" / "config.toml"
+    p.write_text(p.read_text() + '\n[local_model]\nenabled = true\nmodel = "gemma4:e4b"\n')
+    _pl(monkeypatch, "--yes", "--slug", "work-acme", "--local-model")
+    t = _cfg(fake_home, "work-acme")
+    assert t["local_model"] == {"enabled": True, "model": "gemma4:e4b"} and "models" not in t
+
+
+def test_no_local_model_writes_no_models_local(fake_home, monkeypatch, capsys, ollama):
+    _pl(monkeypatch, *GITHUB_ISSUES, "--no-local-model")
+    assert "models" not in _cfg(fake_home, "work-acme")
