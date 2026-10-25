@@ -73,6 +73,7 @@ def _wp2_expected(args, legacy):
         out = out.replace("update,local-model}", "update,local-model,connectors}")   # pl connectors (machine-wide MCP servers)
         out = out.replace("local-model,connectors}", "local-model,connectors,inbox}")   # pl inbox
         out = out.replace("connectors,inbox}", "connectors,inbox,kill-switch}")
+        out = out.replace("skills,update,", "skills,pods,update,")   # pl pods (list, show)
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
         out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all]\n")
         out = out.replace("usage: pl [-h]\n", "usage: pl [-h] [--profile NAME] [--version]\n", 1)

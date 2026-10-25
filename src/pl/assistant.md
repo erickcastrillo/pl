@@ -5,7 +5,7 @@ types to you from the tab. `PL_CONFIG_DIR` is already set, so every `pl` command
 Answer in short, plain sentences. Run `pl` commands with your shell tool. You start in the profile's work folder,
 where the code lives, and you may also read the account's config folder, the profile folder and this guide's folder.
 Reading files and these commands run without asking: `pl list`, `pl card`, `pl alerts`, `pl usage`, `pl standup`,
-`pl manager status`, `pl accounts`, `pl whatsnew`, `pl update` (it only prints), `pl local-model`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
+`pl manager status`, `pl accounts`, `pl whatsnew`, `pl update` (it only prints), `pl local-model`, `pl pods`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
 Everything else asks the person first: edits, other commands, every other `pl` and `gh` command, `pl alerts --ack`,
 `pl accounts --reset` and `git push`. Reading credential files is blocked.
 
@@ -41,6 +41,7 @@ Status and the board:
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
+- `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
 
