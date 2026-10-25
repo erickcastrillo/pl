@@ -1,5 +1,5 @@
 """What's new: one entry per feature, oldest first. The console shows the entries newer than the last one it showed
-(kept in <profile>/state/whatsnew.json) once after an upgrade; ? or the palette shows them all; `pl whatsnew` prints them.
+(kept in <profile>/state/whatsnew.json) once after an upgrade; the palette shows them all; `pl whatsnew` prints them.
 A new feature adds an entry here with a key greater than every other one."""
 import json
 import os
@@ -127,6 +127,9 @@ ENTRIES = [
        "machine.toml [connectors.discord]; buttons and Send back modal", "pl chat test discord"),
     _e("2026-10-24.01", "Exit codes for scripts: 0 done, 1 failed, 2 bad input, with a one-line reason",
        "every pl command; an unknown card or column now exits 2 (it was 1)", "pl card nosuch; echo $?"),
+    _e("2026-10-25.01", "The footer shows the actions that fit the selected card, and ? opens help for the screen",
+       "Pipeline: approve and send back show only on a spec or plan waiting for you, p reads hold; ? is help, "
+       "What's new is in the palette (ctrl+p)", "pl"),
 ]
 
 

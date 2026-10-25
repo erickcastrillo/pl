@@ -12,6 +12,19 @@ TABS = [("dashboard", "Dashboard"), ("assistant", "Assistant"), ("ideas", "Ideas
 # Keys stay fixed when tabs() hides the Assistant.
 TAB_KEYS = {tid: str(i) for i, (tid, _) in enumerate(TABS)}
 
+HELP = {
+    "dashboard": "What needs you first, then what the agents did in the chosen window. w changes the window, s writes a standup.",
+    "assistant": "Ask the assistant about your cards, pull requests and settings. Type in the box and press Enter.",
+    "ideas": "Ideas waiting to become cards. Pick one to read it, edit it or send it into the pipeline.",
+    "cards": "Every card by column. A card that waits on you shows approve and send back in the footer; the details are on the right.",
+    "prs": "Pull requests by what they need: a decision, a merge, a rework, or only a wait.",
+    "loops": "The background loops that keep the pipeline moving, with when each last ran.",
+    "alerts": "Things that went wrong or need a look. Pick one to read it.",
+    "activity": "A log of what the agents and you did, newest first.",
+    "settings": "Accounts, models, skills and the other settings of this profile.",
+    "subagents": "Agents running in the background and what each is doing.",
+}
+
 
 def skip_headings(t, is_item, last=None):
     """Keep a DataTable's cursor off heading rows. On a heading it moves to the next row is_item(key) accepts in the

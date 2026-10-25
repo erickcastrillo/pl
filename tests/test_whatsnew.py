@@ -79,13 +79,13 @@ async def test_the_popup_shows_once_per_upgrade_and_only_the_new_entries(profile
         assert "A shiny thing" in text and whatsnew.ENTRIES[-2]["title"] not in text
 
 
-async def test_question_mark_and_the_palette_reopen_it(profile):
+async def test_the_palette_reopens_it(profile):
     whatsnew.mark_seen()
     app = PlApp(snapshot_provider=Provider(), whatsnew=True)
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         assert not isinstance(app.screen, whatsnew_screen())
-        await pilot.press("question_mark")
+        app.action_whatsnew()
         await settle(pilot)
         assert isinstance(app.screen, whatsnew_screen()) and whatsnew.ENTRIES[0]["title"] in screen_text(app)
         await pilot.press("escape")
@@ -161,12 +161,12 @@ async def test_the_popup_fits_a_narrow_terminal(profile):
     app = PlApp(snapshot_provider=Provider(), autostart=False, whatsnew=False)
     async with app.run_test(size=(70, 30)) as pilot:
         await settle(pilot)
-        await pilot.press("question_mark")
+        app.action_whatsnew()
         await settle(pilot)
         assert app.screen.query_one(Vertical).outer_size.width <= 70
     app = PlApp(snapshot_provider=Provider(), autostart=False, whatsnew=False)
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("question_mark")
+        app.action_whatsnew()
         await settle(pilot)
         assert app.screen.query_one(Vertical).outer_size.width == 96

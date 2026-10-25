@@ -17,7 +17,8 @@ from pl.trackers.github import RateLimited
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.cards import CardsView, attention_count, card_count
-from pl.tui.chrome import TABS, TAB_KEYS, header_text, tabs
+from pl.tui.chrome import HELP, TABS, TAB_KEYS, header_text, tabs
+from pl.tui.needs import review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
@@ -108,7 +109,31 @@ class WhatsNewScreen(ModalScreen):
             yield Static(Text("What's new in pl", style="bold"))
             with VerticalScroll(id="whatsnew-body"):
                 yield Static(Text(whatsnew.text(self.entries)))
-            yield Static(Text("esc close · ? or the palette (ctrl+p) opens this again · pl whatsnew prints it", style="dim"))
+            yield Static(Text("esc close · the palette (ctrl+p) has What's new · pl whatsnew prints it", style="dim"))
+
+    def action_close(self):
+        self.dismiss(None)
+
+
+class HelpScreen(ModalScreen):
+    """What this screen is for, then every key active on it; esc closes."""
+    DEFAULT_CSS = """
+    HelpScreen { align: center middle; }
+    HelpScreen > Vertical { width: 100%; max-width: 96; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    #help-body { height: 1fr; }
+    """
+    BINDINGS = [Binding("escape", "close", "close"), Binding("question_mark", "close", "close", show=False)]
+
+    def __init__(self, title, about, keys):
+        super().__init__()
+        self.title_text, self.about, self.keys = title, about, keys
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"Help: {self.title_text}", style="bold"))
+            with VerticalScroll(id="help-body"):
+                yield Static(Text(self.about + "\n\n" + "\n".join(f"{k}  {what}" for k, what in self.keys)))
+            yield Static(Text("esc close · the palette (ctrl+p) has What's new", style="dim"))
 
     def action_close(self):
         self.dismiss(None)
@@ -174,7 +199,7 @@ class PlApp(App):
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
         Binding("K", "kill_switch", "kill switch"),
-        Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
+        Binding("question_mark", "help", "help", key_display="?"), Binding("U", "update", "update", show=False),
         Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
 
@@ -286,6 +311,18 @@ class PlApp(App):
     def action_whatsnew(self):
         if not isinstance(self.screen, WhatsNewScreen):
             self.push_screen(WhatsNewScreen(whatsnew.ENTRIES))
+
+    def action_help(self):
+        if isinstance(self.screen, HelpScreen):
+            return
+        keys, seen = [], set()
+        for key, active in self.screen.active_bindings.items():
+            b = active.binding
+            if active.enabled and b.show and b.description and b.description not in seen:
+                seen.add(b.description)
+                keys.append((b.key_display or key, b.description))
+        title = dict(tabs()).get(self.active_tab, self.active_tab)
+        self.push_screen(HelpScreen(title, HELP.get(self.active_tab, ""), keys))
 
     def get_system_commands(self, screen):
         yield from super().get_system_commands(screen)
@@ -469,12 +506,20 @@ class PlApp(App):
         if action == "standup":
             return self.active_tab == "dashboard" and len(self.screen_stack) == 1
         if action == "review":
-            return self.active_tab == "cards" and len(self.screen_stack) == 1
+            return self.active_tab == "cards" and len(self.screen_stack) == 1 and self.selected_waits_for_review()
         if action == "dispatcher":
             return len(self.screen_stack) == 1   # never a second D while its choice or confirm dialog is open
         if action == "kill_switch":
             return len(self.screen_stack) == 1
         return True
+
+    def selected_waits_for_review(self):
+        """A spec or plan at its gate, or a manual spec card (a / x then say how to hand it to the pipeline)."""
+        try:
+            row = self.query_one(CardsView)._row()
+        except NoMatches:
+            return False
+        return bool(row) and (review_kind(row) is not None or row.get("col") == "Spec ready")
 
     async def action_cycle_window(self):
         self.window = (self.window + 1) % len(WINDOWS)
