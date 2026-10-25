@@ -197,6 +197,13 @@ def steady_worker_waits(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_stage_hooks(monkeypatch):
+    """Launch tests compare exact argv: a stage launch adds no Claude Code hooks unless test_hooks turns them on."""
+    from pl import hooks
+    monkeypatch.setattr(hooks, "enabled", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def no_live_agent_window(monkeypatch):
     """The dispatcher's look for an agent window it does not track reads tmux: off unless a test turns it on."""
     from pl import dispatch

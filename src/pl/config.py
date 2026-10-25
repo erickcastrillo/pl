@@ -72,10 +72,10 @@ def _defaults():
     # memory: agents start only while min_free_memory is free; a window past max_agent_processes/_memory is stopped
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
     # autostart: the console starts the dispatcher. account_checks: minutes between health checks of a parked account
-    # (the last repeats; [] is off). release_waiting_after: minutes a run agent may wait (a GATE line or an idle
+    # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. release_waiting_after: minutes a run agent may wait (a GATE line or an idle
     # screen) before pl stops it and holds its card back (0 is off)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
-                "release_waiting_after": 30, "rework_rounds": 3, **MEMORY_DEFAULTS}
+                "release_waiting_after": 30, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
     GATES = {"spec": False}
     PIPELINE = None       # [pipeline]: columns, stages and gates; the engineering pipeline when absent
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
