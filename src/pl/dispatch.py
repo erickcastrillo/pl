@@ -340,6 +340,19 @@ def memory_arg(c, stage, dry):
         return ""
 
 
+def _small_run(c):
+    """True when c's approved PLAN budget fits [stages.run.small] and no rework round is running, so its run agent
+    takes the small model. The PLAN is refetched (a board list cuts descriptions); no call without a small table."""
+    small = (C.STAGES.get("run") or {}).get("small")
+    if not isinstance(small, dict) or ((c.get("metadata") or {}).get("rework") or {}).get("active"):
+        return False
+    try:
+        budget = harnesses.plan_budget(sections(card(c["id"]).get("description")).get("PLAN"))
+    except (RateLimited, OSError):
+        return False
+    return budget is not None and budget[0] <= small["max_files"] and budget[1] <= small["max_lines"]
+
+
 def bootstrap_warning(c):
     err = (c.get("metadata") or {}).get("bootstrap_error")
     if not err:
@@ -382,8 +395,9 @@ def start_worker(c, stage, attempts, dry):
         link = reader.extract_thread_link(c)
         prompt += f" fields={shlex.quote(fields_json)} thread={shlex.quote(link)}"
     prompt += questions.prompt_arg(c)
+    small = stage == "run" and _small_run(c)
     if dry:
-        print(f"  would start {name} under {profile}: {prompt}")
+        print(f"  would start {name} under {profile}{' (small model)' if small else ''}: {prompt}")
         return
     try:
         harnesses.refuse_bypass(h)
@@ -421,7 +435,7 @@ def start_worker(c, stage, attempts, dry):
         connectors_proxy.write_mcp_config(host_mcp, connectors_proxy.make_mcp_config(f"http://{bridge}:{srv.port}", scope.bearer))
         sandbox.transfer_in(sandbox.vm_name(), host_mcp, f"/tmp/mcp-{sid}.json")
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
-                                                         stage=stage, hooks=(c["id"], win)), script)
+                                                         stage=stage, hooks=(c["id"], win), small=small), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
