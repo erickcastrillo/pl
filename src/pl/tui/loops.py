@@ -228,6 +228,9 @@ class LoopForm(ModalScreen):
         skill = self.query_one("#loop-skill", Select).value
         skill = None if skill is Select.NULL else skill
         prompt = self._value("prompt")
+        template = self.query_one("#loop-template", Select).value
+        if skill and template is not Select.NULL and prompt == loops.TEMPLATES[template].get("prompt"):
+            prompt = None   # the loader runs a prompt before a skill, so the template's would hide the chosen skill
         if not problem and not (skill or prompt):
             problem = "give a prompt or pick a skill"
         if not problem and self._value("every"):

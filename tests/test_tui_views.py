@@ -2562,3 +2562,20 @@ async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
         problem = str(form.query_one("#loop-problem").render())
         assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
     assert added == []
+
+
+async def test_picking_a_skill_after_a_template_drops_the_template_prompt(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-template").value = "overdue-invoices"
+        await settle(pilot)
+        form.query_one("#loop-skill").value = "pl-billing-chase"
+        form.query_one("#loop-name").value = "invoices"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added[0][1]["skill"] == "pl-billing-chase" and added[0][1]["prompt"] is None
