@@ -87,6 +87,8 @@ def _defaults():
     PODS = {}             # [pods.<name>] file, knowledge, skills, plugins, budgets
     POD = None            # [pipeline] pod: the pipeline's pod (default the profile name)
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    TRIGGERS = {}         # [triggers.<name>]
+    CONNECTORS = {}       # [connectors.<name>]
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
     return out
@@ -189,6 +191,8 @@ def _apply(g, t):
     g["MODELS"] = dict(t.get("models", {}))
     g["PODS"] = {n: dict(v) for n, v in t.get("pods", {}).items()}
     g["POD"] = t.get("pipeline", {}).get("pod")
+    g["TRIGGERS"] = dict(t.get("triggers", {}))
+    g["CONNECTORS"] = dict(t.get("connectors", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -395,6 +399,8 @@ def validate(doc) -> list[str]:
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
     errs += _pod_errors(doc.get("pods", {}), globals()["CONFIG_DIR"])
+    from pl import triggers
+    errs += triggers.validate(doc)
     return errs
 
 

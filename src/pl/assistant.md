@@ -65,6 +65,7 @@ Intake:
 - `pl idea "text"`: drop a one-line idea on the intake board (or the Inbox when there is none).
 - `pl pull` (`--list`): bring cards assigned to the person into the funnel.
 - `pl adopt <id>`: flag an existing card for the funnel.
+- `pl triggers`: turn matching incoming messages into cards; list, pause and resume.
 - `pl board init`: add the Inbox column when the board lacks it.
 
 Running pl:

@@ -82,6 +82,9 @@
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
+  pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
+                          turn matching incoming messages into cards; list [--json] shows status;
+                          pause/resume NAME toggles whether it runs
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -273,6 +276,21 @@ def _main():
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
+    p = sub.add_parser("triggers"); pt = p.add_subparsers(dest="triggers_cmd")
+    q = pt.add_parser("add")
+    q.add_argument("name")
+    q.add_argument("--connector", required=True)
+    q.add_argument("--query", required=True)
+    q.add_argument("--every", required=True)
+    q.add_argument("--pipeline", required=True)
+    q.add_argument("--cap", type=int, default=20)
+    q.add_argument("--column")
+    q.add_argument("--attach-to", action="append", default=None)
+    q.add_argument("--yes", action="store_true")
+    q.add_argument("--dry-run", action="store_true")
+    q = pt.add_parser("list"); q.add_argument("--json", action="store_true")
+    q = pt.add_parser("pause"); q.add_argument("name")
+    q = pt.add_parser("resume"); q.add_argument("name")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -300,6 +318,7 @@ def _main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
+     "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
