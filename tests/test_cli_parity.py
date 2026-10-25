@@ -47,8 +47,8 @@ def _wp2_expected(args, legacy):
         out = out.replace("usage: pl profiles", "usage: pl accounts")
     if args[:1] == ["board"]:
         out = out.replace("usage: pl board [-h] action",
-                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check}")
-        out = out.replace("action\n", "{init,serve,check}\n")
+                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check,migrate}")
+        out = out.replace("action\n", "{init,serve,check,migrate}\n")
         flags = "  --stdio\n  --listen HOST:PORT\n  --token-env VAR\n"
         if "options:\n" in out:
             out = out.replace("options:\n", f"options:\n{flags}")

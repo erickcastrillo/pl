@@ -622,6 +622,9 @@ def cmd_board(a):
     if a.action == "check":
         from pl import boardcheck
         return boardcheck.cmd_check(a)
+    if a.action == "migrate":
+        from pl import migrate
+        return migrate.cmd_migrate(a)
     if a.action != "init":
         raise SystemExit("pl board: only 'init' is supported")
     if "Inbox" in lists():
