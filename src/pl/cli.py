@@ -130,6 +130,8 @@
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
                           test JOB [--json] runs the job's sample 3 times (answer, schema pass|fail, ms);
                           set JOB MODEL [--yes] writes [models.local]; JOB is route, summarise, title or embed
+  pl models set-stage <stage> <harness> <model> [--small]
+                          set (or, with "", remove) the model a stage uses on one harness
   pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
                           turn matching incoming messages into cards; list [--json] shows status;
                           pause/resume NAME toggles whether it runs
@@ -202,6 +204,7 @@ import argparse
 import os
 import sys
 
+from pl import stage_models
 from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
@@ -447,6 +450,9 @@ def _main():
     q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")
     q = pm.add_parser("set"); q.add_argument("job"); q.add_argument("model")
     q.add_argument("--yes", action="store_true", help="write without asking")
+    q = pm.add_parser("set-stage"); q.add_argument("stage"); q.add_argument("harness")
+    q.add_argument("model", help='a model id, or "" to remove the key')
+    q.add_argument("--small", action="store_true", help="the small-change model ([stages.<stage>.small.models])")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
@@ -547,6 +553,7 @@ def _main():
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
-     "models": lambda a: __import__("pl.local_jobs").local_jobs.cmd_models(a),
+     "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
+                          else __import__("pl.local_jobs").local_jobs.cmd_models)(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
      "kill-switch": outward.cmd_kill_switch}[a.cmd](a)
