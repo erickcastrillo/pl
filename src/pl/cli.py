@@ -334,6 +334,7 @@ def _main():
     q = pc.add_parser("add"); q.add_argument("name"); q.add_argument("command", nargs="*"); q.add_argument("--url"); q.add_argument("--pin", help="the server version you expect; another version counts as a tool change")
     q.add_argument("--yes", action="store_true")
     q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
+    q = pc.add_parser("serve"); q.add_argument("name"); q.add_argument("--card", required=True); q.add_argument("--stage", required=True)
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")

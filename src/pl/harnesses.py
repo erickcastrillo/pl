@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pl import config as C
+from pl import events
 
 
 @dataclass
@@ -320,13 +321,35 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None):
+def mcp_flags(h, servers, profile, card_id, stage, window):
+    """The flags that give a harness only these connectors, each as a `pl connectors serve` proxy command (no URL, no token)."""
+    if not servers:
+        return []
+    if h.name not in ("claude", "codex"):
+        events.emit("error", card_id, message=f"{h.name} cannot take connectors; none given to stage {stage}")
+        return []
+    def cmd(name):
+        return [sys.executable, "-m", "pl", "--profile", profile, "connectors", "serve", name,
+                "--card", str(card_id), "--stage", str(stage)]
+    if h.name == "codex":
+        return [f for n in servers for f in ("-c", f"mcp_servers.{n}.command={json.dumps(cmd(n)[0])}",
+                                             "-c", f"mcp_servers.{n}.args={json.dumps(cmd(n)[1:])}")]
+    f = C.STATE_DIR / "launch" / (re.sub(r"[^A-Za-z0-9._-]", "_", window) + ".mcp.json")
+    f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        json.dump({"mcpServers": {n: {"command": cmd(n)[0], "args": cmd(n)[1:]} for n in servers}}, out)
+    return [f"--mcp-config={f}", "--strict-mcp-config"]
+
+
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, servers=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
     plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
-    hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook."""
+    hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook.
+    servers: connector names this stage agent's harness gets, through the pl proxy."""
     from pl import hooks as pl_hooks, skills
     pdir = skills.launch_plugin(h, plugin)
     prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
@@ -336,6 +359,8 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
                               pdir)
     if hooks and stage and h.name == "claude" and pl_hooks.enabled():
         argv = [argv[0], "--settings", pl_hooks.settings_json(*hooks), *argv[1:]]
+    if servers and stage and hooks:
+        argv = [argv[0], *mcp_flags(h, servers, C.PROFILE_NAME, hooks[0], stage, hooks[1]), *argv[1:]]
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
     from pl import sandbox

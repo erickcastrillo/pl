@@ -234,8 +234,11 @@ def cmd_connectors(a):
         add(a.name, command=getattr(a, "command", None) or None, url=getattr(a, "url", None), pin=getattr(a, "pin", None))
         _audit("connectors.add", a.name)
         print(f"added connector {a.name}")
+    elif sub == "serve":
+        from pl import connectors_proxy
+        connectors_proxy.serve(a.name)
     else:
-        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME")
+        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME | serve NAME --card ID --stage S")
 
 
 def load_config() -> dict:
