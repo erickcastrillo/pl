@@ -5,12 +5,14 @@ import subprocess
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import DataTable, Markdown, Static
+from textual.screen import ModalScreen
+from textual.widgets import Markdown, Static
 
 from pl import config as C
 from pl.commands import PR_URL, intent_text
 from pl.setup import LABELS
 from pl.trackers import github
+from pl.tui.cards import FitTable
 from pl.tui.chrome import skip_headings
 from pl.tui.review import ConfirmScreen
 
@@ -140,9 +142,30 @@ class MergeScreen(ConfirmScreen):
             yield Static(Text("y / enter Merge · n no", style="dim"))
 
 
+class PrScreen(ModalScreen):
+    """The selected PR's overview as a dialog, for terminals too narrow for the details pane."""
+    DEFAULT_CSS = """
+    PrScreen { align: center middle; }
+    PrScreen > VerticalScroll { width: 100%; height: 100%; border: round $accent; background: $surface; }
+    """
+    BINDINGS = [Binding("escape", "close", "close")]
+
+    def __init__(self, text, md):
+        super().__init__()
+        self.text, self.md = text, md
+
+    def compose(self):
+        with VerticalScroll():
+            yield Static(self.text)
+            yield Markdown(self.md, open_links=False)
+
+    def action_close(self):
+        self.dismiss()
+
+
 class PrsView(Horizontal):
     DEFAULT_CSS = """
-    #prs-table { width: 84; height: 1fr; border: round $panel-lighten-2; }
+    #prs-table { height: 1fr; border: round $panel-lighten-2; }
     #prs-side { width: 1fr; height: 1fr; }
     #prs-body { height: 1fr; }
     """
@@ -156,8 +179,8 @@ class PrsView(Horizontal):
         self._last = None   # the cursor row before the last move: which way it travels
 
     def compose(self):
-        t = DataTable(id="prs-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_columns("pr")
+        t = FitTable("pr", id="prs-table", cursor_type="row", show_header=False, zebra_stripes=False)
+        t.add_column("pr", key="pr")
         yield t
         with Vertical(id="prs-side", classes="panel"):
             d = Static(Text(""), id="prs-detail")
@@ -176,14 +199,14 @@ class PrsView(Horizontal):
                 if rid in self._prs:   # a duplicate row would raise DuplicateKey
                     continue
                 self._prs[rid] = pr
-                row = Text(f"  {pr['repo']}#{pr['number']}  {pr['title'] or ''}")
+                row = Text(f"  {pr['repo']}#{pr['number']}  {pr['title'] or ''}", no_wrap=True, overflow="ellipsis")
                 when = str(pr.get("updatedAt") or "")[:16].replace("T", " ")
                 if when:
                     row.append(f"   updated {when} UTC", style="dim")
                 built.append((rid, row))
             if not g[key]:
                 built.append((f"none:{key}", Text("  none", style="dim")))
-        t = self.query_one(DataTable)
+        t = self.query_one(FitTable)
         if [k for k, _ in built] == [k for k, _ in self._built]:
             col = next(iter(t.columns))
             for (rid, new), (_, was) in zip(built, self._built):
@@ -200,8 +223,15 @@ class PrsView(Horizontal):
         self._built = built
         self.selected()
 
+    def on_data_table_row_selected(self, _):
+        _, pr = self._current()
+        if pr is not None and self.app.has_class("-narrow"):
+            hit = self._cache.get(self._ckey(pr))
+            self.app.push_screen(PrScreen(overview_text(pr, hit, self._method.get(pr["repo"], "squash")),
+                                          hit[2] if hit and hit[0] == "ok" else ""))
+
     def _current(self):
-        t = self.query_one(DataTable)
+        t = self.query_one(FitTable)
         if not t.row_count:
             return None, None
         key = t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
@@ -301,6 +331,6 @@ class PrsView(Horizontal):
         self.run_worker(run, thread=True, group="prs-merge")
 
     def on_data_table_row_highlighted(self, _):
-        self._last = skip_headings(self.query_one(DataTable), self._prs.__contains__, self._last)
+        self._last = skip_headings(self.query_one(FitTable), self._prs.__contains__, self._last)
         self._err = None
         self.selected()

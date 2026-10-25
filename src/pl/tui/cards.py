@@ -21,6 +21,30 @@ from pl.tui.subagents import TODO_MARK
 from pl.util import ago, short_id
 
 TITLE_WIDTH = 34   # two less than before: the state column starts with the ! marker
+NARROW_NOW = 14
+
+
+class FitTable(DataTable):
+    """Under the app's -narrow class the `flex` column takes the width the others leave, and the `capped` columns stop
+    growing with their text, so no column is cut at 80 columns. Wide, columns keep their own widths."""
+
+    def __init__(self, flex, wide=None, capped=(), **kw):
+        super().__init__(**kw)
+        self.flex, self.wide, self.capped = flex, wide, capped
+
+    def on_resize(self, _):
+        narrow = self.app.has_class("-narrow")
+        cols = {c.key.value: c for c in self.ordered_columns}
+        for k in self.capped:
+            cols[k].auto_width, cols[k].width = not narrow, NARROW_NOW if narrow else cols[k].width
+        flex = cols[self.flex]
+        if narrow:
+            others = sum(c.get_render_width(self) for c in cols.values() if c is not flex)
+            flex.auto_width, flex.width = False, max(10, self.content_size.width - others - 2)
+        else:
+            flex.auto_width, flex.width = self.wide is None, self.wide or flex.width
+        self._require_update_dimensions = True
+        self.refresh(layout=True)
 
 
 STATE = {"review": ("your review", "#e0a040"), "manual": ("yours to do", "#5f9fff"), "working": ("working", "green"),
@@ -397,7 +421,7 @@ def drop_back(c):
 class CardsView(CardActions, Horizontal):
     DEFAULT_CSS = """
     CardsView { height: 1fr; }
-    #cards-table { width: 84; height: 1fr; border: round $primary; }
+    #cards-table { height: 1fr; border: round $primary; }
     #cards-side { width: 1fr; height: 1fr; }
     #cards-detail { height: auto; }
     #cards-body { height: 1fr; }
@@ -419,10 +443,11 @@ class CardsView(CardActions, Horizontal):
         self._last = None   # the cursor row before the last move: which way it travels
 
     def compose(self):
-        t = DataTable(id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_column("id")
-        t.add_column("title", width=TITLE_WIDTH)   # a long title ends in … so state and now stay on screen
-        t.add_columns("state", "now")
+        t = FitTable("title", TITLE_WIDTH, ("now",), id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
+        t.add_column("id", key="id")
+        t.add_column("title", width=TITLE_WIDTH, key="title")   # a long title ends in … so state and now stay on screen
+        t.add_column("state", key="state")
+        t.add_column("now", key="now")
         yield t
         with Vertical(id="cards-side", classes="panel"):
             yield Static(Text(""), id="cards-detail")

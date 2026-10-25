@@ -202,6 +202,9 @@ class DispatcherChoice(ModalScreen):
         self.dismiss(what)
 
 
+NARROW_BELOW = 120   # columns: below this the list fills the width and the details pane gives way
+
+
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
@@ -248,6 +251,9 @@ class PlApp(App):
                     else:
                         yield Static(Text(LATER[tid], style="dim"))
         yield Footer()
+
+    def on_resize(self, event):
+        self.set_class(event.size.width < NARROW_BELOW, "-narrow")
 
     def on_mount(self):
         self.set_interval(self.interval, self.refresh_data)

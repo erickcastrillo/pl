@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from rich.console import Console
-from textual.widgets import TabbedContent
+from textual.widgets import DataTable, TabbedContent
 
 from pl import cli, trackers, watch
 from pl import config as C
@@ -205,6 +205,53 @@ async def test_dashboard_bottom_row_three_equal_columns(size):
         await settle(pilot)
         widths = [app.query_one(i).size.width for i in ("#decide", "#health", "#standup-panel")]
         assert min(widths) > 0 and max(widths) - min(widths) <= 1, widths
+
+
+async def _open_tab(pilot, app, tid):
+    await settle(pilot)
+    app.action_tab(tid)
+    await settle(pilot)
+
+
+@pytest.mark.parametrize("tid", ["cards", "prs"])
+async def test_80x24_every_tab_fits_with_no_cut_columns(tid):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _open_tab(pilot, app, tid)
+        pane = app.query_one(f"#{tid}")
+        for w in pane.walk_children(with_self=True):
+            if w.display and w.region.width:
+                assert w.region.right <= 80, (w, w.region)
+        for t in pane.query(DataTable):
+            assert sum(c.get_render_width(t) for c in t.ordered_columns) <= t.content_size.width, t
+
+
+async def test_80x24_enter_opens_the_card_details():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _open_tab(pilot, app, "cards")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_cards.CardScreen)
+
+
+async def test_80x24_enter_on_a_pr_opens_its_overview():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _open_tab(pilot, app, "prs")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_prs.PrScreen)
+
+
+@pytest.mark.parametrize("tid", ["cards", "prs"])
+async def test_160x48_list_and_details_both_show(tid):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(160, 48)) as pilot:
+        await _open_tab(pilot, app, tid)
+        for sel in (f"#{tid}-table", f"#{tid}-side"):
+            w = app.query_one(sel)
+            assert w.display and w.region.width > 0, sel
 
 
 async def test_small_terminal_every_tab():
