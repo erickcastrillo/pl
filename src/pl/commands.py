@@ -1021,6 +1021,8 @@ def cmd_worktrees_bootstrap(a):
         print(f"{failure['reason']}:\n{failure['output']}", file=sys.stderr)
         if a.card:
             record_bootstrap_failure(a.card, failure)
+    if a.card and not failures and not a.dry_run:
+        clear_bootstrap_failure(a.card)
 
 
 def record_bootstrap_failure(card_ref, failure):
@@ -1029,6 +1031,12 @@ def record_bootstrap_failure(card_ref, failure):
     note = f"{failure['reason']}:\n{failure['output']}"
     parts["BOOTSTRAP"] = (parts["BOOTSTRAP"].rstrip() + "\n\n" + note) if parts.get("BOOTSTRAP") else note
     update(c["id"], description=check_size(render(parts)), metadata={"bootstrap_error": failure})
+
+
+def clear_bootstrap_failure(card_ref):
+    c = find_card(card_ref)
+    if (c.get("metadata") or {}).get("bootstrap_error"):
+        update(c["id"], metadata={"bootstrap_error": None})
 
 
 def cmd_sync(a):

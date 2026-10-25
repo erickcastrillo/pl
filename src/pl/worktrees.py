@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.agents import registry, worker_status
 from pl.board import cards, col_name
-from pl.util import slug_of
+from pl.util import mask, slug_of
 
 
 def _git(argv):
@@ -350,7 +350,7 @@ _popen = subprocess.Popen
 def parse_timeout(value):
     if value is None:
         return DEFAULT_SETUP_TIMEOUT
-    if isinstance(value, int) and value > 0:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     raise ValueError(f"invalid timeout '{value}': timeout must be a positive integer")
 
@@ -380,7 +380,9 @@ def run_setup(command, timeout, worktree_path, log_path):
     """Run the setup command in the worktree with stdout and stderr in log_path; return the failure reason, or None."""
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "w") as log:
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as log:
         proc = _popen(["sh", "-c", command], cwd=str(worktree_path), stdout=log, stderr=subprocess.STDOUT,
                       start_new_session=True)
         try:
@@ -427,7 +429,7 @@ def bootstrap_worktree(main_repo, worktree_path, dry_run=False, log_path=None, f
     log_path = log_path or worktree_path / ".pl-setup.log"
     reason = run_setup(str(command), timeout, worktree_path, log_path)
     if reason and failures is not None:
-        failures.append({"reason": reason, "output": log_tail(log_path)})
+        failures.append({"reason": reason, "output": mask(log_tail(log_path))})
     return notes
 
 
