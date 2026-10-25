@@ -37,10 +37,15 @@
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
-  pl titles check [--json]
+  pl titles check [--json] [--fix [--dry-run]]
                           list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
-                          one side, or share a pair with another card (Done left out); changes nothing; exits 1
-                          when it finds any (2: the board could not be read); --json prints them as a list
+                          one side, or share a pair with another card (Done left out); exits 1 when it finds
+                          any (2: the board could not be read); --json prints them as a list; --fix adds the
+                          missing prefix or metadata and leaves clashes for a person (exit 1 if any are left);
+                          --dry-run says what it would change
+  pl titles next          the next free plan number on the board (Done cards count)
+  pl titles set <id> --plan N --slice M
+                          title the card "Plan N slice M: ..." (any old prefix replaced) and record both in its metadata
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
@@ -282,6 +287,8 @@ def _main():
     q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     q.add_argument("--fix", action="store_true", help="add the missing title prefix or plan/slice metadata; clashes are left for a person")
     q.add_argument("--dry-run", action="store_true", help="with --fix: say what would change, change nothing")
+    pt.add_parser("next")
+    q = pt.add_parser("set"); q.add_argument("id"); q.add_argument("--plan", type=int, required=True); q.add_argument("--slice", type=int, required=True)
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")

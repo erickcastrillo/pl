@@ -232,3 +232,65 @@ def test_dry_run_without_fix_is_refused(board):
     with pytest.raises(SystemExit, match="--dry-run goes with --fix"):
         titles.cmd_titles(argparse.Namespace(**{**vars(ns()), "dry_run": True}))
     assert board.writes == []
+
+
+# ---------- next and set ----------
+
+def run_next(capsys, **kw):
+    titles.cmd_titles(argparse.Namespace(**{**vars(ns("next")), **kw}))
+    return capsys.readouterr().out
+
+
+def test_next_is_one_more_than_the_highest_plan_including_done(board, capsys):
+    board.items = [mk(1, "x", col="Done", plan=21, slice=1), mk(2, "Plan 20 slice 1: y"), mk(3, "z", plan="abc")]
+    assert run_next(capsys) == "22\n"
+
+
+def test_next_on_a_board_without_plan_cards_is_1(board, capsys):
+    board.items = [mk(1, "a plain idea")]
+    assert run_next(capsys) == "1\n"
+
+
+def test_set_titles_and_tags_a_card_with_no_plan(board, capsys):
+    board.items = [mk(1, "worktrees list and gc")]
+    titles.set_plan("00000001", 22, 1)
+    new = "Plan 22 slice 1: worktrees list and gc"
+    assert board.writes == [("update", (board.items[0]["id"],), {"title": new, "metadata": {"plan": 22, "slice": 1}})]
+    assert new in capsys.readouterr().out
+
+
+def test_set_replaces_an_old_prefix(board):
+    board.items = [mk(1, "Plan 5 slice 3: worktrees gc", plan=5, slice=3)]
+    titles.set_plan("00000001", 22, 1)
+    assert board.writes[0][2]["title"] == "Plan 22 slice 1: worktrees gc"
+
+
+def test_set_refuses_a_slot_another_card_holds(board):
+    board.items = [mk(1, "gc"), mk(2, "other", col="Done", plan=22, slice=1)]
+    with pytest.raises(SystemExit, match="00000002"):
+        titles.set_plan("00000001", 22, 1)
+    assert board.writes == []
+
+
+def test_set_refuses_plan_below_1_and_unknown_id(board):
+    board.items = [mk(1, "gc")]
+    for token, plan, slice_no in (("00000001", 0, 1), ("00000001", 1, 0), ("nope#999", 1, 1)):
+        with pytest.raises(SystemExit):
+            titles.set_plan(token, plan, slice_no)
+    assert board.writes == []
+
+
+def test_help_lists_the_titles_commands():
+    from pl import cli, whatsnew
+    for line in ("pl titles check [--json] [--fix [--dry-run]]", "pl titles next",
+                 "pl titles set <id> --plan N --slice M"):
+        assert line in cli.__doc__
+    assert "pl titles set" in whatsnew.text(whatsnew.ENTRIES)
+
+
+def test_a_tracker_error_on_next_and_fix_exits_neither_0_nor_1(board, capsys):
+    board.error = "pl: gh timed out after 60s: gh project item-list"
+    for kw in ({"titles_cmd": "next"}, {"fix": True}):
+        with pytest.raises(SystemExit) as e:
+            titles.cmd_titles(argparse.Namespace(**{**vars(ns()), **kw}))
+        assert e.value.code not in (0, 1)

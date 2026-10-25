@@ -112,7 +112,31 @@ def _read_cards():
         raise SystemExit(2 if e.code else 0)
 
 
+def next_plan(cs):
+    seen = [n for c in cs for n in (title_pair(c["title"])[0], meta_pair(c.get("metadata") or {})[0])
+            if isinstance(n, int) and not isinstance(n, bool)]
+    return 1 + max(seen, default=0)
+
+
+def set_plan(token, plan, slice_no):
+    if plan < 1 or slice_no < 1:
+        raise SystemExit("pl titles set: --plan and --slice are whole numbers from 1")
+    cs = _read_cards()
+    c = board.pick(token, cs, "pl titles set")
+    for o in cs:
+        if o["id"] != c["id"] and (plan, slice_no) in (title_pair(o["title"]), meta_pair(o.get("metadata") or {})):
+            raise SystemExit(f"pl titles set: Plan {plan} slice {slice_no} is already {o['id']} {o['title']!r}")
+    new = ideas.plan_title(plan, slice_no, strip_prefix(c["title"]))
+    board.update(c["id"], title=new, metadata={"plan": plan, "slice": slice_no})
+    print(f"{c['id']}: {c['title']!r} -> {new!r}")
+
+
 def cmd_titles(a):
+    if a.titles_cmd == "next":
+        print(next_plan(_read_cards()))
+        return
+    if a.titles_cmd == "set":
+        return set_plan(a.id, a.plan, a.slice)
     if a.dry_run and not a.fix:
         raise SystemExit("pl titles check: --dry-run goes with --fix")
     cs = [c for c in _read_cards() if board.col_name(c["list_id"]) != "Done"]
