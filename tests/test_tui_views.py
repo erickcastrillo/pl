@@ -174,7 +174,7 @@ async def test_refresh_failure_keeps_numbers_and_shows_the_error():
         await settle(pilot)
         assert tile(app, "specs") == "12"
         assert "Rate exceeded" in str(app.query_one("#header").render())
-        await pilot.press("w")          # data must still be there: the next window shows its own fake value
+        await pilot.press("]")          # data must still be there: the next window shows its own fake value
         await pilot.pause()
         assert tile(app, "specs") == "71"
         prov.fail = None
@@ -183,16 +183,19 @@ async def test_refresh_failure_keeps_numbers_and_shows_the_error():
         assert "Rate exceeded" not in str(app.query_one("#header").render())
 
 
-async def test_w_cycles_the_window():
+async def test_brackets_cycle_the_window():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         seen = [(tile(app, "specs"), tile(app, "opened"))]
         for _ in range(3):
-            await pilot.press("w")
+            await pilot.press("]")
             await pilot.pause()
             seen.append((tile(app, "specs"), tile(app, "opened")))
         assert seen == [("12", "2"), ("71", "5"), ("3", "1"), ("12", "2")]
+        await pilot.press("[")
+        await pilot.pause()
+        assert tile(app, "specs") == "3"
 
 
 @pytest.mark.parametrize("size", [(120, 40), (80, 24)])
@@ -457,39 +460,37 @@ async def test_pr_overview_shows_what_the_pr_is_and_whether_to_merge(monkeypatch
         assert sum(1 for a, _ in gh.calls if a[3:4] == ["https://github.com/o/frontend/pull/1200"]) == 1   # cached
 
 
-async def test_m_merges_only_after_confirmation(monkeypatch):
+async def test_M_merges_only_after_confirmation(monkeypatch):
     gh = FakeGh(_view())
     monkeypatch.setattr(tui_prs, "_run", gh)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
-        await pilot.press("m")
+        await pilot.press("M")
         await settle(pilot)
         assert "development" in screen_text(app) and "squash" in screen_text(app)   # the modal names base and method
         assert gh.merges() == []
         await pilot.press("n")
         await settle(pilot)
         assert gh.merges() == [] and len(app.screen_stack) == 1
-        await pilot.press("m")
+        await pilot.press("M")
         await settle(pilot)
         await pilot.press("y")
         await settle(pilot)
         assert gh.merges() == [["gh", "pr", "merge", "https://github.com/o/frontend/pull/1200", "--squash"]]
 
 
-async def test_not_ready_pr_is_refused_on_m_and_confirmed_on_M(monkeypatch):
+async def test_not_ready_pr_on_M_names_the_reason_and_asks(monkeypatch):
     gh = FakeGh(_view(checks=("SUCCESS", "FAILURE")))
     monkeypatch.setattr(tui_prs, "_run", gh)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
         assert "1 check failed" in screen_text(app)
-        await pilot.press("m")
-        await settle(pilot)
-        assert len(app.screen_stack) == 1 and gh.merges() == []
         await pilot.press("M")
         await settle(pilot)
         assert len(app.screen_stack) == 2 and gh.merges() == []
+        assert "1 check failed" in screen_text(app) and "Merge anyway?" in screen_text(app)
         await pilot.press("enter")
         await settle(pilot)
         assert gh.merges() == [["gh", "pr", "merge", "https://github.com/o/frontend/pull/1200", "--squash"]]
@@ -501,13 +502,13 @@ async def test_repo_without_squash_offers_a_merge_commit(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
-        await pilot.press("m", "y")
+        await pilot.press("M", "y")
         await settle(pilot)
         url = "https://github.com/o/frontend/pull/1200"
         assert gh.merges() == [["gh", "pr", "merge", url, "--squash"]]   # no automatic --merge retry
-        assert any("press m again" in str(n.message) for n in app._notifications)
+        assert any("press M again" in str(n.message) for n in app._notifications)
         gh.merge = (0, "merged", "")
-        await pilot.press("m")
+        await pilot.press("M")
         await settle(pilot)
         assert "merge commit" in screen_text(app) and len(app.screen_stack) == 2 and len(gh.merges()) == 1
         await pilot.press("y")
@@ -519,10 +520,13 @@ def _notes(app):
     return " | ".join(str(n.message) for n in app._notifications)
 
 
-async def _refused(pilot, app, gh):
-    await pilot.press("m")
+async def _asks_to_merge_anyway(pilot, app, gh):
+    await pilot.press("M")
     await settle(pilot)
-    return len(app.screen_stack) == 1 and gh.merges() == []
+    asked = len(app.screen_stack) == 2 and "Merge anyway?" in screen_text(app) and gh.merges() == []
+    await pilot.press("escape")
+    await settle(pilot)
+    return asked
 
 
 async def test_changes_requested_is_not_ready(monkeypatch):
@@ -532,17 +536,17 @@ async def test_changes_requested_is_not_ready(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
         assert "not ready: a reviewer asked for changes" in screen_text(app)
-        assert await _refused(pilot, app, gh)
+        assert await _asks_to_merge_anyway(pilot, app, gh)
 
 
-async def test_missing_merge_ready_label_is_refused(monkeypatch):
+async def test_missing_merge_ready_label_asks_to_merge_anyway(monkeypatch):
     gh = FakeGh(_view(labels=("pl:ready-for-review",)))
     monkeypatch.setattr(tui_prs, "_run", gh)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
         assert "not ready: no merge-ready label" in screen_text(app)
-        assert await _refused(pilot, app, gh)
+        assert await _asks_to_merge_anyway(pilot, app, gh)
 
 
 async def test_a_renamed_merge_ready_label_is_the_only_one_that_counts(monkeypatch):
@@ -553,7 +557,7 @@ async def test_a_renamed_merge_ready_label_is_the_only_one_that_counts(monkeypat
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
         assert "not ready: no merge-ready label" in screen_text(app)
-        assert await _refused(pilot, app, gh)
+        assert await _asks_to_merge_anyway(pilot, app, gh)
     gh = FakeGh(_view(labels=("ship-it",)))
     monkeypatch.setattr(tui_prs, "_run", gh)
     app = PlApp(snapshot_provider=Provider())
@@ -569,7 +573,7 @@ async def test_a_pr_with_no_checks_is_ready_and_says_so(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
         assert "ready to merge (no checks ran)" in screen_text(app)
-        await pilot.press("m")
+        await pilot.press("M")
         await settle(pilot)
         assert len(app.screen_stack) == 2
 
@@ -584,7 +588,7 @@ async def test_a_pr_link_that_is_not_a_github_pr_url_is_never_passed_to_gh(monke
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app, url="--admin")
         assert "not a GitHub pull request link" in screen_text(app)
-        for key in ("m", "M"):
+        for key in ("M",):
             await pilot.press(key)
             await settle(pilot)
             assert len(app.screen_stack) == 1
@@ -773,7 +777,7 @@ async def test_pipeline_filter_with_nothing_waiting_says_so_and_keys_only_notify
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app)
-        await pilot.press("n")
+        await pilot.press("f")
         await settle(pilot)
         text = screen_text(app)
         assert "Nothing needs you." in text and "select a row" in text
@@ -935,16 +939,16 @@ async def test_pipeline_marks_the_cards_that_need_you_and_counts_them_on_the_tab
         assert marked == MINE
         assert any("red" in str(sp.style) for sp in t.get_row("c0000003aaaa")[2].spans)
         assert "3 Pipeline 6 · 4 need you" in screen_text(app)
-        assert "4 need you" in t.border_title and "n only those" in t.border_title
+        assert "4 need you" in t.border_title and "f only those" in t.border_title
 
 
-async def test_n_shows_only_the_cards_that_need_you_and_n_again_shows_all(monkeypatch):
+async def test_f_shows_only_the_cards_that_need_you_and_f_again_shows_all(monkeypatch):
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(_attention_data()))
     async with app.run_test(size=(176, 48)) as pilot:
         view = await _open_cards(pilot, app, "60000002aaaa")
         t = app.query_one("#cards-table")
-        await pilot.press("n")
+        await pilot.press("f")
         await settle(pilot)
         assert set(view._rows) == MINE and view._current()[0] == "60000002aaaa"   # the selected card stays selected
         assert "needs you only" in t.border_title and "4 of 6 cards" in t.border_title
@@ -953,7 +957,7 @@ async def test_n_shows_only_the_cards_that_need_you_and_n_again_shows_all(monkey
         app.refresh_data()
         await settle(pilot)
         assert set(view._rows) == MINE   # the filter stays on across refreshes
-        await pilot.press("n")
+        await pilot.press("f")
         await settle(pilot)
         assert len(view._rows) == 6 and "needs you only" not in t.border_title
 
@@ -985,7 +989,7 @@ def test_the_pipeline_keys_do_not_clash_with_the_console_keys():
     app_keys = {b.key for b in PlApp.BINDINGS}
     view_keys = [b.key for b in tui_cards.CardsView.BINDINGS]
     assert len(view_keys) == len(set(view_keys))
-    assert not ({"d", "h", "f", "z", "u", "e"} & app_keys) and {"d", "h", "f", "z", "u", "e"} <= set(view_keys)
+    assert not ({"d", "h", "f", "F", "z", "u", "e"} & app_keys) and {"d", "h", "f", "F", "z", "u", "e"} <= set(view_keys)
     assert "D" in app_keys and "D" not in view_keys   # D stays the dispatcher's key
     assert {"ctrl+k", "exclamation_mark"} <= app_keys and not ({"ctrl+k", "exclamation_mark"} & set(view_keys))
 
@@ -1062,20 +1066,20 @@ async def test_h_hands_a_card_to_manual_after_asking_and_refuses_one_already_the
     assert [g[0] for g in got] == [("spec0001aaaa", "Manual")] and got[0][1] is not threading.main_thread()
 
 
-async def test_f_marks_a_card_done_after_asking(monkeypatch):
+async def test_F_marks_a_card_done_after_asking(monkeypatch):
     from pl.tui.review import ConfirmScreen
     _fake_card_read(monkeypatch, [])
     got = _called(monkeypatch, "done", ["done d0000004"])
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "d0000004aaaa")
-        await pilot.press("f")
+        await pilot.press("F")
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen) and "done" in app.screen.message.lower()
         await pilot.press("n")
         await settle(pilot)
         assert got == []
-        await pilot.press("f")
+        await pilot.press("F")
         await pilot.pause()
         await pilot.press("y")
         await settle(pilot)
@@ -1141,7 +1145,7 @@ async def test_drop_hand_off_and_done_refuse_a_card_already_in_done(monkeypatch)
         await pilot.press("z")
         await settle(pilot)
         await _open_cards(pilot, app, "f0000001aaaa")
-        for key in ("d", "f", "h"):
+        for key in ("d", "F", "h"):
             await pilot.press(key)
             await settle(pilot)
             assert len(app.screen_stack) == 1, key
@@ -1797,7 +1801,7 @@ async def test_long_titles_leave_state_and_now_on_screen(monkeypatch, size):
         await _open_cards(pilot, app)
         line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
         assert "writing the plan" in line and "…" in line
-        await pilot.press("n")      # the filtered list: the same columns
+        await pilot.press("f")      # the filtered list: the same columns
         await settle(pilot)
         line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
         assert "writing the plan" in line and "…" in line
@@ -2048,19 +2052,14 @@ async def test_merge_is_refused_while_the_kill_switch_is_on(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_pr(pilot, app)
-        await pilot.press("m")
+        await pilot.press("M")
         await settle(pilot)
         assert gh.merges() == []
         assert len(app.screen_stack) == 1  # no merge confirmation opened
 
-        await pilot.press("M")
-        await settle(pilot)
-        assert gh.merges() == []
-        assert len(app.screen_stack) == 1
-
         # Turn it off and confirm merge is allowed
         outward.set(False)
-        await pilot.press("m")
+        await pilot.press("M")
         await settle(pilot)
         assert len(app.screen_stack) == 2
 
@@ -2176,3 +2175,34 @@ async def test_b_opens_the_brain_tab_on_any_profile():
         await pilot.press("b")
         await pilot.pause()
         assert app.active_tab == "brain"
+
+
+def _every_binding():
+    import importlib
+    import inspect
+    import pkgutil
+    from textual.screen import ModalScreen
+    import pl.tui
+    from pl.tui import app as tui_app
+    classes = [PlApp, *tui_app.VIEWS.values(), tui_cards.CardActions]
+    for info in pkgutil.iter_modules(pl.tui.__path__):
+        mod = importlib.import_module(f"pl.tui.{info.name}")
+        classes += [c for _, c in inspect.getmembers(mod, inspect.isclass)
+                    if issubclass(c, ModalScreen) and c.__module__ == mod.__name__]
+    for cls in dict.fromkeys(classes):
+        for b in cls.__dict__.get("BINDINGS", []) + cls.__dict__.get("CARD_BINDINGS", []):
+            yield cls, b
+
+
+def test_no_key_has_two_meanings_across_every_view_and_screen():
+    from pl.tui.chrome import MEANING
+    from pl.tui.review import ConfirmScreen
+    from pl.tui.app import DispatcherChoice
+    meanings = {}
+    for cls, b in _every_binding():
+        if issubclass(cls, (ConfirmScreen, DispatcherChoice)):   # y / n / enter / esc answer the dialog's own question
+            continue
+        assert b.action in MEANING or b.action.split("(")[0] in MEANING, f"{cls.__name__}: {b.action} has no MEANING"
+        meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]
+        meanings.setdefault(b.key, {}).setdefault(meaning, []).append(cls.__name__)
+    assert {k: m for k, m in meanings.items() if len(m) > 1} == {}

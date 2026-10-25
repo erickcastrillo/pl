@@ -176,7 +176,26 @@ ENTRIES = [
        "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
     _e("2026-10-25.20", "Stages wait for folder trust instead of starting a stuck Claude agent",
        "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
-    _e("2026-10-25.21", "Exited agents' windows close by themselves",
+    _e("2026-10-25.21", "Move a pipeline to another board without losing a card", "pl board migrate",
+       "pl board migrate --to local --dry-run"),
+    _e("2026-10-25.22", "One key, one meaning in the console; merge is M and asks first",
+       "Pull requests: M merges (a PR that is not ready asks 'Merge anyway?'). Dashboard: [ and ] change the window. "
+       "Pipeline: f only mine, F done. Settings: T tests connections. Ideas: F2 rename, H harness, ctrl+n skip question. "
+       "Home: space opens details", "pl"),
+    _e("2026-10-25.23", "Small jobs on local models, checked, with fallbacks",
+       "[models.local]: a model per job (route, summarise, title, embed); setup writes it for a new profile",
+       "pl models test summarise"),
+    _e("2026-10-25.24", "Pipelines from templates: sales, clients, billing, team", "pl pipelines", "pl pipelines list --templates"),
+    _e("2026-10-25.25", "Add a pipeline as a new profile; export and import it", "pl pipelines add",
+       "pl pipelines add sales --template new-client --board local --yes"),
+    _e("2026-10-25.26", "Connectors: plug any MCP server in by role, sign in through the browser",
+       "docs/connectors.md; pl connectors import --from claude lists the servers you already set up", "pl connectors list"),
+    _e("2026-10-25.27", "pl sandbox login: sign a harness in from inside the profile's Multipass VM",
+       "pl sandbox create, status, start, stop, destroy, login; [sandbox] in the profile config",
+       "pl sandbox login <account>"),
+    _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
+       "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
+    _e("2026-10-25.29", "Exited agents' windows close by themselves",
        "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert", "pl alerts"),
 ]
 
