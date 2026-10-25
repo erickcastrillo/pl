@@ -57,9 +57,9 @@
   pl rework [--dry-run]    send cards in PR open whose pull request the review labeled for rework back to a run
                           agent now (the dispatcher does this every 10 min); after [dispatch] rework_rounds rounds
                           (3) the PR gets the failed label for a person
-  pl merges --dry-run [--json]
-                          each pull request ready to merge, every merge rule's result and what the merge loop would
-                          do (nothing is merged)
+  pl merges [--dry-run] [--json]
+                          judge each pull request ready to merge; one that fails a rule gets the needs-person label
+                          and one comment per head commit (nothing is merged; --dry-run changes nothing)
   pl retry <id|#n|all> [--stage S]
                           start a card's failed agent fresh: clears its worker and attempt count (all: every
                           funnel card whose agent died too often; --stage: only an agent of that stage)
