@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, manager, memory, move_agent, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
+from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, manager, memory, move_agent, pipeline, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -38,6 +38,8 @@ def has_design(c):
 
 
 def stage_for(c, col):
+    if pipeline.is_config():
+        return pipeline.stage_at(col)
     if col == "Inbox":
         for s, cfg in (C.STAGES or {}).items():
             if cfg.get("reader"):
@@ -70,6 +72,8 @@ def approved_label(c, col, reg, all_cards=None):
 
 
 def stage_complete(c, col, stage):
+    if pipeline.is_config():
+        return pipeline.complete(col, stage)
     if stage == "design":
         return has_design(c) or C.COLUMNS.index(col) > C.COLUMNS.index("Spec ready")
     return C.COLUMNS.index(col) >= C.COLUMNS.index(C.STAGE_DONE_AT[stage])
@@ -328,17 +332,19 @@ def start_worker(c, stage, attempts, dry):
     h, profile = harnesses.harness_for(stage, c)
     name = f"{stage}-{slug_of(c)[:28]}"      # tmux window name: no colon, so "pipeline:<name>" targets stay unambiguous
     label = f"{stage}:{slug_of(c)[:28]}"     # Claude session display name
-    if not C.PROMPTS.get(stage):
+    generic = pipeline.is_config()
+    if not generic and not C.PROMPTS.get(stage):
         raise SystemExit(f"pl: set [stages.{stage}] prompt in {C.path() or 'config.toml'}")
-    prompt = C.PROMPTS[stage].format(id=c["id"], worktrees_dir=C.WORKTREES_DIR or "")
+    prompt = pipeline.prompt(stage, c["id"]) if generic else C.PROMPTS[stage].format(id=c["id"], worktrees_dir=C.WORKTREES_DIR or "")
+    builtin = C.PROMPTS.get(stage) == C.BUILTIN_PROMPTS.get(stage) and not generic
     review = (C.CODE_HOST.get("labels") or {}).get("review")
-    if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"] and review:
+    if stage == "run" and builtin and review:
         prompt += f" review={shlex.quote(review)}"   # pl-run labels its pull request with it
-    if stage in ("plan", "run") and C.PROMPTS[stage] == C.BUILTIN_PROMPTS[stage]:
+    if stage in ("plan", "run") and builtin:
         prompt += pr_limit_args()
-    if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"]:
+    if stage == "run" and builtin:
         prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
-    if C.PROMPTS[stage] == C.BUILTIN_PROMPTS.get(stage):
+    if builtin:
         prompt += memory_arg(c, stage, dry)
     if not dry:
         prompt = context.launch_prompt(c, stage, prompt)
@@ -1030,7 +1036,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     # order: runs first (they are the long pole), In progress ones (a restart) before Approved ones that have not
     # started, then plans, designs, specs; oldest first
     rank = {"run": 0, "plan": 1, "design": 2, "spec": 3}
-    todo.sort(key=lambda t: (rank[t[1]], t[3] != "In progress", slice_order(t[0]), t[0].get("updated_at") or ""))
+    todo.sort(key=lambda t: (rank.get(t[1], 4), t[3] != "In progress", slice_order(t[0]), t[0].get("updated_at") or ""))
     pause = paused()
     held = 0
     for c, stage, attempts, col in todo:
