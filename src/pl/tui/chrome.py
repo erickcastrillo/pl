@@ -98,7 +98,7 @@ def stopped_by(data):
     return f"{row['stopped_by']} {time.strftime('%H:%M:%S', time.localtime(row['stopped_at']))}"
 
 
-def header_text(data, error=None, note=None):
+def header_text(data, error=None, note=None, last_good=None):
     """pl, profile badge, tracker type, dispatcher state, accounts, pause state, clock, and the last refresh error."""
     t = Text(no_wrap=True, overflow="ellipsis")
     t.append(" pl ", style="bold #e0a040")
@@ -134,5 +134,7 @@ def header_text(data, error=None, note=None):
     if note:
         t.append(f"   {note}", style="bold red" if "fail" in note or "still running" in note else "#e0a040")
     if error:
+        if last_good:
+            t.append(f"   data from {last_good}", style="bold red")
         t.append(f"   {error}", style="bold red")
     return t
