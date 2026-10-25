@@ -130,6 +130,8 @@ def run_waiting(w, reg, st=None):
     rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if _on_pane(r, w)), {})
     if rec.get("status") == "busy" or not pane_exists(w.get("pane")):
         return None
+    if harnesses.pane_command(w["pane"]) in harnesses.SHELLS:
+        return "exited"
     gates = GATE_RE.findall(harnesses._run(["tmux", "capture-pane", "-p", "-t", w["pane"], "-S", "-60"]).stdout or "")
     if gates:
         return f"waiting ({gates[-1]})"

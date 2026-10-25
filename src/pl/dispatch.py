@@ -947,7 +947,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
-                runs_live += 1
+                runs_live += why != "exited"
                 if why:
                     print(f"{short_id(c['id'])}  run agent {why}; its slot is free")   # its window stays: no second agent
                 else:
