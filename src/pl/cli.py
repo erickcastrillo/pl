@@ -116,6 +116,9 @@
                           work folder and worktrees folder; --yes destroys the VM without asking
   pl worktrees bootstrap PATH [--dry-run]
                           copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
+  pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
+                          run the repo's Playwright suite in a throwaway Multipass VM set up from its
+                          .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -219,6 +222,9 @@ def _main():
     if pre_a.rest[:1] == ["chat"]:             # machine-wide: no profile of its own
         from pl import chat
         return chat.cmd_chat(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["e2e"]:              # repo-driven: reads .pl/e2e.yaml, needs no tracker
+        from pl import e2e
+        return e2e.cmd_e2e(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])

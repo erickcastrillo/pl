@@ -12,7 +12,7 @@ pl drives an idea → spec → plan → PR funnel through the AI coding harness 
 - `uv sync` · `uv run pytest -q` · `uv run ruff check src tests`
 
 ## Conventions
-- Python ≥ 3.11, standard library first; dependencies: textual, tomlkit, mcp. Plain functions over classes unless a connector interface needs one.
+- Python ≥ 3.11, standard library first; dependencies: textual, tomlkit, mcp, PyYAML. Plain functions over classes unless a connector interface needs one.
 - Every subprocess call goes through the module's single runner function so tests can fake it. No `shell=True`.
 - Tests never touch the real HOME, tmux, network, or harness CLIs. `PL_NO_UPDATE_CHECK=1` is set for every test.
 
