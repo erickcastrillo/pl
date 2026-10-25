@@ -1,5 +1,5 @@
 """What's new: one entry per feature, oldest first. The console shows the entries newer than the last one it showed
-(kept in <profile>/state/whatsnew.json) once after an upgrade; ? or the palette shows them all; `pl whatsnew` prints them.
+(kept in <profile>/state/whatsnew.json) once after an upgrade; the palette shows them all; `pl whatsnew` prints them.
 A new feature adds an entry here with a key greater than every other one."""
 import json
 import os
@@ -112,6 +112,9 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-25.01", "The footer shows the actions that fit the selected card, and ? opens help for the screen",
+       "Pipeline: approve and send back show only on a spec or plan waiting for you, p reads hold; ? is help, "
+       "What's new is in the palette (ctrl+p)", "pl"),
 ]
 
 

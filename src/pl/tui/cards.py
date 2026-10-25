@@ -292,7 +292,7 @@ class CardsView(CardActions, Horizontal):
                 Binding("o", "answer", "answer questions"), Binding("d", "drop", "drop"), Binding("h", "hand_off", "to Manual"),
                 Binding("f", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
                 Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
-                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold / release")]
+                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold")]
 
     def __init__(self):
         super().__init__()
@@ -658,6 +658,7 @@ class CardsView(CardActions, Horizontal):
 
     def on_data_table_row_highlighted(self, _):
         self._last = skip_headings(self.query_one(DataTable), self._rows.__contains__, self._last)
+        self.app.refresh_bindings()
         try:
             self._detail_for_cursor()
         except Exception as e:  # noqa: BLE001 - a bad card must not kill the console

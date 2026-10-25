@@ -1992,3 +1992,105 @@ async def test_p_holds_a_card_with_a_reason_and_releases_a_held_one(monkeypatch)
         await settle(pilot)
     assert [g[0] for g in held] == [("e0000006aaaa", "legal")]
     assert [g[0] for g in freed] == [("e0000007aaaa",)]
+
+
+# ---------- plan 5 slice 1: plain output, footer actions, per-screen help ----------
+
+GOLDEN_PLAIN_FRAME = "\n".join([
+    'pl watch  14:30:00   dispatcher: running   profiles: acme: ok (0 running, 0 queued)  acme2: ok (0 running, 0 queued)',
+    'NEEDS YOU: 2 plans to review',
+    'CARDS',
+    '',
+    'LOOPS   1 of 1 running',
+    ' ○ merge-check',
+    ' ? frontend#1117  Keyboard shortcuts: gather stalled PRs',
+    ' ? api#1576  fix(users): delete routes staff only',
+    ' ? frontend#1200  feat: merge me first',
+    ' ? frontend#1201  feat: merge me second',
+    ' ? api#1300  feat: waiting for the gate',
+    '   spec0001  pl: track cards in GitHub Projects',
+    '>> 4a000001  Add a salesforce keyword to the palette',
+    '>> 60000002  api: no persistent BCC field',
+    '   c0000003  Host DB proxy serves a frozen database',
+    '   d0000004  objective_outcome recorded succeeded',
+    '',
+    'NEEDS YOU: pl review 4a000001   pl review 60000002',
+    'dispatcher, last lines:',
+    '  dispatcher idle',
+    '',
+    'agent screens: tmux attach -t pl-test   then Ctrl-b w to pick a window   |   !! = agent needs you   >> = plan waits for your review   |   pl watch (no --plain) is the TUI',
+])
+
+
+def _plain_frame(monkeypatch):
+    monkeypatch.setattr(watch, "pane_tail", lambda pane, n: ["dispatcher idle"])
+    monkeypatch.setattr(C, "TMUX_SESSION", "pl-test")
+    return watch.render_watch(fake_data()["snapshot"])
+
+
+def test_plain_and_once_output_is_unchanged(monkeypatch):
+    assert _plain_frame(monkeypatch) == GOLDEN_PLAIN_FRAME
+
+
+def test_pl_watch_once_prints_one_frame(monkeypatch, capsys):
+    monkeypatch.setattr(watch, "watch_snapshot", lambda: fake_data()["snapshot"])
+    frame = _plain_frame(monkeypatch)
+    watch.cmd_watch(argparse.Namespace(once=True, plain=False))
+    assert capsys.readouterr().out == frame + "\n"
+
+
+def _footer_keys(app):
+    return {b.description for _, (_, b, enabled, _) in app.screen.active_bindings.items() if enabled}
+
+
+async def test_footer_on_a_plan_gate_shows_approve_send_back_and_hold(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "4a000001aaaa")
+        assert {"approve", "send back", "hold"} <= _footer_keys(app)
+        assert "hold / release" not in _footer_keys(app)
+
+
+async def test_footer_on_a_running_card_hides_approve_and_send_back(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "4a000001aaaa")
+        t = app.query_one("#cards-table")
+        t.move_cursor(row=t.get_row_index("d0000004aaaa"))
+        await settle(pilot)
+        keys = _footer_keys(app)
+        assert "approve" not in keys and "send back" not in keys and "hold" in keys
+
+
+@pytest.mark.parametrize("tab,key", [("dashboard", "0"), ("cards", "3"), ("prs", "4"), ("loops", "5"),
+                                     ("alerts", "6"), ("ideas", "2"), ("settings", "8")])
+async def test_question_mark_opens_this_screens_help(tab, key, monkeypatch):
+    from pl.tui.app import HelpScreen
+    from pl.tui.chrome import HELP
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press(key)
+        await settle(pilot)
+        await pilot.press("question_mark")
+        await settle(pilot)
+        assert isinstance(app.screen, HelpScreen)
+        text = " ".join(screen_text(app).replace("│", " ").split())
+        assert HELP[tab] in text and "quit" in text
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, HelpScreen)
+
+
+async def test_whatsnew_opens_from_the_palette():
+    from pl.tui.app import WhatsNewScreen
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        command = next(c for c in app.get_system_commands(app.screen) if c.title == "What's new")
+        command.callback()
+        await settle(pilot)
+        assert isinstance(app.screen, WhatsNewScreen)
