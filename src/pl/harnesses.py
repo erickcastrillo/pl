@@ -361,6 +361,27 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
     return "\n".join(lines) + "\n"
 
 
+def _shown(path):
+    p = str(path)
+    home = str(C.HOME)
+    if p == home:
+        return "~"
+    if p.startswith(home + "/"):
+        return "~/" + shlex.quote(p[len(home) + 1:])
+    if p.startswith("~/"):
+        return "~/" + shlex.quote(p[2:])
+    return shlex.quote(p)
+
+
+def trust_command(h, account, folder):
+    """The command that saves folder trust where this account's agent reads it (same env as launch_script)."""
+    if folder != "~" and not folder.startswith(("/", "~/")):
+        folder = str(C.WORK_DIR)
+    d = C.PROFILES.get(account)
+    env = f"{h.env_var}={_shown(d)} " if h.env_var and d else ""
+    return f"cd {_shown(folder)} && {env}{h.bin}"
+
+
 def headless_argv(h, account, prompt, stage=None):
     """(argv, env) for a one-shot run; no shell."""
     env = dict(os.environ)

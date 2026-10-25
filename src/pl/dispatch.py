@@ -819,9 +819,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
-                if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} once (open the window or run claude in it)",
+                fix = harnesses.trust_command(wh, w.get("profile"), trust)
+                if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
                                       f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt"):
-                    notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: open {where} and answer once")
+                    notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: run {fix} and answer once")
             if trust and w.get("window"):
                 waiting.append(w["window"])
             if bool(trust) != bool(w.get("trust_wait")):

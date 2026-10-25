@@ -3,6 +3,7 @@ reported and never answered."""
 import subprocess
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -213,6 +214,31 @@ def test_an_agent_held_at_the_trust_prompt_is_alive_not_dead(monkeypatch):
     assert agents.worker_status(w, {})[0] == "dead"
 
 
+def test_trust_command_names_the_account_config_folder(monkeypatch):
+    monkeypatch.setattr(C, "HOME", Path("/home/me"))
+    monkeypatch.setattr(C, "PROFILES", {"claude": Path("/home/me/.claude")})
+    assert harnesses.trust_command(harnesses.get("claude"), "claude", "/home/me/code/pl") \
+        == "cd ~/code/pl && CLAUDE_CONFIG_DIR=~/.claude claude"
+
+
+def test_trust_command_without_a_config_folder_has_no_env_part(monkeypatch):
+    monkeypatch.setattr(C, "HOME", Path("/home/me"))
+    monkeypatch.setattr(C, "PROFILES", {})
+    cmd = harnesses.trust_command(harnesses.get("claude"), "other", "/home/me/code/pl")
+    assert cmd == "cd ~/code/pl && claude" and "CLAUDE_CONFIG_DIR" not in cmd
+
+
+def test_trust_command_quotes_odd_folders_and_falls_back_to_the_work_dir(monkeypatch):
+    monkeypatch.setattr(C, "HOME", Path("/home/me"))
+    monkeypatch.setattr(C, "PROFILES", {})
+    monkeypatch.setattr(C, "WORK_DIR", Path("/home/me/work"))
+    claude = harnesses.get("claude")
+    assert harnesses.trust_command(claude, "x", "/srv/a b;c") == "cd '/srv/a b;c' && claude"
+    assert harnesses.trust_command(claude, "x", "/home/me/a b") == "cd ~/'a b' && claude"
+    assert harnesses.trust_command(claude, "x", "~/code/pl") == "cd ~/code/pl && claude"
+    assert harnesses.trust_command(claude, "x", "this folder") == "cd ~/work && claude"
+
+
 def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch):
     w = {"stage": "spec", "pane": "%1", "window": "@1", "session_id": "s", "profile": "claude", "harness": "claude",
          "started_at": "2020-01-01T00:00:00+00:00"}
@@ -223,9 +249,13 @@ def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch
     monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w["session_id"]))
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)
     monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: "/Users/me/Code/Proj")
+    monkeypatch.setitem(C.PROFILES, "claude", C.HOME / ".claude")
     started, writes = _pass(monkeypatch, [c])
     a = alerts.get("permission_wait:o/r#1")
-    assert a and "trust the folder /Users/me/Code/Proj once" in a["title"] and "open the window" in a["title"]
+    fix = harnesses.trust_command(harnesses.get("claude"), "claude", "/Users/me/Code/Proj")
+    assert a and "trust the folder /Users/me/Code/Proj" in a["title"] and fix in a["title"]
+    assert "CLAUDE_CONFIG_DIR=" in a["title"] and "Yes, I trust this folder" in a["title"]
+    assert "run claude in it" not in a["title"]
     assert started == [] and not [k for k in keys if k and k[0] == "send-keys"]
     assert writes[-1][1]["metadata"]["worker"]["trust_wait"] == "/Users/me/Code/Proj"
     monkeypatch.setattr(agents, "col_name", lambda lid: "Inbox")
