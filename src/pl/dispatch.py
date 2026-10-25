@@ -1477,6 +1477,7 @@ def stop_dispatcher(tries=5):
 
 
 _WARNED_TMUX = set()
+_WARNED_MODELS = set()
 IDLE_MAX = 300   # seconds: the longest wait between passes while the board and the agents stay the same
 NAP = 5          # seconds: the wait is slept in slices this long, so a change wakes the dispatcher early
 RESTART_REQUEST = "pl-restart-request"   # in the state folder: pl manager asks this dispatcher to restart itself
@@ -1509,7 +1510,11 @@ def reload_config():
     try:
         C.load(config_dir=str(C.CONFIG_DIR)) if C.CONFIG_DIR else C.load()
         import tomlkit
-        errs = C.validate(tomlkit.parse(C.path().read_text())) if C.path() else []
+        doc = tomlkit.parse(C.path().read_text()) if C.path() else None
+        errs = C.validate(doc) if doc is not None else []
+        warns = []
+        if doc is not None and not errs:
+            errs, warns = C.check_models(doc)
         if errs:
             raise SystemExit("; ".join(errs))
     except (SystemExit, Exception) as e:  # noqa: BLE001 - a bad file must never stop the dispatcher
@@ -1518,6 +1523,10 @@ def reload_config():
         print(f"warning: settings not reloaded, keeping the previous ones: {e}")
         return
     harnesses._CACHE.clear()
+    for w in warns:
+        if w not in _WARNED_MODELS:
+            _WARNED_MODELS.add(w)
+            print(f"warning: {w}")
     if C.TMUX_SESSION != keep["TMUX_SESSION"] and C.TMUX_SESSION not in _WARNED_TMUX:
         _WARNED_TMUX.add(C.TMUX_SESSION)
         print(f"warning: tmux_session changed to {C.TMUX_SESSION!r}; this dispatcher keeps {keep['TMUX_SESSION']!r} until restarted")
@@ -1530,6 +1539,13 @@ def cmd_dispatch(a):
     if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.manages(C.PROFILE_NAME):
         print(f"this machine is run by pl manager (pid {manager.holder_pid() or '?'}); it starts this profile's dispatcher")
         return   # a restored tmux window just closes; the manager's own dispatcher keeps running
+    if C.path():
+        import tomlkit
+        bad, warns = C.check_models(tomlkit.parse(C.path().read_text()))
+        for w in warns:
+            print(f"warning: {w}")
+        if bad:
+            raise SystemExit("pl dispatch: not started:\n" + "\n".join(f"  {e}" for e in bad))
     lock = None if a.dry_run else dispatch_lock()  # noqa: F841 - kept open to hold the lock
     if lock:
         print(f"dispatcher started for {C.PROFILE_NAME or 'legacy'} (pid {os.getpid()})", flush=True)
