@@ -29,6 +29,10 @@
                           running agent is not stopped. unhold removes the tag and the reason
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete] show a card's sections and metadata, or delete it
+  pl titles check [--json]
+                          list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
+                          one side, or share a pair with another card (Done left out); changes nothing; exits 1
+                          when it finds any (2: the board could not be read); --json prints them as a list
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
@@ -111,7 +115,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, profiles, rework, setup, skills
+from pl import alerts, assistant, config, events, profiles, rework, setup, skills, titles
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -178,6 +182,8 @@ def main():
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("board"); p.add_argument("action")
     p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
+    p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
+    q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     p = sub.add_parser("section"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
@@ -228,7 +234,7 @@ def main():
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
-     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
+     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "titles": titles.cmd_titles, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
