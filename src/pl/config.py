@@ -549,6 +549,34 @@ def stage_harnesses(v, accounts) -> set[str]:
     return {(accounts.get(a) or {}).get("harness") or "claude" for a in pool if a in accounts}
 
 
+def _models_errors(path, models) -> list[str]:
+    from pl import harnesses
+    if not isinstance(models, dict):
+        return [f"{path} must be a table of harness = \"model\""]
+    errs = []
+    for h, m in models.items():
+        if h not in harnesses.MODEL_FLAGS:
+            errs.append(f"{path}.{h}: harness {h} takes no model; models take {', '.join(harnesses.MODEL_FLAGS)}")
+        elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
+            errs.append(f"{path}.{h}: must be a model id like \"opus\" (no spaces or quotes, not starting with -)")
+        elif h != "claude" and m in harnesses.CLAUDE_MODELS:
+            errs.append(f"{path}.{h}: {m!r} is a claude model name; use a model {h} offers")
+    return errs
+
+
+def _small_errors(name, small) -> list[str]:
+    """[stages.run.small]: the plan budget limits and the model per harness a small change runs on."""
+    if name != "run":
+        return [f"stages.{name}.small: only the run stage takes a small-change model"]
+    if not isinstance(small, dict):
+        return ["stages.run.small must be a table with max_lines, max_files and models"]
+    errs = [f"stages.run.small.{k}: must be a whole number above 0" for k in ("max_lines", "max_files")
+            if isinstance(small.get(k), bool) or not isinstance(small.get(k), int) or small[k] < 1]
+    if "models" in small:
+        errs += _models_errors("stages.run.small.models", small["models"])
+    return errs
+
+
 def _stage_effort_errors(name, v, accounts) -> list[str]:
     """[stages.<name>] effort: a level every harness the stage can run on takes. models: a model per harness."""
     from pl import harnesses
@@ -557,19 +585,9 @@ def _stage_effort_errors(name, v, accounts) -> list[str]:
         errs.append(f"stages.{name}: model is not a stage setting; set one per harness in [stages.{name}.models], "
                     "like claude = \"opus\" (a stage may pool accounts of different harnesses)")
     if "models" in v:
-        models = v["models"]
-        if not isinstance(models, dict):
-            errs.append(f"stages.{name}.models must be a table of harness = \"model\"")
-        else:
-            for h, m in models.items():
-                if h not in harnesses.MODEL_FLAGS:
-                    errs.append(f"stages.{name}.models.{h}: harness {h} takes no model; "
-                                f"models take {', '.join(harnesses.MODEL_FLAGS)}")
-                elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
-                    errs.append(f"stages.{name}.models.{h}: must be a model id like \"opus\" "
-                                "(no spaces or quotes, not starting with -)")
-                elif h != "claude" and m in harnesses.CLAUDE_MODELS:
-                    errs.append(f"stages.{name}.models.{h}: {m!r} is a claude model name; use a model {h} offers")
+        errs += _models_errors(f"stages.{name}.models", v["models"])
+    if "small" in v:
+        errs += _small_errors(name, v["small"])
     if "effort" not in v:
         return errs
     hs = stage_harnesses(v, accounts)

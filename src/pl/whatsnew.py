@@ -168,7 +168,13 @@ ENTRIES = [
        "rule add, rollback and rules suggested from repeated edits", "pl pods show engineering"),
     _e("2026-10-25.17", "pl titles check --fix repairs drift; next and set number plan cards",
        "pl titles next, pl titles set", "pl titles check --fix --dry-run"),
-    _e("2026-10-25.18", "Exited agents' windows close by themselves",
+    _e("2026-10-25.18", "Small changes run on a cheaper model",
+       "[stages.run.small] in config.toml: a run agent whose approved PLAN budget is at or under max_lines and max_files "
+       "starts on the small model for its harness; rework rounds use the normal one",
+       "[stages.run.small] max_lines = 60"),
+    _e("2026-10-25.19", "pl-plan files later slices as Plan N slice M with plan metadata",
+       "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
+    _e("2026-10-25.20", "Exited agents' windows close by themselves",
        "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert", "pl alerts"),
 ]
 
