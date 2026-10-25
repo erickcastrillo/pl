@@ -15,7 +15,7 @@ from pl import config as C
 from pl import standup
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.cards import CardsView
-from pl.tui.needs import needs_groups, waiting_total
+from pl.tui.needs import needs_groups, needs_you_count
 from pl.tui.prs import pr_groups
 from pl.usage import human
 from pl.util import age, parse_iso
@@ -68,7 +68,7 @@ def tile_values(data, window):
     return {"specs": m.get("specs_written", 0), "plans": m.get("plans_written", 0),
             "opened": count_since(act.get("opened"), seconds) if act else "?",
             "merged": count_since(act.get("merged"), seconds) if act else "?",
-            "ready": len(pr_groups(rows)["merge"]), "waiting": waiting_total(needs_groups(rows))}
+            "ready": len(pr_groups(rows)["merge"]), "waiting": needs_you_count(data)}
 
 
 # row key → (tab, Needs-you card group to select on the Pipeline with its attention filter on, or None)

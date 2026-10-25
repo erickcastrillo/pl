@@ -4,7 +4,9 @@ import json
 from pl.util import mask
 
 SHAPES = {"list": "board", "card": "card", "section": "section", "alerts": "alerts",
-          "usage": "usage", "standup": "standup", "accounts": "accounts", "profiles": "profiles", "intent": "intent"}
+          "usage": "usage", "standup": "standup", "accounts": "accounts", "profiles": "profiles", "intent": "intent",
+          "manager-status": "manager-status", "local-model": "local-model", "whatsnew": "whatsnew",
+          "skills-list": "skills-list", "update-check": "update-check"}
 
 
 def emit(data):
