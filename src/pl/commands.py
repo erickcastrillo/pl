@@ -539,6 +539,33 @@ def cmd_card(a):
         print(f"-- section {k or '(preamble)'}: {len(v)} chars, first line: {v.strip().splitlines()[0][:80] if v.strip() else ''}")
 
 
+def _caps_value(flag, raw, parse):
+    value = parse(raw)
+    if not isinstance(value, int) or value <= 0:
+        raise SystemExit(f"pl caps: --{flag} must be a positive number, got {raw!r}")
+    return value
+
+
+def cmd_caps(a):
+    try:
+        c = find_card(a.id)
+    except BadInput as e:
+        raise SystemExit(str(e)) from None
+    if a.caps_cmd == "reset":
+        update(c["id"], metadata={"caps": None})
+        print(f"{short_id(c['id'])}: card caps cleared; the profile's caps apply")
+        return
+    if a.minutes is None and a.tokens is None:
+        raise SystemExit("pl caps set: give --minutes and/or --tokens")
+    caps = dict((c.get("metadata") or {}).get("caps") or {})
+    if a.minutes is not None:
+        caps["minutes"] = _caps_value("minutes", a.minutes, lambda v: int(v) if re.fullmatch(r"\d+", str(v).strip()) else None)
+    if a.tokens is not None:
+        caps["tokens"] = _caps_value("tokens", a.tokens, C.parse_tokens)
+    update(c["id"], metadata={"caps": caps})
+    print(f"{short_id(c['id'])}: card caps {caps}")
+
+
 WRITABLE = ("SPEC", "DESIGN", "PLAN")   # the sections stage agents write; INPUT and REVIEW NOTES are yours
 SECTION_MAX = 256 * 1024                # bytes a --from file may hold
 APPROVED_COLUMNS = ("Approved", "In progress", "PR open", "Done")   # the PLAN is a person's decision from here on
@@ -884,6 +911,12 @@ def retry(ref, stage=None):
         if not w and (c.get("metadata") or {}).get("run_retry_at"):
             update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
             out.append(f"{head}: cleared the blocked hold of its released run agent; the dispatcher starts it now")
+            continue
+        meta = c.get("metadata") or {}
+        if not w and meta.get("cap_stopped") and col_name(c["list_id"]) == "Manual" and not stage:
+            back = meta.get("manual_from_column") or "Approved"
+            update(c["id"], column=back, metadata=dict.fromkeys(("cap_stopped", "manual_from_column", "cap_note", "manual_reason", "worker")))
+            out.append(f"{head}: stopped at a cap; back to {back}, the dispatcher starts the stage fresh")
             continue
         if not w or (stage and w.get("stage") != stage):
             out.append(f"{head}: no {stage or ''} agent to reset".replace("  agent", " agent"))
