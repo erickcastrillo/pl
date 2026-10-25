@@ -35,6 +35,7 @@ FLOOR = 50              # points: below this, nothing; GitHub would refuse it an
 RESERVE = 0.05          # share of the limit kept for writes: commands and agents stop below it
 PERIODIC = 0.20         # periodic reads stop below this share of the limit
 LOW = 0.50              # below this share left, each profile keeps to its fair share for periodic reads
+GAP = 0.10             # share of the limit: a bigger difference between pl and GitHub is flagged
 STALE = 60              # seconds: an older reading is checked against GitHub before a call is held for it
 PERIODIC_ROLES = ("dispatcher", "console")
 ROLE = {"name": "command"}   # who this process is: "dispatcher", "console", or the pl command it runs ("pl card")
@@ -310,17 +311,36 @@ def usage_for(folder, profile):
             "remaining": led["remaining"], "limit": led.get("limit") or 5000, "reset": led["reset"]}
 
 
-def report():
-    """`pl usage --github`: every GitHub user's budget this hour, per profile and per caller."""
-    rows = accounts()
-    if not rows:
+def _github_side(acct, led, fresh, current):
+    """The GitHub half of a report line: a fresh reading and any gap from pl's, or why there is none."""
+    if acct != current:
+        return "GitHub: no fresh reading: token not used by this process"
+    if isinstance(fresh, str):
+        return f"GitHub: no reading ({fresh})"
+    rem, reset = fresh
+    lim = (led or {}).get("limit") or 5000
+    side = f"GitHub {rem} of {lim} left, resets {time.strftime('%H:%M', time.localtime(reset))}"
+    if led and abs(led["remaining"] - rem) > GAP * lim:
+        side += f" | GAP {abs(led['remaining'] - rem)} points, over {GAP:.0%} of {lim}"
+    return side
+
+
+def report(rows=None, fresh=None, current=None):
+    """`pl usage --github`: every GitHub user's budget this hour, per profile and per caller. With `fresh` (GitHub's own
+    reading of `current`'s token, or why there is none), each line shows pl's reading beside GitHub's."""
+    rows = accounts() if rows is None else rows
+    if not rows and fresh is None:
         return "GitHub: no GraphQL reading this hour (pl records one with each board read)"
     out = []
+    if fresh is not None and all(acct != current for acct, _ in rows):
+        out.append(f"{_label(current)}: pl: no reading yet | {_github_side(current, None, fresh, current)}")
     for acct, led in rows:
         reset = time.strftime("%H:%M", time.localtime(led["reset"]))
         age = int(_clock() - (led.get("at") or 0))
-        out.append(f"{_label(acct)}: {led['remaining']} of {led.get('limit') or 5000} GraphQL points left, resets {reset} "
-                   f"(read {age} s ago)")
+        ours = "pl " if fresh is not None else ""
+        head = (f"{_label(acct)}: {ours}{led['remaining']} of {led.get('limit') or 5000} GraphQL points left, "
+                f"resets {reset} (read {age} s ago)")
+        out.append(head if fresh is None else f"{head} | {_github_side(acct, led, fresh, current)}")
         for p, (v, share) in profile_rows(led).items():
             out.append(f"  {p:<20} spent {v:>5}   fair share {share}")
         by = sorted((led.get("by") or {}).items(), key=lambda kv: -kv[1])

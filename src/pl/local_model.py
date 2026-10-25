@@ -12,6 +12,7 @@ import urllib.request
 from urllib.parse import urlsplit
 
 from pl import config as C
+from pl import jsonout
 
 DEFAULTS = {"enabled": False, "url": "http://localhost:11434", "model": "gemma4", "timeout": 30}
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -158,8 +159,12 @@ def available(s=None):
     return False, f"{model} is not pulled at {url}: run ollama pull {model}"
 
 
-def cmd_local_model(_a=None):
+def cmd_local_model(a=None):
     s = settings()
+    if getattr(a, "json", False):
+        ok, line = available()
+        jsonout.emit({"enabled": s.get("enabled") is True, "url": s.get("url"), "model": s.get("model"), "ok": ok, "detail": line})
+        raise SystemExit(0 if ok else 1)
     print(f"enabled: {'yes' if s.get('enabled') is True else 'no'}\nurl: {s.get('url')}\nmodel: {s.get('model')}")
     ok, line = available()
     print(line)

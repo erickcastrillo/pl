@@ -86,7 +86,8 @@
                           max_context = 60 sets another percent, 0 turns it off; one loop interval apart, at most
                           3 an hour; background shells or agents the session started end with it). --github
                           shows GitHub's GraphQL budget this hour instead: points left, the reset, what each
-                          profile and caller spent and each profile's fair share
+                          profile and caller spent and each profile's fair share; it also asks GitHub for a fresh
+                          reading of this process's token and prints it next to pl's, marking a GAP past 10%
   pl hook <Notification|Stop> --card ID --window W
                           what a Claude Code stage agent's hooks run (pl adds them at launch; [dispatch] hooks = false
                           turns them off): a permission wait or a finished turn reaches the card at once. Exits 2
@@ -99,6 +100,8 @@
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl sync status [--json]
                           how many changes are queued for the GitHub board and when the next window opens
+  pl sync init --from-github [--dry-run]
+                          copy the [sync] github board into the empty local board once, and write sync-ids.json
   pl sync now [--json]  send queued changes to the GitHub board now, within the budget
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
@@ -110,18 +113,18 @@
                           a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
                           ask the central read-only brain across every pipeline and connector
-  pl manager start|stop [--all]|status|restart NAME
+  pl manager start|stop [--all]|status [--json]|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
   pl worktrees list | gc [--dry-run] [--yes] [--json]
                           the worktrees pl-run made in the worktrees folder: their card, column and keep/remove;
                           gc lists what is safe to remove (finished card, clean, all pushed); --yes removes it
-  pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
+  pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
   pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
-  pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
+  pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
@@ -132,6 +135,8 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
+  pl mcp serve --brain|--memory
+                          serve the brain tools, or memory_search over the agent memory, to an MCP client
   pl memory search Q [--card ID] [--pod P] [--limit N] | add TEXT --kind K [--card ID] [--client C] [--contact C]
                           [--replaces ID] | show ID  (each takes --json)
                           what agents remember: run summaries, approval reasons, decisions; says when search is
@@ -145,7 +150,7 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
-  pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
+  pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
@@ -369,7 +374,7 @@ def _main():
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
-    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
+    p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller, beside GitHub's own reading")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
     p = sub.add_parser("alerts"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include resolved alerts")
@@ -434,9 +439,9 @@ def _main():
     p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
-    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
+    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
-    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
     q = pm.add_parser("list"); q.add_argument("--json", action="store_true", help="output as JSON")
     q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")
@@ -491,7 +496,8 @@ def _main():
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     q = pb.add_parser("end"); q.add_argument("conv")
     q = pb.add_parser("undo"); q.add_argument("conv")
-    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "now"]); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "init", "now"]); p.add_argument("--json", action="store_true")
+    p.add_argument("--from-github", action="store_true"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):

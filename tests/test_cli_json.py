@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pl import alerts, board, commands, events, jsonout, profiles, standup, usage, watch
+from pl import alerts, board, commands, events, jsonout, local_model, manager, profiles, skills, standup, update, usage, watch
 from pl import config as C
 from pl.trackers import mcp
 
@@ -65,14 +65,37 @@ def fake_reads(monkeypatch):
     monkeypatch.setattr(commands.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=json.dumps({"body": ""})))
 
 
+@pytest.fixture(autouse=True)
+def fake_machine_reads(monkeypatch):
+    monkeypatch.setattr(manager, "running", lambda: True)
+    monkeypatch.setattr(manager, "read_status", lambda max_age=0: {"at": 1.5, "pid": 7, "hold": False, "profiles": [{"name": "one", "running": True}]})
+    monkeypatch.setattr(local_model, "settings", lambda: {"enabled": True, "url": "http://localhost:11434", "model": "m"})
+    monkeypatch.setattr(local_model, "available", lambda s=None: (True, "ok: m is pulled"))
+    monkeypatch.setattr(skills, "scan", lambda: [
+        {"name": "s", "account": "work", "kind": "skill", "origin": "", "library": True, "linked": ["a"], "description": "d"}])
+    monkeypatch.setattr(skills, "library", lambda: Path("/lib"))
+    monkeypatch.setattr(update, "enabled", lambda: True)
+    monkeypatch.setattr(update, "check", lambda: "v99.0.0")
+
+
+def _local_model(a):
+    with pytest.raises(SystemExit) as e:
+        local_model.cmd_local_model(a)
+    assert e.value.code == 0
+
+
 NS = {"list": dict(all=False, product=False), "card": dict(id="x", delete=False),
       "section": dict(id="x", name="spec", from_=None), "alerts": dict(all=False, ack=None),
       "usage": dict(since=None, by="account", github=False),
       "standup": dict(since=None, markdown=False, slack=False, summary=False),
-      "accounts": dict(reset=None), "profiles": dict(profiles_cmd=None), "intent": dict(pr=PR)}
+      "accounts": dict(reset=None), "profiles": dict(profiles_cmd=None), "intent": dict(pr=PR),
+      "manager-status": {}, "local-model": {}, "whatsnew": {}, "skills-list": dict(skills_cmd="list"), "update-check": dict(check=True)}
 FN = {"list": commands.cmd_list, "card": commands.cmd_card, "section": commands.cmd_section, "alerts": alerts.cmd_alerts,
       "usage": usage.cmd_usage, "standup": standup.cmd_standup, "accounts": commands.cmd_profiles,
-      "profiles": profiles.cmd_profiles, "intent": commands.cmd_intent}
+      "profiles": profiles.cmd_profiles, "intent": commands.cmd_intent,
+      "manager-status": lambda a: manager.cmd_manager(["status", "--json"]), "local-model": _local_model,
+      "whatsnew": lambda a: __import__("pl.whatsnew").whatsnew.cmd_whatsnew(["--json"]),
+      "skills-list": skills.cmd_skills, "update-check": update.cmd_update}
 ALL = list(FN)
 
 
@@ -154,3 +177,17 @@ def test_intent_json_keeps_the_plan_scope_sections_only(capsys):
     run("intent")
     card = json.loads(capsys.readouterr().out)["cards"][0]
     assert card["spec"] == "the spec" and card["plan_scope"].startswith("## Minimum change") and "Summary" not in card["plan_scope"]
+
+
+def test_manager_status_json_when_not_running(capsys, monkeypatch):
+    monkeypatch.setattr(manager, "running", lambda: False)
+    manager.cmd_manager(["status", "--json"])
+    assert json.loads(capsys.readouterr().out) == {"running": False}
+
+
+def test_update_check_json_when_the_check_is_off(capsys, monkeypatch):
+    monkeypatch.setattr(update, "enabled", lambda: False)
+    monkeypatch.setattr(update, "check", lambda: None)
+    run("update-check")
+    got = json.loads(capsys.readouterr().out)
+    assert got["enabled"] is False and got["latest"] is None and got["update_available"] is False
