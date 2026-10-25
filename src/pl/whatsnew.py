@@ -143,6 +143,9 @@ ENTRIES = [
        "Alerts tab; pl connectors approve-tools <name>", "pl connectors approve-tools <name>"),
     _e("2026-10-25.07", "pl ask: central read-only brain answers with checked sources",
        "ask questions across every pipeline and connector; every fact links a source", "pl ask \"what needs me today?\""),
+    _e("2026-10-25.08", "Chat answers questions via the brain with checked source links",
+       "Chat: plain questions and 'remember this' answered when [brain] chat = true",
+       "send a question in chat"),
 ]
 
 

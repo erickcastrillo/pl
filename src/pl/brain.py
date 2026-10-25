@@ -580,3 +580,24 @@ def cmd_brain(a):
         print(f"{verb} {len(res)} conversation{'s' if len(res) != 1 else ''}")
         return 0
     return 0
+
+
+def chat_reply(answer: Any) -> str:
+    from pl.chat import safe_text
+
+    text = (
+        answer.get("text") or answer.get("answer") or ""
+        if isinstance(answer, dict)
+        else getattr(answer, "text", getattr(answer, "answer", str(answer)))
+    )
+    sources = (answer.get("sources") if isinstance(answer, dict) else getattr(answer, "sources", [])) or []
+    cleaned = safe_text(text)
+    links = []
+    for s in sources[:5]:
+        t = s.get("title", "") if isinstance(s, dict) else getattr(s, "title", "")
+        u = s.get("url", "") if isinstance(s, dict) else getattr(s, "url", "")
+        if t and u:
+            links.append(f"{t}: {u}")
+        elif u or t:
+            links.append(str(u or t))
+    return (cleaned + "\n\n" + "\n".join(links)).strip() if links else cleaned

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -183,7 +184,19 @@ def _handle_message(adapter: Any, msg: dict[str, Any]) -> None:
             adapter.send(chat_id, f"Sent back {prompt_data.get('card', '')} with review notes")
             return
 
-    adapter.send(chat_id, "I only take replies to cards")
+    if not manager._machine_toml().get("brain", {}).get("chat", False):
+        adapter.send(chat_id, "I only take replies to cards")
+        return
+
+    def _worker():   # [brain] chat = true: free text goes to the central brain, off the poll loop
+        from pl import brain
+        ans = (brain.remember(conv=chat_id, text=text) if text.lower().startswith("remember this")
+               else brain.ask(text, conv=chat_id))
+        reply = brain.chat_reply(ans)
+        if reply:
+            adapter.send(chat_id, reply)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def _load_adapters() -> list[Any]:
