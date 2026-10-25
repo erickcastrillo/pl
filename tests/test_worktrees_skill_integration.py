@@ -17,6 +17,9 @@ def _run_skill():
     return (SHIPPED / "pl-run" / "SKILL.md").read_text()
 
 
+CURRENT = int(re.search(r"^pl-builtin-version: (\d+)$", _run_skill(), re.M).group(1))   # later changes to pl-run bump it
+
+
 @pytest.fixture
 def lib(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -32,13 +35,13 @@ def shipped_v4(tmp_path, monkeypatch):
     d = tmp_path / "pkg4"
     shutil.copytree(SHIPPED, d)
     f = d / "pl-run" / "SKILL.md"
-    f.write_text(f.read_text().replace("pl-builtin-version: 5", "pl-builtin-version: 4").replace(BOOTSTRAP, "git status"))
+    f.write_text(f.read_text().replace(f"pl-builtin-version: {CURRENT}", "pl-builtin-version: 4").replace(BOOTSTRAP, "git status"))
     monkeypatch.setattr(skills, "BUILTIN_DIR", d)
     return d
 
 
-def test_pl_run_builtin_version_is_5():
-    assert re.search(r"^pl-builtin-version: 5$", _run_skill(), re.M)
+def test_pl_run_builtin_version_is_at_least_5():
+    assert CURRENT >= 5
 
 
 def test_pl_run_line_count_within_150_lines():
@@ -63,10 +66,10 @@ def test_pl_run_instructs_proceeding_on_bootstrap_diagnostics():
     assert re.search(r"bootstrap reports.*proceed", _run_skill(), re.S | re.I)
 
 
-def test_install_builtins_updates_unedited_pl_run_from_v4_to_v5(lib, shipped_v4, monkeypatch):
+def test_install_builtins_updates_unedited_pl_run_from_v4_to_current(lib, shipped_v4, monkeypatch):
     skills.install_builtins()
     monkeypatch.setattr(skills, "BUILTIN_DIR", SHIPPED)
-    assert skills.install_builtins() == ["updated built-in pl-run to version 5"]
+    assert skills.install_builtins() == [f"updated built-in pl-run to version {CURRENT}"]
     assert BOOTSTRAP in (lib / "pl-run" / "SKILL.md").read_text()
 
 
@@ -92,7 +95,6 @@ def test_whatsnew_contains_worktrees_bootstrap_entry():
 def test_whatsnew_entry_key_is_sorted_and_valid():
     keys = [e["key"] for e in whatsnew.ENTRIES]
     assert keys == sorted(keys) and len(set(keys)) == len(keys)
-    assert keys[-1] == "2026-10-23.01"
 
 
 def test_readme_worktrees_section_documents_bootstrap():

@@ -53,7 +53,7 @@ such choice in the pull request description.
    pl worktrees bootstrap "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" --card <id>
    ```
 
-   If bootstrap reports a problem, carry on with the diagnostics it printed; do not stop.
+   If bootstrap reports a problem, proceed with the diagnostics it printed; do not stop.
 
    If the branch or worktree already exists from an earlier attempt, reuse it (`git worktree list` shows where; an
    older one may be at `../<repo>-pl-<short-name>`) and continue where it stopped. Run every later command inside it.
@@ -118,7 +118,7 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
    ```
 
    Every problem it lists as still open is the work. Findings it says are fixed need nothing.
-3. Make no new branch or pull request. Reuse the branch's worktree (`git worktree list`), or add one from
+3. Do not make a new branch or a new pull request. Reuse the branch's worktree (`git worktree list`), or add one from
    `origin/<branch>` in `$PL_WORKTREES_DIR` and run `pl worktrees bootstrap <worktree path> --card <id>`. `git fetch
    origin`, then merge the pull request's base branch into it (never rebase or force-push), resolving conflicts.
 4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.

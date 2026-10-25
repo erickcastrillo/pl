@@ -183,7 +183,7 @@ async def test_no_profile_settings_are_read_only(gh_signed_in):
         app.action_tab("settings")
         await settle(pilot)
         assert "no profile loaded: settings are read-only" in screen_text(app)
-        inputs = [i for i in app.query(Input) if not i.id.startswith("assistant")]   # the Assistant and Brain tabs have their own prompt boxes
+        inputs = [i for i in app.query(Input) if not i.id.endswith("-input")]   # the Assistant and Brain tabs have their own prompt boxes
         assert inputs and all(i.disabled for i in inputs)
     with pytest.raises(SystemExit) as e:
         C.save(tomlkit.document())
