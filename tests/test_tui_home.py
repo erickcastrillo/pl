@@ -160,3 +160,14 @@ def test_a_stale_summary_shows_stopped():
     fresh_rows = home_rows(fresh)
     assert fresh_rows[0]["running"] is True
     assert fresh_rows[0]["status"] == "running"
+
+
+def test_oldest_wait_as_written_by_summary_py_is_an_iso_time():
+    # summary.py writes "since" as the card's updated_at (an ISO string), not epoch seconds
+    from datetime import datetime, timezone
+    since = datetime.fromtimestamp(time.time() - 600, timezone.utc).isoformat(timespec="seconds")
+    s = {"name": "pl", "running": True, "at": time.time(), "interval": 30, "columns": [],
+         "oldest_wait": {"card": "pl#1", "since": since}}
+    assert home_rows([s])[0]["oldest_wait"] == "10m"
+    s["oldest_wait"] = {"card": "pl#1", "since": "not a time"}
+    assert home_rows([s])[0]["oldest_wait"] == "-"
