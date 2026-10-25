@@ -518,3 +518,21 @@ def test_usage_parser_accepts_json_flag(monkeypatch):
     with pytest.raises(SystemExit) as e:
         cli.main()
     assert e.value.code == 0
+
+
+def test_usage_json_shows_each_local_jobs_calls_median_and_fallback_rate(fake_home, capsys):
+    C.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    day = 86400
+
+    def line(job, ago, ms, fallback=None):
+        return json.dumps({"ts": _ts(ago), "job": job, "model": "m:1", "ms": ms, "ok": fallback is None,
+                           "fallback": fallback, "why": ""})
+    (C.STATE_DIR / "local-jobs.jsonl").write_text("\n".join([
+        line("route", day, 100), line("route", 2 * day, 300), line("route", 3 * day, 500, "person"),
+        line("route", 3 * day, 900), line("title", day, 40), line("title", 20 * day, 5000, "skip")]) + "\n")
+    write(transcript(fake_home), [turn("m1", inp=100, out=10)])
+    usage.cmd_usage(argparse.Namespace(since="7d", by="account", json=True))
+    out = json.loads(capsys.readouterr().out)
+    assert out["local_jobs"] == {"route": {"calls": 4, "median_ms": 400, "fallback_rate": 0.25},
+                                 "title": {"calls": 1, "median_ms": 40, "fallback_rate": 0.0}}
+    assert out["usage"]["main"]["input"] == 100 and out["usage"]["main"]["output"] == 10

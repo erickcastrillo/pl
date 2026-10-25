@@ -180,7 +180,7 @@ async def test_the_console_shows_the_notice_and_u_shows_the_commands(git, monkey
         assert isinstance(app.screen, UpdateScreen)
         text = screen_text(app)
         assert "git pull" in text and "uv tool install --force --reinstall" in text and "v0.3.0" in text
-        await pilot.press("c")
+        await pilot.press("y")   # copy is y since Plan 5 slice 2 (one key, one meaning)
         assert copied == [update.COMMANDS]
         await pilot.press("escape")
         await settle(pilot)

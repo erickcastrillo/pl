@@ -38,6 +38,48 @@ not yet in Done (or dropped); both are empty when there are none. `intake` is em
 {"alerts": [{"key", "severity", "title", "fix", "first_seen", "count", ...}]}
 ```
 
+## usage
+`pl usage [--since S] [--by account|model|loop] --json`
+
+```
+{"since", "by", "state_transitions": {"hook", "screen"},
+ "usage": {group: {"input", "output", "cache_read", "cache_write", "cost", "unpriced"}}}
+```
+`--by card --json` prints minutes, tokens and caps per card and stage instead.
+
+## standup
+`pl standup [--since S] --json` (`--markdown`, `--slack` and `--summary` only change the text form)
+
+```
+{"since", "prs": {"merged"|"opened"|"closed": {"total", "items": [{"repo", "number", "title", "url", "yours"}]}},
+ "pipeline": {"ideas added": n, ...}, "needs_you": ["title"], "errors": [{"message", "count"}]}
+```
+When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
+
+## accounts
+`pl accounts [--reset NAME|all] --json`
+
+```
+{"accounts": [{"name", "parked", "until", "reason", "dir"}]}
+```
+`until` and `reason` are empty when the account is not parked.
+
+## profiles
+`pl profiles --json`
+
+```
+{"profiles": [{"name", "dir", "running", "holder", "tmux_session", "tracker", "board_id", "accounts": {name: dir}}],
+ "warnings": ["text"]}
+```
+
+## intent
+`pl intent <PR URL> --json`
+
+```
+{"pr", "cards": [{"id", "title", "spec", "plan_scope"}]}
+```
+`plan_scope` is the plan's scope sections (minimum change, acceptance, non-goals), joined; empty when there is no plan.
+
 ## merges
 `pl merges --dry-run --json`
 
