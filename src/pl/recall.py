@@ -1,4 +1,6 @@
 """Agent memory: entries about runs, approvals and decisions, in a SQLite store with full-text search."""
+import hashlib
+import json
 import os
 import re
 import math
@@ -9,7 +11,7 @@ import sys
 from datetime import datetime, timezone
 
 from pl import config as C
-from pl import jsonout, local_jobs, local_model, util
+from pl import events, jsonout, local_jobs, local_model, util
 from pl.board import sections
 
 SEMANTIC_MIN = 0.55
@@ -301,6 +303,52 @@ def forget(entry_id) -> bool:
         return False
 
 
+_OF_CONTACT = "contact = ? OR replaced_by IN (SELECT id FROM entries WHERE contact = ?)"
+
+
+def count_contact(contact) -> int:
+    con = _db()
+    try:
+        return con.execute(f"SELECT count(*) FROM entries WHERE {_OF_CONTACT}", (contact, contact)).fetchone()[0]
+    finally:
+        con.close()
+
+
+def forget_contact(contact) -> int:
+    """Delete every entry linked to the contact, the older entries they replaced, and their vectors."""
+    con = _db()
+    try:
+        with con:
+            con.execute(f"DELETE FROM vectors WHERE id IN (SELECT id FROM entries WHERE {_OF_CONTACT})", (contact, contact))
+            n = con.execute(f"DELETE FROM entries WHERE {_OF_CONTACT}", (contact, contact)).rowcount
+            con.execute("INSERT INTO entries_fts(entries_fts) VALUES ('rebuild')")
+        con.execute("VACUUM")
+    finally:
+        con.close()
+    return n
+
+
+def _cmd_forget(a):
+    if a.dry_run:
+        n = count_contact(a.contact)
+        print(json.dumps({"would_delete": n}) if a.json else f"would delete {n} entries")
+        return 0
+    if not a.yes:
+        if not sys.stdin.isatty():
+            raise SystemExit(2)
+        try:
+            ok = input(f"Forget every memory entry linked to contact {a.contact}? [y/N]: ")
+        except EOFError:
+            ok = ""
+        if ok.strip().lower() not in ("y", "yes"):
+            print("nothing changed")
+            return 0
+    n = forget_contact(a.contact)
+    events.emit("memory_forgot", contact_hash=hashlib.sha256(a.contact.encode("utf-8")).hexdigest()[:12], count=n)
+    print(json.dumps({"deleted": n}) if a.json else f"deleted {n} entries")
+    return 0
+
+
 def _link(e):
     return f"pl card {e['card']}" if e["card"] else f"pl memory show {e['id']}"
 
@@ -351,4 +399,4 @@ def _memory_show(a):
 
 
 def cmd_memory(a):
-    return {"search": _memory_search, "add": _memory_add, "show": _memory_show}[a.action](a)
+    return {"search": _memory_search, "add": _memory_add, "show": _memory_show, "forget": _cmd_forget}[a.action](a)

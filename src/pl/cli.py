@@ -443,6 +443,10 @@ def _main():
     m = pm.add_parser("show"); m.add_argument("id")
     for m in pm.choices.values():
         m.add_argument("--json", action="store_true")
+    m = pm.add_parser("forget"); m.add_argument("--contact", required=True, help="contact id to forget")
+    m.add_argument("--yes", action="store_true", help="confirm without prompting")
+    m.add_argument("--dry-run", action="store_true", help="count the entries without deleting")
+    m.add_argument("--json", action="store_true")
     p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
     p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
     p = sub.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
