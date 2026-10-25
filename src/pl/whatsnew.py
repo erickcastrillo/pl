@@ -199,6 +199,7 @@ ENTRIES = [
        "Done cards included; the Product board is skipped", "pl list --plan 21"),
     _e("2026-10-25.30", "Exited agents' windows close by themselves",
        "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert", "pl alerts"),
+    _e("2026-10-25.31", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
 ]
 
 

@@ -22,6 +22,7 @@ COMMANDS = {
     "CardsView.done": "pl done <id>",
     "CardsView.move_column": "pl move <id> <col>",
     "CardsView.hand_off": "pl move <id> Manual",
+    "CardsView.plan_filter": "pl list --plan N",
     "CardsView.retry": "pl retry <id>",
     "CardsView.restart": "pl restart <id>",
     "CardsView.move_agent": "pl move-agent <card> <account>",
