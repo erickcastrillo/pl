@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from pl import config as C
+from pl import events
 
 
 
@@ -34,6 +35,7 @@ FLOOR = 50              # points: below this, nothing; GitHub would refuse it an
 RESERVE = 0.05          # share of the limit kept for writes: commands and agents stop below it
 PERIODIC = 0.20         # periodic reads stop below this share of the limit
 LOW = 0.50              # below this share left, each profile keeps to its fair share for periodic reads
+STALE = 60              # seconds: an older reading is checked against GitHub before a call is held for it
 PERIODIC_ROLES = ("dispatcher", "console")
 ROLE = {"name": "command"}   # who this process is: "dispatcher", "console", or the pl command it runs ("pl card")
 
@@ -148,6 +150,31 @@ def record(points=1, rate=None):
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
             spent[prof] = spent.get(prof, 0) + points
             by[f"{prof} {role}"] = by.get(f"{prof} {role}", 0) + points
+            _write(_path(), led)
+    except OSError:
+        pass
+
+
+def stale():
+    """True when the ledger holds a reading of this window that is older than STALE seconds."""
+    led, now = ledger(), _clock()
+    return (led.get("reset") or 0) > now and now - (led.get("at") or 0) > STALE
+
+
+def refresh(remaining, reset):
+    """Take GitHub's own reading (free) over the ledger's, spending nothing. A gap of more than 10% of the limit is
+    logged, with where this process signs in (never a token), so a second token can be traced."""
+    try:
+        with _locked():
+            led = ledger()
+            limit = led.get("limit") or 5000
+            if isinstance(led.get("remaining"), int) and abs(led["remaining"] - remaining) > 0.1 * limit:
+                events.emit("github_budget_gap", None, ledger=led["remaining"], github=remaining, role=ROLE["name"],
+                            profile=C.PROFILE_NAME, folder=_folder(),
+                            token_env=bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")))
+            if led.get("window") != reset:
+                led.update(window=reset, spent={}, by={})
+            led.update(limit=limit, remaining=remaining, reset=reset, at=_clock())
             _write(_path(), led)
     except OSError:
         pass

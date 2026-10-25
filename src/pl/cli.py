@@ -227,11 +227,17 @@ def main():
     ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
-    {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
+    from pl.trackers.github import RateLimited
+    commands = {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
-     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
+     "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}
+    try:
+        commands[a.cmd](a)
+    except RateLimited as e:   # held, not failed: try again after the reset
+        print(f"pl: {e.note}", file=sys.stderr)
+        raise SystemExit(3) from None
