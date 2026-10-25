@@ -36,7 +36,10 @@ def shipped(tmp_path, monkeypatch):
 
 def _bump(shipped, name, text="\nNew step.\n"):
     f = shipped / name / "SKILL.md"
-    f.write_text(f.read_text().replace("pl-builtin-version: 1", "pl-builtin-version: 2") + text)
+    head = f.read_text()
+    version = int(re.search(r"^pl-builtin-version: (\d+)$", head, re.M).group(1)) + 1
+    f.write_text(re.sub(r"^pl-builtin-version: \d+$", f"pl-builtin-version: {version}", head, count=1, flags=re.M) + text)
+    return version
 
 
 # ---------- the package ----------
@@ -95,8 +98,8 @@ def test_install_copies_every_builtin_into_the_library(lib):
 
 def test_an_unedited_older_copy_is_updated(lib, shipped):
     skills.install_builtins()
-    _bump(shipped, "pl-spec")
-    assert skills.install_builtins() == ["updated built-in pl-spec to version 2"]
+    version = _bump(shipped, "pl-spec")
+    assert skills.install_builtins() == [f"updated built-in pl-spec to version {version}"]
     assert (lib / "pl-spec" / "SKILL.md").read_text().endswith("New step.\n")
 
 
@@ -108,8 +111,8 @@ def test_an_edited_copy_is_never_overwritten(lib, shipped):
     assert skills.install_builtins() == ["built-in pl-spec has an update; your edited copy was kept"]
     assert (lib / "pl-spec" / "SKILL.md").read_text() == mine
     assert skills.install_builtins() == []                       # said once per new version, not on every start
-    _bump(shipped, "pl-design")
-    assert skills.install_builtins() == ["updated built-in pl-design to version 2"]
+    version = _bump(shipped, "pl-design")
+    assert skills.install_builtins() == [f"updated built-in pl-design to version {version}"]
     assert (lib / "pl-spec" / "SKILL.md").read_text() == mine
 
 
@@ -477,9 +480,9 @@ def test_a_broken_state_file_never_crashes_install(lib, shipped):
     st["pl-plan"] = {**st["pl-plan"], "version": "abc", "told": "x"}
     st["pl-run"] = ["x"]
     (lib / ".pl-builtin.json").write_text(json.dumps(st))
-    _bump(shipped, "pl-plan")
+    version = _bump(shipped, "pl-plan")
     out = skills.install_builtins()
-    assert "updated built-in pl-plan to version 2" in out
+    assert f"updated built-in pl-plan to version {version}" in out
     (lib / ".pl-builtin.json").write_text('["not", "a", "dict"]')
     skills.install_builtins()
 
