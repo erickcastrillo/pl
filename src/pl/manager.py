@@ -84,7 +84,6 @@ def update_machine_toml(modifier):
     tmp.replace(path)
 
 
-
 def _run(argv, timeout=None):
     """The one subprocess seam of this module (tests fake it)."""
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
@@ -444,6 +443,11 @@ def tick(state):
     try:
         from pl.chat import inbound
         inbound.poll()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from pl.chat.gates import post_outbox
+        post_outbox()
     except Exception:  # noqa: BLE001
         pass
     try:

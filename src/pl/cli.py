@@ -71,7 +71,7 @@
                           ones are still restarted and finished windows still closed. resume: back to normal
   pl kill-switch on|off|status [--json]
                           machine-wide kill switch: holds approved cards with outward actions; off releases them
-  pl chat add|list|remove|test
+  pl chat add|list|remove|test|route
                           messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
   pl manager start|stop [--all]|status|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every

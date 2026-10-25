@@ -12,6 +12,9 @@ MONEY_RE = re.compile(r"([$€£¥]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:USD
 ADDRESS_RE = re.compile(r"\b\d+\s+[A-Za-z0-9.]+(?:\s+[A-Za-z0-9.]+)?\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Way|Court|Ct)\b", re.IGNORECASE)
 DIGITS_RE = re.compile(r"\b\d{5,}\b")
 
+KINDS = {"gates", "alerts", "digest"}
+ADAPTERS: dict[str, Any] = {}
+
 
 def safe_text(s: str) -> str:
     from pl import util
@@ -65,15 +68,46 @@ def remove(name: str) -> tuple[int, str]:
     return 0, f"removed chat connector {name}"
 
 
+def route(kind: str, names: list[str]) -> tuple[int, str]:
+    if kind not in KINDS:
+        return 2, f"pl chat route: unknown kind '{kind}' (must be one of: {', '.join(sorted(KINDS))})"
+    conns = load()
+    for name in names:
+        if name not in conns:
+            return 1, f"pl chat route: connector '{name}' not found"
+
+    import tomlkit
+
+    def modifier(doc):
+        conns_tbl = doc.setdefault("connectors", tomlkit.table())
+        for name, cfg in conns.items():
+            tbl = conns_tbl.setdefault(name, tomlkit.table())
+            r = list(cfg.get("routes", ["gates"]))
+            if name in names:
+                if kind not in r:
+                    r.append(kind)
+            else:
+                if kind in r:
+                    r.remove(kind)
+            tbl["routes"] = r
+
+    manager.update_machine_toml(modifier)
+    return 0, f"routed {kind} to {', '.join(names) if names else 'none'}"
+
+
 def adapter(name: str):
     connectors = load()
     if name in connectors:
         cfg = connectors[name]
         ad_type = cfg.get("adapter", name)
+        if ad_type in ADAPTERS:
+            return ADAPTERS[ad_type](name, cfg)
         if ad_type == "telegram":
             from pl.chat.telegram import Telegram
             return Telegram(name, cfg)
         raise KeyError(f"pl chat: unknown adapter {ad_type!r}")
+    if name in ADAPTERS:
+        return ADAPTERS[name]
     if name == "telegram":
         from pl.chat.telegram import Telegram
         return Telegram
@@ -91,8 +125,17 @@ def cmd_chat(argv: list[str]) -> int:
     p_list = sub.add_parser("list"); p_list.add_argument("--json", action="store_true")
     p_rm = sub.add_parser("remove"); p_rm.add_argument("name"); p_rm.add_argument("--yes", action="store_true")
     p_test = sub.add_parser("test"); p_test.add_argument("name")
+    p_route = sub.add_parser("route")
+    p_route.add_argument("kind", choices=["gates", "alerts", "digest"])
+    p_route.add_argument("name", nargs="+")
 
     a = ap.parse_args(argv)
+    if a.action == "route":
+        code, msg = route(a.kind, a.name)
+        print(msg, file=sys.stderr if code else sys.stdout)
+        if code:
+            raise SystemExit(code)
+        return 0
     if a.action == "add":
         if not a.yes and not sys.stdin.isatty():
             print("pl chat add: pass --yes when running without a terminal", file=sys.stderr)
