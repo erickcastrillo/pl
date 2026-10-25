@@ -117,7 +117,7 @@
   pl sandbox create|status|start|stop|destroy [--yes]
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
                           work folder and worktrees folder; --yes destroys the VM without asking
-  pl worktrees bootstrap PATH [--dry-run]
+  pl worktrees bootstrap PATH [--dry-run] [--card ID]
                           copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
@@ -352,7 +352,8 @@ def _main():
     p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc", "bootstrap"])
     p.add_argument("path", nargs="?", help="bootstrap: the new worktree")
     p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
-    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied and linked")
+    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
+    p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")

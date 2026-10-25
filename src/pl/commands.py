@@ -1009,11 +1009,35 @@ def cmd_outbox(a):
 
 
 def cmd_worktrees_bootstrap(a):
+    log_path = C.STATE_DIR / "runs" / f"{re.sub(r'[^a-zA-Z0-9_.-]', '-', a.card)}-setup.log" if a.card else None
+    failures = []
     try:
-        for note in worktrees.bootstrap_worktree(worktrees.main_checkout(Path.cwd()), Path(a.path).expanduser().resolve(), a.dry_run):
+        for note in worktrees.bootstrap_worktree(worktrees.main_checkout(Path.cwd()), Path(a.path).expanduser().resolve(),
+                                                 a.dry_run, log_path, failures):
             print(note)
     except ValueError as e:
         raise SystemExit(f"pl worktrees bootstrap: {e}")
+    for failure in failures:
+        print(f"{failure['reason']}:\n{failure['output']}", file=sys.stderr)
+        if a.card:
+            record_bootstrap_failure(a.card, failure)
+    if a.card and not failures and not a.dry_run:
+        clear_bootstrap_failure(a.card)
+
+
+def record_bootstrap_failure(card_ref, failure):
+    c = find_card(card_ref)
+    parts = sections(c.get("description"))
+    note = f"{failure['reason']}:\n{failure['output']}"
+    parts["BOOTSTRAP"] = (parts["BOOTSTRAP"].rstrip() + "\n\n" + note) if parts.get("BOOTSTRAP") else note
+    update(c["id"], description=check_size(render(parts)), metadata={"bootstrap_error": failure})
+
+
+def clear_bootstrap_failure(card_ref):
+    c = find_card(card_ref)
+    if (c.get("metadata") or {}).get("bootstrap_error"):
+        update(c["id"], metadata={"bootstrap_error": None})
+
 
 def cmd_sync(a):
     from pl import ghquota, outbox
