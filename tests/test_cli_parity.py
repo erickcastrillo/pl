@@ -108,3 +108,52 @@ def test_no_config_rename_leaked_into_strings():
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and leak.search(node.value):
                 offenders.append(f"{p.name}:{node.lineno}: {node.value[:60]!r}")
     assert offenders == []
+
+
+def test_every_console_action_has_a_pl_command():
+    import importlib
+    import inspect
+    import pkgutil
+    from textual.app import App
+    from textual.screen import Screen
+    from textual.widget import Widget
+    import pl.tui
+    from pl.tui.parity import COMMANDS, NAV
+
+    for modinfo in pkgutil.iter_modules(pl.tui.__path__):
+        mod = importlib.import_module(f"pl.tui.{modinfo.name}")
+        for _, cls in inspect.getmembers(mod, inspect.isclass):
+            if not cls.__module__.startswith("pl.tui"):
+                continue
+            if not issubclass(cls, (Screen, Widget, App)):
+                continue
+            bindings = list(getattr(cls, "BINDINGS", [])) + list(getattr(cls, "CARD_BINDINGS", []))
+            for b in bindings:
+                act = b.action if hasattr(b, "action") else str(b)
+                act_name = act.split("(")[0]
+                assert (
+                    f"{cls.__name__}.{act_name}" in COMMANDS
+                    or act_name in COMMANDS
+                    or act_name in NAV
+                    or act_name.removeprefix("app.") in NAV
+                ), f"unmapped console action: {cls.__name__}.{act_name}"
+
+
+def test_every_mapped_command_parses(tmp_path, monkeypatch):
+    from pl import cli
+    from pl.tui.parity import COMMANDS
+
+    prof = tmp_path / ".pl-fake"
+    prof.mkdir()
+    (prof / "config.toml").write_text('[tracker]\nkind = "github-project"\nowner = "o"\nrepo = "r"\n')
+    monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    for key, cmd in sorted(COMMANDS.items()):
+        words = cmd.split()[:2]
+        monkeypatch.setattr(sys, "argv", [*words, "--help"])
+        try:
+            cli.main()
+        except SystemExit as exc:
+            assert exc.code in (0, None), f"{key}: {cmd} failed with exit {exc.code}"
+
