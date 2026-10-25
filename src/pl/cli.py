@@ -127,6 +127,7 @@ from pl.move_agent import cmd_move_agent
 from pl.standup import cmd_standup
 from pl.usage import cmd_usage
 from pl.watch import cmd_watch
+from pl.util import BadInput
 
 
 PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFIG_DIR)"
@@ -144,6 +145,17 @@ class VersionAction(argparse.Action):
 
 
 def main():
+    try:
+        return _main()
+    except SystemExit as e:
+        if not isinstance(e.code, str):
+            raise
+        reason = "; ".join(l.strip() for l in e.code.splitlines() if l.strip())
+        print(reason if reason.startswith("pl") else f"pl: {reason}", file=sys.stderr)
+        raise SystemExit(2 if isinstance(e, BadInput) else 1) from None
+
+
+def _main():
     # First pass: only a --profile given before the subcommand picks the pl profile.
     pre = argparse.ArgumentParser(prog="pl", add_help=False)
     pre.add_argument("--profile"); pre.add_argument("rest", nargs=argparse.REMAINDER)
@@ -238,7 +250,7 @@ def main():
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
-        raise SystemExit(NO_PROFILE)
+        raise BadInput(NO_PROFILE)
     if not a.cmd:
         if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
             return cmd_watch(argparse.Namespace(interval=None, once=False, plain=False))

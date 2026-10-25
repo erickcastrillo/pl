@@ -143,7 +143,7 @@ def test_without_a_profile_commands_refuse_but_help_and_profiles_work(fake_home,
     monkeypatch.setattr(sys, "argv", ["pl", "list"])
     with pytest.raises(SystemExit) as e:
         cli.main()
-    assert str(e.value) == NO_PROFILE
+    assert e.value.code == 2 and capsys.readouterr().err.strip() == NO_PROFILE
     monkeypatch.setattr(sys, "argv", ["pl", "--help"])
     with pytest.raises(SystemExit) as e:
         cli.main()

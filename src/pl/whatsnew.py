@@ -125,6 +125,8 @@ ENTRIES = [
        "chat approvals: reply with notes to send back, /stop pauses outward actions", "pl"),
     _e("2026-10-23.06", "Discord chat connector: approve, edit and send back gates from Discord",
        "machine.toml [connectors.discord]; buttons and Send back modal", "pl chat test discord"),
+    _e("2026-10-24.01", "Exit codes for scripts: 0 done, 1 failed, 2 bad input, with a one-line reason",
+       "every pl command; an unknown card or column now exits 2 (it was 1)", "pl card nosuch; echo $?"),
 ]
 
 

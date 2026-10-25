@@ -20,13 +20,13 @@ from pl.board import (card, cards, check_size, col_id, col_name, find_card, fres
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
-from pl.util import age, notify, now_iso, parse_iso, short_id, slug_of, tmux
+from pl.util import BadInput, age, notify, now_iso, parse_iso, short_id, slug_of, tmux
 
 
 def cmd_idea(a):
     text = a.text.strip()
     if not text:
-        raise SystemExit("pl idea: the idea text is empty")
+        raise BadInput("pl idea: the idea text is empty")
     direct = not intake_configured()     # no [intake]: the idea goes straight into the pipeline's Inbox
     line = text.splitlines()[0].strip() if direct else text
     title = a.title or (line if len(line) <= 70 else line[:70].rsplit(" ", 1)[0])
@@ -34,7 +34,7 @@ def cmd_idea(a):
     for d in a.doc:
         p = Path(d).expanduser().resolve()
         if not p.is_file():
-            raise SystemExit(f"pl idea: no such file {d}")
+            raise BadInput(f"pl idea: no such file {d}")
         docs.append(str(p))
         body.append(f"## Attached: {p.name} ({p})")
         try:
@@ -255,7 +255,7 @@ def cmd_approve(a):
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
         return
     if col != "Plan for review" and not a.force:
-        raise SystemExit(f"pl approve: card is in '{col}', not 'Plan for review' (use --force to override)")
+        raise BadInput(f"pl approve: card is in '{col}', not 'Plan for review' (use --force to override)")
     parts = sections(c.get("description"))
     path = plan_path(c)
     edited = edited_plan(c, path)
@@ -420,7 +420,7 @@ def cmd_move(a):
     --pr URL first records the pull request in metadata.pr_urls (once), from a fresh read, then moves."""
     pr = getattr(a, "pr", None)
     if pr is not None and not PR_URL_RE.fullmatch(pr):
-        raise SystemExit(f"pl move: --pr {pr!r} is not a GitHub pull request URL (https://github.com/OWNER/REPO/pull/N)")
+        raise BadInput(f"pl move: --pr {pr!r} is not a GitHub pull request URL (https://github.com/OWNER/REPO/pull/N)")
     cid = None
     if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
         fresh_next()     # it writes what it read: never from a copy that may be minutes old
@@ -536,7 +536,7 @@ def cmd_section(a):
             print(text.rstrip("\n"))
         return
     if name not in WRITABLE:
-        raise SystemExit(f"pl section: only SPEC, DESIGN or PLAN can be written, not {name}")
+        raise BadInput(f"pl section: only SPEC, DESIGN or PLAN can be written, not {name}")
     text = _section_source(a.from_)
     if not text.strip():
         raise SystemExit("pl section: the text is empty; nothing was written")

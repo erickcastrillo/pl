@@ -8,6 +8,7 @@ import time
 
 from pl import config as C
 from pl import ghquota, trackers
+from pl.util import BadInput
 
 
 # ---------- board access (thin wrappers over the configured tracker; names and signatures are a compat contract) ----------
@@ -22,7 +23,7 @@ def lists():
 
 def col_id(name):
     if name not in lists():
-        raise SystemExit(f"pl: the board has no column {name!r} (for Inbox run: pl board init)")
+        raise BadInput(f"pl: the board has no column {name!r} (for Inbox run: pl board init)")
     return lists()[name]["id"]
 
 
@@ -136,7 +137,7 @@ def pick(token, cs, who="pl", min_prefix=1):
     hits = matches(token, cs, min_prefix)
     if len(hits) != 1:
         some = f": {', '.join(c['id'] for c in hits[:10])}; give the full id" if hits else ""
-        raise SystemExit(f"{who}: {len(hits)} cards match {token!r}{some}")
+        raise BadInput(f"{who}: {len(hits)} cards match {token!r}{some}")
     return hits[0]
 
 
