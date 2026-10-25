@@ -67,7 +67,7 @@ def resolve(src):
     ref = src["ref"]
     if SHA_RE.fullmatch(ref):
         return ref
-    out = _git(["git", "ls-remote", _url(src), ref or "HEAD"])
+    out = _git(["git", "ls-remote", "--", _url(src), ref or "HEAD"])
     for line in out.splitlines():
         sha = line.split("\t")[0]
         if SHA_RE.fullmatch(sha):
@@ -108,7 +108,9 @@ def _json_flags(p):
 def inventory(root, path):
     """Every file under root/path, the code in them flagged by kind, and what kind of source it is."""
     root = Path(root).resolve()
-    base = root / path if path else root
+    base = Path(os.path.realpath(root / path)) if path else root
+    if not base.is_relative_to(root):
+        raise Refused(f"{path} leads outside the source")
     if not base.exists():
         raise Refused(f"no such path at the pinned commit: {path}")
     files, flags, skills = [], [], []
@@ -116,7 +118,7 @@ def inventory(root, path):
         dirs[:] = sorted(x for x in dirs if x != ".git")
         for n in sorted(names) + [x for x in dirs if os.path.islink(os.path.join(d, x))]:
             p = Path(d, n)
-            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(root)):
+            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(base)):
                 raise Refused(f"{p.relative_to(root)} is a credential file or a link out of the source")
             if p.is_dir():
                 continue

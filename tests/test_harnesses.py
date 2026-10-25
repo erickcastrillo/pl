@@ -1,4 +1,5 @@
 """WP7: agents run under Claude Code, Codex or Antigravity; every command is built from quoted template tokens."""
+import json
 import re
 import shlex
 import subprocess
@@ -536,6 +537,21 @@ def test_run_waiting_reads_gate_markers_and_idle_time(fake_home, monkeypatch, te
     assert agents.run_waiting(RUN_W, {"s1": {"status": status}}) == want
 
 
+@pytest.mark.parametrize("command, status, want", [
+    ("zsh", "idle", "exited"),                  # the agent left: its pane is back at the shell
+    ("claude", "idle", None),
+    ("zsh", "busy", None),                      # a busy session is working, whatever the pane runs
+])
+def test_run_waiting_says_exited_when_the_pane_is_back_at_a_shell(fake_home, monkeypatch, command, status, want):
+    monkeypatch.setattr(agents, "pane_exists", lambda p: True)
+
+    def run(argv, **kw):
+        out = command if "#{pane_current_command}" in argv else str(int(time.time()))
+        return types.SimpleNamespace(returncode=0, stdout=out + "\n", stderr="")
+    monkeypatch.setattr(harnesses, "_run", run)
+    assert agents.run_waiting(RUN_W, {"s1": {"status": status}}) == want
+
+
 def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None):
     started = []
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ask)   # the permission-prompt screen check
@@ -562,6 +578,16 @@ def test_a_waiting_run_agent_frees_its_slot_and_is_never_started_twice(fake_home
     new = _auto("bbbb0002", "Approved")
     assert _pass(monkeypatch, [idle, new], "waiting (nothing-runnable)") == [("bbbb0002", "run")]
     assert _pass(monkeypatch, [idle, new], None) == []   # a working run agent still holds the only slot
+
+
+def test_an_exited_run_agent_holds_no_live_run_place(fake_home, monkeypatch, capsys):
+    gone = _auto("aaaa0001", "In progress", worker=dict(RUN_W))
+    new = _auto("bbbb0002", "Approved")
+    assert _pass(monkeypatch, [gone, new], "exited", max_runs=1) == [("bbbb0002", "run")]
+    assert "run agent exited; its slot is free" in capsys.readouterr().out
+    two = [_auto(f"aaaa000{i}", "In progress", worker={**RUN_W, "window": f"@{i}"}) for i in (1, 2)]
+    assert _pass(monkeypatch, [*two, new], "exited", max_runs=1) == [("bbbb0002", "run")]   # exited windows fill no live cap
+    assert _pass(monkeypatch, [*two, new], "waiting (idle 31 min)", max_runs=1) == []        # idle ones still do
 
 
 @pytest.mark.parametrize("tag, label", [("split", "split — see child cards"), ("parked", "held")])
@@ -852,3 +878,30 @@ def test_a_loop_whose_template_bypasses_permissions_is_refused(fake_home, fake_t
         dispatch.ensure_services({}, [], {}, False, None)
     assert not sent
 
+
+
+def test_claude_launch_uses_strict_mcp_config_with_only_team_servers(fake_home, fake_tmux, monkeypatch):
+    from pl import connectors
+    monkeypatch.setenv("PL_MACHINE_DIR", str(fake_home / "machine"))
+    (fake_home / "machine").mkdir()
+    connectors.path().write_text('[connectors.docs]\ncommand = "docs-mcp"\nteams = ["acme"]\n'
+                                 '[connectors.billing]\ncommand = "b-mcp"\nteams = ["billing"]\n')
+    c = {"id": "abc", "title": "T", "metadata": {"profile": "acme"}}
+    dispatch.start_worker(c, "spec", 1, False)
+    argv = shlex.split(fake_tmux[0][0])
+    mcp = [a for a in argv if a.startswith("--mcp-config=")]
+    assert len(mcp) == 1 and "--strict-mcp-config" in argv
+    servers = json.loads(open(mcp[0].split("=", 1)[1]).read())["mcpServers"]
+    assert list(servers) == ["docs"]
+
+
+def test_every_builtin_harness_has_a_login_command():
+    assert set(harnesses.LOGIN) == set(harnesses.BUILTINS)
+    for n, b in harnesses.BUILTINS.items():
+        assert harnesses.login_argv(harnesses.get(n))[0] == b.bin
+
+
+def test_login_argv_is_empty_for_an_unknown_harness():
+    h = harnesses.BUILTINS["claude"]
+    assert harnesses.login_argv(type("H", (), {"name": "mine"})()) == []
+    assert harnesses.login_argv(h) == ["claude", "/login"]

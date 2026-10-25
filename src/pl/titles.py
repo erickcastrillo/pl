@@ -1,9 +1,10 @@
-"""pl titles check: plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree. Reads only."""
+"""pl titles: check plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree (--fix repairs the
+one-sided ones), and number plan cards (next, set)."""
 import json
 import re
 import sys
 
-from pl import board
+from pl import board, ideas
 from pl.util import short_id
 
 TITLE_RE = re.compile(r"^\s*plan\s+(\d+)\s+slice\s+(\d+)\s*:", re.I)
@@ -12,6 +13,13 @@ TITLE_RE = re.compile(r"^\s*plan\s+(\d+)\s+slice\s+(\d+)\s*:", re.I)
 def title_pair(title):
     m = TITLE_RE.match(title or "")
     return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+PREFIX_RE = re.compile(r"^\s*plan\s+\d+\s+slice\s+\d+\s*:\s*", re.I)
+
+
+def strip_prefix(title):
+    return PREFIX_RE.sub("", title or "", count=1).strip()
 
 
 def _num(v):
@@ -54,14 +62,97 @@ def drift(cs):
     return sorted(rows, key=lambda r: (str(r["plan"] or r["title_plan"]), str(r["slice"] or r["title_slice"]), r["id"]))
 
 
-def cmd_titles(a):
+def _holders(cs):
+    held = {}
+    for c in cs:
+        for pair in {title_pair(c["title"]), meta_pair(c.get("metadata") or {})}:
+            if _has(pair) and None not in pair:
+                held.setdefault(pair, set()).add(c["id"])
+    return held
+
+
+def fix_rows(rows, cs, dry_run):
+    held, fixed = _holders(cs), []
+    for r in rows:
+        meta, title = (r["plan"], r["slice"]), (r["title_plan"], r["title_slice"])
+        pair = title if _has(title) else meta
+        one_sided = _has(title) != _has(meta) and None not in pair
+        row = {**r, "action": "skipped", "new_title": None}
+        if one_sided and held.get(pair, set()) <= {r["id"]}:
+            if _has(meta):
+                row.update(action="rename", new_title=ideas.plan_title(*meta, strip_prefix(r["title"])))
+                if not dry_run:
+                    board.update(r["id"], title=row["new_title"])
+            else:
+                row["action"] = "write metadata"
+                if not dry_run:
+                    board.update(r["id"], metadata={"plan": title[0], "slice": title[1]})
+        elif one_sided:
+            row["reason"] = f"{_pair(*pair)} is used by more than one card"
+        fixed.append(row)
+    return fixed
+
+
+def fix_line(r, dry_run):
+    who = short_id(r["id"])
+    if r["action"] == "rename":
+        return f"{'would rename' if dry_run else 'renamed'} {who}: {r['title']!r} -> {r['new_title']!r}"
+    if r["action"] == "write metadata":
+        return (f"{'would write' if dry_run else 'wrote'} metadata {_pair(r['title_plan'], r['title_slice'])} on {who} "
+                "(title unchanged)")
+    return f"skipped {who} {r['title']!r}: {r['reason']}; fix by hand with pl titles set"
+
+
+def _read_cards():
     try:
-        cs = [c for c in board.cards() if board.col_name(c["list_id"]) != "Done"]
+        return board.cards()
     except SystemExit as e:
         if isinstance(e.code, str):
             print(e.code, file=sys.stderr)
         raise SystemExit(2 if e.code else 0)
+
+
+def next_plan(cs):
+    seen = [n for c in cs for n in (title_pair(c["title"])[0], meta_pair(c.get("metadata") or {})[0])
+            if isinstance(n, int) and not isinstance(n, bool)]
+    return 1 + max(seen, default=0)
+
+
+def set_plan(token, plan, slice_no):
+    if plan < 1 or slice_no < 1:
+        raise SystemExit("pl titles set: --plan and --slice are whole numbers from 1")
+    cs = _read_cards()
+    c = board.pick(token, cs, "pl titles set")
+    for o in cs:
+        if o["id"] != c["id"] and (plan, slice_no) in (title_pair(o["title"]), meta_pair(o.get("metadata") or {})):
+            raise SystemExit(f"pl titles set: Plan {plan} slice {slice_no} is already {o['id']} {o['title']!r}")
+    new = ideas.plan_title(plan, slice_no, strip_prefix(c["title"]))
+    board.update(c["id"], title=new, metadata={"plan": plan, "slice": slice_no})
+    print(f"{c['id']}: {c['title']!r} -> {new!r}")
+
+
+def cmd_titles(a):
+    if a.titles_cmd == "next":
+        print(next_plan(_read_cards()))
+        return
+    if a.titles_cmd == "set":
+        return set_plan(a.id, a.plan, a.slice)
+    if a.dry_run and not a.fix:
+        raise SystemExit("pl titles check: --dry-run goes with --fix")
+    every = _read_cards()
+    cs = [c for c in every if board.col_name(c["list_id"]) != "Done"]
     rows = drift(cs)
+    if a.fix:
+        rows = fix_rows(rows, every, a.dry_run)
+        if a.json:
+            print(json.dumps(rows, indent=2))
+        elif not rows:
+            print(f"titles: no card needs fixing ({len(cs)} plan cards checked)")
+        for r in rows if not a.json else ():
+            print(fix_line(r, a.dry_run))
+        if any(r["action"] == "skipped" for r in rows):
+            raise SystemExit(1)
+        return
     if a.json:
         print(json.dumps(rows, indent=2))
     elif not rows:

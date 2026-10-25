@@ -110,9 +110,9 @@ class IdeasView(Widget):
     #idea-keys, #idea-status { height: 1; color: $text-muted; }
     #idea-brief { width: 54; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
-    BINDINGS = [Binding("n", "new", "new idea"), Binding("d", "discard", "discard"), Binding("r", "rename", "rename"),
-                Binding("h", "harness", "harness"), Binding("e", "edit_brief", "edit brief"),
-                Binding("A", "approve", "approve brief"), Binding("ctrl+s", "skip", "skip question")]
+    BINDINGS = [Binding("n", "new", "new idea"), Binding("d", "discard", "discard"), Binding("f2", "rename", "rename"),
+                Binding("H", "harness", "harness"), Binding("e", "edit_brief", "edit brief"),
+                Binding("A", "approve", "approve brief"), Binding("ctrl+n", "skip", "skip question")]
 
     def __init__(self):
         super().__init__()
@@ -127,8 +127,8 @@ class IdeasView(Widget):
                     yield Static("", id="idea-transcript")
                 yield Static("", id="idea-status")
                 yield IdeaInput(id="idea-input", soft_wrap=True, show_line_numbers=False)
-                yield Static(Text("enter send · ctrl+j new line · ctrl+s skip question · e edit brief · "
-                                  "A approve · h harness · n new · d discard · r rename", style="dim"), id="idea-keys")
+                yield Static(Text("enter send · ctrl+j new line · ctrl+n skip question · e edit brief · "
+                                  "A approve · H harness · n new · d discard · F2 rename", style="dim"), id="idea-keys")
             yield Static("", id="idea-brief")
 
     def on_mount(self):

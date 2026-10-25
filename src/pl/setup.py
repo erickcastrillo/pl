@@ -440,6 +440,7 @@ def ask_attention(answers, flags):
 
 LOCAL_MODEL_PROMPT = ("Use a local model (Gemma 4 on Ollama) for small jobs like the standup summary? "
                       "Data stays on this machine. [Y/n]: ")
+EMBED_MODEL = "nomic-embed-text"
 OLLAMA_DOWNLOAD = "https://ollama.com/download"
 
 
@@ -542,7 +543,18 @@ def build_doc(a):
         doc["code_host"].pop("labels", None)
     if a.get("local_model"):
         doc["local_model"] = dict(a["local_model"])
+        if a["local_model"].get("enabled") is True:
+            doc["models"] = {"local": models_local(a["local_model"])}
     return doc
+
+
+def models_local(lm):
+    """[models.local] for a new profile: summarise on today's model, embed once its model is pulled."""
+    from pl import local_model
+    table = {"summarise": lm.get("model") or local_model.DEFAULTS["model"]}
+    if local_model.pulled(EMBED_MODEL, local_model.models(lm) or set()):
+        table["embed"] = EMBED_MODEL
+    return table
 
 
 def merged_doc(a):
@@ -879,11 +891,12 @@ def cmd_setup(argv: list[str], profile=None):
         bak = d / f"config.toml.bak-{time.strftime('%Y%m%d-%H%M%S')}"
         with os.fdopen(os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
             f.write(a["old_bytes"])
-        if errs := C.validate(doc):   # checked before the old file is replaced, so it never needs restoring
+        if errs := C.validate(doc) or C.check_models(doc)[0]:   # checked before the old file is replaced, so it never needs restoring
             print(f"pl setup: not saved; {d / 'config.toml'} is unchanged:\n" + "\n".join(f"  {e}" for e in errs),
                   file=sys.stderr)
             raise SystemExit(3)
-        C.save(doc, d / "config.toml")   # temp file 0600, fsync, os.replace
+        for w in C.save(doc, d / "config.toml"):   # temp file 0600, fsync, os.replace
+            print(f"warning: {w}", file=sys.stderr)
         print(f"updated {_tilde(d)}/config.toml (the old one is {bak.name})")
     else:
         doc = build_doc(a)
@@ -895,7 +908,10 @@ def cmd_setup(argv: list[str], profile=None):
         print(f"created {_tilde(d)}/config.toml")
         write_notify_script(a, d, flags.force)
     _install_builtins()
-    errs = C.validate(doc)
+    bad, warns = C.check_models(doc)
+    for w in warns:
+        print(f"warning: {w}", file=sys.stderr)
+    errs = C.validate(doc) or bad
     if errs:
         print("pl setup: the profile was written but does not pass its checks; edit "
               f"{d / 'config.toml'}:\n" + "\n".join(f"  {e}" for e in errs), file=sys.stderr)
