@@ -33,9 +33,12 @@ class FakeMultipass:
     def __init__(self):
         self.vms = {}
         self.calls = []
+        self.inputs = []
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
+        if "input" in kw:
+            self.inputs.append((list(argv), kw["input"]))
         cmd = argv[1] if len(argv) > 1 else ""
         if cmd == "launch":
             name = argv[argv.index("--name") + 1]
@@ -97,7 +100,7 @@ def test_config_reads_the_sandbox_table(fake_home):
         '[sandbox]\nenabled = true\ncpus = 4\nmemory = "8G"\n'
     )
     C.load("t")
-    assert sandbox.settings() == {"enabled": True, "cpus": 4, "memory": "8G", "disk": "20G"}
+    assert sandbox.settings() == {"enabled": True, "cpus": 4, "memory": "8G", "disk": "20G", "allow": []}
 
 
 def test_validate_checks_the_sandbox_table():
@@ -110,7 +113,7 @@ def test_validate_checks_the_sandbox_table():
         ({"cpus": True}, "sandbox.cpus must be a whole number of at least 1"),
         ({"memory": 4}, 'sandbox.memory must be a size like "4G" or "512M"'),
         ({"disk": "lots"}, 'sandbox.disk must be a size like "4G" or "512M"'),
-        ({"image": "x"}, "sandbox.image is not a setting; the keys are enabled, cpus, memory, disk"),
+        ({"image": "x"}, "sandbox.image is not a setting; the keys are enabled, cpus, memory, disk, allow"),
     ]
     for sb, expected_err in bad_cases:
         errs = C.validate({"sandbox": sb})
@@ -380,4 +383,90 @@ def test_the_session_bearer_works_only_for_its_card(fake_home):
         assert "refused" in exc.value.message
     finally:
         srv.stop()
+
+
+
+def fake_resolver(host, port):
+    mapping = {
+        "api.anthropic.com": [(2, None, None, None, ("1.1.1.10", 0))],
+        "api.openai.com": [(2, None, None, None, ("2.2.2.10", 0))],
+        "generativelanguage.googleapis.com": [(2, None, None, None, ("3.3.3.10", 0))],
+        "github.com": [(2, None, None, None, ("140.82.112.4", 0))],
+        "api.github.com": [(2, None, None, None, ("140.82.112.5", 0))],
+        "allowed.host.com": [(2, None, None, None, ("4.4.4.10", 0)),
+                             (10, None, None, None, ("2001:db8::4", 0, 0, 0))],
+    }
+    if host in mapping:
+        return mapping[host]
+    raise OSError(f"unknown host: {host}")
+
+
+def test_the_ruleset_drops_by_default_and_allows_only_listed_hosts():
+    assert sandbox.SANDBOX_HOSTS["claude"] == ["api.anthropic.com"]
+    assert sandbox.SANDBOX_HOSTS["codex"] == ["api.openai.com"]
+    assert sandbox.SANDBOX_HOSTS["antigravity"] == ["generativelanguage.googleapis.com"]
+
+    # Base ruleset: drops by default, allows DNS and harness hosts, no code host by default
+    text = sandbox.ruleset(harness="claude", resolver=fake_resolver)
+    assert "policy drop;" in text
+    assert "udp dport 53 accept" in text
+    assert "tcp dport 53 accept" in text
+    assert "1.1.1.10" in text
+    assert "140.82.112.4" not in text
+    assert "evil.com" not in text
+
+    # With code_host, custom allow list (host and CIDR), and endpoint port
+    text2 = sandbox.ruleset(
+        harness="claude",
+        endpoint_port=9090,
+        allow=["allowed.host.com", "192.168.1.0/24"],
+        include_code_host=True,
+        resolver=fake_resolver,
+    )
+    assert "policy drop;" in text2
+    assert "tcp dport 9090 accept" in text2
+    assert "1.1.1.10" in text2
+    assert "140.82.112.4" in text2
+    assert "140.82.112.5" in text2
+    assert "4.4.4.10" in text2
+    assert "192.168.1.0/24" in text2
+    assert "2001:db8::4" in text2
+    assert "evil.com" not in text2
+
+
+def test_a_bad_allow_entry_is_refused():
+    good = {"sandbox": {"allow": ["github.com", "api.github.com", "10.0.0.0/8", "192.168.1.1"]}}
+    assert C.validate(good) == []
+
+    bad_cases = [
+        ({"allow": "not-a-list"}, "sandbox.allow must be a list of host names or CIDRs"),
+        ({"allow": ["http://github.com"]}, "must be a host name or CIDR"),
+        ({"allow": ["github.com:443"]}, "must be a host name or CIDR"),
+        ({"allow": ["github.com/path"]}, "must be a host name or CIDR"),
+        ({"allow": ["bad host with spaces"]}, "must be a host name or CIDR"),
+        ({"allow": ["999.999.999.999"]}, "must be a host name or CIDR"),
+        ({"allow": ["; sudo rm -rf /"]}, "must be a host name or CIDR"),
+        ({"allow": [123]}, "must be a host name or CIDR"),
+    ]
+    for sb, expected_err in bad_cases:
+        errs = C.validate({"sandbox": sb})
+        assert any(expected_err in e for e in errs), f"Expected {expected_err!r} in {errs}"
+
+
+def test_the_ruleset_goes_on_stdin_not_argv(fake_mp):
+    fake_mp.vms["pl-sbx-test"] = {"state": "Running", "mounts": {}, "argv": []}
+    sandbox.apply_egress_rules("pl-sbx-test", harness="claude", endpoint_port=8080, resolver=fake_resolver)
+
+    exec_calls = [c for c in fake_mp.calls if c[1] == "exec"]
+    assert len(exec_calls) == 1
+    argv = exec_calls[0]
+    assert argv == [sandbox.MULTIPASS, "exec", "pl-sbx-test", "--", "sudo", "nft", "-f", "-"]
+    assert not any("policy drop" in str(arg) for arg in argv)
+    assert not any("table inet" in str(arg) for arg in argv)
+
+    assert len(fake_mp.inputs) == 1
+    input_argv, input_text = fake_mp.inputs[0]
+    assert input_argv == argv
+    assert "policy drop;" in input_text
+    assert "tcp dport 8080 accept" in input_text
 
