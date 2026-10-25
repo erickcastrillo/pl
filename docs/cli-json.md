@@ -17,8 +17,10 @@ is not part of the document; `src/pl/jsonout.py` (`SHAPES`) maps each command to
 `pl card <id> --json`
 
 ```
-{"id", "title", "column", "tags": [], "updated_at", "metadata": {}, "sections": {"NAME": chars}}
+{"id", "title", "column", "tags": [], "updated_at", "metadata": {}, "sections": {"NAME": chars},
+ "caps": {"minutes", "tokens"}, "spent": {"minutes", "tokens"}}
 ```
+`caps` is the stage's [caps.<stage>] (empty when none); `spent` is what the agent has used (tokens is null when the harness does not count them).
 
 ## section
 `pl section <id> NAME --json` (read form). A card without that section exits 1 with the reason on stderr.

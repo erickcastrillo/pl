@@ -13,14 +13,14 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, ideas, move_agent, pods, recall, trackers, worktrees
+from pl import audit, events, ideas, move_agent, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
-from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stop_worker
+from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
-from pl.util import BadInput, age, notify, now_iso, parse_iso, short_id, slug_of, tmux
+from pl.util import BadInput, age, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
 
 
 def cmd_idea(a):
@@ -493,18 +493,31 @@ def _strip_email_block(text):
     return text
 
 
+def _caps_line(used):
+    caps, spent = used["caps"], used["spent"]
+    mins = f"{spent['minutes']}/{caps['minutes']} min" if "minutes" in caps else f"{spent['minutes']} min"
+    if spent["tokens"] is None:
+        toks = "tokens: not counted for this harness"
+    else:
+        toks = f"tokens: {usage.human(spent['tokens'])}" + (f"/{usage.human(caps['tokens'])}" if "tokens" in caps else "")
+    return f"caps: {mins}   {toks}"
+
+
 def cmd_card(a):
     c = find_card(a.id)
     if a.delete:
         trackers.get("tracker").delete(c["id"])
         print(f"deleted {short_id(c['id'])}  {c['title']}")
         return
+    used = card_caps(c, load_state(), time.time(), col_name(c["list_id"]))
     if getattr(a, "json", False):
         emit({"id": c["id"], "title": c["title"], "column": col_name(c["list_id"]), "tags": c.get("tags") or [],
               "updated_at": c.get("updated_at"), "metadata": c.get("metadata") or {},
-              "sections": {k: len(v) for k, v in sections(c.get("description")).items()}})
+              "sections": {k: len(v) for k, v in sections(c.get("description")).items()}, **used})
         return
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
+    if used["caps"]:
+        print(_caps_line(used))
     if c.get("unreadable"):
         print("metadata: unreadable\n" + str(c["unreadable"])[:2000])
     else:

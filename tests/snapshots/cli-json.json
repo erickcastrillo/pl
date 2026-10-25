@@ -24,6 +24,11 @@
   },
   "sections": {
    "SPEC": "int"
+  },
+  "caps": {},
+  "spent": {
+   "minutes": "int",
+   "tokens": "int"
   }
  },
  "list": {

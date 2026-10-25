@@ -29,7 +29,8 @@
                           hold a card (the parked tag, other tags kept): the dispatcher starts no agent on it; its
                           running agent is not stopped. unhold removes the tag and the reason
   pl board init           create the Inbox column if the board lacks it
-  pl card <id> [--delete] show a card's sections and metadata, or delete it
+  pl card <id> [--delete|--json]
+                          show a card's sections, metadata and stage caps, or delete it
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN

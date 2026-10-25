@@ -128,6 +128,54 @@ def stop_worker(c, w, meta=None, live=True):
     return None
 
 
+def cap_spent(c, w, st, now):
+    """(active minutes, tokens or None) of the card's agent against its stage caps. The time it sat on a usage-limit
+    screen is not counted: the clock is kept in the dispatcher state and advances once per pass. Tokens are counted
+    for Claude Code only."""
+    clocks = st.setdefault("cap_clock", {})
+    rec = clocks.get(c["id"]) or {}
+    if rec.get("started_at") != w.get("started_at"):
+        rec = {"started_at": w.get("started_at"), "at": now, "parked": 0}
+    if w.get("limit_hit"):
+        rec["parked"] += now - rec["at"]
+    rec["at"] = now
+    clocks[c["id"]] = rec
+    started = parse_iso(w["started_at"]) if w.get("started_at") else now
+    tokens = usage._spent(usage._load(), {w.get("session_id")}, started) if (w.get("harness") or "claude") == "claude" else None
+    return max(0.0, now - started - rec["parked"]) / 60, tokens
+
+
+def card_caps(c, st, now, col=None):
+    """{"caps": the stage's caps, "spent": {"minutes", "tokens"}} for pl card; spent is 0 minutes without an agent."""
+    w = (c.get("metadata") or {}).get("worker") or {}
+    stage = w.get("stage") or stage_for(c, col or col_name(c["list_id"]))
+    minutes, tokens = cap_spent(c, w, st, now) if w else (0.0, 0)
+    return {"caps": C.CAPS.get(stage) or {}, "spent": {"minutes": round(minutes), "tokens": tokens}}
+
+
+def _check_caps(c, w, st, now):
+    """The note for an agent at its stage's time or token cap, else None."""
+    caps = C.CAPS.get(w.get("stage")) or {}
+    minutes, tokens = cap_spent(c, w, st, now)
+    if caps.get("minutes") and minutes >= caps["minutes"]:
+        return f"stopped at the {caps['minutes']}-minute cap"
+    if caps.get("tokens") and tokens is not None and tokens >= caps["tokens"]:
+        return f"stopped at the {usage.human(caps['tokens'])}-token cap"
+    return None
+
+
+def stop_at_cap(c, w, note):
+    """Stop the agent the way pl drop does (its worktree and branch stay) and move the card to Manual with the note.
+    True when stopped."""
+    if no := stop_worker(c, w, {"cap_note": note, "manual_reason": note}):
+        print(f"{short_id(c['id'])}  {w.get('stage')} agent is {note}; could not stop it ({no})")
+        return False
+    update(c["id"], column="Manual", description=f"{(c.get('description') or '').rstrip()}\n\n## Stopped at a cap\n{note}\n")
+    events.emit("capped", c["id"], stage=w.get("stage"), note=note)
+    print(f"{short_id(c['id'])}  {w.get('stage')} agent {note}; the card waits in Manual")
+    return True
+
+
 def _api_restart(st, c, w, err, failed):
     """Stop an agent left idle by an API error so its stage starts fresh; at most API_RESTARTS a day per card,
     then an alert. True when stopped."""
@@ -794,6 +842,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
                 and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh
             m, w, status = c["metadata"], {}, "none"
+        if w and status == "alive" and not busy and not dry and w.get("stage") == stage and C.CAPS \
+                and (note := _check_caps(c, w, st, time.time())) and stop_at_cap(c, w, note):
+            continue
         # a worker for an earlier stage that finished its job: clean its window once it has gone idle
         if w and w.get("stage") != stage and stage_complete(c, col, w["stage"]) and status == "alive":
             rec = reg.get(sid) or {}
