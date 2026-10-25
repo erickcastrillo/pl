@@ -432,9 +432,10 @@ def cmd_usage(a):
         print(json.dumps(card_report(scan(), since, cards or [])))
         return
     if getattr(a, "json", False):
-        from pl import jsonout
+        from pl import jsonout, local_jobs
         rows = totals(scan(), since, by, cards)
         usage = {g: dict(zip(("input", "output", "cache_read", "cache_write", "cost", "unpriced"), r)) for g, r in rows.items()}
-        jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage})
+        jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage,
+                     "local_jobs": local_jobs.stats(since)})
         return
     print(table(scan(), since, by, cards))
