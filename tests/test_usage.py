@@ -536,3 +536,16 @@ def test_usage_json_shows_each_local_jobs_calls_median_and_fallback_rate(fake_ho
     assert out["local_jobs"] == {"route": {"calls": 4, "median_ms": 400, "fallback_rate": 0.25},
                                  "title": {"calls": 1, "median_ms": 40, "fallback_rate": 0.0}}
     assert out["usage"]["main"]["input"] == 100 and out["usage"]["main"]["output"] == 10
+
+
+def test_usage_json_gives_each_group_its_token_total(fake_home, capsys):
+    write(transcript(fake_home), [turn("m1", inp=100, out=10, cr=5, model="claude-test-1")])
+    group = _usage_json(capsys, by="model")["usage"]["claude-test-1"]
+    assert group["total"] == sum(group[k] for k in ("input", "output", "cache_read", "cache_write")) == 115
+
+
+def test_json_with_github_is_refused_before_anything_is_fetched(fake_home, monkeypatch):
+    from pl import ghquota
+    monkeypatch.setattr(ghquota, "report", lambda: pytest.fail("fetched"))
+    with pytest.raises(SystemExit, match="--json"):
+        usage.cmd_usage(argparse.Namespace(since=None, by=None, json=True, github=True))

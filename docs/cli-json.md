@@ -43,9 +43,9 @@ not yet in Done (or dropped); both are empty when there are none. `intake` is em
 
 ```
 {"since", "by", "state_transitions": {"hook", "screen"},
- "usage": {group: {"input", "output", "cache_read", "cache_write", "cost", "unpriced"}}}
+ "usage": {group: {"input", "output", "cache_read", "cache_write", "total", "cost", "unpriced"}}}
 ```
-`--by card --json` prints minutes, tokens and caps per card and stage instead.
+`--by card --json` prints minutes, tokens and caps per card and stage instead. `--json` does not combine with `--github`.
 
 ## standup
 `pl standup [--since S] --json` (`--markdown`, `--slack` and `--summary` only change the text form)
