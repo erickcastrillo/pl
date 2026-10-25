@@ -91,3 +91,46 @@ def test_fts_syntax_in_a_query_is_treated_as_words():
         recall.search(q)
     assert recall.search("alpha OR zzz") == []
     assert len(recall.search("alpha beta")) == 1
+
+
+def _embedding(monkeypatch, vectors, fail=False):
+    """Set [models.local] embed and fake local_jobs.embed: vectors maps a word to a vector; a text takes the first match."""
+    monkeypatch.setattr(C, "MODELS", {"local": {"embed": "nomic-embed-text"}})
+
+    def embed(texts):
+        if fail:
+            raise OSError("ollama down")
+        return [next((v for w, v in vectors.items() if w in t), [0.0, 0.0, 1.0]) for t in texts]
+    monkeypatch.setattr("pl.local_jobs.embed", embed)
+
+
+def test_a_query_with_other_words_of_the_same_meaning_finds_the_entry(monkeypatch):
+    _embedding(monkeypatch, {"divide": [1.0, 0.1, 0.0], "split": [0.9, 0.2, 0.0]})
+    near = recall.add("split the change into 3 PRs", "rejection", "s")
+    recall.add("unrelated note about lunch", "fact", "s")
+    rows, mode = recall.search_with_mode("divide the work")
+    assert mode == "full-text+semantic"
+    assert [e["id"] for e in rows] == [near]
+
+
+def test_without_embeddings_search_is_full_text_and_says_so():
+    recall.add("split the change into 3 PRs", "rejection", "s")
+    rows, mode = recall.search_with_mode("divide the work")
+    assert (rows, mode) == ([], "full-text")
+    assert recall.search_with_mode("split")[1] == "full-text"
+
+
+def test_an_embed_failure_still_saves_the_entry(monkeypatch):
+    _embedding(monkeypatch, {}, fail=True)
+    i = recall.add("split the change into 3 PRs", "rejection", "s")
+    assert recall.get(i)["text"] == "split the change into 3 PRs"
+    assert [e["id"] for e in recall.search("split")] == [i]
+    assert recall.search_with_mode("split")[1] == "full-text"
+
+
+def test_reindex_fills_in_missing_vectors(monkeypatch):
+    i = recall.add("split the change into 3 PRs", "rejection", "s")
+    _embedding(monkeypatch, {"divide": [1.0, 0.0, 0.0], "split": [1.0, 0.1, 0.0]})
+    assert recall.reindex() == 1
+    assert recall.reindex() == 0
+    assert [e["id"] for e in recall.search("divide")] == [i]

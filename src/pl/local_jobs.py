@@ -129,3 +129,19 @@ def card_summary(card) -> str | None:
     parts = [(k, v) for k, v in board.sections(card.get("description")).items() if k]
     body = f"{card.get('title') or ''}\n\n{parts[-1][1] if parts else card.get('description') or ''}".strip()
     return run("summarise", body)[0]
+
+
+def embed(texts) -> list[list[float]] | None:
+    """One vector per text from the embed model, or None when none is set or the call fails."""
+    s = local_model.job_settings()
+    model = s["models"].get("embed")
+    if not model or local_model.url_problem(s["host"], s["allow_lan"] is True):
+        return None
+    try:
+        body = local_model._request(str(s["host"]).rstrip("/") + "/api/embed", {"model": model, "input": list(texts)},
+                                    local_model._timeout(s))
+        vectors = json.loads(body)["embeddings"]
+    except Exception:  # noqa: BLE001 - no vector is not an error for the caller
+        return None
+    ok = len(vectors) == len(texts) and all(v and all(isinstance(x, (int, float)) for x in v) for v in vectors)
+    return vectors if ok else None
