@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, ideas, move_agent, pods, recall, trackers, usage, worktrees
+from pl import audit, events, harnesses, ideas, move_agent, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -472,7 +472,29 @@ def move_to(ref, column, cid=None):
     return cid
 
 
+def _check_trust():
+    accts = [n for n in C.PROFILES if harnesses.account_harness(n).name == "claude"]
+    if not accts:
+        print("no Claude accounts in this profile")
+        return
+    folders = [(label, d) for label, d in (("work", C.WORK_DIR), ("worktrees", C.WORKTREES_DIR)) if d]
+    untrusted = False
+    for acct in accts:
+        for label, folder in folders:
+            ok, reason = harnesses.folder_trust(acct, folder)
+            note = f" ({reason})" if reason else ""
+            print(f"  {acct:<10} {label:<10} {'trusted' if ok else 'NOT trusted'}  {harnesses._shown(folder)}{note}")
+            if not ok:
+                untrusted = True
+                fix = harnesses.trust_command(harnesses.account_harness(acct), acct, str(folder))
+                print(f'      fix: {fix}, choose "Yes, I trust this folder" and exit')
+    if untrusted:
+        raise SystemExit(1)
+
+
 def cmd_profiles(a):
+    if getattr(a, "check_trust", False):
+        return _check_trust()
     st = profile_state()
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):

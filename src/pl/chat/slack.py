@@ -6,6 +6,7 @@ import urllib.request
 from typing import Any
 
 from pl import util
+from pl.audit import CHAT_UNKNOWN_SENDER
 from pl.chat.inbound import InboundEvent, audit_record, dispatch_action
 from pl.trackers import mcp
 import websockets.sync.client as wsc
@@ -124,7 +125,7 @@ class Slack:
         u = payload.get("user")
         user_id = str(u.get("id", "")) if isinstance(u, dict) else str(payload.get("user_id", ""))
         if not user_id or user_id not in self.allow:
-            audit_record("chat_unknown_sender", connector=self.name, sender_id=user_id)
+            audit_record(CHAT_UNKNOWN_SENDER, connector=self.name, sender_id=user_id)
             return None
         itype = payload.get("type")
         if itype == "block_actions":

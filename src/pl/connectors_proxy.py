@@ -17,7 +17,7 @@ def is_write_forbidden(connector: str, tool: str) -> bool:
 
 
 def record_tool_call(connector: str, tool: str, access: str = "read", result: str = "ok") -> None:
-    audit.append("connector.tool", target=connector, detail={"tool": tool, "access": access, "result": result})
+    audit.append(audit.CONNECTOR_TOOL, target=connector, detail={"tool": tool, "access": access, "result": result}, access=access)
 
 
 def call_tool(connector: str, tool: str, args: dict | None = None, access: str = "read", handler=None):

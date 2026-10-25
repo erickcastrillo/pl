@@ -116,6 +116,51 @@ def test_an_edited_copy_is_never_overwritten(lib, shipped):
     assert (lib / "pl-spec" / "SKILL.md").read_text() == mine
 
 
+PLAN_SKILL = "pl-plan"
+
+
+def _plan_skill_text():
+    return (skills.BUILTIN_DIR / PLAN_SKILL / "SKILL.md").read_text()
+
+
+def test_pl_plan_files_later_slices_with_plan_and_slice():
+    text = _plan_skill_text()
+    for needed in ("--plan", "--slice", "--title", "pl titles next", "pl titles set"):
+        assert needed in text
+    assert int(skills.VERSION_RE.search(text).group(1)) >= 6
+    assert 'pl idea "Slice <k> of <card title>' not in text
+    ideas = [line for block in re.findall(r"```.*?```", text, re.S) for line in block.splitlines() if line.strip().startswith("pl idea")]
+    assert ideas and all("--plan" in line for line in ideas)
+    assert "(after <id>)" in text and not re.search(r'--title "[^"]*\(after', text)
+
+
+def test_pl_plan_records_a_refused_number_and_names_slices_by_card():
+    text = _plan_skill_text()
+    assert "Decisions" in text and "guess" in text
+    later = text.split("## Later slices")[1].split("## Decisions")[0]
+    assert "Slice <k>" in later and "Plan <N>" in later and "<card id>" in later
+
+
+def test_an_unedited_pl_plan_v5_is_updated_to_v6(lib, shipped):
+    real = _plan_skill_text()
+    older = shipped / PLAN_SKILL / "SKILL.md"
+    older.write_text(re.sub(r"^pl-builtin-version: \d+$", "pl-builtin-version: 5", real, count=1, flags=re.M))
+    skills.install_builtins()
+    older.write_text(real)
+    version = skills.VERSION_RE.search(real).group(1)
+    assert skills.install_builtins() == [f"updated built-in pl-plan to version {version}"]
+
+
+def test_an_edited_pl_plan_is_kept_when_v6_ships(lib, shipped):
+    real = _plan_skill_text()
+    older = shipped / PLAN_SKILL / "SKILL.md"
+    older.write_text(re.sub(r"^pl-builtin-version: \d+$", "pl-builtin-version: 5", real, count=1, flags=re.M))
+    skills.install_builtins()
+    (lib / PLAN_SKILL / "SKILL.md").write_text(older.read_text() + "\nMy own rule.\n")
+    older.write_text(real)
+    assert skills.install_builtins() == ["built-in pl-plan has an update; your edited copy was kept"]
+
+
 def test_a_users_own_skill_of_that_name_is_kept(lib):
     (lib / "pl-run").mkdir(parents=True)
     (lib / "pl-run" / "SKILL.md").write_text("---\nname: pl-run\ndescription: mine\n---\nmine\n")
@@ -661,7 +706,7 @@ def test_pl_plan_splits_into_independent_slices():
                    "(after <id>)"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 5" in text
+    assert "pl-builtin-version: 6" in text
 
 
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
