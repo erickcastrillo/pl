@@ -443,4 +443,4 @@ def move_card(ref, target=None, confirm=None, dry_run=False):
 
 def cmd_move_agent(a):
     confirm = None if a.yes else (lambda q: ask("move-agent", q + " [y/N] ").strip().lower() in ("y", "yes"))
-    print(move_card(a.card, a.account, confirm, a.dry_run))
+    print(move_card(a.card, a.account, confirm, getattr(a, "dry_run", False)))

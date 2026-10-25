@@ -544,7 +544,7 @@ def cmd_profiles(a):
     if getattr(a, "check_trust", False):
         return _check_trust()
     st = profile_state()
-    if a.reset and a.dry_run:
+    if a.reset and getattr(a, "dry_run", False):
         print(f"would un-park {a.reset}")
         return
     if a.reset:
@@ -1029,7 +1029,7 @@ def cmd_pause(a):
     if paused():
         print(f"already paused since {paused().get('since', '?')[:16]} UTC")
         return
-    if a.dry_run:
+    if getattr(a, "dry_run", False):
         print("would pause: no new agents would start from the next dispatcher pass")
         return
     C.ATTN.mkdir(exist_ok=True)
@@ -1041,7 +1041,7 @@ def cmd_resume(a):
     if not paused():
         print("not paused")
         return
-    if a.dry_run:
+    if getattr(a, "dry_run", False):
         print("would resume: the next dispatcher pass would start waiting cards again")
         return
     C.PAUSE_FILE.unlink()
