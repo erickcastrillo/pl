@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from pl import accounts, assistant, config as C, harnesses, manager, profiles, util
+from pl import accounts, assistant, config as C, harnesses, local_model, manager, profiles, recall, util
 from pl.manager import machine_dir
 from pl.util import mask, now_iso, parse_iso, short_id
 
@@ -424,6 +424,22 @@ def conv_show(conv: str) -> list[dict]:
         return []
 
 
+DISTIL_SYSTEM = (
+    "Extract at most 5 durable decisions, facts, commitments, or user preferences from the user's messages. "
+    "Only use statements made by the user. Do not include tool results, temporary details, or queries. "
+    "Output ONLY a JSON array of objects with keys 'kind' (one of: 'decision', 'fact', 'commitment', 'preference') "
+    "and 'text' (a concise statement). If nothing durable was decided or stated, return []."
+)
+
+
+def _append_turn(conv: str, item: dict) -> None:
+    """Add a raw record (saved ids, an undo) to the conversation file, 0600."""
+    p = _conv_dir() / f"{conv}.jsonl"
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
+        f.write(json.dumps(item) + "\n")
+
+
 def prune(now=None, dry_run: bool = False) -> list[Path]:
     """Delete conversations older than [brain] keep_days (default 180). Return deleted paths."""
     if now is None:
@@ -460,9 +476,93 @@ def prune(now=None, dry_run: bool = False) -> list[Path]:
     return deleted
 
 
+def _distil_model(user_text: str) -> list[dict]:
+    ans = local_model.ask(DISTIL_SYSTEM, user_text)
+    if not ans:
+        return []
+    try:
+        m = re.search(r"\[.*\]", ans, re.DOTALL)
+        items = json.loads(m.group(0) if m else ans)
+    except Exception:
+        return []
+    if not isinstance(items, list):
+        return []
+    valid = []
+    for it in items[:5]:
+        if isinstance(it, dict) and it.get("text"):
+            k = str(it.get("kind", "decision")).lower()
+            valid.append({
+                "kind": k if k in ("decision", "fact", "commitment", "preference") else "decision",
+                "text": str(it["text"]),
+            })
+    return valid
+
+
+def end(conv: str) -> str:
+    turns = conv_show(conv)
+    user_turns = [str(t.get("text", "")).strip() for t in turns if t.get("role") in ("user", "owner") and t.get("text")]
+    saved_ids = []
+    if user_turns:
+        for it in _distil_model("\n".join(user_turns))[:5]:
+            try:
+                eid = recall.add(text=it["text"], kind=it["kind"], source=f"brain:{conv}", link=f"pl brain show {conv}")
+                if eid:
+                    saved_ids.append(eid)
+            except Exception:
+                continue
+    if saved_ids:
+        _append_turn(conv, {"role": "saved", "saved_ids": saved_ids})
+    return f"saved {len(saved_ids)} · undo: pl brain undo {conv}"
+
+
+def remember(conv: str, text: str | None = None) -> str:
+    if text is None and ("remember this" in conv.lower() or " " in conv):
+        text, conv = conv, "default"
+    clean = re.sub(r"^remember\s+this[:\s]*", "", text or "", flags=re.I).strip() or (text or "").strip()
+    kind = "decision" if "decision" in clean.lower() else "preference"
+    eid = recall.add(clean, kind=kind, source=f"brain:{conv}", link=f"pl brain show {conv}")
+    _append_turn(conv, {"role": "saved", "saved_ids": [eid]})
+    return f"saved 1 · undo: pl brain undo {conv}"
+
+
+def undo(conv: str) -> str:
+    turns = conv_show(conv)
+    saved, undone = [], set()
+    for t in turns:
+        if t.get("role") == "saved" and isinstance(t.get("saved_ids"), list):
+            saved.extend(t["saved_ids"])
+        elif t.get("role") == "undo" and isinstance(t.get("undone_ids"), list):
+            undone.update(t["undone_ids"])
+    to_undo = [eid for eid in saved if eid not in undone]
+    for eid in to_undo:
+        recall.forget(eid)
+    if to_undo:
+        _append_turn(conv, {"role": "undo", "undone_ids": to_undo})
+    return f"undone {len(to_undo)}"
+
+
+def check_idle(now: float | None = None) -> list[str]:
+    now = time.time() if now is None else now
+    idle = C.BRAIN.get("idle_end", 30) * 60 if hasattr(C, "BRAIN") and isinstance(C.BRAIN, dict) else 1800
+    d = _conv_dir()
+    ended = []
+    if d.exists():
+        for p in d.glob("*.jsonl"):
+            if p.name.endswith((".sources.jsonl", ".cards.jsonl")):
+                continue
+            turns = conv_show(p.stem)
+            if turns and not any(t.get("role") in ("saved", "undo") for t in turns) and now - p.stat().st_mtime >= idle:
+                end(p.stem)
+                ended.append(p.stem)
+    return ended
+
+
 def cmd_brain(a):
-    """pl brain show <conv> [--json] | pl brain prune [--dry-run]."""
+    """pl brain show <conv> [--json] | prune [--dry-run] | end <conv> | undo <conv>."""
     cmd = getattr(a, "brain_cmd", None)
+    if cmd in ("end", "undo"):
+        print(end(a.conv) if cmd == "end" else undo(a.conv))
+        return 0
     if cmd == "show":
         turns = conv_show(a.conv)
         if getattr(a, "json", False):

@@ -73,7 +73,7 @@
                           machine-wide kill switch: holds approved cards with outward actions; off releases them
   pl chat add|list|remove|test|route
                           messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
-  pl brain show CONV [--json] | prune [--dry-run]
+  pl brain show CONV [--json] | prune [--dry-run] | end CONV | undo CONV
                           a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
                           ask the central read-only brain across every pipeline and connector
@@ -338,6 +338,8 @@ def _main():
     p = sub.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
     q = pb.add_parser("show"); q.add_argument("conv"); q.add_argument("--json", action="store_true")
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
+    q = pb.add_parser("end"); q.add_argument("conv")
+    q = pb.add_parser("undo"); q.add_argument("conv")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):

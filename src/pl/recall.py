@@ -1,18 +1,37 @@
 """Agent memory: entries about runs, approvals and decisions, in a SQLite store with full-text search."""
 import os
+import re
 import secrets
 import sqlite3
 import sys
 from datetime import datetime, timezone
 
 from pl import config as C
+from pl import util
 from pl.board import sections
 
-KINDS = ("run", "approval", "rejection", "decision", "fact", "preference")
+KINDS = ("run", "approval", "rejection", "decision", "fact", "preference", "commitment")
+
+
+class Refused(Exception):
+    pass
+
+
+def _luhn(s: str) -> bool:
+    d = [int(c) for c in s if c.isdigit()]
+    return 13 <= len(d) <= 19 and sum((x * 2 - 9 if x * 2 > 9 else x * 2) if i % 2 else x for i, x in enumerate(reversed(d))) % 10 == 0
+
+
+def _clean(text: str) -> str:
+    if util.mask(text) != text:
+        raise Refused("memory takes no text holding secrets")
+    return re.sub(r"\b(?:\d[ -]*?){13,19}\b", lambda m: ("****" + re.sub(r"\D", "", m.group(0))[-4:]) if _luhn(m.group(0)) else m.group(0), text)
+
+
 _SCHEMA = """
 CREATE TABLE entries(id TEXT PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL,
   card TEXT, pipeline TEXT, pod TEXT, client TEXT, contact TEXT, author TEXT, created_at TEXT NOT NULL,
-  replaced_by TEXT);
+  replaced_by TEXT, link TEXT);
 CREATE VIRTUAL TABLE entries_fts USING fts5(text, content='entries');
 CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN
   INSERT INTO entries_fts(rowid, text) VALUES (new.rowid, new.text);
@@ -43,13 +62,20 @@ def _db():
         if "fts5" in str(e).lower():
             raise RuntimeError("pl: this Python's SQLite has no FTS5") from e
         raise
+    cols = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+    if "link" not in cols:   # a store made before entries could carry a link
+        con.execute("ALTER TABLE entries ADD COLUMN link TEXT")
+        con.commit()
     return con
 
 
 def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, contact=None, author=None,
-        replaces=None):
+        replaces=None, link=None):
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
+    if os.environ.get("PL_UNTRUSTED") == "1":   # an agent reading untrusted content may not write memory
+        raise Refused("untrusted source")
+    text = _clean(text)
     pipeline = pipeline or C.PROFILE_NAME
     pod = pod or pipeline
     entry_id = "m-" + secrets.token_hex(4)
@@ -57,8 +83,9 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
     con = _db()
     try:
         with con:
-            con.execute("INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)",
-                        (entry_id, kind, text, source, card, pipeline, pod, client, contact, author, now))
+            con.execute("INSERT INTO entries(id, kind, text, source, card, pipeline, pod, client, contact, author, created_at, link) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (entry_id, kind, text, source, card, pipeline, pod, client, contact, author, now, link))
             if replaces:
                 con.execute("UPDATE entries SET replaced_by=? WHERE id=?", (entry_id, replaces))
     finally:
@@ -173,3 +200,16 @@ def for_prompt(card, pod, cap=8, max_tokens=1500):
             break
         lines.append(line)
     return "\n".join(lines)
+
+
+def forget(entry_id) -> bool:
+    """Delete one entry (the Brain tab's undo of what a conversation saved)."""
+    try:
+        con = _db()
+        try:
+            with con:
+                return con.execute("DELETE FROM entries WHERE id = ?", (entry_id,)).rowcount > 0
+        finally:
+            con.close()
+    except Exception:
+        return False
