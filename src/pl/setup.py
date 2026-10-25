@@ -24,6 +24,7 @@ import tomlkit
 from pl import config as C
 from pl import harnesses, profiles
 from pl.trackers import github
+from pl.util import ask
 
 HARNESSES = {"claude": "claude", "codex": "codex", "agy": "antigravity"}   # choice -> built-in harness
 BINARIES = {"claude": "claude", "codex": "codex", "agy": "agy"}
@@ -92,7 +93,7 @@ _sleep = time.sleep
 
 def _input(prompt):
     try:
-        return input(prompt)
+        return ask("setup", prompt)
     except EOFError:
         raise SystemExit("pl setup: setup cancelled, nothing written") from None
 
@@ -879,7 +880,7 @@ def cmd_setup(argv: list[str], profile=None):
     if flags.interactive and _input("Write this profile? [Y/n]: ").strip().lower() in ("n", "no"):
         raise SystemExit("pl setup: nothing written")
     if not a["exists"]:
-        profiles._target(a["slug"])   # appeared while we asked: never overwrite
+        profiles.refuse_existing(profiles._target(a["slug"]))   # appeared while we asked: never overwrite
     url = None
     if "_create" in t:
         a["tracker"], url = _create_project(t, t["owner"], a["gh_config_dir"])
@@ -935,7 +936,7 @@ def cmd_setup(argv: list[str], profile=None):
         print(msg)
         try:
             yes = flags.interactive and "uv tool update-shell" in msg and \
-                input("Run uv tool update-shell now? [y/N]: ").strip().lower() in ("y", "yes")
+                _input("Run uv tool update-shell now? [y/N]: ").strip().lower() in ("y", "yes")
         except EOFError:
             yes = False
         r = _run(["uv", "tool", "update-shell"]) if yes else None

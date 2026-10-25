@@ -26,6 +26,9 @@ def _path():
 
 def emit(kind, card_id=None, **detail):
     """Append one event line. Never raises on a disk problem: losing an event must not stop the dispatcher."""
+    from pl import trackers
+    if trackers.dry_run():
+        return
     if kind == "error" and "message" in detail:
         detail["message"] = str(detail["message"])[:ERROR_CHARS]
     rec = {**detail, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "profile": C.PROFILE_NAME,

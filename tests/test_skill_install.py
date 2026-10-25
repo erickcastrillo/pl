@@ -197,3 +197,91 @@ def test_ls_remote_ends_options_before_the_url(env):
     run(yes=True)
     ls = next(a for a in env["calls"] if a[:2] == ["git", "ls-remote"])
     assert ls[2] == "--"
+
+
+def _plugin(up, name="kit"):
+    (up / ".claude-plugin").mkdir()
+    (up / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": name}))
+    (up / "hooks").mkdir()
+    (up / "hooks" / "hooks.json").write_text('{"hooks": {}}')
+    (up / ".mcp.json").write_text('{"mcpServers": {}}')
+
+
+def _marketplace(up, plugins):
+    (up / ".claude-plugin").mkdir()
+    (up / ".claude-plugin" / "marketplace.json").write_text(json.dumps({"plugins": plugins}))
+
+
+def test_a_plugin_installs_its_skills_and_lists_its_hooks_separately(env):
+    _plugin(env["up"])
+    code, out = run("github:acme/kit@main", yes=False)
+    assert code == 0
+    assert out.index("Skills (installed)") < out.index("Hooks and MCP servers (listed, not enabled)")
+    held = out[out.index("Hooks and MCP servers"):out.index("Runs code")]
+    assert "hooks/hooks.json" in held and ".mcp.json" in held and "review" not in held
+    assert (env["lib"] / "review" / "SKILL.md").is_file()
+    assert json.loads((env["lib"] / ".pl-sources.json").read_text())["review"]["plugin"] == "kit"
+    kept = env["lib"] / ".pl-plugins" / f"kit@{SHA[:7]}"
+    assert (kept / "hooks" / "hooks.json").is_file() and (kept / "skills" / "review" / "SKILL.md").is_file()
+    assert [i["name"] for i in skills.scan() if i["account"] == skills.LIBRARY] == ["review"]
+
+
+def test_a_marketplace_entry_needs_plugin_and_lists_the_choices(env, capsys):
+    _marketplace(env["up"], [{"name": "kit", "source": "./"}, {"name": "extra", "source": "./extra"}])
+    assert run("github:acme/kit@main", yes=True)[0] == 2
+    err = capsys.readouterr().err
+    assert "--plugin" in err and "extra" in err and "kit" in err
+    assert not env["lib"].exists()
+    assert run("github:acme/kit@main", yes=True, plugin="nope")[0] == 2
+    err = capsys.readouterr().err
+    assert "nope" in err and "extra" in err and "kit" in err
+    assert run("github:acme/kit@main", yes=True, plugin="kit")[0] == 0
+    assert json.loads((env["lib"] / ".pl-sources.json").read_text())["review"]["plugin"] == "kit"
+
+
+def test_a_marketplace_entry_in_another_github_repo_is_fetched_there(env):
+    _marketplace(env["up"], [{"name": "kit", "source": {"source": "github", "repo": "other/tools"}}])
+    assert run("github:acme/kit@main", yes=True, plugin="kit")[0] == 0
+    assert ["git", "remote", "add", "origin", "https://github.com/other/tools"] in env["calls"]
+    assert json.loads((env["lib"] / ".pl-sources.json").read_text())["review"]["repo"] == "other/tools"
+
+
+def test_plugin_hooks_are_never_installed_into_an_account(env):
+    _plugin(env["up"])
+    run("github:acme/kit@main", yes=True)
+    assert not (env["lib"] / "review" / "hooks").exists()
+    assert [p.name for p in env["lib"].iterdir() if not p.name.startswith(".")] == ["review"]
+    plugin = skills.plugin_dir()
+    assert plugin is not None and not list(plugin.rglob("hooks.json")) and not list(plugin.rglob(".mcp.json"))
+    assert not list((env["lib"].parent).glob(".claude*"))
+
+
+def test_a_marketplace_source_off_github_exits_2(env, capsys):
+    _marketplace(env["up"], [{"name": "kit", "source": {"source": "url", "url": "https://gitlab.com/acme/kit.git"}}])
+    assert run("github:acme/kit@main", yes=True, plugin="kit")[0] == 2
+    assert "GitHub" in capsys.readouterr().err
+    assert not env["lib"].exists()
+
+
+def _second_skill(up):
+    (up / "skills" / "other").mkdir()
+    (up / "skills" / "other" / "SKILL.md").write_text("---\nname: other\ndescription: d\n---\n")
+
+
+def test_a_plugin_skill_linking_to_a_sibling_skill_is_refused(env, capsys):
+    _plugin(env["up"])
+    _second_skill(env["up"])
+    (env["up"] / "skills" / "review" / "notes.md").unlink()
+    (env["up"] / "skills" / "review" / "notes.md").symlink_to("../other/SKILL.md")
+    code, _ = run("github:acme/kit@main", yes=True)
+    assert code == 2
+    assert "link out of the source" in capsys.readouterr().err
+    assert not (env["lib"] / "review").exists() and not (env["lib"] / ".pl-plugins").exists()
+
+
+def test_a_plugin_skill_linking_inside_its_own_folder_is_installed(env):
+    _plugin(env["up"])
+    (env["up"] / "skills" / "review" / "notes.md").unlink()
+    (env["up"] / "skills" / "review" / "notes.md").symlink_to("check.py")
+    assert run("github:acme/kit@main", yes=True)[0] == 0
+    assert (env["lib"] / "review" / "notes.md").is_symlink()

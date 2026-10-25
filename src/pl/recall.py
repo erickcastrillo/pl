@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pl import config as C
 from pl import events, jsonout, local_jobs, local_model, util
 from pl.board import sections
+from pl.util import ask
 
 SEMANTIC_MIN = 0.55
 KINDS = ("run", "approval", "rejection", "decision", "fact", "preference", "commitment")
@@ -301,6 +302,10 @@ def record_run(c, stage, worker):
 
 def note(text, kind, source, card):
     """add() for callers that must carry on when the store fails: the failure is printed, never raised."""
+    from pl import trackers
+    if trackers.dry_run():
+        print(f"would remember ({kind}) on {card}")
+        return None
     try:
         return add(text, kind, source, card=card, author=C.USER_EMAIL or None)
     except Exception as e:
@@ -388,10 +393,8 @@ def _cmd_forget(a):
         print(json.dumps({"would_delete": n}) if a.json else f"would delete {n} entries")
         return 0
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit(2)
         try:
-            ok = input(f"Forget every memory entry linked to contact {a.contact}? [y/N]: ")
+            ok = ask("recall forget", f"Forget every memory entry linked to contact {a.contact}? [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):

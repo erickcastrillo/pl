@@ -132,9 +132,14 @@ def test_new_profile_refuses_existing_and_round_trips(fake_home, capsys):
     profiles.new_profile("work")
     d = fake_home / ".pl-work"
     assert (d / "config.toml").is_file()
+    original = (d / "config.toml").read_text()
     assert "alias pl-work='PL_CONFIG_DIR=~/.pl-work pl'" in capsys.readouterr().out
+    profiles.new_profile("work")
+    assert "already exists, unchanged" in capsys.readouterr().out
+    (d / "config.toml").write_text("# edited\n")
     with pytest.raises(SystemExit, match="exists"):
         profiles.new_profile("work")
+    (d / "config.toml").write_text(original)
     C.load("work")
     assert C.GATES["spec"] is True
     for k, v in src.items():

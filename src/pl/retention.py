@@ -6,14 +6,13 @@ replaces email content, message snippets and summary with thread: <link>, and se
 import hashlib
 import json
 import re
-import sys
 import time
 from datetime import datetime, timezone
 
 from pl import board, events
 from pl import config as C
 from pl.board import cards
-from pl.util import now_iso, parse_iso, short_id
+from pl.util import ask, now_iso, parse_iso, short_id
 
 RETENTION_EVERY = 86400   # seconds between daily retention passes
 _LAST = {"at": None}
@@ -246,10 +245,8 @@ def forget(contact, *, dry_run=False):
 
 def cmd_forget(a):
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit(2)
         try:
-            ok = input(f"Forget contact {a.contact}? [y/N]: ")
+            ok = ask("forget", f"Forget contact {a.contact}? [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):
