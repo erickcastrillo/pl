@@ -76,16 +76,14 @@ def _db():
 class McpMemory:
     """The memory tools of an MCP server (a connector with role "memory"), returning what the local store returns."""
 
-    def __init__(self, server, timeout=30):
-        self.server, self.timeout = server, timeout
+    def __init__(self, connector):
+        self.connector = connector
 
     def _call(self, tool, args):
-        from pl.trackers import mcp as M
-        key, s = M._session(self.server, self.timeout)
-        res = s.run(lambda session: session.call_tool(tool, args))
-        text = next((c.text for c in res.content if getattr(c, "type", None) == "text"), "")
-        if res.isError:
-            raise RuntimeError(f"pl: memory tool {tool} failed: {util.mask(text)[:200]}")
+        from pl import connectors
+        text = connectors.call(self.connector, tool, args, mode="memory")
+        if not isinstance(text, str):
+            raise RuntimeError(f"pl: memory tool {tool} failed: no text reply")
         try:
             return json.loads(text) if text.strip() else None
         except ValueError:
@@ -112,12 +110,9 @@ class McpMemory:
 def backend():
     """The MCP memory server when a connector has role "memory"; None means the local store."""
     from pl import connectors
-    for _, c in connectors.load().items():
+    for name, c in connectors.load().items():
         if c["enabled"] and "memory" in c.get("role", []):
-            cmd = [c["command"]] if isinstance(c.get("command"), str) else list(c.get("command") or [])
-            server = {"url": c["url"], "headers": c.get("headers") or {}} if c.get("url") else \
-                {"command": cmd[0], "args": [*cmd[1:], *(c.get("args") or [])], "env": c.get("env") or {}}
-            return McpMemory(server)
+            return McpMemory(name)
     return None
 
 

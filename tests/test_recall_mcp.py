@@ -1,12 +1,10 @@
 """The memory MCP backend: a connector with role "memory" serves the entries, and pl serves memory_search."""
 import json
-import types
 
 import pytest
 
 from pl import config as C
 from pl import connectors, mcp_serve, recall
-from pl.trackers import mcp as M
 
 
 @pytest.fixture(autouse=True)
@@ -23,26 +21,23 @@ def fake_home(tmp_path, monkeypatch):
         setattr(C, k, v)
 
 
-class FakeSession:
-    def __init__(self, replies):
-        self.replies = replies
+class FakeHub:
+    def __init__(self):
+        self.replies = {}
         self.calls = []
 
-    def run(self, fn):
-        return fn(self)
-
-    def call_tool(self, tool, args):
+    def call(self, name, tool, args=None, mode=None):
         self.calls.append((tool, args))
-        text = json.dumps(self.replies[tool])
-        return types.SimpleNamespace(isError=False, content=[types.SimpleNamespace(type="text", text=text)])
+        assert name == "hub" and mode == "memory"
+        return json.dumps(self.replies[tool])
 
 
 @pytest.fixture
 def hub(monkeypatch):
-    session = FakeSession({})
+    fake = FakeHub()
     monkeypatch.setattr(connectors, "load", lambda: {"hub": {"role": ["memory"], "enabled": True, "url": "http://hub/mcp"}})
-    monkeypatch.setattr(M, "_session", lambda server, timeout, as_is=False: ("k", session))
-    return session
+    monkeypatch.setattr(connectors, "call", fake.call)
+    return fake
 
 
 def test_cli_search_with_the_mcp_backend_returns_the_servers_results_unchanged(hub):
@@ -104,3 +99,12 @@ def test_a_non_json_reply_is_reported_like_a_server_error(hub, monkeypatch):
     monkeypatch.setattr(json, "dumps", lambda v: "not json")
     with pytest.raises(RuntimeError, match="pl: memory tool memory_get failed"):
         recall.get("m-1")
+
+
+def test_a_memory_connector_with_unapproved_changed_tools_refuses_memory_add(monkeypatch):
+    monkeypatch.setattr(connectors, "load", lambda: {"hub": {"role": ["memory"], "enabled": True, "url": "http://hub/mcp"}})
+    monkeypatch.setattr(connectors, "load_config", lambda: {"hub": {"url": "http://hub/mcp"}})
+    monkeypatch.setattr(connectors, "load_state", lambda: {"hub": {"tools_changed": {"added": ["memory_wipe"]}}})
+    monkeypatch.setattr(connectors, "_transport", lambda cfg: pytest.fail("a refused write must not reach the server"))
+    with pytest.raises(PermissionError, match="memory_add"):
+        recall.add("split into 3 PRs", "decision", "test")
