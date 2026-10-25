@@ -7,6 +7,7 @@ COMMANDS = {
     "PlApp.standup": "pl standup",
     "PlApp.whatsnew": "pl whatsnew",
     "PlApp.update": "pl update",
+    "HomeView.select": "pl profiles",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardsView.drop": "pl drop <id>",
     "CardsView.undrop": "pl undrop <id>",

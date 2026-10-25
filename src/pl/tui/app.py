@@ -1,6 +1,8 @@
 """PlApp: the pl console. One background refresh feeds every view; views never call the board, gh or tmux."""
 import os
 
+from pathlib import Path
+
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
@@ -20,6 +22,7 @@ from pl.tui.cards import CardsView, attention_count, card_count
 from pl.tui.chrome import HELP, TABS, TAB_KEYS, header_text, tabs
 from pl.tui.needs import review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
+from pl.tui.home import HomeView, read as summary_read
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
 from pl.tui.prs import PrsView
@@ -29,7 +32,7 @@ from pl.tui.skills import SkillsView
 from pl.tui.subagents import SubagentsView
 
 LATER = {}
-VIEWS = {"dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
+VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView}
 
@@ -55,7 +58,8 @@ def default_provider():
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
             "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
             "machine": manager.read_status(), "now": _now(snap["rows"]), "alerts": _alerts(),
-            "kill": outward.state()}
+            "kill": outward.state(),
+            "home": [summary_read(d) for d in sorted(Path.home().glob(".pl-*"))]}
 
 
 def _now(rows):
@@ -218,9 +222,11 @@ class PlApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(header_text(None), id="header")
-        with TabbedContent(id="tabs", initial="dashboard"):
-            for tid, name in tabs():
-                with TabPane(f"{TAB_KEYS[tid]} {name}", id=tid):
+        shown_tabs = tabs()
+        initial = "home" if any(t[0] == "home" for t in shown_tabs) else "dashboard"
+        with TabbedContent(id="tabs", initial=initial):
+            for tid, name in shown_tabs:
+                with TabPane(f"{TAB_KEYS.get(tid, '')} {name}".strip(), id=tid):
                     if tid in VIEWS:
                         yield VIEWS[tid]()
                     else:
@@ -451,6 +457,8 @@ class PlApp(App):
         if self.data is None:
             return
         rows = self.data["snapshot"]["rows"]
+        if self.query(HomeView):
+            self.query_one(HomeView).show(self.data)
         self.query_one(DashboardView).show(self.data, self.window)
         self.query_one(PrsView).show(self.data)
         self.query_one(LoopsView).show(self.data)

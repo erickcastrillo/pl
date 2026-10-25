@@ -1,16 +1,25 @@
 """The console chrome: tab list and the header line (canvas row 0)."""
 import time
+from pathlib import Path
 
 from rich.text import Text
 
 from pl import config as C
 
-TABS = [("dashboard", "Dashboard"), ("assistant", "Assistant"), ("ideas", "Ideas"), ("cards", "Pipeline"),
-        ("prs", "Pull requests"), ("loops", "Loops"), ("alerts", "Alerts"), ("activity", "Activity"),
-        ("settings", "Settings"), ("subagents", "Background")]
+
+class _TabsList(list):
+    """Tabs list that yields the standard 0-9 keyed tabs during iteration, while retaining Home."""
+    def __iter__(self):
+        return (t for t in super().__iter__() if t[0] != "home")
+
+
+TABS = _TabsList([("home", "Home"), ("dashboard", "Dashboard"), ("assistant", "Assistant"),
+                  ("ideas", "Ideas"), ("cards", "Pipeline"), ("prs", "Pull requests"),
+                  ("loops", "Loops"), ("alerts", "Alerts"), ("activity", "Activity"),
+                  ("settings", "Settings"), ("subagents", "Background")])
 # tab key = position in this list: 0 Dashboard, 1 Assistant, 2 Ideas, 3 Pipeline, ... 9 Background.
 # Keys stay fixed when tabs() hides the Assistant.
-TAB_KEYS = {tid: str(i) for i, (tid, _) in enumerate(TABS)}
+TAB_KEYS = {"home": "H", **{tid: str(i) for i, (tid, _) in enumerate(TABS)}}
 
 HELP = {
     "dashboard": "What needs you first, then what the agents did in the chosen window. w changes the window, s writes a standup.",
@@ -54,8 +63,10 @@ def show_first_heading(t, is_item):
 
 
 def tabs():
-    """The tabs this console shows: all of them, less the Assistant when [assistant] enabled = false."""
-    return [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]
+    """The tabs this console shows: Home when >= 2 profiles have config.toml, less Assistant when disabled."""
+    count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
+    res = [("home", "Home")] if count >= 2 else []
+    return res + [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]
 
 
 def stopped_by(data):
