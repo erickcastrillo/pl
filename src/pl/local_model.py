@@ -4,8 +4,10 @@ the machine, and there is no API key. Any failure gives None and pl carries on a
 
 The model's answer is untrusted data: it is only displayed, after control characters are stripped and its length
 is capped. It is never run, never put in a shell string and never read as Rich markup."""
+import ipaddress
 import json
 import re
+import sys
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -13,6 +15,11 @@ from pl import config as C
 
 DEFAULTS = {"enabled": False, "url": "http://localhost:11434", "model": "gemma4", "timeout": 30}
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
+JOBS = ("route", "summarise", "title", "embed")
+JOB_DEFAULTS = {"timeout": 30, "allow_lan": False, "route_min_confidence": 0.7}
+FALLBACK_DEFAULTS = {"route": "person", "summarise": "skip", "title": "skip", "embed": "skip"}
+PRIVATE_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10")]
+_warned = set()
 MAX_CHARS = 2000
 # C0 and C1 controls except newline and tab, DEL, and the bidi overrides that reorder text on screen
 CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩]")
@@ -23,16 +30,44 @@ def settings() -> dict:
     return {**DEFAULTS, **(C.LOCAL_MODEL or {})}
 
 
-def url_problem(url) -> str | None:
-    """Why url may not be used (None = fine): it must be http(s) on a loopback host."""
+def _is_private(host) -> bool:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host.endswith(".local")
+    return any(ip in net for net in PRIVATE_NETS)
+
+
+def url_problem(url, allow_lan=False) -> str | None:
+    """Why url may not be used (None = fine): it must be http(s) on a loopback host, or with allow_lan on a
+    private-network host too (never a public address)."""
     try:
         u = urlsplit(url) if isinstance(url, str) else None
         host = u and u.hostname
     except ValueError:
         host = None
-    if not host or u.scheme not in ("http", "https") or host not in LOOPBACK:
+    if not host or u.scheme not in ("http", "https") or not (host in LOOPBACK or allow_lan and _is_private(host)):
         return f"url {url!r} is refused: only a loopback host (localhost, 127.0.0.1, ::1) keeps the text on this machine"
     return None
+
+
+def job_settings() -> dict:
+    """What the local jobs run on: [models.local] over the old [local_model] table, whose model (when enabled)
+    is the summarise model. {host, allow_lan, timeout, route_min_confidence, models: {job: model}, fallback}."""
+    old, ml = settings(), dict((C.MODELS or {}).get("local") or {})
+    models = {"summarise": old["model"]} if old.get("enabled") is True else {}
+    models.update({j: ml[j] for j in JOBS if j in ml})
+    return {**JOB_DEFAULTS, "timeout": old["timeout"], "host": old["url"],
+            **{k: v for k, v in ml.items() if k in ("host", "allow_lan", "timeout", "route_min_confidence")},
+            "models": models, "fallback": {**FALLBACK_DEFAULTS, **(ml.get("fallback") or {})}}
+
+
+def warn_if_lan() -> None:
+    """Once per process, tell on stderr that the configured host is not this machine."""
+    host = urlsplit(str(job_settings()["host"])).hostname
+    if host and host not in LOOPBACK and host not in _warned:
+        _warned.add(host)
+        print(f"local model host {host} is on your network, not this machine", file=sys.stderr)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

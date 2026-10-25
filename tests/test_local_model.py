@@ -13,6 +13,7 @@ from pl import config as C
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
     saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    local_model._warned.clear()
     monkeypatch.setenv("HOME", str(tmp_path))
     for var in ("PL_CONFIG_DIR", "PL_TMUX_SESSION"):
         monkeypatch.delenv(var, raising=False)
@@ -168,3 +169,70 @@ def test_cli_check_fails_when_not_available(calls, fake_home, monkeypatch, capsy
     with pytest.raises(SystemExit) as e:
         cli.main()
     assert e.value.code == 1 and "enabled: yes" in capsys.readouterr().out
+
+
+def _models_local(**kw):
+    C.MODELS = {"local": kw}
+
+
+def test_models_local_sets_a_model_per_job():
+    _models_local(host="http://localhost:11434", route="gemma4:e2b", summarise="gemma4:e4b", embed="nomic-embed-text",
+                  timeout=9, fallback={"route": "person", "title": "cheap"})
+    s = local_model.job_settings()
+    assert s["models"] == {"route": "gemma4:e2b", "summarise": "gemma4:e4b", "embed": "nomic-embed-text"}
+    assert s["host"] == "http://localhost:11434" and s["timeout"] == 9 and s["route_min_confidence"] == 0.7
+    assert s["fallback"] == {"route": "person", "summarise": "skip", "title": "cheap", "embed": "skip"}
+
+
+def test_the_old_local_model_table_maps_to_summarise():
+    C.LOCAL_MODEL = {"enabled": True, "url": "http://127.0.0.1:1", "model": "gemma4:e4b", "timeout": 5}
+    s = local_model.job_settings()
+    assert s["models"] == {"summarise": "gemma4:e4b"} and s["host"] == "http://127.0.0.1:1" and s["timeout"] == 5
+    C.LOCAL_MODEL = {"enabled": False, "model": "gemma4:e4b"}
+    assert local_model.job_settings()["models"] == {}
+    _models_local(summarise="other")
+    C.LOCAL_MODEL = {"enabled": True, "model": "gemma4:e4b"}
+    assert local_model.job_settings()["models"] == {"summarise": "other"}
+
+
+def test_validate_checks_jobs_fallbacks_and_timeout(fake_home):
+    (fake_home / ".claude-cheap").mkdir()
+    good = '[accounts.cheap]\nharness = "claude"\n[models.local]\nhost = "http://localhost:11434"\nroute = "m"\n' \
+           'route_min_confidence = 0.8\ntimeout = 10\n[models.local.fallback]\ntitle = "cheap"\nroute = "person"\n'
+    assert C.validate(tomlkit.parse(good)) == []
+    for bad, key in (('route = ""', "route"), ("title = 3", "title"), ("timeout = 0", "timeout"),
+                     ("route_min_confidence = 2", "route_min_confidence"), ('allow_lan = "yes"', "allow_lan"),
+                     ('api_key = "x"', "api_key"), ('host = "http://example.com"', "loopback"),
+                     ('[models.local.fallback]\nroute = "nobody"', "nobody"),
+                     ('[models.local.fallback]\nchat = "skip"', "chat")):
+        errs = C.validate(tomlkit.parse(f"[models.local]\n{bad}\n"))
+        assert any(key in e for e in errs), (bad, errs)
+
+
+@pytest.mark.parametrize("url", ["http://10.0.0.5:11434", "http://192.168.1.9", "http://172.16.0.2", "http://169.254.1.1",
+                                 "http://box.local:11434", "http://[fd00::1]:11434"])
+def test_a_lan_host_is_refused_without_allow_lan(url):
+    assert "loopback" in local_model.url_problem(url)
+    _models_local(host=url)
+    assert any("loopback" in e for e in C.validate(tomlkit.parse(f'[models.local]\nhost = "{url}"\n')))
+
+
+def test_allow_lan_accepts_a_private_host_and_warns(capsys):
+    url = "http://192.168.1.9:11434"
+    assert local_model.url_problem(url, allow_lan=True) is None
+    assert C.validate(tomlkit.parse(f'[models.local]\nhost = "{url}"\nallow_lan = true\n')) == []
+    _models_local(host=url, allow_lan=True)
+    local_model.warn_if_lan()
+    local_model.warn_if_lan()
+    assert capsys.readouterr().err == "local model host 192.168.1.9 is on your network, not this machine\n"
+
+
+def test_no_warning_for_a_loopback_host(capsys):
+    _models_local(host="http://localhost:11434", allow_lan=True)
+    local_model.warn_if_lan()
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("url", ["http://8.8.8.8", "https://ollama.example.org", "http://10.0.0.5.example.com", "http://[2001:db8::1]"])
+def test_allow_lan_still_refuses_a_public_host(url):
+    assert local_model.url_problem(url, allow_lan=True)
