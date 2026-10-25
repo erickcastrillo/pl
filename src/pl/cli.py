@@ -147,7 +147,7 @@
                           detects the limit on an agent's screen, parks that profile, and restarts the card
                           under the other one); --reset un-parks a profile by hand
   pl pods list [--json] | show NAME [--json]
-                          the pipeline's pods: rules (pod.md), knowledge, skills, plugins and layer budgets
+                          the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
