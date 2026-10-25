@@ -202,6 +202,7 @@ A usage limit hit by one profile parks that account folder for every profile tha
 - [Use pl with GitHub](docs/github.md): Projects or Issues as the tracker, pull requests, a first run.
 - [Use any MCP board server as the tracker](docs/mcp-trackers.md): the tools mapping, security, troubleshooting.
 - [The pl Board Protocol](docs/board-protocol.md): standard tools, card contract, error codes and conformance rules.
+- [Connectors](docs/connectors.md): plug in MCP servers by role, import them from Claude Code, tiers and security.
 - [One dispatcher per profile](docs/dispatcher.md): the single-dispatcher check and keeping pl out of tmux session restore.
 
 ## The card contract

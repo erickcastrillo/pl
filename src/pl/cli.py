@@ -131,7 +131,7 @@
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
-  pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME
+  pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | import --from claude [--add NAME --team T --role R --yes] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
   pl profiles             every pl profile (~/.pl-NAME) and whether its dispatcher runs; warns when two share
@@ -333,6 +333,9 @@ def _main():
     q = pc.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, without any secret")
     q = pc.add_parser("add"); q.add_argument("name"); q.add_argument("command", nargs="*"); q.add_argument("--url"); q.add_argument("--pin", help="the server version you expect; another version counts as a tool change")
     q.add_argument("--yes", action="store_true")
+    q = pc.add_parser("import"); q.add_argument("--from", dest="source", choices=["claude", "codex"], default="claude")
+    q.add_argument("--add", metavar="NAME"); q.add_argument("--team", action="append"); q.add_argument("--role", action="append")
+    q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
