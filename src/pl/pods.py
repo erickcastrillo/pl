@@ -49,8 +49,8 @@ def current():
 
 def launch_pod():
     """The pod whose skills a launch is limited to: only one the profile configures, so a profile without pods keeps the whole library."""
-    pod = current()
-    return pod if pod["name"] in C.PODS else None
+    name = next((n for n in (C.POD or C.PROFILE_NAME, "engineering") if n in C.PODS), None)
+    return find(name) if name else None
 
 
 def names():
