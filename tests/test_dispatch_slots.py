@@ -150,7 +150,8 @@ def test_untracked_stage_windows_holding_only_a_shell_are_closed_and_never_count
     out = (f"@1 %1 {now - 5000} - 0 run-restored zsh\n@2 %2 {now - 5000} - 0 plan-restored bash\n"
            f"@3 %3 {now} - 0 run-fresh zsh\n@5 %5 {now - 5000} pl 0 run-tracked zsh\n")
     calls = _sweep_tmux(monkeypatch, out)
-    assert dispatch.sweep_untracked([_card(1, worker=w)], {}, False, {}) == 0
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    assert dispatch.sweep_untracked([{**_card(1, worker=w), "list_id": "In progress"}], {}, False, {}) == 0
     kills = [c for c in calls if c[:2] == ["tmux", "kill-window"]]
     assert kills == [["tmux", "kill-window", "-t", "@1"], ["tmux", "kill-window", "-t", "@2"]]   # never a tracked one
 
