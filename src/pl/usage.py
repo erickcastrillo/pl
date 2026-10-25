@@ -410,6 +410,8 @@ def card_report(st, since, cards):
 
 
 def cmd_usage(a):
+    if getattr(a, "github", False) and getattr(a, "json", False):
+        raise SystemExit("pl: --json does not apply to --github")
     if getattr(a, "github", False):
         from pl import ghquota
         print(ghquota.report())

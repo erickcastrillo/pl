@@ -349,16 +349,18 @@ def memory_arg(c, stage, dry):
 
 
 def _small_run(c):
-    """True when c's approved PLAN budget fits [stages.run.small] and no rework round is running, so its run agent
-    takes the small model. The PLAN is refetched (a board list cuts descriptions); no call without a small table."""
+    """(lines, files) of c's approved PLAN budget when it fits [stages.run.small] and no rework round is running, so
+    its run agent takes the small model; None otherwise. The PLAN is refetched (a board list cuts descriptions); no call without a small table."""
     small = (C.STAGES.get("run") or {}).get("small")
     if not isinstance(small, dict) or ((c.get("metadata") or {}).get("rework") or {}).get("active"):
-        return False
+        return None
     try:
         budget = harnesses.plan_budget(sections(card(c["id"]).get("description")).get("PLAN"))
     except (RateLimited, OSError):
-        return False
-    return budget is not None and budget[0] <= small["max_files"] and budget[1] <= small["max_lines"]
+        return None
+    if budget is not None and budget[0] <= small["max_files"] and budget[1] <= small["max_lines"]:
+        return budget[1], budget[0]
+    return None
 
 
 def bootstrap_warning(c):
@@ -418,9 +420,11 @@ def start_worker(c, stage, attempts, dry):
         link = reader.extract_thread_link(c)
         prompt += f" fields={shlex.quote(fields_json)} thread={shlex.quote(link)}"
     prompt += questions.prompt_arg(c)
-    small = stage == "run" and _small_run(c)
+    small = _small_run(c) if stage == "run" else None
+    rework_round = stage == "run" and bool(((c.get("metadata") or {}).get("rework") or {}).get("active"))
+    model, why = harnesses.model_reason(h, profile, stage, small, rework_round)
     if dry:
-        print(f"  would start {name} under {profile}{' (small model)' if small else ''}: {prompt}")
+        print(f"  would start {name} under {profile} model {model} ({why}): {prompt}")
         return
     try:
         harnesses.refuse_bypass(h)
@@ -444,7 +448,7 @@ def start_worker(c, stage, attempts, dry):
         update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
                                              "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
                                              "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
-                                             "launch": str(script)},
+                                             "launch": str(script), "model": model, "model_reason": why},
                                   "answered": None})
     except BaseException:   # a rate limit or a failed write: no record, so no window and no agent
         tmux("kill-window", "-t", win, check=False)
@@ -462,7 +466,7 @@ def start_worker(c, stage, attempts, dry):
                                                          servers=None if C.SANDBOX.get("enabled") else stage_servers(profile, stage)), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
-    events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
+    events.emit("started", c["id"], stage=stage, harness=h.name, session=sid, model=model, reason=why)
     print(f"  started {name} under {profile} in {C.TMUX_SESSION}:{win} ({prompt})")
 
 
