@@ -39,6 +39,9 @@ def has_design(c):
 
 def stage_for(c, col):
     if col == "Inbox":
+        for s, cfg in (C.STAGES or {}).items():
+            if cfg.get("reader"):
+                return s
         return "spec"
     if col == "Spec ready":
         if (C.GATES or {}).get("spec") and not (c.get("metadata") or {}).get("spec_approved_at"):
@@ -242,6 +245,13 @@ def memory_arg(c, stage, dry):
 
 
 def start_worker(c, stage, attempts, dry):
+    if (C.STAGES.get(stage) or {}).get("reader"):
+        if dry:
+            print(f"  would run reader for {c['id']}")
+            return
+        from pl import reader
+        reader.run(c, stage=stage, attempts=attempts)
+        return
     h, profile = harnesses.harness_for(stage, c)
     name = f"{stage}-{slug_of(c)[:28]}"      # tmux window name: no colon, so "pipeline:<name>" targets stay unambiguous
     label = f"{stage}:{slug_of(c)[:28]}"     # Claude session display name
@@ -259,6 +269,11 @@ def start_worker(c, stage, attempts, dry):
         prompt += memory_arg(c, stage, dry)
     if not dry:
         prompt = context.launch_prompt(c, stage, prompt)
+    if (C.STAGES.get(stage) or {}).get("from_fields"):
+        from pl import reader
+        fields_json = json.dumps((c.get("metadata") or {}).get("fields") or {})
+        link = reader.extract_thread_link(c)
+        prompt += f" fields={shlex.quote(fields_json)} thread={shlex.quote(link)}"
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return
