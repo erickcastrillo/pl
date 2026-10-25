@@ -134,6 +134,9 @@ ENTRIES = [
        "pl link <id> engineering:<id> --relation built-for"),
     _e("2026-10-25.03", "Triggers: matching mail becomes a card in its pipeline",
        "[triggers.<name>] in profile; runs in dispatcher pass", "pl triggers list"),
+    _e("2026-10-25.04", "Agents ask you questions; pl answer continues the stage",
+       "Pipeline: questions show in pl inbox and in chat; the owner's answer continues the stage",
+       "pl answer <id> \"text\""),
 ]
 
 
