@@ -879,11 +879,12 @@ def cmd_setup(argv: list[str], profile=None):
         bak = d / f"config.toml.bak-{time.strftime('%Y%m%d-%H%M%S')}"
         with os.fdopen(os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
             f.write(a["old_bytes"])
-        if errs := C.validate(doc):   # checked before the old file is replaced, so it never needs restoring
+        if errs := C.validate(doc) or C.check_models(doc)[0]:   # checked before the old file is replaced, so it never needs restoring
             print(f"pl setup: not saved; {d / 'config.toml'} is unchanged:\n" + "\n".join(f"  {e}" for e in errs),
                   file=sys.stderr)
             raise SystemExit(3)
-        C.save(doc, d / "config.toml")   # temp file 0600, fsync, os.replace
+        for w in C.save(doc, d / "config.toml"):   # temp file 0600, fsync, os.replace
+            print(f"warning: {w}", file=sys.stderr)
         print(f"updated {_tilde(d)}/config.toml (the old one is {bak.name})")
     else:
         doc = build_doc(a)
@@ -895,7 +896,10 @@ def cmd_setup(argv: list[str], profile=None):
         print(f"created {_tilde(d)}/config.toml")
         write_notify_script(a, d, flags.force)
     _install_builtins()
-    errs = C.validate(doc)
+    bad, warns = C.check_models(doc)
+    for w in warns:
+        print(f"warning: {w}", file=sys.stderr)
+    errs = C.validate(doc) or bad
     if errs:
         print("pl setup: the profile was written but does not pass its checks; edit "
               f"{d / 'config.toml'}:\n" + "\n".join(f"  {e}" for e in errs), file=sys.stderr)
