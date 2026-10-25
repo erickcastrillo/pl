@@ -114,6 +114,8 @@ ENTRIES = [
        "for you with the failed label", "pl rework --dry-run"),
     _e("2026-10-23.01", "A built-in local board and the pl board protocol",
        "pl setup: the default board for a new non-code pipeline", "pl board check local"),
+    _e("2026-10-23.02", "pl inbox: every gate waiting on you, in every profile",
+       "CLI: pl inbox, or pl inbox --json", "pl inbox"),
 ]
 
 

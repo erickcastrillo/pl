@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, inbox, manager, memory, move_agent, rework, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -711,6 +711,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     low = memory.check_starts(st) if not dry else None
     if not dry:
         board._save(C.STATE_DIR / "agent-waits.json", {"at": time.time(), "windows": waiting})
+        inbox.write(inbox.rows_here(all_cards))
     if not dry and not paused():
         try:   # parked accounts whose next check is due: one cheap call each; a working one is un-parked now
             accounts.check_parked()
