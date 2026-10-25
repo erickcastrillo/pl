@@ -36,6 +36,9 @@ def host(monkeypatch):
         return json.dumps(ns.prs[int(args[2])])
     monkeypatch.setattr(merges.github, "_gh", fake_gh)
     monkeypatch.setattr(merges.board, "cards", lambda: ns.cards)
+    ns.checks = [{"rule": "conflicts", "ok": True, "why": "merges cleanly onto main"}, {"rule": "tests", "ok": True, "why": "local tests passed; CI: none"}]
+    monkeypatch.setattr(merges.merge_check, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(merges.merge_check, "check", lambda pr, base: ns.checks)
     monkeypatch.setattr(merges, "col_name", lambda lid: lid)
     monkeypatch.setattr(agents, "col_name", lambda lid: lid)
     return ns
@@ -43,7 +46,7 @@ def host(monkeypatch):
 
 def _pr(n, files=(("src/a.py", 10, 5),), labels=("pl:ready",), body="", state="OPEN", draft=False):
     return {"number": n, "url": URL.format(n), "state": state, "isDraft": draft, "baseRefName": "main", "body": body,
-            "labels": [{"name": x} for x in labels],
+            "labels": [{"name": x} for x in labels], "statusCheckRollup": [],
             "files": [{"path": p, "additions": a, "deletions": d} for p, a, d in files]}
 
 
@@ -60,7 +63,7 @@ def _add(host, card, pr):
 
 
 def _rules(host, card):
-    j = merges.judge(card, host.prs[int(card["metadata"]["pr_urls"][0].rsplit("/", 1)[1])], host.cards)
+    j = merges.judge(card, host.prs[int(card["metadata"]["pr_urls"][0].rsplit("/", 1)[1])], host.cards, "main")
     return {r["rule"]: r for r in j["rules"]}, j
 
 
@@ -85,8 +88,8 @@ def test_small_clean_pr_passes_size_sensitive_and_deps(host):
     card, _ = _add(host, _card("c1"), _pr(1))
     rules, j = _rules(host, card)
     assert [rules[r]["ok"] for r in ("size", "sensitive", "dependencies")] == [True, True, True]
-    assert rules["tests"]["ok"] is None and rules["conflicts"]["ok"] is None
-    assert j["action"] == "would merge once tests and conflicts pass"
+    assert rules["tests"]["ok"] is True and rules["conflicts"]["ok"] is True
+    assert j["action"] == "would merge"
 
 
 def test_too_big_fails_size_and_tests_lines_do_not_count(host):
@@ -159,8 +162,8 @@ def test_dry_run_prints_every_rule_and_writes_nothing(host, capsys):
     merges.cmd_merges(types.SimpleNamespace(dry_run=True, json=False))
     out = capsys.readouterr().out
     assert "#1 Plan 1 slice 1: ok" in out and "  ok  size:" in out and "  FAIL  size: 400 lines outside tests" in out
-    assert "  —  tests: not checked yet (later slice)" in out
-    assert "  -> would merge once tests and conflicts pass" in out and "  -> needs a person: size" in out
+    assert "  ok  conflicts: merges cleanly onto main" in out
+    assert "  -> would merge" in out and "  -> needs a person: size" in out
     assert host.calls and all(c[:2] == ["pr", "view"] for c in host.calls)
 
 
@@ -170,8 +173,26 @@ def test_dry_run_json_is_one_document(host, capsys):
     doc = json.loads(capsys.readouterr().out)
     (cand,) = doc["candidates"]
     assert cand["card"] == "c1" and cand["pr"] == URL.format(1)
-    assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "tests", "conflicts"]
-    assert cand["action"] == "would merge once tests and conflicts pass"
+    assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "conflicts", "tests"]
+    assert all(r["ok"] in (True, False, None) and r["why"] for r in cand["rules"])
+    assert cand["action"] == "would merge"
+
+
+def test_conflict_reads_needs_a_person_conflicts(host, capsys):
+    host.checks = [{"rule": "conflicts", "ok": False, "why": "conflicts with main: a.py"},
+                   {"rule": "tests", "ok": None, "why": "not run: conflicts"}]
+    _add(host, _card("c1"), _pr(1))
+    merges.cmd_merges(types.SimpleNamespace(dry_run=True, json=False))
+    out = capsys.readouterr().out
+    assert "  FAIL  conflicts: conflicts with main: a.py" in out and "  —  tests: not run: conflicts" in out
+    assert "  -> needs a person: conflicts" in out
+
+
+def test_a_rule_that_did_not_run_is_never_would_merge(host):
+    host.checks = [{"rule": "conflicts", "ok": None, "why": "not run: git fetch failed: x"},
+                   {"rule": "tests", "ok": None, "why": "not run: git fetch failed"}]
+    card, _ = _add(host, _card("c1"), _pr(1))
+    assert _rules(host, card)[1]["action"] == "needs a person: conflicts, tests not run"
 
 
 def test_dry_run_with_no_candidates_says_so(host, capsys):

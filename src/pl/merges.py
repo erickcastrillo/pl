@@ -4,7 +4,7 @@ import fnmatch
 import json
 import re
 
-from pl import agents, board, jsonout, rework
+from pl import agents, board, jsonout, merge_check, rework
 from pl import config as C
 from pl.board import col_name, sections
 from pl.trackers import github
@@ -14,7 +14,6 @@ SENSITIVE = ["**/migrations/**", "**/*.sql", "**/*.designer.cs", "**/schema*", "
              "**/uv.lock", "**/package-lock.json", "**/yarn.lock", "**/poetry.lock", "**/Gemfile.lock", "**/go.sum", "**/Cargo.lock"]
 HUMAN_TAG = "Requires Human Review"
 TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*$|_test\.[^/]+$")
-NOT_CHECKED = {"ok": None, "why": "not checked yet (later slice)"}
 
 
 def settings():
@@ -29,7 +28,7 @@ def _match(path, globs):
 
 def _pr(repo, num):
     return json.loads(github._gh(["pr", "view", str(num), "--repo", repo, "--json",
-                                  "number,url,state,isDraft,baseRefName,body,labels,files"]))
+                                  "number,url,state,isDraft,baseRefName,body,labels,files,statusCheckRollup"]))
 
 
 def candidates(all_cards):
@@ -76,12 +75,14 @@ def rule_deps(card, all_cards):
     return {"ok": not waiting, "why": f"waiting for {', '.join(map(short_id, waiting))}" if waiting else "all dependencies are merged"}
 
 
-def judge(card, pr, all_cards):
-    rules = {"size": rule_size(pr), "sensitive": rule_sensitive(card, pr, settings()["sensitive"]),
-             "dependencies": rule_deps(card, all_cards), "tests": NOT_CHECKED, "conflicts": NOT_CHECKED}
-    failed = [n for n, r in rules.items() if r["ok"] is False]
-    return {"card": card["id"], "pr": pr["url"], "title": card.get("title"), "rules": [{"rule": n, **r} for n, r in rules.items()],
-            "action": f"needs a person: {', '.join(failed)}" if failed else "would merge once tests and conflicts pass"}
+def judge(card, pr, all_cards, base):
+    rules = [{"rule": "size", **rule_size(pr)}, {"rule": "sensitive", **rule_sensitive(card, pr, settings()["sensitive"])},
+             {"rule": "dependencies", **rule_deps(card, all_cards)}, *merge_check.check(pr, base)]
+    failed = [r["rule"] for r in rules if r["ok"] is False]
+    not_run = [r["rule"] for r in rules if r["ok"] is None]
+    action = "would merge" if not failed and not not_run else \
+        f"needs a person: {', '.join(failed)}" if failed else f"needs a person: {', '.join(not_run)} not run"
+    return {"card": card["id"], "pr": pr["url"], "title": card.get("title"), "rules": rules, "action": action}
 
 
 def cmd_merges(a):
@@ -90,7 +91,9 @@ def cmd_merges(a):
     if C.TRACKER.get("type") != "github-project" or not C.TRACKER.get("repo"):
         raise SystemExit("pl merges: needs a github-project tracker with a repo")
     all_cards = board.cards()
-    judged = [judge(c, pr, all_cards) for c, pr in candidates(all_cards)]
+    found = candidates(all_cards)
+    base = merge_check.default_branch(C.TRACKER["repo"]) if found else None
+    judged = [judge(c, pr, all_cards, base) for c, pr in found]
     if a.json:
         return jsonout.emit({"candidates": judged})
     if not judged:
