@@ -217,7 +217,7 @@ ENTRIES = [
     _e("2026-10-25.37", "pl help --json lists every command; pl jobs shows the long jobs running",
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
     _e("2026-10-25.38", "Board backup to git: board.json every 5 minutes",
-       "config.toml: [sync] git = \"<clone path>\" (local board only)", "pl alerts"),
+       "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)", "pl alerts"),
 ]
 
 

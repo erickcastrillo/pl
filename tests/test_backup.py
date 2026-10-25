@@ -34,6 +34,7 @@ class Git:
     def __init__(self):
         self.calls = []
         self.push_rc = 0
+        self.push_err = "fatal: unable to access\nmore"
         self.diff_rc = 1
         self.commit_rc = 0
 
@@ -41,7 +42,7 @@ class Git:
         self.calls.append(argv)
         sub = argv[3]
         if sub == "push":
-            return self.push_rc, "", "fatal: unable to access\nmore" if self.push_rc else ""
+            return self.push_rc, "", self.push_err if self.push_rc else ""
         if sub == "diff":
             return self.diff_rc, "", ""
         if sub == "commit":
@@ -309,3 +310,26 @@ def test_backup_error_does_not_stop_pass(env, monkeypatch):
 def test_dry_run_never_backs_up(pass_env):
     dispatch.cmd_dispatch(_args(dry_run=True))
     assert pass_env == []
+
+
+def test_failure_message_hides_url_credentials(env):
+    write(env)
+    env.git.push_rc = 1
+    env.git.push_err = "fatal: unable to access 'https://user:s3cretpw@host.test/r.git/': denied"
+    for _ in range(3):
+        env.clock[0] += 300
+        backup.tick()
+    shown = repr(env.events) + alerts.get("backup_push")["title"]
+    assert "s3cretpw" not in shown and "user:" not in shown
+    assert "https://***@host.test/r.git/" in alerts.get("backup_push")["title"]
+
+
+def test_refresh_commits_and_pushes_now(env):
+    backup.refresh()
+    assert env.git.subs()[-2:] == ["commit", "push"]
+
+
+def test_refresh_without_sync_does_nothing(env, monkeypatch):
+    monkeypatch.setattr(C, "SYNC", {})
+    assert backup.refresh() is False
+    assert env.git.calls == []

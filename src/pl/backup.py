@@ -3,6 +3,7 @@ file and pushes it, at most once per 5-minute window after a change and once on 
 in the clone and is tried again in the next window; three in a row open one alert. Only [tracker] type = "local"."""
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -10,12 +11,14 @@ from pathlib import Path
 
 from pl import config as C
 from pl import alerts, board, events, trackers
+from pl.util import mask
 
 INTERVAL = 300
 MARGIN = 30       # the window closes early, so a commit lands inside 5 minutes given the dispatcher's nap slices
 ALERT_AFTER = 3
 FILE = "board.json"
 _clock = time.time
+URL_CREDS_RE = re.compile(r"(?<=://)[^/@\s]+@")
 _ok = None        # (folder, True/False): the start check's answer
 
 
@@ -98,7 +101,7 @@ def check():
 
 def _first_line(text):
     lines = (text or "").strip().splitlines()
-    return lines[0] if lines else "git failed"
+    return mask(URL_CREDS_RE.sub("***@", lines[0])) if lines else "git failed"
 
 
 def _failed(f, st, now, text):
@@ -130,6 +133,17 @@ def tick(force=False):
         _tick(force)
     except (Exception, SystemExit) as e:  # noqa: BLE001 - a backup problem never stops the dispatcher
         events.emit("error", message=f"board backup failed: {e}")
+
+
+def refresh():
+    """Back up right now, whatever the window says (pl forget uses it). False when [sync] git is unset or unusable."""
+    if folder() is None or not check():
+        return False
+    st = _load()
+    st["pending_since"] = st["pending_since"] or _clock()
+    _save(st)
+    tick(force=True)
+    return True
 
 
 def _tick(force):
