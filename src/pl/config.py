@@ -89,6 +89,7 @@ def _defaults():
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     TRIGGERS = {}         # [triggers.<name>]
     CONNECTORS = {}       # [connectors.<name>]
+    RETENTION = {"email_days": 90}  # [retention] email_days = 90
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
     return out
@@ -193,6 +194,7 @@ def _apply(g, t):
     g["POD"] = t.get("pipeline", {}).get("pod")
     g["TRIGGERS"] = dict(t.get("triggers", {}))
     g["CONNECTORS"] = dict(t.get("connectors", {}))
+    g["RETENTION"] = {**g["RETENTION"], **t.get("retention", {})}
 
 
 def default_worktrees(work_dir) -> Path:
@@ -357,6 +359,9 @@ def validate(doc) -> list[str]:
     if doc.get("pipeline"):
         from pl import pipeline
         errs += pipeline.errors(pipeline.from_toml(doc["pipeline"]), doc.get("connectors"))
+    ed = doc.get("retention", {}).get("email_days")
+    if ed is not None and (isinstance(ed, bool) or not isinstance(ed, int) or ed < 0):
+        errs.append("retention.email_days must be a whole number of at least 0")
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")

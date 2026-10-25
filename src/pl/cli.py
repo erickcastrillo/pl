@@ -246,6 +246,12 @@ def _main():
     p.add_argument("--summary", action="store_true", help="add a 2-3 sentence summary from the local model ([local_model])")
     p = sub.add_parser("intent"); p.add_argument("pr", help="full PR URL")
     p = sub.add_parser("rework"); p.add_argument("--dry-run", action="store_true", help="say what would be sent back")
+    p = sub.add_parser("retention"); ps = p.add_subparsers(dest="retention_cmd")
+    q = ps.add_parser("run")
+    q.add_argument("--dry-run", action="store_true", help="say what would be retained")
+    q.add_argument("--json", action="store_true", help="print JSON")
+    p.add_argument("--dry-run", action="store_true", help="say what would be retained")
+    p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
@@ -340,6 +346,7 @@ def _main():
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
+     "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
