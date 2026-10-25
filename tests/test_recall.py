@@ -143,3 +143,32 @@ def test_forget_removes_the_entrys_vector_too(monkeypatch):
     assert recall.forget(i)
     ids = [r[0] for r in recall._db().execute("SELECT id FROM vectors")]
     assert ids == [keep]
+
+
+@pytest.mark.parametrize("source", ["email:inbox/1", "connector:gmail", "trigger:t1"])
+def test_an_email_or_connector_source_is_refused(source):
+    with pytest.raises(recall.Refused, match="no text from emails or connector results"):
+        recall.add("the invoice is due", "fact", source)
+    assert recall.search("invoice") == []
+
+
+def test_a_save_under_pl_untrusted_is_refused(monkeypatch):
+    monkeypatch.setenv("PL_UNTRUSTED", "1")
+    with pytest.raises(recall.Refused, match="no text from emails or connector results"):
+        recall.add("the invoice is due", "fact", "owner:ana")
+    assert recall.search("invoice") == []
+
+
+def test_text_holding_a_configured_secret_is_refused(monkeypatch):
+    from pl.trackers import mcp
+    monkeypatch.setattr(mcp, "_secrets", {"hunter2-secret-value"})
+    with pytest.raises(recall.Refused):
+        recall.add("the key is hunter2-secret-value", "fact", "owner:ana")
+    assert recall.search("hunter2") == []
+
+
+def test_a_card_number_is_masked_and_a_plain_number_is_kept():
+    masked = recall.get(recall.add("paid with 4111 1111 1111 1111 today", "fact", "owner:ana"))["text"]
+    assert masked == "paid with ****1111 today"
+    plain = recall.get(recall.add("order 1234567890123 shipped", "fact", "owner:ana"))["text"]
+    assert plain == "order 1234567890123 shipped"
