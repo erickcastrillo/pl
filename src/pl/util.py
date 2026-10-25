@@ -61,7 +61,8 @@ def slug_of(c):
 
 
 def notify(title, message):
-    if C.ATTENTION and C.ATTENTION.exists():
+    from pl import trackers
+    if C.ATTENTION and C.ATTENTION.exists() and not trackers.dry_run():
         subprocess.run([str(C.ATTENTION), "notify", title, message], capture_output=True)
 
 
