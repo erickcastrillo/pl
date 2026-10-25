@@ -21,8 +21,28 @@ TABS = _TabsList([("home", "Home"), ("dashboard", "Dashboard"), ("assistant", "A
 # Keys stay fixed when tabs() hides the Assistant.
 TAB_KEYS = {"home": "H", **{tid: str(i) for i, (tid, _) in enumerate(TABS) if tid != "brain"}, "brain": "b"}   # brain uses b
 
+# What each bound action means to the person at the keys. A key may serve several actions only when they share a meaning;
+# tests/test_tui_views.py fails on a key with two, and on a binding whose action is missing here.
+MEANING = {
+    "tab": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
+    "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
+    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher",
+    "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
+    "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
+    "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
+    "hold": "hold", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
+    "open_window": "open window", "jump": "open window", "drop": "remove", "discard": "remove", "delete": "remove",
+    "revoke": "remove", "retry": "try again", "move_agent": "move to account", "move_column": "move to column",
+    "only_mine": "filter", "next_filter": "filter", "done": "done", "show_done": "show done", "undrop": "undo",
+    "undo": "undo", "adopt": "to pipeline", "hand_off": "to Manual", "answer": "answer", "edit": "edit",
+    "edit_brief": "edit", "edit_input": "edit", "external_edit": "edit in $EDITOR", "ack": "acknowledge",
+    "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",
+    "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
+    "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
+}
+
 HELP = {
-    "dashboard": "What needs you first, then what the agents did in the chosen window. w changes the window, s writes a standup.",
+    "dashboard": "What needs you first, then what the agents did in the chosen window. [ and ] change the window, s writes a standup.",
     "assistant": "Ask the assistant about your cards, pull requests and settings. Type in the box and press Enter.",
     "ideas": "Ideas waiting to become cards. Pick one to read it, edit it or send it into the pipeline.",
     "cards": "Every card by column. A card that waits on you shows approve and send back in the footer; the details are on the right.",

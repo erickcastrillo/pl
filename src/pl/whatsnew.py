@@ -163,6 +163,10 @@ ENTRIES = [
     _e("2026-10-25.15", "pl e2e: your repo's Playwright tests in a throwaway Multipass VM",
        "set up from the repo's .pl/e2e.yaml; ~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
        "pl e2e --help. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
+    _e("2026-10-25.16", "One key, one meaning in the console; merge is M and asks first",
+       "Pull requests: M merges (a PR that is not ready asks 'Merge anyway?'). Dashboard: [ and ] change the window. "
+       "Pipeline: f only mine, F done. Settings: T tests connections. Ideas: F2 rename, H harness, ctrl+n skip question. "
+       "Home: space opens details", "pl"),
 ]
 
 
