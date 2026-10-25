@@ -45,7 +45,7 @@ GH_PR_WRITES = ("checkout", "close", "comment", "create", "edit", "lock", "merge
                 "review", "unlock", "update-branch")
 # --ac, --r, --d: argparse also takes a unique prefix of a long flag (--ack, --reset, --delete)
 ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), "Bash(pl alerts *--ac*)",
-             "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
+             "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl titles set*)", "Bash(pl titles *--fix*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
              "Bash(pl manager *run*)", "Bash(pl manager -*)", "Bash(gh -*)", *(f"Bash(gh {c}*)" for c in GH_TOP), "Bash(gh pr -*)",
              *(f"Bash(gh pr {c}*)" for c in GH_PR_WRITES), "Bash(git push*)", "Bash(git push:*)", "Bash(git -*)",
              "Bash(git diff *--output*)", "Bash(git log *--output*)", "Bash(git difftool*)"]

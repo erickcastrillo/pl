@@ -343,9 +343,10 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
     small: the stage's small-change model for h's harness wins over its normal one.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
     hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook."""
-    from pl import hooks as pl_hooks, skills
-    pdir = skills.launch_plugin(h, plugin)
-    prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
+    from pl import hooks as pl_hooks, pods, skills
+    pod = pods.launch_pod()
+    pdir = skills.launch_plugin(h, plugin, pod)
+    prompt = skills.library_prompt(h, account, prompt, pdir, pod) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
     template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
@@ -398,6 +399,24 @@ def trust_command(h, account, folder):
     return f"cd {_shown(folder)} && {env}{h.bin}"
 
 
+def claude_trusts(account, folder):
+    """True only when the account's Claude config marks exactly this folder trusted. pl only reads this one file and
+    keeps nothing from it but the answer; it never writes it."""
+    d = C.PROFILES.get(account)
+    p = (Path(d) if d else C.HOME) / ".claude.json"
+    if folder != "~" and not folder.startswith(("/", "~/")):
+        folder = str(C.WORK_DIR)
+    elif folder.startswith("~"):
+        folder = str(C.HOME) + folder[1:]
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return False
+    projects = data.get("projects") if isinstance(data, dict) else None
+    ent = projects.get(folder.removesuffix("/")) if isinstance(projects, dict) else None
+    return isinstance(ent, dict) and ent.get("hasTrustDialogAccepted") is True
+
+
 def headless_argv(h, account, prompt, stage=None):
     """(argv, env) for a one-shot run; no shell."""
     env = dict(os.environ)
@@ -408,10 +427,11 @@ def headless_argv(h, account, prompt, stage=None):
         env[h.env_var] = str(d)
     if C.GH_CONFIG_DIR:
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
-    from pl import skills
-    pdir = skills.launch_plugin(h)
+    from pl import pods, skills
+    pod = pods.launch_pod()
+    pdir = skills.launch_plugin(h, pod=pod)
     template, values = _with_model(h.headless, h, account, stage)
-    return skills.with_plugin(_argv(template, {**values, "prompt": skills.library_prompt(h, account, prompt, pdir)}),
+    return skills.with_plugin(_argv(template, {**values, "prompt": skills.library_prompt(h, account, prompt, pdir, pod)}),
                               pdir), env
 
 

@@ -166,7 +166,9 @@ ENTRIES = [
     _e("2026-10-25.16", "Pods: rules, knowledge and skills per team",
        "pl pods show NAME --json adds approval rate, edits per draft and escalations over 30 days; pod.md versions, "
        "rule add, rollback and rules suggested from repeated edits", "pl pods show engineering"),
-    _e("2026-10-25.17", "Small changes run on a cheaper model",
+    _e("2026-10-25.17", "pl titles check --fix repairs drift; next and set number plan cards",
+       "pl titles next, pl titles set", "pl titles check --fix --dry-run"),
+    _e("2026-10-25.18", "Small changes run on a cheaper model",
        "[stages.run.small] in config.toml: a run agent whose approved PLAN budget is at or under max_lines and max_files "
        "starts on the small model for its harness; rework rounds use the normal one",
        "[stages.run.small] max_lines = 60"),

@@ -38,6 +38,8 @@
     "title": "str",
     "column": "str",
     "agent": "str",
+    "depends_on": [],
+    "waiting_on": [],
     "age_seconds": "int"
    }
   ],

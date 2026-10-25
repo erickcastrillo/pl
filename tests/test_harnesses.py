@@ -536,6 +536,21 @@ def test_run_waiting_reads_gate_markers_and_idle_time(fake_home, monkeypatch, te
     assert agents.run_waiting(RUN_W, {"s1": {"status": status}}) == want
 
 
+@pytest.mark.parametrize("command, status, want", [
+    ("zsh", "idle", "exited"),                  # the agent left: its pane is back at the shell
+    ("claude", "idle", None),
+    ("zsh", "busy", None),                      # a busy session is working, whatever the pane runs
+])
+def test_run_waiting_says_exited_when_the_pane_is_back_at_a_shell(fake_home, monkeypatch, command, status, want):
+    monkeypatch.setattr(agents, "pane_exists", lambda p: True)
+
+    def run(argv, **kw):
+        out = command if "#{pane_current_command}" in argv else str(int(time.time()))
+        return types.SimpleNamespace(returncode=0, stdout=out + "\n", stderr="")
+    monkeypatch.setattr(harnesses, "_run", run)
+    assert agents.run_waiting(RUN_W, {"s1": {"status": status}}) == want
+
+
 def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None):
     started = []
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ask)   # the permission-prompt screen check
@@ -562,6 +577,16 @@ def test_a_waiting_run_agent_frees_its_slot_and_is_never_started_twice(fake_home
     new = _auto("bbbb0002", "Approved")
     assert _pass(monkeypatch, [idle, new], "waiting (nothing-runnable)") == [("bbbb0002", "run")]
     assert _pass(monkeypatch, [idle, new], None) == []   # a working run agent still holds the only slot
+
+
+def test_an_exited_run_agent_holds_no_live_run_place(fake_home, monkeypatch, capsys):
+    gone = _auto("aaaa0001", "In progress", worker=dict(RUN_W))
+    new = _auto("bbbb0002", "Approved")
+    assert _pass(monkeypatch, [gone, new], "exited", max_runs=1) == [("bbbb0002", "run")]
+    assert "run agent exited; its slot is free" in capsys.readouterr().out
+    two = [_auto(f"aaaa000{i}", "In progress", worker={**RUN_W, "window": f"@{i}"}) for i in (1, 2)]
+    assert _pass(monkeypatch, [*two, new], "exited", max_runs=1) == [("bbbb0002", "run")]   # exited windows fill no live cap
+    assert _pass(monkeypatch, [*two, new], "waiting (idle 31 min)", max_runs=1) == []        # idle ones still do
 
 
 @pytest.mark.parametrize("tag, label", [("split", "split — see child cards"), ("parked", "held")])
