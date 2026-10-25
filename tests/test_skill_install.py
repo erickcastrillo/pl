@@ -196,7 +196,8 @@ def test_a_marketplace_entry_needs_plugin_and_lists_the_choices(env, capsys):
     assert "--plugin" in err and "extra" in err and "kit" in err
     assert not env["lib"].exists()
     assert run("github:acme/kit@main", yes=True, plugin="nope")[0] == 2
-    assert "nope" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "nope" in err and "extra" in err and "kit" in err
     assert run("github:acme/kit@main", yes=True, plugin="kit")[0] == 0
     assert json.loads((env["lib"] / ".pl-sources.json").read_text())["review"]["plugin"] == "kit"
 

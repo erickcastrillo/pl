@@ -160,8 +160,8 @@ def _marketplace_entry(root, src, path, name, roots):
     except (OSError, ValueError, KeyError, TypeError):
         raise Refused("marketplace.json has no usable plugins list")
     if name not in entries:
-        raise Refused(f"no plugin named {name!r} here; " if name else "a marketplace needs --plugin NAME; "
-                      f"it lists: {', '.join(sorted(entries))}")
+        listing = f"it lists: {', '.join(sorted(entries))}"
+        raise Refused(f"no plugin named {name!r} here; {listing}" if name else f"a marketplace needs --plugin NAME; {listing}")
     source = entries[name]
     if isinstance(source, str) and source.startswith("./"):
         sub = _src(src["owner"], src["repo"], "/".join(x for x in (path, source[2:].strip("/")) if x), src["ref"])
