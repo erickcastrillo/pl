@@ -73,6 +73,8 @@
                           machine-wide kill switch: holds approved cards with outward actions; off releases them
   pl chat add|list|remove|test|route
                           messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
+  pl brain show CONV [--json] | prune [--dry-run]
+                          a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
                           ask the central read-only brain across every pipeline and connector
   pl manager start|stop [--all]|status|restart NAME
@@ -333,9 +335,12 @@ def _main():
     p.add_argument("--json", action="store_true", help="output counts as JSON")
     p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
     p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
+    p = sub.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
+    q = pb.add_parser("show"); q.add_argument("conv"); q.add_argument("--json", action="store_true")
+    q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
-    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
+    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise BadInput(NO_PROFILE)
     if not a.cmd:
         if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
@@ -366,6 +371,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
      "sandbox": lambda a: __import__("pl.sandbox").sandbox.cmd_sandbox(a),
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),

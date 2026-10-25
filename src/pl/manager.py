@@ -464,6 +464,13 @@ def tick(state):
                          "gave_up": False, "error": f"manager tick failed: {type(e).__name__}"})
     rows += [{"name": p["name"], "running": False, "dispatcher_pid": None, "restarts": 0, "gave_up": False,
               "error": p["error"]} for p in bad]
+    if now - state.get("brain_pruned", 0) >= 86400:
+        state["brain_pruned"] = now
+        try:
+            from pl import brain
+            brain.prune(now)
+        except Exception as e:  # noqa: BLE001 - prune failure never stops the tick
+            print(f"brain prune failed: {type(e).__name__}: {e}", flush=True)
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
               "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error,
               "build": build, "pkg": str(update.PKG)}

@@ -39,6 +39,7 @@ Status and the board:
 - `pl watch --once`: one text frame of the console board.
 - `pl forget --contact ID_OR_EMAIL --yes`: remove one contact from cards, logs and memory (rule 1 applies: ask first; `--dry-run` counts only).
 - `pl sandbox create|status|start|stop|destroy`: the optional Multipass VM for this profile's stage agents (rule 1 applies; ask first).
+- `pl brain show CONV` (`--json`): the turns of a brain conversation. `pl brain prune` deletes old ones (ask first).
 - `pl audit` (`--since 7d`, `--json`, `--verify`): the profile's append-only log of who did what; `--verify` checks its hash chain.
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
@@ -82,6 +83,7 @@ Running pl:
 - `pl accounts` (`--reset NAME`): which harness account is parked for a usage limit.
 - `pl profiles`: every pl profile; `pl profiles new NAME` creates one.
 - `pl manager status|start|stop|restart NAME`: the machine manager that keeps dispatchers running.
+- `pl brain show <conv>` (`--json`) / `pl brain prune` (`--dry-run`): inspect or prune conversations.
 - `pl setup`: create a profile. Interactive; the person runs it.
 - `pl assistant log "..."`: rule 4. The Activity feed also records each pipeline
   command run from this window, but only on a best-effort basis: it is a record, not a guard.
