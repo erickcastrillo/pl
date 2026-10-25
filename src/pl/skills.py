@@ -381,36 +381,115 @@ def install_in_all_harnesses(name=None):
 
 # ---------- launches: Claude loads the library as a plugin; other harnesses get the skill inlined ----------
 
-def plugin_dir():
-    """<profile state>/plugin: a Claude plugin (named "pl") whose skills/ links to the library, so a Claude session pl
-    starts sees the library as /pl:<name>. Each profile has its own. None when the library holds no skill."""
+def find_plugin_folder(name: str) -> Path | None:
+    """Locate a plugin directory in library() / '.pl-plugins' matching name or name@<sha>."""
+    pdir = library() / ".pl-plugins"
+    if not pdir.is_dir():
+        return None
+    direct = pdir / name
+    if direct.is_dir():
+        return direct
+    candidates = [p for p in pdir.iterdir() if p.is_dir() and p.name.startswith(f"{name}@")]
+    return sorted(candidates)[-1] if candidates else None
+
+
+def plugin_hook_commands(plug_dir: Path) -> list[str]:
+    """List hook commands defined in the plugin folder (hooks/hooks.json, hooks.json, or scripts in hooks/)."""
+    cmds = []
+    for hfile in (plug_dir / "hooks" / "hooks.json", plug_dir / "hooks.json"):
+        if hfile.is_file():
+            try:
+                for m in re.finditer(r'"command"\s*:\s*"([^"]+)"', hfile.read_text()):
+                    if m.group(1) not in cmds:
+                        cmds.append(m.group(1))
+            except OSError:
+                pass
+    hdir = plug_dir / "hooks"
+    if hdir.is_dir():
+        for script in hdir.iterdir():
+            if script.is_file() and script.name != "hooks.json":
+                rel = f"hooks/{script.name}"
+                if rel not in cmds:
+                    cmds.append(rel)
+    return cmds
+
+
+def plugin_dir(pod=None):
+    """<profile state>/plugin[-<pod>]: a Claude plugin whose skills/ links to the library or pod skills.
+    For a pod, its skills and enabled plugins' skills are linked; hooks/settings/mcp are never copied or linked."""
     try:
+        pod_name = pod["name"] if isinstance(pod, dict) else str(pod) if pod else None
+        p = C.STATE_DIR / (f"plugin-{pod_name}" if pod_name else "plugin")
         lib = library()
-        if not lib.is_dir() or not any((d / "SKILL.md").is_file() for d in lib.iterdir() if not d.name.startswith(".")):
+        if not pod_name and (not lib.is_dir() or not any((d / "SKILL.md").is_file() for d in lib.iterdir() if not d.name.startswith("."))):
             return None
-        p = C.STATE_DIR / "plugin"
         man = p / ".claude-plugin" / "plugin.json"
         man.parent.mkdir(parents=True, exist_ok=True)
         if not man.exists():
-            man.write_text(json.dumps({"name": "pl", "description": "pl's shared skills library"}, indent=1) + "\n")
+            name_desc = ({"name": f"pl-{pod_name}", "description": f"pl's skills for pod {pod_name}"} if pod_name
+                         else {"name": "pl", "description": "pl's shared skills library"})
+            man.write_text(json.dumps(name_desc, indent=1) + "\n")
         link_ = p / "skills"
-        if link_.is_symlink() and link_.resolve() != lib.resolve():
-            link_.unlink()   # pl's own link to an old library folder
-        if not os.path.lexists(link_):
-            os.symlink(lib, link_, target_is_directory=True)
-        return p if link_.is_symlink() and link_.resolve() == lib.resolve() else None
+        if not pod_name:
+            if link_.is_symlink() and link_.resolve() != lib.resolve():
+                link_.unlink()
+            if not os.path.lexists(link_):
+                os.symlink(lib, link_, target_is_directory=True)
+            return p if link_.is_symlink() and link_.resolve() == lib.resolve() else None
+        if link_.is_symlink():
+            link_.unlink()
+        link_.mkdir(parents=True, exist_ok=True)
+        for item in link_.iterdir():
+            if item.is_symlink():
+                item.unlink()
+        if isinstance(pod, dict):
+            for sname in pod.get("skills", []):
+                src = lib / sname
+                if src.is_dir() and not (link_ / sname).exists():
+                    os.symlink(src, link_ / sname, target_is_directory=True)
+            for plug in pod.get("plugins", []):
+                pname = plug["name"] if isinstance(plug, dict) else plug
+                pf = find_plugin_folder(pname)
+                ps = (pf / "skills") if pf else None
+                if ps and ps.is_dir():
+                    for s in ps.iterdir():
+                        if (s.is_dir() or (s / "SKILL.md").is_file()) and not (link_ / s.name).exists():
+                            os.symlink(s, link_ / s.name, target_is_directory=True)
+                elif pf and (pf / "SKILL.md").is_file() and not (link_ / pname).exists():
+                    os.symlink(pf, link_ / pname, target_is_directory=True)
+        return p
     except (OSError, SystemExit):
         return None
 
 
-def launch_plugin(h, plugin=True):
-    """The plugin folder a launch of h adds with --plugin-dir: Claude only, and only when plugin is true."""
-    return plugin_dir() if plugin and h.name == "claude" else None
+def launch_plugin(h, plugin=True, pod=None):
+    """The plugin folder(s) a launch of h adds with --plugin-dir: Claude only, and only when plugin is true."""
+    if not plugin or h.name != "claude":
+        return None
+    p = plugin_dir(pod)
+    dirs = [p] if p else []
+    if pod and isinstance(pod, dict):
+        for plug in pod.get("plugins", []):
+            if isinstance(plug, dict) and plug.get("hooks"):
+                pf = find_plugin_folder(plug.get("name", ""))
+                if pf and pf not in dirs:
+                    dirs.append(pf)
+    if not dirs:
+        return None
+    return dirs if len(dirs) > 1 else dirs[0]
 
 
 def with_plugin(argv, p):
     """argv with --plugin-dir p after the program name; argv unchanged when p is None."""
-    return [argv[0], "--plugin-dir", str(p), *argv[1:]] if p and argv else argv
+    if not p or not argv:
+        return argv
+    if isinstance(p, (list, tuple)):
+        extra = []
+        for d in p:
+            if d:
+                extra.extend(["--plugin-dir", str(d)])
+        return [argv[0], *extra, *argv[1:]]
+    return [argv[0], "--plugin-dir", str(p), *argv[1:]]
 
 
 def _clean_inlined(d):
@@ -632,8 +711,70 @@ def _cmd_reset(a):
     return 0
 
 
+def _cmd_enable(a):
+    """pl skills enable [--plugin NAME] [NAME] --pod POD [--hooks] [--yes]."""
+    pod_name = a.pod
+    import tomlkit
+    cfg_path = C.path()
+    doc = tomlkit.parse(cfg_path.read_text()) if cfg_path and cfg_path.is_file() else tomlkit.document()
+    pods_tbl = doc.setdefault("pods", tomlkit.table())
+    pod_tbl = pods_tbl.setdefault(pod_name, tomlkit.table())
+    if pod_name == "engineering" and "skills" not in pod_tbl:
+        pod_tbl["skills"] = ["pl-spec", "pl-design", "pl-plan", "pl-run", "pl-review"]
+
+    if getattr(a, "plugin", None):
+        plug_name = a.plugin
+        pf = find_plugin_folder(plug_name)
+        if not pf:
+            raise SystemExit(f"pl: plugin {plug_name!r} not found in {library() / '.pl-plugins'}")
+        if getattr(a, "hooks", False):
+            cmds = plugin_hook_commands(pf)
+            if cmds:
+                print("Hook commands:")
+                for c in cmds:
+                    print(f"  {c}")
+            if not getattr(a, "yes", False):
+                if not sys.stdin.isatty():
+                    raise SystemExit("pl: refused: enabling hooks without a terminal needs --yes")
+                ans = input(f"Enable hooks for plugin {plug_name}? [y/N] ")
+                if ans.strip().lower() not in ("y", "yes"):
+                    raise SystemExit("pl: aborted")
+        plugins = pod_tbl.setdefault("plugins", tomlkit.array())
+        found = False
+        for entry in plugins:
+            if isinstance(entry, dict) and entry.get("name") == plug_name:
+                entry["hooks"] = bool(a.hooks)
+                found = True
+                break
+        if not found:
+            entry = tomlkit.inline_table()
+            entry["name"] = plug_name
+            entry["hooks"] = bool(a.hooks)
+            plugins.append(entry)
+        C.save(doc)
+        print(f"enabled plugin {plug_name} (hooks={str(bool(a.hooks)).lower()}) in pod {pod_name}")
+        return 0
+
+    name = getattr(a, "name", None)
+    if not name:
+        raise SystemExit("pl: give a skill name or --plugin NAME")
+    lib = library()
+    if not (lib / name / "SKILL.md").is_file():
+        raise SystemExit(f"pl: unknown skill {name!r}")
+    skills_arr = pod_tbl.setdefault("skills", tomlkit.array())
+    if name in skills_arr:
+        print(f"skill {name} is already enabled in pod {pod_name}")
+        return 0
+    skills_arr.append(name)
+    C.save(doc)
+    print(f"enabled skill {name} in pod {pod_name}")
+    return 0
+
+
 def cmd_skills(a):
-    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes]."""
+    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable."""
+    if a.skills_cmd == "enable":
+        return _cmd_enable(a)
     if a.skills_cmd == "reset":
         return _cmd_reset(a)
     if a.skills_cmd == "share":
