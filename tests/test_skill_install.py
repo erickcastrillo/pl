@@ -33,7 +33,7 @@ def env(tmp_path, monkeypatch):
         if argv[:2] == ["git", "ls-remote"]:
             return f"{SHA}\trefs/heads/main\n"
         if argv[:2] == ["git", "checkout"]:
-            shutil.copytree(up, cwd, dirs_exist_ok=True)
+            shutil.copytree(up, cwd, dirs_exist_ok=True, symlinks=True)
         return ""
     monkeypatch.setattr(S, "_git", fake)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -160,3 +160,22 @@ def test_list_json_shows_the_source(env, capsys):
     rows = json.loads(capsys.readouterr().out)
     row = next(r for r in rows if r["name"] == "review")
     assert row["source"]["repo"] == "acme/kit" and row["source"]["sha"] == SHA
+
+
+def test_a_link_that_leaves_the_skill_folder_but_stays_in_the_checkout_is_refused(env, capsys):
+    (env["up"] / ".ssh").mkdir()
+    (env["up"] / ".ssh" / "id_rsa").write_text("harmless")
+    (env["up"] / "skills" / "review" / "notes.md").unlink()
+    (env["up"] / "skills" / "review" / "notes.md").symlink_to("../../.ssh/id_rsa")
+    code, _ = run(yes=True)
+    assert code == 2
+    assert "link out of the source" in capsys.readouterr().err
+    assert not (env["lib"] / "review").exists()
+
+
+def test_a_link_inside_the_skill_folder_is_still_installed(env):
+    (env["up"] / "skills" / "review" / "notes.md").unlink()
+    (env["up"] / "skills" / "review" / "notes.md").symlink_to("check.py")
+    code, _ = run(yes=True)
+    assert code == 0
+    assert (env["lib"] / "review" / "notes.md").is_symlink()

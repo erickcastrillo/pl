@@ -116,7 +116,7 @@ def inventory(root, path):
         dirs[:] = sorted(x for x in dirs if x != ".git")
         for n in sorted(names) + [x for x in dirs if os.path.islink(os.path.join(d, x))]:
             p = Path(d, n)
-            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(root)):
+            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(base)):
                 raise Refused(f"{p.relative_to(root)} is a credential file or a link out of the source")
             if p.is_dir():
                 continue
