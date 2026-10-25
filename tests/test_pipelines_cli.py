@@ -100,3 +100,9 @@ def test_list_reads_the_pipeline_name_and_summary_without_loading_the_profile(fa
     rows = {r["profile"]: r for r in json.loads(capsys.readouterr().out)}
     assert rows["sales"]["pipeline"] == "sales" and rows["sales"]["summary"]["running"] is True
     assert rows["dev"]["pipeline"] == "engineering" and rows["dev"]["summary"] is None
+
+
+def test_list_templates_names_all_five(capsys):
+    pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
+    names = {r["name"] for r in json.loads(capsys.readouterr().out)}
+    assert names == {"engineering", "new-client", "existing-client", "billing", "team"}
