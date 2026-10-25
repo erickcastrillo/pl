@@ -81,6 +81,9 @@
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
+  pl worktrees list | gc [--dry-run] [--yes] [--json]
+                          the worktrees pl-run made in the worktrees folder: their card, column and keep/remove;
+                          gc lists what is safe to remove (finished card, clean, all pushed); --yes removes it
   pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
@@ -302,6 +305,10 @@ def _main():
     q = pk.add_parser("enable"); q.add_argument("name", nargs="?", help="skill name"); q.add_argument("--plugin", help="plugin name")
     q.add_argument("--pod", required=True, help="pod name"); q.add_argument("--hooks", action="store_true", help="enable plugin hooks")
     q.add_argument("--yes", action="store_true", help="do not ask first")
+    p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc"])
+    p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
+    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default)")
+    p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
@@ -373,6 +380,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
      "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
      "sandbox": lambda a: __import__("pl.sandbox").sandbox.cmd_sandbox(a),
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),

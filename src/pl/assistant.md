@@ -48,6 +48,7 @@ Status and the board:
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
+- `pl worktrees list` | `gc` (`--yes`, `--json`): the worktrees pl-run made, and which are safe to remove; `gc --yes` removes them (it asks).
 
 Moving work (rule 1 applies):
 - `pl approve <id>` / `pl reject <id> "notes"`: accept a plan, or send it back with notes.
