@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, local_jobs, manager, memory, move_agent, pipeline, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
+from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -782,6 +782,7 @@ def github_board():
     return str((C.TRACKER or {}).get("type") or "").startswith("github")
 
 
+SYNC_PER_PASS = 20   # outbox entries a pass sends to GitHub at most: a long queue never holds up the agents
 INTAKE_EVERY = 300   # seconds between the default issue intake's searches (one GraphQL search each; the board is read every pass)
 _INTAKE = {"at": None, "noted": None}   # noted: the search back-off window already logged as an event
 
@@ -1105,6 +1106,14 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             accounts.check_parked()
         except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"account check failed: {e}", file=sys.stderr)
+        try:   # a local board's queued changes go to its GitHub Project (sync.py)
+            if C.SYNC.get("github") and outbox.count():
+                r = sync.replay(limit=SYNC_PER_PASS)
+                if r["stopped_because"] == "error":
+                    events.emit("error", message=f"sync: {r['error']}")
+        except Exception as e:  # noqa: BLE001 - a failed replay never stops the pass
+            print(f"sync failed: {e}", file=sys.stderr)
+            events.emit("error", message=f"sync: {e}")
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
     room = manager.room_for(ms, C.PROFILE_NAME)   # new agents this profile's share of the machine has room for

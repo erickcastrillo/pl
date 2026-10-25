@@ -193,6 +193,8 @@ ENTRIES = [
     _e("2026-10-25.27", "pl sandbox login: sign a harness in from inside the profile's Multipass VM",
        "pl sandbox create, status, start, stop, destroy, login; [sandbox] in the profile config",
        "pl sandbox login <account>"),
+    _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
+       "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
 ]
 
 
