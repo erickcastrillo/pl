@@ -205,6 +205,8 @@ ENTRIES = [
     _e("2026-10-25.32", "Memory: run summaries and approval reasons, searchable",
        "pl mcp serve --memory (tool memory_search); [connectors.<name>] role = [\"memory\"]",
        "pl memory search \"split into 3 PRs\""),
+    _e("2026-10-25.33", "pl usage --github shows GitHub's own budget next to pl's and marks a gap",
+       "pl usage --github", "pl usage --github"),
 ]
 
 
