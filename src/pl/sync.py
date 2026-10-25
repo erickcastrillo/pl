@@ -278,6 +278,34 @@ def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
                 "edit the card here to match GitHub, or leave it to keep yours; the alert clears at the next pl sync now")
 
 
+def resolve(card_id, keep):
+    """Settle the GitHub edit saved on a card: take its values (remote) or queue the local ones (local)."""
+    local = Local(C.TRACKER)   # not trackers.get: taking GitHub's values must not reach the outbox
+    cur = local.card(card_id)
+    meta = dict(cur.get("metadata") or {})
+    held = {f: v for f, v in (meta.get("remote_edit") or {}).items() if f in PULLED}
+    if not held:
+        raise SystemExit(f"card {card_id} has no remote edit")
+    meta.pop("remote_edit")
+    outbox.strip(card_id, set(held))
+    if keep == "remote":
+        take = {f: v["value"] for f, v in held.items()}
+        if "column" in take:
+            local.ensure_column(take["column"])
+        local.update(card_id, verify=False, metadata=meta, **take)
+    else:
+        mine = _values(cur, {v: k for k, v in local.columns().items()})
+        for f in sorted(held):
+            outbox.append(card_id, "update", {f: mine[f]})
+        local.update(card_id, verify=False, metadata=meta)
+    base = _load_base()
+    base.setdefault(card_id, {}).update({f: _norm(f, v["value"]) for f, v in held.items()})
+    _save_base(base)
+    board.dirty()
+    alerts.resolve(f"sync-conflict:{card_id}")
+    return sorted(held)
+
+
 def local_id(token):
     token = token.strip()
     return next((lid for lid, gid in _state()["ids"].items() if gid == token), None)

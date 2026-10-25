@@ -216,6 +216,8 @@ ENTRIES = [
     _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
     _e("2026-10-25.37", "pl help --json lists every command; pl jobs shows the long jobs running",
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
+    _e("2026-10-25.38", "Settle a sync conflict in one command", "pl alerts: the sync-conflict alert names it",
+       "pl sync resolve <card> --keep remote"),
 ]
 
 
