@@ -1156,6 +1156,8 @@ def cmd_sync(a):
     target = C.SYNC.get("github")
     if not target:
         raise SystemExit("pl sync: set [sync] github in config.toml")
+    if a.action == "init":
+        return sync.cmd_init(a)
     if a.action == "now":
         return _sync_now(sync.replay(), getattr(a, "json", False))
     n = outbox.count()

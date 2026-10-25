@@ -5,8 +5,9 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from pl import board, ghquota, outbox
+from pl import board, dispatch, ghquota, outbox
 from pl import config as C
+from pl.trackers.local import Local
 from pl.trackers import github
 
 ENTRY_POINTS = 8   # estimate of one entry's cost: a create is the dearest, an update with its re-read the next
@@ -27,7 +28,7 @@ def _ids_path():
 def _state():
     try:
         got = json.loads(_ids_path().read_text())
-        return {"ids": dict(got["ids"]), "last_sent": int(got["last_sent"])}
+        return {**got, "ids": dict(got["ids"]), "last_sent": int(got["last_sent"])}
     except (OSError, ValueError, KeyError, TypeError):
         return {"ids": {}, "last_sent": 0}
 
@@ -152,3 +153,59 @@ def _replay(limit):
     window = datetime.fromtimestamp(until, timezone.utc).isoformat(timespec="seconds") if until else None
     return {"sent": sent, "remaining": outbox.count(), "stopped_because": stopped, "next_window": window,
             "error": error}
+
+
+def local_id(token):
+    token = token.strip()
+    return next((lid for lid, gid in _state()["ids"].items() if gid == token), None)
+
+
+def _github():
+    owner, _, number = C.SYNC["github"].partition("/projects/")
+    return github.GitHubProject({"type": "github-project", "owner": owner, "number": number,
+                                 "status_field": C.SYNC.get("status_field") or github.STAGE_FIELD})
+
+
+def _refuse(why):
+    raise SystemExit(f"pl sync init: {why}")
+
+
+def cmd_init(a):
+    """Copy the GitHub board into the empty local board. Every GitHub read comes before the first local write."""
+    shown = C.SYNC["github"]
+    if C.TRACKER.get("type") != "local":
+        _refuse('needs [tracker] type = "local"')
+    if not a.from_github:
+        _refuse("say where from: --from-github")
+    if dispatch.dispatcher_running() and not dispatch.paused():
+        _refuse("the dispatcher is running; run pl pause first")
+    if _ids_path().exists():
+        _refuse("sync-ids.json already exists")
+    local = Local(C.TRACKER)   # not trackers.get: the outbox wrapper must not see the import
+    if local.cards():
+        _refuse("the local board is not empty")
+    try:
+        gh = _github()
+        columns, cards = gh.columns(), gh.cards()
+    except SystemExit as e:
+        _refuse(f"reading {shown} failed: {e}; nothing was imported")
+    if a.dry_run:
+        print(f"would import {len(cards)} cards into {len(columns)} columns from {shown}")
+        return
+    names = {cid: name for name, cid in columns.items()}
+    made, state = [], {"ids": {}, "items": {}, "last_sent": 0}
+    try:
+        for name in columns:
+            local.ensure_column(name)
+        for c in cards:
+            new = local.create(names.get(c.get("list_id"), "Inbox"), title=c["title"], description=c.get("description") or "",
+                               tags=c.get("tags") or [], metadata=c.get("metadata") or {}, assigned_to=c.get("assigned_to"))
+            made.append(new["id"])
+            state["ids"][new["id"]] = c["id"]
+            state["items"][new["id"]] = c.get("item_id")
+    except BaseException as e:
+        for cid in made:
+            local.delete(cid)
+        raise SystemExit(f"pl sync init: {e}; nothing was imported") from e
+    _save(state)
+    print(f"imported {len(cards)} cards into {len(columns)} columns from {shown}")
