@@ -152,6 +152,8 @@ ENTRIES = [
        "pl idea", "pl idea \"...\" --plan 3 --slice 2 --title \"...\""),
     _e("2026-10-25.11", "pl titles check lists plan cards whose 'Plan N slice M' title and metadata disagree",
        "pl titles check", "pl titles check --json"),
+    _e("2026-10-25.12", "Plans say what they depend on; pl depends --from-plans records it",
+       "pl-plan skill, pl depends", "pl depends --from-plans --dry-run"),
 ]
 
 

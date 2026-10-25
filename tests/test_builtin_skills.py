@@ -75,7 +75,7 @@ def test_every_pl_command_a_skill_names_exists_in_the_cli():
             seen.add(cmd)
             assert cmd in top, f"{n}: pl {cmd}"
             assert cmd not in subs or not sub or sub in subs[cmd], f"{n}: pl {cmd} {sub}"
-    assert {"card", "move", "section"} <= seen
+    assert {"card", "move", "section", "depends"} <= seen
 
 
 def test_the_mention_parser_catches_a_made_up_command():
@@ -482,7 +482,7 @@ def test_a_broken_state_file_never_crashes_install(lib, shipped):
     (lib / ".pl-builtin.json").write_text(json.dumps(st))
     version = _bump(shipped, "pl-plan")
     out = skills.install_builtins()
-    assert f"updated built-in pl-plan to version {version}" in out
+    assert "updated built-in pl-plan to version 4" in out
     (lib / ".pl-builtin.json").write_text('["not", "a", "dict"]')
     skills.install_builtins()
 
@@ -612,3 +612,21 @@ def test_a_bare_loop_prompt_of_a_library_skill_gets_the_plugin_name(lib, monkeyp
     argv = shlex.split(harnesses.launch_script(harnesses.get("claude"), "a", "/loop /pl-review repo=o/r", "s",
                                                "l").splitlines()[-1])
     assert argv[-1] == "/loop /pl:pl-review repo=o/r"
+
+
+def test_pl_plan_requires_a_depends_on_line():
+    text = (skills.BUILTIN_DIR / "pl-plan" / "SKILL.md").read_text()
+    fmt = re.search(r"## Plan format\s+```(.*?)```", text, re.S)
+    assert fmt, "Plan format block missing"
+    assert "Depends on:" in fmt.group(1)
+    assert "Depends on: none" in text
+    assert "Every plan has" in text
+
+
+def test_pl_plan_links_each_later_slice():
+    text = (skills.BUILTIN_DIR / "pl-plan" / "SKILL.md").read_text()
+    assert "pl depends" in text and "--on" in text
+    idx_depends = text.index("pl depends")
+    idx_idea = text.index('pl idea "Slice')
+    assert idx_depends > idx_idea
+

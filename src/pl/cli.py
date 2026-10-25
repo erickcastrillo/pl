@@ -32,6 +32,8 @@
   pl depends <id> --on <id>... | --clear
                           record cards this card depends on, or clear them; the dispatcher starts an Approved card
                           only once every dependency is merged
+  pl depends --from-plans [--dry-run]
+                          record the Depends on line of every PLAN for cards with no dependencies yet
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
@@ -245,7 +247,7 @@ def _main():
     p = sub.add_parser("undrop"); p.add_argument("id")
     p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)")
     p = sub.add_parser("unhold"); p.add_argument("id")
-    p = sub.add_parser("depends"); p.add_argument("id"); p.add_argument("--on", nargs="+", default=[], metavar="ID", help="cards this card depends on"); p.add_argument("--clear", action="store_true", help="remove every dependency")
+    p = sub.add_parser("depends"); p.add_argument("id", nargs="?"); p.add_argument("--on", nargs="+", default=[], metavar="ID", help="cards this card depends on"); p.add_argument("--clear", action="store_true", help="remove every dependency"); p.add_argument("--from-plans", action="store_true", help="record the Depends on line of every PLAN for cards with no dependencies yet"); p.add_argument("--dry-run", action="store_true", help="with --from-plans: show what it would record")
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("link"); p.add_argument("id"); p.add_argument("target", metavar="PIPELINE:ID")
     p.add_argument("--relation", default="related"); p.add_argument("--one-side", action="store_true", help="write only this card, not the other")
@@ -262,10 +264,10 @@ def _main():
     p.add_argument("--json", action="store_true", help="output JSON")
     p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
     p = sub.add_parser("section"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
-    p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
-    q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
+    p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
+    q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")
