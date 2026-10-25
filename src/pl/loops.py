@@ -1,5 +1,6 @@
-"""pl loops: list|add|pause|resume|rm manage [loops.<name>] in the profile's config.toml; run queues a run now."""
+"""pl loops: list|add|edit|pause|resume|rm manage [loops.<name>] in the profile's config.toml; run queues a run now."""
 import json
+import re
 import sys
 import time
 from datetime import datetime
@@ -11,6 +12,31 @@ from pl import schedule
 from pl.util import BadInput, ask, load_state, save_state
 
 WAIT_POLLS = 150
+
+WORK_HOURS = "08:00-18:00 weekdays"
+# Prompts name connector roles (email, payments), never a vendor.
+TEMPLATES = {
+    "auto-review": {"prompt": "Review the open pull requests that wait for review: read each diff and its checks, label each one ready, "
+                              "rework or failed, and comment what you found. Never merge.",
+                    "every": "30m", "hours": "08:00-20:00", "writes": True},
+    "daily-standup": {"prompt": "Summarise what moved on the board since yesterday: cards done, in progress and blocked. "
+                                "Write it as one short note for the owner.",
+                      "every": "weekdays 09:00", "hours": WORK_HOURS, "writes": False},
+    "inbox-triage": {"prompt": "Read the new mail through the email connector and group it as urgent, reply-needed or FYI. "
+                               "List the first two groups with a one-line reason each. Do not send, move or delete anything.",
+                     "every": "30m", "hours": WORK_HOURS, "writes": False},
+    "overdue-invoices": {"prompt": "Through the payments connector, list the invoices past their due date, oldest first, with the customer, "
+                                   "the amount and the days late. Propose a reminder for each one; do not send it.",
+                         "every": "weekdays 09:00", "hours": WORK_HOURS, "writes": False},
+    "dependency-updates": {"prompt": "List the project's outdated dependencies and the ones with security advisories. Propose one update "
+                                     "at a time with the risk of each; do not change any file.",
+                           "every": "weekdays 07:00", "hours": "06:00-12:00 weekdays", "writes": False},
+    "stale-cards": {"prompt": "Find the cards that have not moved for 7 days. List each with its column and age, and propose "
+                              "nudge, drop or hold for it.",
+                    "every": "weekdays 10:00", "hours": WORK_HOURS, "writes": False},
+}
+
+LOOP_PREFIX = re.compile(r"/loop (\d+)([mhd])(?:\s+|$)")
 
 
 def _fail(message: str):
@@ -84,12 +110,21 @@ def _cmd_add(a) -> int:
     if a.name in doc.get("loops", {}):
         print(f"loop {a.name} exists, nothing changed")
         return 0
+    template = {}
+    if a.template:
+        if a.template not in TEMPLATES:
+            _fail(f"no template {a.template}; choose one of: {', '.join(TEMPLATES)}")
+        template = dict(TEMPLATES[a.template])
+        if a.skill:
+            del template["prompt"]
     entry = tomlkit.table()
-    for key, value in (("skill", a.skill), ("prompt", a.prompt), ("every", a.every), ("hours", a.hours),
-                       ("account", a.account), ("team", a.team)):
+    for key, value in (("skill", a.skill), ("prompt", a.prompt or template.get("prompt")), ("every", a.every or template.get("every")),
+                       ("hours", a.hours or template.get("hours")), ("account", a.account), ("team", a.team)):
         if value:
             entry[key] = value
-    entry["writes"] = bool(a.writes)
+    if "skill" not in entry and "prompt" not in entry:
+        _fail("give --skill, --prompt or --template")
+    entry["writes"] = template.get("writes", False) if a.writes is None else a.writes
     if "every" in entry:
         try:
             schedule.parse_every(entry["every"])
@@ -108,6 +143,61 @@ def _cmd_add(a) -> int:
     doc.setdefault("loops", tomlkit.table())[a.name] = entry
     _save(doc)
     print(f"added loop {a.name}")
+    return 0
+
+
+def _converted(prompt: str | None) -> tuple[str, str]:
+    """The `every` a leading `/loop Nm|Nh|Nd` stands for, and the prompt without that prefix."""
+    m = LOOP_PREFIX.match(prompt or "")
+    if not m:
+        _fail("the prompt has no /loop prefix to convert")
+    count, unit = int(m[1]), m[2]
+    if unit == "d":
+        _fail("a /loop day interval has no `every` of its own; pass --every, for example daily 09:00")
+    every = f"{count}m" if unit == "m" else "hourly" if count == 1 else f"{count * 60}m"
+    return every, prompt[m.end():]
+
+
+def _table_for(doc, name: str):
+    """The loop's [loops.<name>] table; a built-in loop, or a default one while [loops] is absent, is written out first."""
+    if name not in C.SERVICES and name not in C.LOOPS_OFF:
+        _fail(f"no loop {name}")
+    written = lambda s: {"prompt": s["prompt"], **({"account": s["profile"]} if s.get("profile") else {})}   # noqa: E731
+    if "loops" not in doc:   # [loops] replaces every default loop, so write them all
+        doc["loops"] = {n: written(s) for n, s in C.SERVICES.items() if not s.get("builtin")}
+    if name not in doc["loops"]:
+        doc["loops"][name] = written(C.SERVICES[name])
+    return doc["loops"][name]
+
+
+def _cmd_edit(a) -> int:
+    doc = _document()
+    entry = _table_for(doc, a.name)
+    if a.skill and not a.prompt:
+        entry.pop("prompt", None)
+    if a.prompt and not a.skill:
+        entry.pop("skill", None)
+    for key, value in (("skill", a.skill), ("prompt", a.prompt), ("every", a.every), ("hours", a.hours), ("account", a.account)):
+        if value is not None:
+            entry[key] = value
+    if a.writes is not None:
+        entry["writes"] = a.writes
+    if a.convert:
+        every, entry["prompt"] = _converted(entry.get("prompt"))
+        entry["every"] = a.every or every
+    elif not any(v is not None for v in (a.skill, a.prompt, a.every, a.hours, a.account, a.writes)):
+        _fail("nothing to change; give a field to set or --convert")
+    if "every" in entry:
+        try:
+            schedule.parse_every(entry["every"])
+        except ValueError as e:
+            _fail(str(e))
+    if a.skill:
+        _warn_if_skill_is_unknown(a.skill)
+    if errors := C.validate(tomlkit.parse(tomlkit.dumps(doc))):
+        _fail("; ".join(errors))
+    _save(doc)
+    print(f"edited loop {a.name}")
     return 0
 
 
@@ -137,7 +227,7 @@ def cmd_loops(a):
         if getattr(a, "dry_run", False):
             return dry_run(a)
         return run(a.name, wait=a.wait, as_json=a.json)
-    return {"list": _cmd_list, "add": _cmd_add, "rm": _cmd_rm,
+    return {"list": _cmd_list, "add": _cmd_add, "edit": _cmd_edit, "rm": _cmd_rm,
             "pause": lambda a: _cmd_toggle(a, False), "resume": lambda a: _cmd_toggle(a, True)}[a.loops_cmd](a)
 
 
