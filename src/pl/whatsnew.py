@@ -185,6 +185,7 @@ ENTRIES = [
     _e("2026-10-25.23", "Small jobs on local models, checked, with fallbacks",
        "[models.local]: a model per job (route, summarise, title, embed); setup writes it for a new profile",
        "pl models test summarise"),
+    _e("2026-10-25.24", "Pipelines from templates: sales, clients, billing, team", "pl pipelines", "pl pipelines list --templates"),
 ]
 
 

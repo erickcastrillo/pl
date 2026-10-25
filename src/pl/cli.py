@@ -320,6 +320,9 @@ def _main():
     p = sub.add_parser("profiles"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
     q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
+    p = sub.add_parser("pipelines"); pl_ = p.add_subparsers(dest="pipelines_cmd", required=True)
+    q = pl_.add_parser("list"); q.add_argument("--templates", action="store_true", help="list the built-in templates"); q.add_argument("--json", action="store_true")
+    q = pl_.add_parser("show"); q.add_argument("name", nargs="?", help="a profile (default: this one)"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("accounts"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p.add_argument("--check-trust", action="store_true", help="show whether each Claude account trusts the work and worktrees folders (reads only)")
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
@@ -491,6 +494,7 @@ def _main():
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
      "memory": lambda a: __import__("pl.recall").recall.cmd_memory(a),
+     "pipelines": lambda a: __import__("pl.pipeline").pipeline.cmd_pipelines(a),
      "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,
