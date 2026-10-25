@@ -142,6 +142,9 @@ def test_edit_of_the_builtin_review_loop_writes_its_table(table, monkeypatch):
 def test_edit_changes_fields_and_refuses_a_bad_every(table, monkeypatch, capsys):
     assert pl(monkeypatch, "edit", "triage", "--skill", "pl-x", "--writes", "--account", "cx") == 0
     assert (_loop(table, "triage")["skill"], _loop(table, "triage")["writes"]) == ("pl-x", True)
+    assert "prompt" not in _loop(table, "triage")
+    assert pl(monkeypatch, "edit", "triage", "--prompt", "again") == 0
+    assert (_loop(table, "triage")["prompt"], "skill" in _loop(table, "triage")) == ("again", False)
     assert pl(monkeypatch, "edit", "triage", "--no-writes") == 0 and _loop(table, "triage")["writes"] is False
     assert pl(monkeypatch, "edit", "triage", "--every", "whenever") == 2
     assert pl(monkeypatch, "edit", "nope", "--every", "30m") == 2

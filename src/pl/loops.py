@@ -175,6 +175,10 @@ def _table_for(doc, name: str):
 def _cmd_edit(a) -> int:
     doc = _document()
     entry = _table_for(doc, a.name)
+    if a.skill and not a.prompt:
+        entry.pop("prompt", None)
+    if a.prompt and not a.skill:
+        entry.pop("skill", None)
     for key, value in (("skill", a.skill), ("prompt", a.prompt), ("every", a.every), ("hours", a.hours), ("account", a.account)):
         if value is not None:
             entry[key] = value
