@@ -66,6 +66,13 @@ BUILTINS = {
 }
 FIELDS = {f.name for f in dataclasses.fields(Harness)}
 
+LOGIN = {"claude": ["claude", "/login"], "codex": ["codex", "login"], "antigravity": ["agy"]}   # sign-in command, run inside the sandbox VM
+
+
+def login_argv(h):
+    return list(LOGIN.get(h.name, []))
+
+
 # The flags that let a pipeline agent or loop work without stopping for permission; never the Assistant. From each
 # CLI's --help: claude 2.1.286 (auto: a safety classifier approves routine actions and blocks risky ones), codex 0.150.1
 # (never ask, writes only inside the workspace), agy and gemini 0.32.1 (edits only: their one mode that never asks

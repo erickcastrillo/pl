@@ -190,6 +190,9 @@ ENTRIES = [
        "pl pipelines add sales --template new-client --board local --yes"),
     _e("2026-10-25.26", "Connectors: plug any MCP server in by role, sign in through the browser",
        "docs/connectors.md; pl connectors import --from claude lists the servers you already set up", "pl connectors list"),
+    _e("2026-10-25.27", "pl sandbox login: sign a harness in from inside the profile's Multipass VM",
+       "pl sandbox create, status, start, stop, destroy, login; [sandbox] in the profile config",
+       "pl sandbox login <account>"),
 ]
 
 
