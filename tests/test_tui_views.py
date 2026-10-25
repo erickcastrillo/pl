@@ -144,7 +144,7 @@ async def test_dashboard_renders_tiles_and_panels():
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         assert [tile(app, n) for n in ("specs", "plans", "opened", "merged", "ready", "waiting")] == \
-            ["12", "11", "2", "1", "2", "5"]
+            ["12", "11", "2", "1", "2", "6"]
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
                   "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
@@ -821,7 +821,7 @@ async def test_pipeline_lists_every_card_by_column_with_its_text(monkeypatch):
         view = await _open_cards(pilot, app, "4a000001aaaa")
         assert app.active_tab == "cards"
         text = screen_text(app)
-        assert "3 Pipeline 5 · 3 need you" in text and "Kanban" not in text and "Needs you" not in text
+        assert "3 Pipeline 5 · 6 need you" in text and "Kanban" not in text and "Needs you" not in text
         heads = ["SPEC READY 1", "PLAN FOR REVIEW 2", "MANUAL 1", "PR OPEN 1"]
         for s in heads + ["4a000001", "60000002", "c0000003", "d0000004", "spec0001"]:
             assert s in text, s
@@ -938,8 +938,8 @@ async def test_pipeline_marks_the_cards_that_need_you_and_counts_them_on_the_tab
         marked = {cid for cid in view._rows if t.get_row(cid)[2].plain.startswith("! ")}
         assert marked == MINE
         assert any("red" in str(sp.style) for sp in t.get_row("c0000003aaaa")[2].spans)
-        assert "3 Pipeline 6 · 4 need you" in screen_text(app)
-        assert "4 need you" in t.border_title and "f only those" in t.border_title
+        assert "3 Pipeline 6 · 7 need you" in screen_text(app)
+        assert "7 need you" in t.border_title and "f only those" in t.border_title
 
 
 async def test_f_shows_only_the_cards_that_need_you_and_f_again_shows_all(monkeypatch):
@@ -1104,7 +1104,7 @@ async def test_z_shows_done_and_dropped_cards_without_a_new_refresh(monkeypatch)
         assert t.get_row("f0000001aaaa")[2].plain.strip() == "done"
         assert t.get_row("f0000002aaaa")[2].plain.strip() == "dropped"
         assert "[red]customer cancelled[/red]" in t.get_row("f0000002aaaa")[3].plain   # card text is data
-        assert "3 Pipeline 5 · 3 need you" in text   # the tab count leaves Done out
+        assert "3 Pipeline 5 · 6 need you" in text   # the tab count leaves Done out
         assert "z hides Done" in t.border_title
         await _open_cards(pilot, app, "f0000002aaaa")
         assert "from Spec ready: [red]customer cancelled[/red]" in screen_text(app)   # the detail pane says why
@@ -2206,3 +2206,23 @@ def test_no_key_has_two_meanings_across_every_view_and_screen():
         meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]
         meanings.setdefault(b.key, {}).setdefault(meaning, []).append(cls.__name__)
     assert {k: m for k, m in meanings.items() if len(m) > 1} == {}
+
+
+# ---------- one "needs you" count ----------
+
+async def test_three_prs_and_two_gates_give_5_everywhere(monkeypatch):
+    from pl.tui.needs import needs_you_count
+    _fake_card_read(monkeypatch, [])
+    monkeypatch.setattr(C, "GATES", {})
+    data = fake_data()
+    data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"] if not (r.get("card") and r["card"]["id"] in ("c0000003aaaa", "spec0001aaaa"))]
+    assert needs_you_count(data) == 5   # decide 1 + merge 2 PRs, 2 plans; the rework PR is not counted
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        text = screen_text(app)
+        assert "needs you 5" in text and "Pipeline 3 · 5 need you" in text
+        assert tile(app, "waiting") == "5"
+        await pilot.press("3")
+        await settle(pilot)
+        assert "5 need you" in app.query_one("#prs-table").border_title

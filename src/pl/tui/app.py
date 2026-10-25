@@ -23,9 +23,9 @@ from pl.trackers.github import RateLimited
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.brain import BrainView
-from pl.tui.cards import CardsView, attention_count, card_count
+from pl.tui.cards import CardsView, card_count
 from pl.tui.chrome import HELP, TABS, TAB_KEYS, header_text, tabs
-from pl.tui.needs import review_kind
+from pl.tui.needs import needs_you_count, review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
 from pl.tui.ideas import IdeasView
@@ -526,7 +526,7 @@ class PlApp(App):
         self.query_one(CardsView).show(self.data)
         tabs = self.query_one(TabbedContent)
         n_prs = sum(1 for r in rows if r.get("pr"))
-        mine = attention_count(self.data)
+        mine = needs_you_count(self.data)
         for tid, label in (("cards", f"Pipeline {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
                            ("prs", f"Pull requests {n_prs}"), ("alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
             tabs.get_tab(tid).label = f"{TAB_KEYS[tid]} {label}"
