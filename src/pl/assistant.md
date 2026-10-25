@@ -36,6 +36,7 @@ Status and the board:
 - `pl section <id> NAME` (`--from FILE`): one section in full; `--from` replaces SPEC, DESIGN or PLAN (it asks).
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
 - `pl titles check` (`--json`): plan cards whose "Plan N slice M:" title and plan/slice metadata disagree; changes nothing.
+- `pl loops run NAME --dry-run`: runs a loop once, read-only, and prints what it would file; asks first because it starts an agent.
 - `pl alerts` (`--all`, `--ack KEY`): open alerts and their fix line; `--ack` stops reminders until it clears.
 - `pl watch --once`: one text frame of the console board.
 - `pl forget --contact ID_OR_EMAIL --yes`: remove one contact from cards, logs and memory (rule 1 applies: ask first; `--dry-run` counts only).

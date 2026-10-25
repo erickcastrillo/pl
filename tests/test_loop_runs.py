@@ -122,3 +122,84 @@ def test_missed_run_fires_once_on_wake(profile, tmux_calls, monkeypatch):
     dispatch.ensure_services(st, [], {}, False, None)
     assert len([c for c in calls if c[0] == "new-window"]) == 1
     assert st["services"]["invoices"]["next_at"] == datetime(2026, 10, 29, 9, 0).isoformat()
+
+
+def _headless_script(name, **kw):
+    h = harnesses.BUILTINS[name]
+    return harnesses.headless_script(h, "cx", "/pl-billing-chase", "invoices", C.STATE_DIR / "r.log", C.STATE_DIR / "r.json", **kw)
+
+
+def test_a_read_only_loop_gets_the_read_only_flags_not_the_unattended_ones(profile):
+    codex = _headless_script("codex", writes=False)
+    assert "--sandbox read-only" in codex and "--ask-for-approval" not in codex and "workspace-write" not in codex
+    assert "export PL_LOOP=invoices" in codex and "export PL_LOOP_WRITES=0" in codex
+    claude = _headless_script("claude", writes=False)
+    assert "--permission-mode plan" in claude and "--permission-mode auto" not in claude
+    assert "PL_LOOP_WRITES" not in _headless_script("codex")
+
+
+def test_a_harness_without_read_only_flags_waits_instead_of_running(profile, tmux_calls):
+    calls, _ = tmux_calls
+    C.ACCOUNTS = {"cx": {"harness": "antigravity", "config_dir": str(profile / ".agy-cx")}}
+    _loop(writes=False)
+    st = {}
+    dispatch.ensure_services(st, [], {}, False, None)
+    assert _script(calls) is None and "no read-only mode" in st["services"]["invoices"]["waits"]
+
+
+@pytest.fixture
+def read_only_loop(monkeypatch):
+    monkeypatch.setenv("PL_LOOP", "invoices")
+    monkeypatch.setenv("PL_LOOP_WRITES", "0")
+
+
+def test_a_read_only_loop_cannot_move_or_approve_a_card(profile, read_only_loop, monkeypatch, capsys):
+    from pl import cli
+    (profile / ".pl-t").mkdir()
+    (profile / ".pl-t" / "config.toml").write_text("")
+    monkeypatch.setenv("PL_CONFIG_DIR", str(profile / ".pl-t"))
+    for argv in (["pl", "move", "1", "Done"], ["pl", "approve", "1"]):
+        monkeypatch.setattr("sys.argv", argv)
+        with pytest.raises(SystemExit) as e:
+            cli.main()
+        assert e.value.code == 2
+        assert "read-only loop: file the action as an idea" in capsys.readouterr().err
+
+
+class FakeTracker:
+    def __init__(self):
+        self.created = []
+
+    def create(self, column, **kw):
+        self.created.append((column, kw))
+        return {"id": "9"}
+
+    def url(self, _id):
+        return "u"
+
+
+@pytest.fixture
+def idea(profile, monkeypatch):
+    from pl import commands, events, trackers
+    t = FakeTracker()
+    monkeypatch.setattr(trackers, "get", lambda _name: t)
+    monkeypatch.setattr(trackers, "me", lambda _t: "me")
+    monkeypatch.setattr(events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(commands, "intake_configured", lambda: False)
+    args = types.SimpleNamespace(text="Chase Acme invoice", title=None, doc=[], account=None, repo=[], start=True)
+    return t, lambda: commands.cmd_idea(args)
+
+
+def test_an_idea_from_a_read_only_loop_is_filed_unstarted_and_tagged(idea, read_only_loop):
+    t, file_idea = idea
+    file_idea()
+    (column, kw), = t.created
+    assert column == "Inbox" and kw["assigned_to"] is None
+    assert {"proposed", "loop:invoices"} <= set(kw["tags"])
+
+
+def test_a_dry_run_idea_is_printed_not_filed(idea, read_only_loop, monkeypatch, capsys):
+    t, file_idea = idea
+    monkeypatch.setenv("PL_DRY_RUN", "1")
+    file_idea()
+    assert t.created == [] and "would file: Chase Acme invoice" in capsys.readouterr().out

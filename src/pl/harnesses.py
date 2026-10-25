@@ -73,6 +73,8 @@ UNATTENDED = {"claude": ["--permission-mode", "auto"],
               "codex": ["--ask-for-approval", "never", "--sandbox", "workspace-write"],
               "antigravity": ["--mode", "accept-edits"],
               "gemini": ["--approval-mode", "auto_edit"]}
+# The harness's own read-only mode, for a loop with writes = false. A harness missing here cannot run one.
+READ_ONLY = {"claude": ["--permission-mode", "plan"], "codex": ["--sandbox", "read-only"]}
 STILL_ASKS = {"antigravity": "allow the commands in agy's own settings",
               "gemini": "allow the commands with a gemini policy file (--policy)"}
 # A permission prompt on screen (strings of each CLI's binary at the versions above; claude's read-outside prompt from
@@ -438,11 +440,13 @@ def write_run_record(log_path, record_path, started_at, ended_at, exit_code):
                    "tokens": tokens, "exit": int(exit_code)}, f)
 
 
-def headless_script(h, account, prompt, name, log_path, record_path):
-    """The sh script a scheduled loop's window runs: the harness once, headless and unattended, its output in a 0600
-    log, then a 0600 run record (start, end, result, tokens, exit status). It deletes itself first."""
-    argv, _ = headless_argv(unattended_headless(h), account, prompt)
+def headless_script(h, account, prompt, name, log_path, record_path, writes=True):
+    """The sh script a scheduled loop's window runs: the harness once, headless and unattended (read-only when writes
+    is false), its output in a 0600 log, then a 0600 run record (start, end, result, tokens, exit status). It deletes
+    itself first."""
+    argv, _ = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
     lines = ["#!/bin/sh", 'rm -f -- "$0"', "umask 077"]
+    lines += [f"export {k}={shlex.quote(v)}" for k, v in loop_env(name, writes).items()]
     if h.env_var and C.PROFILES.get(account):
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(C.PROFILES[account]))}")
     if C.GH_CONFIG_DIR:
@@ -462,6 +466,20 @@ def unattended_headless(h):
     if not flags or any(PERMISSION_FLAG_RE.search(t) for t in h.headless):
         return h
     return dataclasses.replace(h, headless=[*h.headless[:1], *flags, *h.headless[1:]])
+
+
+def read_only_headless(h):
+    """h with its read-only flags after the program name in its headless argv, or None when it has no read-only mode
+    or its template already sets a permission flag (pl never runs a read-only loop with writes)."""
+    flags = READ_ONLY.get(h.name)
+    if not flags or any(PERMISSION_FLAG_RE.search(t) for t in h.headless):
+        return None
+    return dataclasses.replace(h, headless=[*h.headless[:1], *flags, *h.headless[1:]])
+
+
+def loop_env(name, writes, dry_run=False):
+    """The environment a loop run gets; pl's own commands read PL_LOOP_WRITES and PL_DRY_RUN to gate their writes."""
+    return {"PL_LOOP": name, **({} if writes else {"PL_LOOP_WRITES": "0"}), **({"PL_DRY_RUN": "1"} if dry_run else {})}
 
 
 def available(h):

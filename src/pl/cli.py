@@ -402,6 +402,9 @@ def _main():
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     q = pb.add_parser("end"); q.add_argument("conv")
     q = pb.add_parser("undo"); q.add_argument("conv")
+    p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
+    q = pl_.add_parser("run"); q.add_argument("name")
+    q.add_argument("--dry-run", action="store_true", help="run the loop in the foreground, read-only, and print what it would do")
     p = sub.add_parser("sync"); p.add_argument("action", choices=["status"]); p.add_argument("--json", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
@@ -414,6 +417,8 @@ def _main():
         return
     from pl import ghquota
     ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
+    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in ASSISTANT_ACTIONS and a.cmd != "idea":
+        raise BadInput("pl: read-only loop: file the action as an idea")
     if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     if os.environ.get("PL_SOURCE"):
@@ -424,7 +429,7 @@ def _main():
             audit.record("remote_action", card=card_id, command=a.cmd, source=os.environ["PL_SOURCE"])
         except Exception:
             pass
-    {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
+    {"idea": cmd_idea, "loops": lambda a: __import__("pl.loops").loops.cmd_loops(a), "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "outbox": cmd_outbox,
      "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
