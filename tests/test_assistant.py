@@ -762,3 +762,10 @@ def test_after_clear_the_live_session_is_the_one_the_pane_runs(monkeypatch):
     assert assistant.sync_session() is False                      # nothing left to sync
     monkeypatch.setattr(agents, "registry", lambda: {})
     assert assistant.live_session() == new                          # no registry entry: the saved id
+
+
+def test_pl_titles_writes_ask_first_but_check_and_next_do_not(tmux):
+    assistant.ensure()
+    p = _perms(tmux)
+    assert all(any(_hits(p["ask"], c) for c in (cmd,)) for cmd in ("pl titles set x --plan 1 --slice 1", "pl titles check --fix"))
+    assert not any(_hits(p["ask"], c) for c in ("pl titles check", "pl titles check --json", "pl titles next"))

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from pl import config as C
-from pl import harnesses
+from pl import harnesses, pods
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,48}")
 KINDS = {"skill": "skills", "agent": "agents", "command": "commands"}
@@ -502,16 +502,18 @@ def _clean_inlined(d):
             pass
 
 
-def library_prompt(h, account, prompt, plugin=None):
+def library_prompt(h, account, prompt, plugin=None, pod=None):
     """A prompt starting with /<name> (or, on Claude, /loop <every> /<name>) of a library skill the account (and the
     work folder) lacks: Claude gets
     /pl:<name> (the plugin's name for it), but only when plugin (this launch's --plugin-dir) is set; any other harness
     gets "Follow the instructions in <file>", the file holding SKILL.md and the prompt's arguments. Anything else, or
-    any error, returns the prompt unchanged."""
+    any error, returns the prompt unchanged. With a pod, a /name outside the pod's skills is left unchanged."""
     m = re.match(r"(\s*/loop\s+(?:[^/\s]\S*\s+)?)?\s*/([a-z0-9][a-z0-9-]*)(?=\s|$)", prompt or "")
     if not m or (m.group(1) and h.name != "claude"):
         return prompt
     loop, name, rest = m.group(1) or "", m.group(2), prompt[m.end():]
+    if pod and name not in pod["skills"]:
+        return prompt
     try:
         f = library() / name / "SKILL.md"
         if not f.is_file():
@@ -760,7 +762,8 @@ def _cmd_enable(a):
         raise SystemExit("pl: give a skill name or --plugin NAME")
     lib = library()
     if not (lib / name / "SKILL.md").is_file():
-        raise SystemExit(f"pl: unknown skill {name!r}")
+        print(f"pl: unknown skill {name!r}", file=sys.stderr)
+        raise SystemExit(2)
     skills_arr = pod_tbl.setdefault("skills", tomlkit.array())
     if name in skills_arr:
         print(f"skill {name} is already enabled in pod {pod_name}")
@@ -771,10 +774,29 @@ def _cmd_enable(a):
     return 0
 
 
+def _cmd_disable(a):
+    """pl skills disable NAME --pod POD."""
+    import tomlkit
+    doc = tomlkit.parse(C.path().read_text()) if C.path() and C.path().is_file() else tomlkit.document()
+    pod_tbl = doc.setdefault("pods", tomlkit.table()).setdefault(a.pod, tomlkit.table())
+    if a.pod == "engineering" and "skills" not in pod_tbl:
+        pod_tbl["skills"] = list(pods.ENGINEERING_SKILLS)
+    skills_arr = pod_tbl.get("skills", [])
+    if a.name not in skills_arr:
+        print(f"skill {a.name} is not enabled in pod {a.pod}")
+        return 0
+    del skills_arr[list(skills_arr).index(a.name)]
+    C.save(doc)
+    print(f"disabled skill {a.name} in pod {a.pod}")
+    return 0
+
+
 def cmd_skills(a):
-    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable."""
+    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
     if a.skills_cmd == "enable":
         return _cmd_enable(a)
+    if a.skills_cmd == "disable":
+        return _cmd_disable(a)
     if a.skills_cmd == "reset":
         return _cmd_reset(a)
     if a.skills_cmd == "share":

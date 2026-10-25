@@ -31,7 +31,7 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 ## pl commands and when to use them
 
 Status and the board:
-- `pl list` (`--all`, `--product`): what is where and what each agent is doing. Start here for "what is stuck?".
+- `pl list` (`--all`, `--product`, `--json`: cards with depends_on and waiting_on): what is where and what each agent is doing. Start here for "what is stuck?".
 - `pl card <id>`: one card's sections and metadata. Use it to explain why a card is stuck.
 - `pl section <id> NAME` (`--from FILE`): one section in full; `--from` replaces SPEC, DESIGN or PLAN (it asks).
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
@@ -67,6 +67,7 @@ Moving work (rule 1 applies):
 - `pl retention run` (`--dry-run`, `--json`): run email data retention pass now
   (the dispatcher also does this daily).
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
+- `pl caps set <id> [--minutes M] [--tokens 4M]` / `pl caps reset <id>`: give one card its own caps; `pl retry <id>` then restarts a card stopped at a cap.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
 - `pl link <id> <pipeline>:<id>` (`--relation`): link a card to a card in another pipeline's profile.
