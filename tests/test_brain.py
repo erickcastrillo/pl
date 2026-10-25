@@ -284,4 +284,3 @@ def test_no_other_write_tool_is_listed(monkeypatch, tmp_path):
     ]
     for fw in forbidden_writes:
         assert fw not in tool_names
-

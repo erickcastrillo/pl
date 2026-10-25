@@ -2166,3 +2166,13 @@ async def test_whatsnew_opens_from_the_palette():
         command.callback()
         await settle(pilot)
         assert isinstance(app.screen, WhatsNewScreen)
+
+
+async def test_b_opens_the_brain_tab_on_any_profile():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+        await pilot.press("b")
+        await pilot.pause()
+        assert app.active_tab == "brain"

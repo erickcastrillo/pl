@@ -16,10 +16,10 @@ class _TabsList(list):
 TABS = _TabsList([("home", "Home"), ("dashboard", "Dashboard"), ("assistant", "Assistant"),
                   ("ideas", "Ideas"), ("cards", "Pipeline"), ("prs", "Pull requests"),
                   ("loops", "Loops"), ("alerts", "Alerts"), ("activity", "Activity"),
-                  ("settings", "Settings"), ("subagents", "Background")])
+                  ("settings", "Settings"), ("subagents", "Background"), ("brain", "Brain")])
 # tab key = position in this list: 0 Dashboard, 1 Assistant, 2 Ideas, 3 Pipeline, ... 9 Background.
 # Keys stay fixed when tabs() hides the Assistant.
-TAB_KEYS = {"home": "H", **{tid: str(i) for i, (tid, _) in enumerate(TABS)}}
+TAB_KEYS = {"home": "H", **{tid: str(i) for i, (tid, _) in enumerate(TABS) if tid != "brain"}, "brain": "b"}   # brain uses b
 
 HELP = {
     "dashboard": "What needs you first, then what the agents did in the chosen window. w changes the window, s writes a standup.",
