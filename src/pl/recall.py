@@ -289,6 +289,7 @@ def forget(entry_id) -> bool:
         con = _db()
         try:
             with con:
+                con.execute("DELETE FROM vectors WHERE id = ?", (entry_id,))
                 return con.execute("DELETE FROM entries WHERE id = ?", (entry_id,)).rowcount > 0
         finally:
             con.close()

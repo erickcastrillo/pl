@@ -134,3 +134,12 @@ def test_reindex_fills_in_missing_vectors(monkeypatch):
     assert recall.reindex() == 1
     assert recall.reindex() == 0
     assert [e["id"] for e in recall.search("divide")] == [i]
+
+
+def test_forget_removes_the_entrys_vector_too(monkeypatch):
+    _embedding(monkeypatch, {"split": [1.0, 0.1, 0.0]})
+    i = recall.add("split the change into 3 PRs", "rejection", "s")
+    keep = recall.add("lunch note", "fact", "s")
+    assert recall.forget(i)
+    ids = [r[0] for r in recall._db().execute("SELECT id FROM vectors")]
+    assert ids == [keep]
