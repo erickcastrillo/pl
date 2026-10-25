@@ -190,6 +190,19 @@ def test_a_dead_loop_opens_and_resolves(monkeypatch):
     assert not _open("loop_dead:merge-check")
 
 
+def test_a_loop_failing_three_runs_in_a_row_opens_an_alert_and_a_good_run_clears_it(monkeypatch):
+    C.SERVICES = {"invoices": {"prompt": "/pl-billing-chase", "profile": "acme", "every": "daily 09:00"}}
+    runs = [{"exit": 0}, {"exit": 1}, {"exit": 2}, {"exit": 1}]
+    C.STATE_FILE.parent.mkdir(exist_ok=True)
+    C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs}}}))
+    notes = _pass(monkeypatch, [])
+    assert _open("loop_failed:invoices") and len(notes) == 1
+    assert _pass(monkeypatch, []) == []
+    C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs + [{"exit": 0}]}}}))
+    _pass(monkeypatch, [])
+    assert not _open("loop_failed:invoices")
+
+
 def _ago(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - seconds))
 

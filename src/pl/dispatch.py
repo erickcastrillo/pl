@@ -574,11 +574,11 @@ def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
         s["ran_at"] = now_iso()
         s.pop("waits", None)
         return
-    now = _local_now()
-    if not start or (s.get("next_at") and now < datetime.fromisoformat(s["next_at"])):
+    now, asked = _local_now(), s.get("run_now")
+    if not start or (not asked and s.get("next_at") and now < datetime.fromisoformat(s["next_at"])):
         return
     upcoming = schedule.next_run(schedule.parse_every(svc["every"]), after=now).isoformat()
-    if svc.get("hours") and not schedule.in_hours(schedule.parse_hours(svc["hours"]), now):
+    if svc.get("hours") and not asked and not schedule.in_hours(schedule.parse_hours(svc["hours"]), now):
         s["next_at"] = upcoming
         return
     pin = svc["profile"]
@@ -599,6 +599,7 @@ def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
                                        runs_dir / f"{name}.log", record)
     _launch(_loop_pane(name), name, script)
     s.update(profile=use, started_at=now_iso(), ran_at=now_iso(), next_at=upcoming)
+    s.pop("run_now", None)
 
 
 def _loop_waits(svc_state, name, why):
@@ -1251,6 +1252,15 @@ def check_alerts(all_cards, failed, st=None):
                               s.get("waits") or "its window is gone; the dispatcher starts it again on its next pass"):
             notify(alerts.headline(why, f"Loop {name} has not run for {age(ran)}"), s.get("waits") or "see the Loops tab")
     alerts.sweep("loop_stale:", stale, notify)
+    failing = set()
+    for name in C.SERVICES if st is not None else ():
+        last = ((st.get("services") or {}).get(name) or {}).get("runs", [])[-3:]
+        if len(last) == 3 and all(r.get("exit") != 0 for r in last):
+            key = f"loop_failed:{name}"
+            failing.add(key)
+            if why := alerts.open(key, "high", f"Loop {name} failed its last 3 runs", f"see its log under state/loops/{name}.log"):
+                notify(alerts.headline(why, f"Loop {name} failed 3 runs in a row"), last[-1].get("result") or "see the Loops tab")
+    alerts.sweep("loop_failed:", failing, notify)
     _check_anomaly_alerts(now, st)
     if not C.SERVICES:
         return

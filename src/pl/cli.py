@@ -172,7 +172,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, outward, pods, profiles, retention, rework, setup, skills, titles
+from pl import alerts, assistant, config, events, hooks, links, loops, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -295,6 +295,8 @@ def _main():
     p = sub.add_parser("caps"); pc = p.add_subparsers(dest="caps_cmd", required=True)
     q = pc.add_parser("set"); q.add_argument("id"); q.add_argument("--minutes"); q.add_argument("--tokens", help="2M, 500k or a number")
     q = pc.add_parser("reset"); q.add_argument("id")
+    p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
+    q = pl_.add_parser("run"); q.add_argument("name"); q.add_argument("--wait", action="store_true", help="follow until the run ends and print its record"); q.add_argument("--json", action="store_true", help="with --wait: print the record as JSON")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")
@@ -428,7 +430,7 @@ def _main():
      "outbox": cmd_outbox,
      "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
-     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
+     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,

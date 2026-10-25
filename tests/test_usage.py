@@ -438,3 +438,14 @@ def test_old_buckets_and_files_are_dropped_after_14_days(fake_home):
     t = time.time() - 15 * 86400
     os.utime(old, (t, t))
     assert total(usage.scan(), since=30 * 86400) == {"main": 100}
+
+
+def test_scheduled_loop_tokens_come_from_its_run_records(fake_home):
+    C.SERVICES = {"invoices": {"prompt": "/pl-billing-chase", "profile": "cx", "every": "daily 09:00"}}
+    old = (datetime.now(timezone.utc) - timedelta(days=9)).isoformat()
+    runs = [{"ended_at": old, "tokens": 900}, {"ended_at": _ts(3600), "tokens": 40}, {"ended_at": _ts(60), "tokens": "n/a"},
+            {"ended_at": _ts(30), "tokens": 2}]
+    C.STATE_FILE.parent.mkdir(exist_ok=True)
+    C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs}}}))
+    assert usage.summary(usage.scan())["loops"]["invoices"]["tokens_7d"] == 42
+    assert total(usage.scan(), "loop") == {"invoices": 42}
