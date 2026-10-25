@@ -1,5 +1,6 @@
 """Prep slots count what really runs; one account is logged, stored and launched; the folder trust prompt is
 reported and never answered."""
+import json
 import subprocess
 import time
 import types
@@ -306,6 +307,49 @@ def test_trust_command_quotes_odd_folders_and_falls_back_to_the_work_dir(monkeyp
     assert harnesses.trust_command(claude, "x", "/home/me/a b") == "cd ~/'a b' && claude"
     assert harnesses.trust_command(claude, "x", "~/code/pl") == "cd ~/code/pl && claude"
     assert harnesses.trust_command(claude, "x", "this folder") == "cd ~/work && claude"
+
+
+def _trust_file(path, **folders):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"projects": {f: {"hasTrustDialogAccepted": v} for f, v in folders.items()}}))
+
+
+def test_claude_trusts_reads_the_account_config_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "HOME", tmp_path)
+    monkeypatch.setattr(C, "WORK_DIR", tmp_path / "code/pl")
+    monkeypatch.setattr(C, "PROFILES", {"a": tmp_path / ".claude-a"})
+    pl, x = str(tmp_path / "code/pl"), str(tmp_path / "code/x")
+    _trust_file(tmp_path / ".claude-a/.claude.json", **{pl: True, x: False})
+    assert harnesses.claude_trusts("a", pl) is True
+    assert harnesses.claude_trusts("a", pl + "/") is True
+    assert harnesses.claude_trusts("a", x) is False
+    assert harnesses.claude_trusts("a", str(tmp_path / "code")) is False
+    assert harnesses.claude_trusts("a", "this folder") is True
+    assert harnesses.claude_trusts("a", "~/code/pl") is True
+    _trust_file(tmp_path / ".claude.json", **{pl: True})
+    assert harnesses.claude_trusts("nobody", pl) is True
+
+
+def test_claude_trusts_says_no_on_a_missing_empty_or_broken_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(C, "HOME", tmp_path)
+    monkeypatch.setattr(C, "PROFILES", {"a": tmp_path / ".claude-a"})
+    f = tmp_path / ".claude-a/.claude.json"
+    assert harnesses.claude_trusts("a", "/x") is False
+    f.parent.mkdir()
+    for text in ("", "{not json", "[]", '{"projects": []}', '{"projects": {"/y": {"hasTrustDialogAccepted": true}}}',
+                 '{"projects": {"/x": "yes"}}', '{"projects": {"/x": {"hasTrustDialogAccepted": "true"}}}'):
+        f.write_text(text)
+        assert harnesses.claude_trusts("a", "/x") is False
+    assert capsys.readouterr() == ("", "")
+
+
+def test_claude_trusts_never_writes_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "PROFILES", {"a": tmp_path})
+    f = tmp_path / ".claude.json"
+    _trust_file(f, **{"/x": True})
+    before = (f.read_bytes(), f.stat().st_mtime_ns)
+    assert harnesses.claude_trusts("a", "/x") is True
+    assert (f.read_bytes(), f.stat().st_mtime_ns) == before
 
 
 def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch):

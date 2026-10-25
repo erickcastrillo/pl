@@ -382,6 +382,24 @@ def trust_command(h, account, folder):
     return f"cd {_shown(folder)} && {env}{h.bin}"
 
 
+def claude_trusts(account, folder):
+    """True only when the account's Claude config marks exactly this folder trusted. pl only reads this one file and
+    keeps nothing from it but the answer; it never writes it."""
+    d = C.PROFILES.get(account)
+    p = (Path(d) if d else C.HOME) / ".claude.json"
+    if folder != "~" and not folder.startswith(("/", "~/")):
+        folder = str(C.WORK_DIR)
+    elif folder.startswith("~"):
+        folder = str(C.HOME) + folder[1:]
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return False
+    projects = data.get("projects") if isinstance(data, dict) else None
+    ent = projects.get(folder.removesuffix("/")) if isinstance(projects, dict) else None
+    return isinstance(ent, dict) and ent.get("hasTrustDialogAccepted") is True
+
+
 def headless_argv(h, account, prompt, stage=None):
     """(argv, env) for a one-shot run; no shell."""
     env = dict(os.environ)
