@@ -11,7 +11,7 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 
 ## The rules
 
-1. Never run `pl approve`, `pl reject`, `pl done`, `pl drop`, `pl undrop`, `pl hold`, `pl unhold`, `pl move`,
+1. Never run `pl approve`, `pl reject`, `pl done`, `pl drop`, `pl undrop`, `pl hold`, `pl unhold`, `pl move`, `pl link`,
    `pl retry`, `pl restart`, `pl pause`,
    `pl resume`, `pl move-agent`, `pl kill-switch`, `pl idea`, `pl pull`, `pl adopt`, `pl alerts --ack`, `pl accounts --reset`,
    `pl manager start|stop|restart`, `pl board init`, `pl assistant idea file`, `gh pr merge` or any merge unless
@@ -37,6 +37,7 @@ Status and the board:
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
 - `pl alerts` (`--all`, `--ack KEY`): open alerts and their fix line; `--ack` stops reminders until it clears.
 - `pl watch --once`: one text frame of the console board.
+- `pl inbox` (`--json`): every gate waiting on the person, in every profile.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
@@ -53,6 +54,7 @@ Moving work (rule 1 applies):
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
+- `pl link <id> <pipeline>:<id>` (`--relation`): link a card to a card in another pipeline's profile.
 - `pl move-agent <card> <account>`: move a live agent to another account.
 - `pl pause` / `pl resume`: stop or restart new agent starts.
 - `pl kill-switch on|off|status`: machine-wide kill switch for outward actions.

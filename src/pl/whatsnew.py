@@ -130,6 +130,8 @@ ENTRIES = [
     _e("2026-10-25.01", "The footer shows the actions that fit the selected card, and ? opens help for the screen",
        "Pipeline: approve and send back show only on a spec or plan waiting for you, p reads hold; ? is help, "
        "What's new is in the palette (ctrl+p)", "pl"),
+    _e("2026-10-25.02", "Link cards across pipelines", "pl card shows links",
+       "pl link <id> engineering:<id> --relation built-for"),
 ]
 
 

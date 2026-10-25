@@ -480,6 +480,8 @@ def cmd_card(a):
         print("metadata: unreadable\n" + str(c["unreadable"])[:2000])
     else:
         print("metadata: " + json.dumps(c.get("metadata") or {}, indent=1))
+    if (c.get("metadata") or {}).get("links"):
+        print("links: " + ", ".join(f"{l['pipeline']}:{short_id(l['id'])} ({l['relation']})" for l in c["metadata"]["links"]))
     for k, v in sections(c.get("description")).items():
         print(f"-- section {k or '(preamble)'}: {len(v)} chars, first line: {v.strip().splitlines()[0][:80] if v.strip() else ''}")
 
