@@ -47,6 +47,15 @@ such choice in the pull request description.
    git worktree add -b pl/<short-name> "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" origin/<default branch>
    ```
 
+   Then bootstrap it, so the files and dependencies the repository's `.pl/worktree.yaml` asks for are in place:
+
+   ```
+   pl worktrees bootstrap "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" --card <id>
+   ```
+
+   If bootstrap reports a missing file or a setup failure, proceed with the work packages using the
+   diagnostics it printed; do not stop.
+
    If the branch or worktree already exists from an earlier attempt, reuse it where it is and continue where
    it stopped. `git worktree list` shows where it is; an older one may be at `../<repo>-pl-<short-name>`.
    Run every later command inside the worktree.
@@ -107,7 +116,7 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
 
    Every problem it lists as still open is the work. Findings it says are fixed need nothing.
 3. Do not make a new branch or a new pull request. Reuse the branch's worktree (`git worktree list`), or add
-   one from `origin/<branch>` in `$PL_WORKTREES_DIR`. `git fetch origin`, then merge the pull request's base
+   one from `origin/<branch>` in `$PL_WORKTREES_DIR` and bootstrap it with `pl worktrees bootstrap <worktree path> --card <id>`. `git fetch origin`, then merge the pull request's base
    branch into it (a merge, never a rebase or force-push) and resolve conflicts, so it stays mergeable.
 4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.
    Where a finding is marked unsure or is a product call, pick the safer behaviour and say so. When a finding

@@ -146,6 +146,8 @@ ENTRIES = [
     _e("2026-10-25.08", "Chat answers questions via the brain with checked source links",
        "Chat: plain questions and 'remember this' answered when [brain] chat = true",
        "send a question in chat"),
+    _e("2026-10-25.09", "Bootstrap fresh worktrees via .pl/worktree.yaml",
+       "fresh worktrees bootstrapped by pl-run; README: Worktrees folder", "pl worktrees bootstrap <path> --dry-run"),
 ]
 
 
