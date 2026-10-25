@@ -802,7 +802,7 @@ def cmd_skills(a):
         return _cmd_reset(a)
     if a.skills_cmd == "install":
         from pl import skill_sources
-        return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name)
+        return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name, plugin=a.plugin)
     if a.skills_cmd == "share":
         account = a.account or harnesses.default_account()
         placed = _root(account) / "skills" / a.name
