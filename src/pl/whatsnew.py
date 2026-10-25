@@ -188,6 +188,8 @@ ENTRIES = [
     _e("2026-10-25.24", "Pipelines from templates: sales, clients, billing, team", "pl pipelines", "pl pipelines list --templates"),
     _e("2026-10-25.25", "Add a pipeline as a new profile; export and import it", "pl pipelines add",
        "pl pipelines add sales --template new-client --board local --yes"),
+    _e("2026-10-25.26", "Connectors: plug any MCP server in by role, sign in through the browser",
+       "docs/connectors.md; pl connectors import --from claude lists the servers you already set up", "pl connectors list"),
 ]
 
 
