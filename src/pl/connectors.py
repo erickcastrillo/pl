@@ -155,10 +155,15 @@ def _tool_counts() -> dict:
         return {}
 
 
-def _status(c) -> str:
+SIGNIN_STATUS = {"needs_signin": "needs sign-in", "connected": "connected"}
+
+
+def _status(c, cs=None) -> str:
     if not c["enabled"]:
         return "disabled"
     auth, tok = c.get("auth", "oauth" if "url" in c else "none"), c.get("token")
+    if auth == "oauth" and (cs or {}).get("status") in SIGNIN_STATUS:
+        return SIGNIN_STATUS[cs["status"]]
     if auth == "none" or (auth == "token" and VAR_RE.match(tok or "") and os.environ.get(tok[2:-1])):
         return "connected"
     return "not signed in"
@@ -172,9 +177,15 @@ def rows() -> list[dict]:
         ver, pin = cs.get("last_version") or cs.get("approved_version") or "", c.get("pin")
         warn = f"connector {n} version {ver} does not match pinned version {pin}" if pin and ver and ver != pin else ""
         out.append({"name": n, "role": c.get("role", []), "teams": c.get("teams", []), "access": c["access"],
-                    "tier": c["tier"], "status": _status(c), "tools": counts.get(n), "server": _server(c),
+                    "tier": c["tier"], "status": _status(c, cs), "tools": counts.get(n), "server": _server(c),
                     "version": ver, "pin": pin, "warning": warn})
     return out
+
+
+def status() -> dict:
+    """connector name -> status text; Home reads this."""
+    state = load_state()
+    return {n: _status(c, state.get(n)) for n, c in load().items()}
 
 
 def _cell(v) -> str:
@@ -336,6 +347,53 @@ def resolve_server(cfg: dict) -> dict:
     return {k: v for k, v in server.items() if k in ("url", "command", "args", "env", "headers")}
 
 
+def _auth(name: str, cfg: dict):
+    if cfg.get("auth") == "oauth" and cfg.get("url"):
+        return connectors_oauth.provider(name, cfg["url"], interactive=False)
+
+
+def _sign_in_error(e: BaseException):
+    """The NeedsSignIn inside e, which the SDK's task groups may wrap in exception groups."""
+    if isinstance(e, connectors_oauth.NeedsSignIn):
+        return e
+    for inner in getattr(e, "exceptions", ()):
+        if found := _sign_in_error(inner):
+            return found
+
+
+def _mark_sign_in(name: str, needed: bool) -> None:
+    state = load_state()
+    cs = state.setdefault(name, {})
+    status = "needs_signin" if needed else "connected"
+    if cs.get("status") == status:
+        return
+    cs["status"] = status
+    save_state(state)
+    if needed:
+        alerts.open(f"connector_signin:{name}", "warn", f"Connector {name} needs sign-in", f"pl connectors add {name} --reauth")
+    else:
+        alerts.resolve(f"connector_signin:{name}")
+
+
+def _run_signed_in(name: str, cfg: dict, make):
+    """_run(make(auth)), with the connector's stored sign-in; a sign-in that cannot be refreshed marks it needs_signin."""
+    auth = _auth(name, cfg)
+    try:
+        result = _run(make(auth))
+    except BaseException as e:
+        if auth and (found := _sign_in_error(e)):
+            _mark_sign_in(name, True)
+            raise found from None
+        raise
+    if auth:
+        _mark_sign_in(name, False)
+    return result
+
+
+def active_signin_alerts() -> set:
+    return {f"connector_signin:{n}" for n, cs in load_state().items() if cs.get("status") == "needs_signin"}
+
+
 def _transport(cfg: dict, auth=None):
     cfg = resolve_server(cfg)
     if cfg.get("url"):
@@ -428,8 +486,9 @@ def add(name: str, command=None, url: str | None = None, pin: str | None = None,
     state = load_state()
     state[name] = {"approved_tools": fp, "approved_snapshot": snap, "approved_version": version,
                    "last_fingerprint": fp, "last_snapshot": snap, "last_version": version,
-                   "known_read_tools": reads, "tools_changed": None}
+                   "known_read_tools": reads, "tools_changed": None, **({"status": "connected"} if auth else {})}
     save_state(state)
+    alerts.resolve(f"connector_signin:{name}")
     return state[name]
 
 
@@ -439,7 +498,7 @@ def set_pin(name: str, pin: str) -> None:
 
 def tools(name: str) -> list[dict]:
     cfg = load_config().get(name, {})
-    version, raw = _run(_query_raw(cfg))
+    version, raw = _run_signed_in(name, cfg, lambda auth: _query_raw(cfg, auth))
     fp, snap = _fingerprint_tools(raw, version)
     state = load_state()
     cs = state.setdefault(name, {})
@@ -476,13 +535,13 @@ def call(name: str, tool_name: str, args: dict | None = None, mode: str | None =
     if is_write_forbidden(name, tool_name):
         raise PermissionError(f"Connector {name}: write tool {tool_name} forbidden while tools are unapproved")
     cfg = load_config().get(name, {})
-    async def _call():
+    async def _call(auth):
         from mcp import ClientSession
-        async with _transport(cfg) as (r, w, *_):
+        async with _transport(cfg, auth) as (r, w, *_):
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 return await s.call_tool(tool_name, args or {})
-    res = _run(_call())
+    res = _run_signed_in(name, cfg, _call)
     return res.content[0].text if getattr(res, "content", None) and hasattr(res.content[0], "text") else res
 
 
