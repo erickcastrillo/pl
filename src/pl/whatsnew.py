@@ -195,7 +195,7 @@ ENTRIES = [
        "pl sandbox login <account>"),
     _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
        "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
-    _e("2026-10-25.29", "Exited agents' windows close by themselves",
+    _e("2026-10-25.30", "Exited agents' windows close by themselves",
        "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert", "pl alerts"),
 ]
 
