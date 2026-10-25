@@ -1,0 +1,30 @@
+[pipeline]
+name = "new-client"
+template = "new-client"
+columns = ["Lead", "Qualify review", "Proposal", "Proposal review", "Onboarding", "Done"]
+
+[pipeline.stages.qualify]
+column = "Lead"
+done = "Qualify review"
+next = "Proposal"
+skill = "pl-stage"
+section = "PROPOSAL"
+gate = "owner"
+instructions = "Read the lead on the card. Judge fit, budget and timing, and write the qualification and a first outline of the proposal."
+
+[pipeline.stages.proposal]
+column = "Proposal"
+done = "Proposal review"
+skill = "pl-stage"
+section = "PROPOSAL"
+gate = "owner"
+outward = true
+instructions = "Write the full proposal for the client from the qualification. A person approves it before anything is sent."
+
+[pipeline.stages.onboarding]
+column = "Onboarding"
+done = "Done"
+skill = "pl-stage"
+section = "CHECKLIST"
+gate = "owner"
+instructions = "Write the onboarding checklist for the signed client: access to request, people to introduce, first meetings."

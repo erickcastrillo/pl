@@ -11,6 +11,7 @@ from pathlib import Path
 import tomlkit
 
 from pl import config as C
+from pl.jsonout import emit
 
 def _tilde(p):
     s = str(p)
@@ -156,6 +157,11 @@ def _write_config(d, doc):
         f.write(tomlkit.dumps(doc))
 
 
+def pipeline_config(pipeline_doc, tracker, accounts) -> dict:
+    """A pipeline profile's config: its pipeline, a board and the accounts, and no code host."""
+    return _clean({"tracker": tracker, "accounts": {n: dict(a) for n, a in accounts.items()}, "pipeline": pipeline_doc})
+
+
 def _target(name):
     if not C.NAME_RE.match(name):
         raise SystemExit(f"pl: bad profile name {name!r}")
@@ -166,10 +172,14 @@ def _target(name):
 
 
 def new_profile(name: str, from_current: bool = False, github_owner: str | None = None, github_title: str | None = None,
-                github_repo: str | None = None):
+                github_repo: str | None = None, pipeline_doc: dict | None = None, tracker_doc: dict | None = None):
     """Write ~/.pl-<name>/config.toml with the effective (or neutral default) values and [gates] spec = true.
     With github_owner, first create a GitHub Project with a "pl stage" field and make it the tracker."""
     d = _target(name)
+    if pipeline_doc is not None:
+        _write_config(d, pipeline_config(pipeline_doc, tracker_doc, C.ACCOUNTS))
+        print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+        return
     v = _values(from_current)
     if not from_current:
         v["PROMPTS"] = dict(C.BUILTIN_PROMPTS)   # a new profile runs pl's built-in stage skills
@@ -354,6 +364,9 @@ def cmd_new(argv: list[str], profile: str | None = None):
 
 def cmd_profiles(a):
     rows = list_profiles()
+    if getattr(a, "json", False):
+        emit({"profiles": rows, "warnings": shared_warnings(rows)})
+        return
     if not rows:
         print("no profiles yet: create one with pl profiles new <name>")
         return

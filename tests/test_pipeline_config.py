@@ -110,3 +110,32 @@ def test_validate_returns_the_same_errors_for_the_settings_screen(fake_home):
     errs = C.validate(doc)
     assert any(e.startswith("pipeline.stages.prepare.column") for e in errs)
     assert not any("pipeline" in e for e in C.validate(tomlkit.parse("")))
+
+
+def test_engineering_template_equals_the_builtin_pipeline():
+    assert pipeline.templates()["engineering"] == pipeline.engineering()
+
+
+def test_every_template_passes_validation():
+    templates = pipeline.templates()
+    assert {"engineering", "new-client", "existing-client", "billing", "team"} <= set(templates)
+    for name, p in templates.items():
+        if name != "engineering":   # engineering keeps its own code path, where design and plan share a column
+            assert pipeline.errors(p) == [], name
+
+
+def test_billing_outward_stages_are_gated():
+    billing = pipeline.templates()["billing"]
+    assert set(billing["stages"]) == {"prepare-invoice", "chase-overdue"}
+    for name, stage in billing["stages"].items():
+        assert stage["outward"] is True and stage["gate"] == "owner", name
+        assert stage["connectors"] == [], name
+    ungated = {**billing, "stages": {n: {**s, "gate": "none"} for n, s in billing["stages"].items()}}
+    assert len(pipeline.errors(ungated)) == 2
+
+
+def test_other_templates_use_the_generic_stage_skill():
+    stages = {n: set(pipeline.templates()[n]["stages"]) for n in ("existing-client", "team")}
+    assert stages == {"existing-client": {"check-in", "renewal", "issue-triage"}, "team": {"hiring", "onboarding"}}
+    for name in ("existing-client", "billing", "team"):
+        assert {s["skill"] for s in pipeline.templates()[name]["stages"].values()} == {"pl-stage"}
