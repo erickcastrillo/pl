@@ -76,6 +76,7 @@ def _wp2_expected(args, legacy):
         out = out.replace("kill-switch}", "kill-switch,triggers}")   # pl triggers
         out = out.replace("triggers}", "triggers,question,answer}")   # pl question, pl answer
         out = out.replace("skills,update,", "skills,pods,update,")   # pl pods (list, show)
+        out = out.replace("skills,update,local-model}", "skills,update,local-model,forget}")   # pl forget (removes a contact everywhere)
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
         out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all]\n")
         out = out.replace("usage: pl [-h]\n", "usage: pl [-h] [--profile NAME] [--version]\n", 1)

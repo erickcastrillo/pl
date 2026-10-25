@@ -85,6 +85,8 @@
   pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
                           turn matching incoming messages into cards; list [--json] shows status;
                           pause/resume NAME toggles whether it runs
+  pl forget --contact <id|email> --yes [--dry-run] [--json]
+                          remove one contact everywhere: cards, logs, memory; records an audit entry
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -130,7 +132,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, links, outward, pods, profiles, rework, setup, skills
+from pl import alerts, assistant, config, events, links, outward, pods, profiles, retention, rework, setup, skills
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -314,6 +316,10 @@ def _main():
     p.add_argument("--since", help="7d, 24h, or date")
     p.add_argument("--json", action="store_true", help="output json lines")
     p.add_argument("--verify", action="store_true", help="verify the hash chain and exit 1 on broken chain")
+    p = sub.add_parser("forget"); p.add_argument("--contact", required=True, help="contact email or id to forget")
+    p.add_argument("--yes", action="store_true", help="confirm without prompting")
+    p.add_argument("--dry-run", action="store_true", help="count what would be removed without changing anything")
+    p.add_argument("--json", action="store_true", help="output counts as JSON")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -346,6 +352,7 @@ def _main():
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
+     "forget": retention.cmd_forget,
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),

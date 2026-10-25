@@ -91,6 +91,40 @@ def _prune():
         raise
 
 
+def forget(target, dry_run=False):
+    """Rewrite events.jsonl and mcp-*.log without lines holding target. Returns count of lines removed."""
+    if not target:
+        return 0
+    target_lower, total_removed = str(target).strip().lower(), 0
+    log_files = ([_path()] if _path().is_file() else []) + (
+        [p for p in sorted(C.STATE_DIR.glob("mcp-*.log")) if p.is_file()] if C.STATE_DIR.is_dir() else []
+    )
+    for path in log_files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = text.splitlines(keepends=True)
+        kept = [ln for ln in lines if target_lower not in ln.lower()]
+        removed = len(lines) - len(kept)
+        if not removed:
+            continue
+        total_removed += removed
+        if not dry_run:
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.writelines(kept)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
+    return total_removed
+
+
 def metrics(window_seconds, now=None):
     """Counts of events inside the last `window_seconds`; an event exactly at the edge does not count.
     `errors_last` is the most recent error event of all time (or None)."""
