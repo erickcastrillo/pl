@@ -994,6 +994,11 @@ def check_alerts(all_cards, failed, st=None):
     except Exception:
         capped = set()
     alerts.sweep("trigger_cap:", capped, notify)
+    try:
+        from pl import connectors
+        alerts.sweep("connector_tools:", connectors.active_tools_alerts(), notify)
+    except (ImportError, AttributeError):
+        pass
     waiting, now = set(), time.time()
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")
