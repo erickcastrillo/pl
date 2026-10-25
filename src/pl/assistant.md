@@ -71,6 +71,7 @@ Moving work (rule 1 applies):
 - `pl move <id> "<column>"`: move a card to a column.
 - `pl rework` (`--dry-run`): send cards in PR open whose PR the review labeled for rework back to a run agent now
   (the dispatcher also does this every 10 minutes).
+- `pl merges` (`--dry-run`, `--json`): judge which ready pull requests are safe to merge without a person; this slice merges nothing.
 - `pl retention run` (`--dry-run`, `--json`): run email data retention pass now
   (the dispatcher also does this daily).
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.

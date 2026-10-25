@@ -685,6 +685,48 @@ MARKED = "@pl_marks"   # tmux session option: the dispatcher marks this session'
 STAGE_PREFIXES = ("spec-", "design-", "plan-", "run-")
 
 
+def _exited_window(wid, pane, name, owner, all_cards, waits, seen, dry):
+    """True when the exited agent window wid (a shell in a stage window) was handled here: closed, or kept because it
+    shows an error or a human gate, until release_waiting_after minutes passed since it was first seen so. False
+    leaves it to the rest of the sweep: no card owns it, or its card still runs this stage in it (the death and
+    retry path of dispatch_once handles that)."""
+    stage = name.split("-", 1)[0]
+    if owner is None:
+        named = [c for c in all_cards if (c.get("metadata") or {}).get("pipeline_mode") == "auto"
+                 and f"{stage}-{slug_of(c)[:28]}" == name]
+        if len(named) != 1:
+            return False
+        owner = named[0]
+    c = owner
+    current = ((c.get("metadata") or {}).get("worker") or {}).get("window")
+    col = col_name(c["list_id"])
+    if current and current != wid:
+        why = "card has a newer agent"
+    elif hold_reason(c) or stage_for(c, col) != stage or (stage == "run" and col == "Approved"):
+        why = "card moved on"
+    else:
+        return False
+    screen = harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-60"]).stdout or ""
+    gate = next((g for g in GATE_RE.findall(screen) if g in HUMAN_GATES), None)
+    need = f"gate {gate}" if gate else "an error" if death_line(pane) else None
+    if need:
+        rec = waits.get(wid) if isinstance((waits.get(wid) or {}).get("since"), (int, float)) else {"since": time.time()}
+        seen[wid] = rec
+        limit = C.DISPATCH.get("release_waiting_after", 30)
+        if not limit or time.time() - rec["since"] < limit * 60:
+            if not dry and (alert := alerts.open(f"exited_window:{wid}", "warn",
+                                                 f"Card {short_id(c['id'])}: its exited {stage} agent window {name} shows {need}",
+                                                 f"see window {name} ({wid}); " + (f"pl closes it after {limit} min" if limit else "close it when done"))):
+                notify(alerts.headline(alert, f"Exited agent needs you: {c['title'][:40]}"), f"window {name} shows {need}")
+            return True
+        seen.pop(wid)
+        why = f"kept {limit} min for {need}"
+    print(f"{'would close' if dry else 'closing'} exited {stage} agent window {name} ({wid}) for {short_id(c['id'])}: {why}")
+    if not dry:
+        tmux("kill-window", "-t", wid, check=False)
+    return True
+
+
 def sweep_untracked(all_cards, reg, dry, st=None):
     """Tidy the stage windows (spec-, design-, plan-, run-) no card tracks any more, by one rule:
     - only a shell in it (an agent that exited, or a window tmux-resurrect restored): never counted; closed once its
@@ -698,12 +740,14 @@ def sweep_untracked(all_cards, reg, dry, st=None):
     A tracked agent window from before marks gets pl's mark (its own pane, started in this tmux server); then the
     session is marked. Returns how many untracked prep windows of pl's with a live process it left open: they still
     hold a prep slot (run windows hold none)."""
-    tracked = {}
+    tracked, owners = {}, {}
     for c in all_cards:
         m = c.get("metadata") or {}
         for w in ([m["worker"]] if m.get("worker") else []) + (m.get("finished_workers") or []):
             if w.get("window"):
                 tracked[w["window"]] = w
+                owners[w["window"]] = c
+    waits, seen = (st or {}).get("exited_waits") or {}, {}
     out = subprocess.run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{pane_id} #{window_activity} "
                           f"#{{?#{{{MARK}}},pl,-}} #{{start_time}} #{{window_name}} #{{pane_current_command}}"],
                          capture_output=True, text=True).stdout
@@ -717,6 +761,8 @@ def sweep_untracked(all_cards, reg, dry, st=None):
         if not name.startswith(STAGE_PREFIXES):
             continue
         shell = cmd in harnesses.SHELLS
+        if shell and _exited_window(wid, pane, name, owners.get(wid), all_cards, waits, seen, dry):
+            continue   # an exited agent's window: closed, or kept for a person
         if wid in tracked:
             w = tracked[wid]
             since = max(parse_iso(w.get("started_at") or ""), parse_iso(w.get("moved_at") or ""))
@@ -747,6 +793,8 @@ def sweep_untracked(all_cards, reg, dry, st=None):
         print(f"closing untracked {name} agent window {wid}")
         if not dry:
             tmux("kill-window", "-t", wid, check=False)
+    if st is not None:
+        st["exited_waits"] = seen   # a window no longer listed drops its clock
     if not dry:
         tmux("set-option", "-t", f"={C.TMUX_SESSION}", MARKED, "1", check=False)
     _report_foreign(foreign, st, dry)
@@ -1293,6 +1341,7 @@ def check_alerts(all_cards, failed, st=None):
             and untrusted_folder(harnesses.account_harness(p[1]), p[1]) == Path(p[2])}
     alerts.sweep("trust:", held, notify)   # open while that account still does not trust the folder
     alerts.sweep("api_error:", failed, notify)
+    alerts.sweep("exited_window:", {f"exited_window:{k}" for k in (st or {}).get("exited_waits") or {}}, notify)
     try:
         from pl import triggers
         capped = {f"trigger_cap:{n}" for n, s in triggers.load_state().items() if isinstance(s, dict) and s.get("paused") == "cap"}
@@ -1302,6 +1351,7 @@ def check_alerts(all_cards, failed, st=None):
     try:
         from pl import connectors
         alerts.sweep("connector_tools:", connectors.active_tools_alerts(), notify)
+        alerts.sweep("connector_signin:", connectors.active_signin_alerts(), notify)
     except (ImportError, AttributeError):
         pass
     waiting, now = set(), alerts._clock()

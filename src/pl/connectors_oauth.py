@@ -129,7 +129,14 @@ def provider(name: str, url: str, interactive: bool):
     meta = OAuthClientMetadata(
         client_name="pl", redirect_uris=[f"http://127.0.0.1:{server.server_address[1]}/callback"],
         grant_types=["authorization_code", "refresh_token"], response_types=["code"], token_endpoint_auth_method="none")
-    return OAuthClientProvider(url, meta, storage, redirect_handler, callback_handler, timeout=CALLBACK_WAIT)
+    class Provider(OAuthClientProvider):
+        async def _initialize(self):
+            await super()._initialize()
+            # The SDK leaves the expiry unset for stored tokens and on a 401 goes straight to a new sign-in; this makes it refresh first.
+            if self.context.current_tokens:
+                self.context.update_token_expiry(self.context.current_tokens)
+
+    return Provider(url, meta, storage, redirect_handler, callback_handler, timeout=CALLBACK_WAIT)
 
 
 def _settle(future, done):
