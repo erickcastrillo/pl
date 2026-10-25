@@ -29,6 +29,9 @@
   pl hold <id> [--reason TEXT] / pl unhold <id>
                           hold a card (the parked tag, other tags kept): the dispatcher starts no agent on it; its
                           running agent is not stopped. unhold removes the tag and the reason
+  pl depends <id> --on <id>... | --clear
+                          record cards this card depends on, or clear them; the dispatcher starts an Approved card
+                          only once every dependency is merged
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
@@ -159,7 +162,7 @@ from pl import alerts, assistant, config, events, hooks, links, outward, pods, p
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
                          cmd_outbox, cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
-                         cmd_review, cmd_restart, cmd_hold, cmd_unhold)
+                         cmd_review, cmd_restart, cmd_hold, cmd_unhold, cmd_depends)
 from pl.dispatch import cmd_dispatch
 from pl.move_agent import cmd_move_agent
 from pl.standup import cmd_standup
@@ -171,7 +174,7 @@ from pl.util import BadInput
 PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFIG_DIR)"
 # commands that change the pipeline; the event is a record for the Activity feed, not a guard
 ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
-                     "restart", "hold", "unhold")
+                     "restart", "hold", "unhold", "depends")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -242,6 +245,7 @@ def _main():
     p = sub.add_parser("undrop"); p.add_argument("id")
     p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)")
     p = sub.add_parser("unhold"); p.add_argument("id")
+    p = sub.add_parser("depends"); p.add_argument("id"); p.add_argument("--on", nargs="+", default=[], metavar="ID", help="cards this card depends on"); p.add_argument("--clear", action="store_true", help="remove every dependency")
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("link"); p.add_argument("id"); p.add_argument("target", metavar="PIPELINE:ID")
     p.add_argument("--relation", default="related"); p.add_argument("--one-side", action="store_true", help="write only this card, not the other")
@@ -398,6 +402,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "depends": cmd_depends,
      "titles": titles.cmd_titles,
      "hook": hooks.cmd_hook,
      "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),

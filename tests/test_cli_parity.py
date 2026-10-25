@@ -60,6 +60,7 @@ def _wp2_expected(args, legacy):
         out = out.replace(",adopt,done,board,", ",adopt,done,move,board,")   # WP28 adds pl move
         out = out.replace(",adopt,done,move,", ",adopt,done,drop,undrop,move,")   # pl drop / pl undrop
         out = out.replace(",drop,undrop,move,", ",drop,undrop,hold,unhold,move,")   # pl hold / pl unhold (the parked tag)
+        out = out.replace(",hold,unhold,move,", ",hold,unhold,depends,move,")
         out = out.replace(",board,card,profiles,", ",board,card,retry,profiles,")   # WP42 adds pl retry
         out = out.replace(",board,card,retry,", ",board,card,section,retry,")   # pl section (read or write one card section)
         out = out.replace(",section,retry,", ",section,retry,restart,")   # pl restart (stop a card's agent, start fresh)

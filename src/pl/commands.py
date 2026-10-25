@@ -121,7 +121,7 @@ def cmd_list(a):
             rows = sorted(by_col.get(col, []), key=lambda c: c.get("updated_at") or "", reverse=True)
             print(f"{col}  ({len(rows)})")
             for c in rows:
-                print(f"  {short_id(c['id'])}  {c['title'][:56]:<56}  {approved_label(c, col, reg) or worker_view(c, reg):<28} {age(parse_iso(c.get('updated_at') or ''))}")
+                print(f"  {short_id(c['id'])}  {c['title'][:56]:<56}  {approved_label(c, col, reg, pipeline) or worker_view(c, reg):<28} {age(parse_iso(c.get('updated_at') or ''))}")
         print()
     # Intake board: everything assigned to you, linked funnel cards marked
     if not intake_configured():
@@ -522,6 +522,8 @@ def cmd_card(a):
               "sections": {k: len(v) for k, v in sections(c.get("description")).items()}, **used})
         return
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
+    if deps := (c.get("metadata") or {}).get("depends_on"):
+        print(f"depends on {', '.join(short_id(d) for d in deps)}")
     if used["caps"]:
         print(_caps_line(used))
     if c.get("unreadable"):
@@ -736,6 +738,49 @@ def cmd_hold(a):
 
 def cmd_unhold(a):
     for line in unhold(a.id):
+        print(line)
+
+
+def depends(ref, on, clear):
+    """Record or clear card dependencies, refusing cycles. Returns lines to show."""
+    fresh_next()
+    cs = cards()
+    c = card(pick(ref, cs, "pl depends")["id"])
+    head = f"{short_id(c['id'])}  {c['title'][:50]}"
+    if clear:
+        update(c["id"], metadata={"depends_on": []})
+        events.emit("depends_cleared", c["id"])
+        return [f"{head}: no dependencies; it starts like any Approved card"]
+    if not on:
+        raise SystemExit("pl depends: give --on <id>... or --clear")
+    resolved = [pick(token, cs, "pl depends")["id"] for token in on]
+    merged = list((c.get("metadata") or {}).get("depends_on") or [])
+    for tid in resolved:
+        if tid not in merged:
+            merged.append(tid)
+    graph = {x["id"]: list((x.get("metadata") or {}).get("depends_on") or []) for x in cs}
+    graph[c["id"]] = merged
+
+    def find_cycle(node, path):
+        for nxt in graph.get(node, []):
+            if nxt == c["id"]:
+                return path + [nxt]
+            if nxt not in path:
+                if cycle := find_cycle(nxt, path + [nxt]):
+                    return cycle
+        return None
+
+    if cycle := find_cycle(c["id"], [c["id"]]):
+        cycle_str = " -> ".join(short_id(x) for x in cycle)
+        print(f"pl depends: refused: that makes a cycle: {cycle_str}", file=sys.stderr)
+        raise SystemExit(2)
+    update(c["id"], metadata={"depends_on": merged})
+    events.emit("depends", c["id"])
+    return [f"{head}: depends on {', '.join(short_id(x) for x in merged)}"]
+
+
+def cmd_depends(a):
+    for line in depends(a.id, a.on, a.clear):
         print(line)
 
 

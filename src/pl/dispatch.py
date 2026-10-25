@@ -17,8 +17,8 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, manager, memory, move_agent, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
-                       run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
+from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
+                       run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
@@ -52,12 +52,14 @@ def stage_for(c, col):
     return None
 
 
-def approved_label(c, col, reg):
+def approved_label(c, col, reg, all_cards=None):
     """Status line for a Spec ready card whose spec you approved: which stage is next and whether an agent is on it."""
     if hold := hold_reason(c):
         return hold
     if (c.get("metadata") or {}).get("question"):
         return "waiting (question asked)"
+    if col == "Approved" and all_cards is not None and (why := deps_waiting(c, all_cards)):
+        return why
     m = c.get("metadata") or {}
     stage = stage_for(c, col) if col == "Spec ready" and m.get("spec_approved_at") else None
     if stage not in ("design", "plan"):
@@ -933,6 +935,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         if attempts == 0:
             st["notified"].pop(f"{c['id']}:{stage}_failed", None)   # a fresh start (pl retry): a new failure notifies again
+        if stage == "run" and col == "Approved" and (why := deps_waiting(c, all_cards)):
+            print(f"{short_id(c['id'])}  run {why}")
+            continue
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
     prep_alive += sweep_untracked(all_cards, reg, dry, st) or 0
@@ -958,7 +963,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     # order: runs first (they are the long pole), In progress ones (a restart) before Approved ones that have not
     # started, then plans, designs, specs; oldest first
     rank = {"run": 0, "plan": 1, "design": 2, "spec": 3}
-    todo.sort(key=lambda t: (rank[t[1]], t[3] != "In progress", t[0].get("updated_at") or ""))
+    todo.sort(key=lambda t: (rank[t[1]], t[3] != "In progress", slice_order(t[0]), t[0].get("updated_at") or ""))
     pause = paused()
     held = 0
     for c, stage, attempts, col in todo:

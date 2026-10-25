@@ -70,6 +70,7 @@ Moving work (rule 1 applies):
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
 - `pl link <id> <pipeline>:<id>` (`--relation`): link a card to a card in another pipeline's profile.
 - `pl hook <event> --card <id> --window <w>`: what a stage agent's Claude Code hooks run; never run it by hand.
+- `pl depends <id>` (`--on`, `--clear`): record cards this card depends on, or clear them.
 - `pl move-agent <card> <account>`: move a live agent to another account.
 - `pl pause` / `pl resume`: stop or restart new agent starts.
 - `pl kill-switch on|off|status`: machine-wide kill switch for outward actions.
