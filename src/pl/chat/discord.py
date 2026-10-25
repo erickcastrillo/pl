@@ -9,6 +9,7 @@ import urllib.request
 from typing import Any
 
 from pl import util
+from pl.audit import CHAT_UNKNOWN_SENDER
 
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 MONEY_RE = re.compile(r"([$€£¥]\s*\d+(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|CAD|AUD|JPY)\b|\b(?:USD|EUR|GBP|CAD|AUD|JPY)\s*\d+(?:[.,]\d+)?)")
@@ -165,7 +166,7 @@ class Discord:
         u = d.get("member", {}).get("user") or d.get("user")
         user_id = str(u.get("id", "")) if isinstance(u, dict) else str(d.get("user_id", ""))
         if not user_id or user_id not in self.allow:
-            audit_record("chat_unknown_sender", connector=self.name, sender_id=user_id)
+            audit_record(CHAT_UNKNOWN_SENDER, connector=self.name, sender_id=user_id)
             return None
         itype = d.get("type")
         int_id, int_tok = d.get("id", ""), d.get("token", "")

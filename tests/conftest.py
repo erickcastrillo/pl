@@ -41,6 +41,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     from pl import harnesses
     monkeypatch.setattr(harnesses, "MODEL_LIST_ARGV", {})    # agy models / codex's catalog: test_model_effort fakes them
     harnesses._MODELS.clear()
+    from pl import ghquota
+    monkeypatch.setattr(ghquota, "_ask_token", lambda: "")   # no test asks gh for a token; test_gh_rate_limit.py fakes gh
+    ghquota._TOKENS.clear()
 
 
 PY = re.compile(r"python[\d.]*$")
@@ -201,6 +204,13 @@ def no_stage_hooks(monkeypatch):
     """Launch tests compare exact argv: a stage launch adds no Claude Code hooks unless test_hooks turns them on."""
     from pl import hooks
     monkeypatch.setattr(hooks, "enabled", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def trusted_work_dir(monkeypatch):
+    """The dispatcher's trust gate reads the account's .claude.json: off unless a test turns it on."""
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account: None)
 
 
 @pytest.fixture(autouse=True)

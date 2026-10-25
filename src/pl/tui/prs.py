@@ -127,7 +127,7 @@ def overview_text(pr, hit, method):
     why = verdict(v)
     t.append("\n")
     t.append(why if ready(why) else f"not ready: {why}", style="bold green" if ready(why) else "bold red")
-    t.append(f"\nm merge ({METHODS[method][1]})" + ("" if ready(why) else " · M merge anyway"), style="dim")
+    t.append(f"\nM merge ({METHODS[method][1]})", style="dim")
     return t
 
 
@@ -146,7 +146,7 @@ class PrsView(Horizontal):
     #prs-side { width: 1fr; height: 1fr; }
     #prs-body { height: 1fr; }
     """
-    BINDINGS = [Binding("m", "merge(False)", "merge"), Binding("M", "merge(True)", "merge anyway")]
+    BINDINGS = [Binding("M", "merge", "merge")]
 
     def __init__(self):
         super().__init__()
@@ -249,7 +249,7 @@ class PrsView(Horizontal):
         self._cache.clear()
         self._err = None
 
-    def action_merge(self, force):
+    def action_merge(self):
         _, pr = self._current()
         if pr is None or not pr.get("url"):
             self.app.notify("select a pull request to merge")
@@ -265,15 +265,12 @@ class PrsView(Horizontal):
         v = hit[1] if hit and hit[0] == "ok" else None
         why = verdict(v) if v else "its overview has not loaded"
         name = f"{pr['repo']}#{pr['number']}"
-        if not ready(why) and not force:
-            self.app.notify(f"not merging {name}: {why}. Press M to merge it anyway.", markup=False)
-            return
         method = self._method.get(pr["repo"], "squash")
         msg = (f"Merge {name}  {pr.get('title') or ''}\ninto {(v or {}).get('baseRefName') or 'its base branch'} "
-               f"as a {METHODS[method][1]}?" + ("" if ready(why) else f"\n\nNot ready: {why}"))
-        self.app.push_screen(MergeScreen(msg), lambda yes: yes and self._merge(pr, method, "m" if ready(why) else "M"))
+               f"as a {METHODS[method][1]}?" + ("" if ready(why) else f"\n\nNot ready: {why}\nMerge anyway?"))
+        self.app.push_screen(MergeScreen(msg), lambda yes: yes and self._merge(pr, method))
 
-    def _merge(self, pr, method, key="m"):
+    def _merge(self, pr, method):
         """gh pr merge <url> --squash (or --merge) in a worker: no --admin, no --delete-branch."""
         def run():
             ok, repo, r = False, pr["repo"], None
@@ -291,7 +288,7 @@ class PrsView(Horizontal):
                     note = out or f"merged {repo}#{pr['number']}"
                 elif method == "squash" and "squash" in low and "not allowed" in low:
                     self._method[repo] = "merge"
-                    note = f"{repo} does not allow squash merges: press {key} again to merge with a merge commit"
+                    note = f"{repo} does not allow squash merges: press M again to merge with a merge commit"
                 else:
                     lim = github.back_off(r.stderr) if r is not None else None
                     note = lim.note if lim else f"merge failed: {out or 'gh gave no reason'}"

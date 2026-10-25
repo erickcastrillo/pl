@@ -27,6 +27,11 @@ def out(x):
     print(json.dumps(x)); sys.exit(0)
 def flag(name, default=None):
     return args[args.index(name) + 1] if name in args else default
+if args[:2] == ["auth", "token"]:
+    tok = os.environ.get("GH_TOKEN") or state.get("token")
+    if not tok:
+        print("no oauth token found", file=sys.stderr); sys.exit(1)
+    print(tok); sys.exit(0)
 if args[:2] == ["api", "-i"] and state.get("headers") is not None:
     print(state["headers"]); sys.exit(1)   # gh api -i prints the failing reply's headers and body, then exits 1
 if args[:2] == ["api", "rate_limit"] and "search" in args[-1]:   # the REST search budget: 30 a minute
@@ -1480,3 +1485,142 @@ def test_console_header_says_the_board_is_held_until_the_reset(gh):
             assert time.strftime("%H:%M", time.localtime(reset)) in header
             assert app.data is first
     asyncio.run(run())
+
+
+# ---------- one ledger per token (Plan 25 slice 2) ----------
+
+REAL_ASK = ghquota._ask_token
+TOKEN_A, TOKEN_B = "ghp_FAKEAAAA" + "a" * 24, "ghp_FAKEBBBB" + "b" * 24
+
+
+def _hash(token):
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
+
+
+@pytest.fixture
+def tokens(gh, monkeypatch):
+    """The real token lookup through the fake gh, and a way to switch the token as another process would."""
+    monkeypatch.setattr(ghquota, "_ask_token", REAL_ASK)
+    ghquota._TOKENS.clear()
+
+    def use(token):
+        ghquota._TOKENS.clear()
+        monkeypatch.setenv("GH_TOKEN", token)
+    return use
+
+
+def _two_reads(gh, tokens):
+    reset_a, reset_b = int(time.time()) + 1800, int(time.time()) + 3000
+    tokens(TOKEN_A)
+    gh.set(rate=_rate(199, reset_a))
+    trackers.get("tracker").cards()
+    tokens(TOKEN_B)
+    gh.set(rate=_rate(3287, reset_b))
+    board.fresh_next()
+    trackers.get("tracker").cards()
+    return reset_a, reset_b
+
+
+def _files(gh):
+    return sorted(ghquota._dir().glob("acme-bot.*@github.com.json"))
+
+
+def test_two_tokens_of_one_login_keep_separate_ledgers(gh, tokens):
+    reset_a, reset_b = _two_reads(gh, tokens)
+    assert [f.name for f in _files(gh)] == sorted(f"acme-bot.{_hash(t)}@github.com.json" for t in (TOKEN_A, TOKEN_B))
+    a, b = (ghquota.ledger(f"acme-bot.{_hash(t)}@github.com") for t in (TOKEN_A, TOKEN_B))
+    assert (a["remaining"], a["reset"], a["spent"]) == (199, reset_a, {C.PROFILE_NAME: 2})
+    assert (b["remaining"], b["reset"], b["spent"]) == (3287, reset_b, {C.PROFILE_NAME: 2})
+
+
+def test_a_hold_uses_the_budget_of_the_token_the_call_uses(gh, tokens, role):
+    role("pl card")
+    tokens(TOKEN_A)
+    ghquota.learn("acme-bot")
+    _ledger(199, {})
+    tokens(TOKEN_B)
+    _ledger(3287, {})
+    assert ghquota.check("read") is None
+    gh.set(rate=_rate(3285, int(time.time()) + 1800))
+    assert trackers.get("tracker").card("acme/app#3")
+    tokens(TOKEN_A)
+    assert ghquota.check("read") is not None
+    with pytest.raises(github.OverBudget):
+        trackers.get("tracker").card("acme/app#3")
+
+
+def test_the_token_is_asked_once_per_process_and_folder(gh, tokens, tmp_path):
+    for _ in range(5):
+        ghquota.check()
+        ghquota.record(1)
+    assert gh.count("auth", "token") == 1
+    other = tmp_path / "other-gh"
+    other.mkdir()
+    C.GH_CONFIG_DIR = other
+    ghquota.check()
+    assert gh.count("auth", "token") == 2
+
+
+def test_no_token_falls_back_to_the_login_ledger(gh, tokens, monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    gh.set(rate=_rate(4200, int(time.time()) + 1800))
+    trackers.get("tracker").cards()
+    assert ghquota.account() == "acme-bot@github.com" and ghquota.check("read") is None
+    ghquota.account()
+    assert gh.count("auth", "token") == 1
+    ghquota._TOKENS.clear()
+
+    def missing():
+        raise SystemExit("pl: gh is not installed")
+    monkeypatch.setattr(ghquota, "_ask_token", missing)
+    assert ghquota.account() == "acme-bot@github.com"
+
+
+def test_an_old_login_ledger_is_left_alone(gh, tokens):
+    _ledger(10, {})
+    old = ghquota._path()
+    before = old.read_bytes()
+    tokens(TOKEN_B)
+    gh.set(rate=_rate(3287, int(time.time()) + 1800))
+    assert ghquota.check("read") is None
+    trackers.get("tracker").cards()
+    assert old.read_bytes() == before
+    assert ghquota.ledger()["remaining"] == 3287 and ghquota._path() != old
+
+
+def test_the_token_never_reaches_a_file_or_an_event(gh, tokens, tmp_path, capsys):
+    _two_reads(gh, tokens)
+    ghquota.report()
+    ghquota.summary()
+    ghquota.exhausted(int(time.time()) + 60)
+    out = capsys.readouterr()
+    haystack = out.out.encode() + out.err.encode()
+    for f in tmp_path.rglob("*"):
+        if f.is_file() and f != gh.state_file and f.name != "gh":
+            haystack += f.name.encode() + f.read_bytes()
+    for token in (TOKEN_A, TOKEN_B):
+        assert token.encode() not in haystack
+        assert _hash(token).encode() in haystack
+
+
+def test_usage_lists_each_token_ledger_by_login_and_hash(gh, tokens):
+    _two_reads(gh, tokens)
+    report = ghquota.report()
+    assert f"acme-bot@github.com (token {_hash(TOKEN_A)}): 199 of 5000" in report
+    assert f"acme-bot@github.com (token {_hash(TOKEN_B)}): 3287 of 5000" in report
+    assert ghquota.summary().startswith(f"GitHub acme-bot (token {_hash(TOKEN_B)}): 3287 of 5000")
+
+
+def test_manager_share_reads_the_freshest_token_ledger_of_another_folder(gh, tokens):
+    tokens(TOKEN_A)
+    ghquota.learn("acme-bot")
+    ghquota._write(ghquota._path(), {"limit": 5000, "remaining": 1234, "reset": int(time.time()) + 900,
+                                     "at": time.time(), "spent": {"main": 7}})
+    ghquota._write(ghquota._dir() / f"acme-bot.{_hash('ghp_OLDER')}@github.com.json", {"limit": 5000, "remaining": 1, "reset": int(time.time()) + 900,
+                                                 "at": time.time() - 500})
+    ghquota._write(ghquota._dir() / "logins.json", {**ghquota._load(ghquota._dir() / "logins.json"),
+                                                    "/other/folder@github.com": "acme-bot"})
+    got = ghquota.usage_for("/other/folder", "main")
+    assert got and got["remaining"] == 1234 and got["spent"] == 7
+

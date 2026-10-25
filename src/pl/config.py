@@ -124,12 +124,15 @@ def _review_text(repo, lab, account):
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
-def _review_prompt(repo, lab, account):
-    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo and the
-    labels. Claude repeats it with /loop."""
+def _review_prompt(repo, lab, account, limits):
+    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo, the
+    labels and the auto-merge size limits. Claude repeats it with /loop."""
     rework, failed = lab.get("rework") or "pl:needs-rework", lab.get("failed") or "pl:review-failed"
     q = shlex.quote   # a label with spaces stays one value
     text = f"/pl-review repo={q(repo)} review={q(lab['review'])} ready={q(lab['ready'])} rework={q(rework)} failed={q(failed)}"
+    if lab.get("merge_ready"):
+        text += f" merge_ready={q(lab['merge_ready'])}"
+    text += f" auto_lines={limits['pr_auto_merge_lines']} auto_files={limits['pr_auto_merge_files']}"
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
@@ -209,7 +212,7 @@ def _apply(g, t):
         lab = g["CODE_HOST"]["labels"]
         if "auto-review" not in t.get("loops", {}) and g["ACCOUNTS"] and lab.get("review") and lab.get("ready"):
             first, acct = next(iter(g["ACCOUNTS"].items()))
-            g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct), "profile": first,
+            g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct, g["PR_LIMITS"]), "profile": first,
                                                              "fallback": _review_text(tr["repo"], lab, acct),
                                                              "builtin": True}}
     if isinstance(ch.get("gh_config_dir"), str) and ch["gh_config_dir"]:
@@ -448,6 +451,10 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: prompt or skill is required")
             if table == "loops":
                 errs += _loop_schedule_errors(name, v)
+            if table == "stages" and is_local_account(v.get("account")):
+                if why := local_stage_problem(name, v):
+                    errs.append(why)
+                continue
             if accounts and v.get("account") and v["account"] not in accounts:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
@@ -462,6 +469,25 @@ def validate(doc) -> list[str]:
     from pl import triggers
     errs += triggers.validate(doc)
     return errs
+
+
+LOCAL_PREFIX = "local:"
+
+
+def is_local_account(account) -> bool:
+    return isinstance(account, str) and account.startswith(LOCAL_PREFIX)
+
+
+def local_stage_problem(name, v) -> str | None:
+    """Why [stages.<name>] cannot run on its local:<model> account, or None. pl never guesses which stages need tools:
+    the stage says so with tools = false, and the built-in stages always need them."""
+    from pl import harnesses
+    model = v["account"][len(LOCAL_PREFIX):]
+    if name in ("spec", "design", "plan", "run") or v.get("tools") is not False:
+        return (f"stages.{name}: a local model cannot use tools; set tools = false only for a stage that needs none")
+    if not harnesses.MODEL_RE.fullmatch(model):
+        return f"stages.{name}: account must be local:<model>, a model name like \"local:gemma4:e4b\""
+    return None
 
 
 def _pod_path_error(label, v, root):
@@ -516,6 +542,37 @@ def _loop_schedule_errors(name, v) -> list[str]:
     return errs
 
 
+def check_models(doc) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for every set claude or antigravity model name: an error when antigravity does not offer
+    it, a warning when a claude name is outside pl's fixed list or antigravity's list could not be read. It runs
+    a CLI, so validate never calls it."""
+    from pl import harnesses
+    named = [(f"accounts.{n}.model", a.get("harness") or "claude", a["model"])
+             for n, a in doc.get("accounts", {}).items() if isinstance(a, dict) and isinstance(a.get("model"), str)]
+    for s, v in doc.get("stages", {}).items():
+        if not isinstance(v, dict):
+            continue
+        tables = [(f"stages.{s}.models", v.get("models"))]
+        if isinstance(v.get("small"), dict):
+            tables.append((f"stages.{s}.small.models", v["small"].get("models")))
+        named += [(f"{path}.{h}", h, m) for path, t in tables if isinstance(t, dict)
+                  for h, m in t.items() if isinstance(m, str)]
+    errs, warns = [], []
+    for key, h, m in named:
+        if h not in ("claude", "antigravity"):
+            continue
+        names = harnesses.models(h)
+        if not names:
+            warns.append(f"{key}: {m!r} not checked; the {h} model list could not be read (agy models)")
+        elif m not in names:
+            msg = f"{key}: {m!r} is not a model {h} offers; accepted: {', '.join(names)}"
+            if h == "claude":   # pl's list is fixed, not read from the CLI, so an older id, alias or newer model may be valid
+                warns.append(msg.replace("is not a model claude offers", "is not in pl's claude list, passed on as given"))
+            else:
+                errs.append(msg)
+    return errs, warns
+
+
 def _model_errors(name, a) -> list[str]:
     """[accounts.<name>] model and effort: a model id and a level the account's harness takes. Offline: agy's and
     codex's model lists are never read here, so any id passes for them (new models appear)."""
@@ -549,6 +606,34 @@ def stage_harnesses(v, accounts) -> set[str]:
     return {(accounts.get(a) or {}).get("harness") or "claude" for a in pool if a in accounts}
 
 
+def _models_errors(path, models) -> list[str]:
+    from pl import harnesses
+    if not isinstance(models, dict):
+        return [f"{path} must be a table of harness = \"model\""]
+    errs = []
+    for h, m in models.items():
+        if h not in harnesses.MODEL_FLAGS:
+            errs.append(f"{path}.{h}: harness {h} takes no model; models take {', '.join(harnesses.MODEL_FLAGS)}")
+        elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
+            errs.append(f"{path}.{h}: must be a model id like \"opus\" (no spaces or quotes, not starting with -)")
+        elif h != "claude" and m in harnesses.CLAUDE_MODELS:
+            errs.append(f"{path}.{h}: {m!r} is a claude model name; use a model {h} offers")
+    return errs
+
+
+def _small_errors(name, small) -> list[str]:
+    """[stages.run.small]: the plan budget limits and the model per harness a small change runs on."""
+    if name != "run":
+        return [f"stages.{name}.small: only the run stage takes a small-change model"]
+    if not isinstance(small, dict):
+        return ["stages.run.small must be a table with max_lines, max_files and models"]
+    errs = [f"stages.run.small.{k}: must be a whole number above 0" for k in ("max_lines", "max_files")
+            if isinstance(small.get(k), bool) or not isinstance(small.get(k), int) or small[k] < 1]
+    if "models" in small:
+        errs += _models_errors("stages.run.small.models", small["models"])
+    return errs
+
+
 def _stage_effort_errors(name, v, accounts) -> list[str]:
     """[stages.<name>] effort: a level every harness the stage can run on takes. models: a model per harness."""
     from pl import harnesses
@@ -557,19 +642,9 @@ def _stage_effort_errors(name, v, accounts) -> list[str]:
         errs.append(f"stages.{name}: model is not a stage setting; set one per harness in [stages.{name}.models], "
                     "like claude = \"opus\" (a stage may pool accounts of different harnesses)")
     if "models" in v:
-        models = v["models"]
-        if not isinstance(models, dict):
-            errs.append(f"stages.{name}.models must be a table of harness = \"model\"")
-        else:
-            for h, m in models.items():
-                if h not in harnesses.MODEL_FLAGS:
-                    errs.append(f"stages.{name}.models.{h}: harness {h} takes no model; "
-                                f"models take {', '.join(harnesses.MODEL_FLAGS)}")
-                elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
-                    errs.append(f"stages.{name}.models.{h}: must be a model id like \"opus\" "
-                                "(no spaces or quotes, not starting with -)")
-                elif h != "claude" and m in harnesses.CLAUDE_MODELS:
-                    errs.append(f"stages.{name}.models.{h}: {m!r} is a claude model name; use a model {h} offers")
+        errs += _models_errors(f"stages.{name}.models", v["models"])
+    if "small" in v:
+        errs += _small_errors(name, v["small"])
     if "effort" not in v:
         return errs
     hs = stage_harnesses(v, accounts)
@@ -682,9 +757,9 @@ def _sandbox_errors(sb) -> list[str]:
     return errs
 
 
-def save(doc, target=None) -> None:
+def save(doc, target=None) -> list[str]:
     """Write a tomlkit document over the profile's config.toml: validated, temp file 0600 in the same folder,
-    fsync, os.replace. A refused or failed save leaves the old file untouched."""
+    fsync, os.replace. A refused or failed save leaves the old file untouched. Returns the model-name warnings."""
     import tomlkit
     from pl import harnesses
     target = Path(target) if target else path()
@@ -693,6 +768,9 @@ def save(doc, target=None) -> None:
     errs = validate(doc)
     if errs:
         raise SystemExit("pl: not saved: " + "; ".join(errs))
+    bad, warns = check_models(doc)
+    if bad:
+        raise SystemExit("pl: not saved:\n" + "\n".join(f"  {e}" for e in bad))
     text = tomlkit.dumps(doc)
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -706,6 +784,7 @@ def save(doc, target=None) -> None:
         tmp.unlink(missing_ok=True)
         raise
     harnesses._CACHE.clear()
+    return warns
 
 
 # pl manager's machine.toml [limits]: caps across every profile on the machine

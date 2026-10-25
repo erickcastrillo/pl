@@ -214,7 +214,7 @@ class DashboardView(Vertical):
         for i, (_, label, _) in enumerate(WINDOWS):
             bar.append(f" {label} ", style="bold #e0a040 reverse" if i == window else "")
             bar.append("  ")
-        bar.append(f"   profile {C.PROFILE_NAME or 'legacy'} · w changes window · r refresh", style="dim")
+        bar.append(f"   profile {C.PROFILE_NAME or 'legacy'} · [ ] change the window · r refresh", style="dim")
         mem = data.get("memory")
         if mem:
             bar.append(f"   memory: {mem['free'] / 1024 ** 3:.1f} GB free", style="bold red" if mem["low"] else "dim")

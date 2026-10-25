@@ -1,4 +1,5 @@
 """connector tool calls with write gating and audit, plus the HTTP proxy that gives sandboxed agents scoped access."""
+import asyncio
 import http.server
 import json
 import secrets
@@ -17,7 +18,7 @@ def is_write_forbidden(connector: str, tool: str) -> bool:
 
 
 def record_tool_call(connector: str, tool: str, access: str = "read", result: str = "ok") -> None:
-    audit.append("connector.tool", target=connector, detail={"tool": tool, "access": access, "result": result})
+    audit.append(audit.CONNECTOR_TOOL, target=connector, detail={"tool": tool, "access": access, "result": result}, access=access)
 
 
 def call_tool(connector: str, tool: str, args: dict | None = None, access: str = "read", handler=None):
@@ -166,3 +167,44 @@ def stop_proxy():
         if _PROXY:
             _PROXY.stop()
             _PROXY = None
+
+
+class Forbidden(Exception):
+    pass
+
+
+def visible_tools(name: str) -> list[dict]:
+    return [t for t in connectors.tools(name) if not t.get("write")]
+
+
+def proxy_call(name: str, tool: str, args: dict | None):
+    if tool not in {t["name"] for t in visible_tools(name)}:
+        raise Forbidden(f"forbidden: {tool} is not available on connector {name}")
+    return connectors.call(name, tool, args, mode="stage")
+
+
+def build_server(name: str):
+    from mcp import types
+    from mcp.server.lowlevel import Server
+    server = Server(f"pl-{name}")
+
+    @server.list_tools()
+    async def _list():
+        return [types.Tool(name=t["name"], description=t.get("description") or "",
+                           inputSchema=t.get("inputSchema") or {"type": "object"}) for t in visible_tools(name)]
+
+    @server.call_tool()
+    async def _call(tool, args):
+        return [types.TextContent(type="text", text=str(await asyncio.to_thread(proxy_call, name, tool, args)))]
+
+    return server
+
+
+def serve(name: str) -> None:
+    from mcp.server.stdio import stdio_server
+
+    async def _run():
+        server = build_server(name)
+        async with stdio_server() as (r, w):
+            await server.run(r, w, server.create_initialization_options())
+    asyncio.run(_run())
