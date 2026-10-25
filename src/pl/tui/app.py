@@ -1,4 +1,6 @@
 """PlApp: the pl console. One background refresh feeds every view; views never call the board, gh or tmux."""
+import os
+
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
@@ -43,7 +45,7 @@ def default_interval():
 
 def default_provider():
     """The real data for one refresh: board + tmux snapshot, event metrics per window, GitHub PR activity."""
-    from pl import events, ghquota, memory, watch
+    from pl import events, ghquota, memory, outward, watch
     ghquota.set_role("console")   # a periodic reader: it yields first when GitHub's budget runs low
     board.share("read")   # reuse the dispatcher's board read while it is young
     snap = watch.watch_snapshot()
@@ -51,7 +53,8 @@ def default_provider():
             "metrics_by_window": {key: events.metrics(seconds) for key, _, seconds in WINDOWS},
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
             "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
-            "machine": manager.read_status(), "now": _now(snap["rows"]), "alerts": _alerts()}
+            "machine": manager.read_status(), "now": _now(snap["rows"]), "alerts": _alerts(),
+            "kill": outward.state()}
 
 
 def _now(rows):
@@ -170,6 +173,7 @@ class PlApp(App):
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
+        Binding("K", "kill_switch", "kill switch"),
         Binding("question_mark", "whatsnew", "what's new", key_display="?"), Binding("U", "update", "update", show=False),
         Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
@@ -289,6 +293,8 @@ class PlApp(App):
                             self.action_whatsnew)
         yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
                             self.action_skills)
+        yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
+                            self.action_kill_switch)
 
     def action_skills(self):
         """Settings tab, the Skills section, its list focused."""
@@ -357,6 +363,28 @@ class PlApp(App):
             self.notify("no profile loaded: nothing to start", markup=False)
             return
         self.dispatcher_job("toggle")
+
+    def action_kill_switch(self):
+        from pl import outward
+        cur = outward.state()
+        on = cur.get("on")
+        msg = ("Turn off the machine-wide kill switch? Held outward actions will be released."
+               if on else
+               "Turn on the machine-wide kill switch? Outward actions on all profiles will be held.")
+
+        def done(yes):
+            if yes:
+                user = getattr(C, "USER_EMAIL", None) or os.environ.get("USER") or "console"
+                outward.set(not on, by=user)
+                try:
+                    from pl import events
+                    events.emit("kill_switch", state="off" if on else "on", action="off" if on else "on", by=user)
+                except Exception:
+                    pass
+                self.notify(f"kill switch {'off' if on else 'on'}", markup=False)
+                self.refresh_data()
+
+        self.push_screen(ConfirmScreen(msg), done)
 
     @work(thread=True, exclusive=True, group="refresh")
     def refresh_data(self):
@@ -444,6 +472,8 @@ class PlApp(App):
             return self.active_tab == "cards" and len(self.screen_stack) == 1
         if action == "dispatcher":
             return len(self.screen_stack) == 1   # never a second D while its choice or confirm dialog is open
+        if action == "kill_switch":
+            return len(self.screen_stack) == 1
         return True
 
     async def action_cycle_window(self):
