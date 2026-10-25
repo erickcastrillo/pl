@@ -67,7 +67,7 @@ def resolve(src):
     ref = src["ref"]
     if SHA_RE.fullmatch(ref):
         return ref
-    out = _git(["git", "ls-remote", _url(src), ref or "HEAD"])
+    out = _git(["git", "ls-remote", "--", _url(src), ref or "HEAD"])
     for line in out.splitlines():
         sha = line.split("\t")[0]
         if SHA_RE.fullmatch(sha):
@@ -108,7 +108,9 @@ def _json_flags(p):
 def inventory(root, path):
     """Every file under root/path, the code in them flagged by kind, and what kind of source it is."""
     root = Path(root).resolve()
-    base = root / path if path else root
+    base = Path(os.path.realpath(root / path)) if path else root
+    if not base.is_relative_to(root):
+        raise Refused(f"{path} leads outside the source")
     if not base.exists():
         raise Refused(f"no such path at the pinned commit: {path}")
     files, flags, skills = [], [], []

@@ -179,3 +179,21 @@ def test_a_link_inside_the_skill_folder_is_still_installed(env):
     code, _ = run(yes=True)
     assert code == 0
     assert (env["lib"] / "review" / "notes.md").is_symlink()
+
+
+def test_a_path_component_that_is_a_link_out_of_the_checkout_is_refused(env, capsys, tmp_path):
+    outside = tmp_path / "private"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n")
+    (outside / "note.txt").write_text("secret")
+    (env["up"] / "linked").symlink_to(outside)
+    code, _ = run("github:acme/kit/linked@main", yes=True)
+    assert code == 2
+    assert "outside the source" in capsys.readouterr().err
+    assert not (env["lib"] / "linked").exists()
+
+
+def test_ls_remote_ends_options_before_the_url(env):
+    run(yes=True)
+    ls = next(a for a in env["calls"] if a[:2] == ["git", "ls-remote"])
+    assert ls[2] == "--"
