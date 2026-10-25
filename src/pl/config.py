@@ -79,6 +79,7 @@ def _defaults():
     UPDATES = {}          # [updates] check = false: no daily look at pl's release tags
     SKILLS = {}           # [skills] library: the shared skills folder (default ~/.local/share/pl/skills)
     LOCAL_MODEL = {}      # [local_model] enabled, url, model, timeout: an optional Ollama model on this machine (off)
+    MODELS = {}           # [models.local] host, allow_lan, timeout, route/summarise/title/embed, [models.local.fallback]
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     out = {k: v for k, v in locals().items() if k.isupper()}
     _state_paths(out)
@@ -173,6 +174,7 @@ def _apply(g, t):
     g["SKILLS"] = dict(t.get("skills", {}))
     g["UPDATES"] = dict(t.get("updates", {}))
     g["LOCAL_MODEL"] = dict(t.get("local_model", {}))
+    g["MODELS"] = dict(t.get("models", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -324,6 +326,7 @@ def validate(doc) -> list[str]:
             if isinstance(n, bool) or not isinstance(n, (int, float)) or n <= 0:
                 errs.append(f"usage.{key}.{model} must be a number above 0")
     errs += _local_model_errors(doc.get("local_model", {}))
+    errs += _models_local_errors(doc.get("models", {}).get("local", {}), doc.get("accounts", {}))
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")
@@ -457,6 +460,33 @@ def _local_model_errors(lm) -> list[str]:
     t = lm.get("timeout")
     if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0):
         errs.append("local_model.timeout must be a number of seconds above 0")
+    return errs
+
+
+def _models_local_errors(ml, accounts) -> list[str]:
+    """[models.local]: known keys only, a loopback host (a private one with allow_lan = true), a model name per
+    job, and fallbacks that are skip, person or an account."""
+    from pl import local_model
+    keys = ("host", "allow_lan", "timeout", "route_min_confidence", "fallback", *local_model.JOBS)
+    errs = [f"models.local.{k} is not a setting; the keys are {', '.join(keys)}" for k in ml if k not in keys]
+    if not isinstance(ml.get("allow_lan", False), bool):
+        errs.append("models.local.allow_lan must be true or false")
+    if "host" in ml and (why := local_model.url_problem(ml["host"], ml.get("allow_lan") is True)):
+        errs.append(f"models.local.host {why}")
+    for job in local_model.JOBS:
+        if job in ml and not (isinstance(ml[job], str) and ml[job].strip()):
+            errs.append(f"models.local.{job} must be a model name like \"gemma4:e4b\"")
+    t = ml.get("timeout")
+    if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0):
+        errs.append("models.local.timeout must be a number of seconds above 0")
+    c = ml.get("route_min_confidence")
+    if c is not None and (isinstance(c, bool) or not isinstance(c, (int, float)) or not 0 <= c <= 1):
+        errs.append("models.local.route_min_confidence must be a number from 0 to 1")
+    for job, v in (ml.get("fallback") or {}).items():
+        if job not in local_model.JOBS:
+            errs.append(f"models.local.fallback.{job} is not a job; the jobs are {', '.join(local_model.JOBS)}")
+        elif v not in ("skip", "person") and v not in accounts:
+            errs.append(f"models.local.fallback.{job} must be skip, person or an account name, not {v!r}")
     return errs
 
 
