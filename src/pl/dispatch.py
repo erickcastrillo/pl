@@ -1286,7 +1286,8 @@ def check_alerts(all_cards, failed, st=None):
 
 def _check_anomaly_alerts(now, st=None):
     from pl import audit
-    entries = audit.read_entries(since=now - 7 * 86400)
+    since = now - 7 * 86400
+    entries = audit.read_entries(since=since) + audit.read_machine_entries(since=since)
     if not entries:
         alerts.sweep("send_spike:", set(), notify)
         return
@@ -1296,11 +1297,11 @@ def _check_anomaly_alerts(now, st=None):
     hour_writes, week_writes, prior_hosts, recent_auths = {}, {}, {}, []
     for e in entries:
         act, ts = e.get("action") or e.get("kind") or "", audit.parse_entry_ts(e)
-        if act in ("chat.unknown_user", "chat_unknown_sender") and ts >= window_start:
+        if act == audit.CHAT_UNKNOWN_SENDER and ts >= window_start:
             chan = e.get("channel") or e.get("connector") or e.get("target") or "unknown"
             if why := alerts.open(f"chat_unknown:{chan}", "high", f"Unknown chat user in {chan}", "check channel membership or invite them"):
                 notify(alerts.headline(why, f"Unknown chat user: {chan}"), "unauthorized chat message")
-        elif act == "connector.write":
+        elif act == audit.CONNECTOR_TOOL and e.get("access") == "write":
             conn = e.get("connector") or e.get("target") or "unknown"
             week_writes[conn] = week_writes.get(conn, 0) + 1
             if ts >= now - 3600:

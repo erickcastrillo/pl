@@ -102,7 +102,7 @@ def handle_update(adapter: Any, update: dict[str, Any]) -> None:
     sender_id, chat_id = _sender_and_chat(update)
     allow = [str(x) for x in getattr(adapter, "allow", [])]
     if allow and (sender_id not in allow and chat_id not in allow):
-        audit.record("chat_unknown_sender", connector=getattr(adapter, "name", "telegram"), sender_id=sender_id or chat_id)
+        audit.record(audit.CHAT_UNKNOWN_SENDER, connector=getattr(adapter, "name", "telegram"), sender_id=sender_id or chat_id)
         return
     if "callback_query" in update:
         _handle_callback(adapter, update["callback_query"])
