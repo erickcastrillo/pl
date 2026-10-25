@@ -150,10 +150,12 @@
                           move a card's live Claude agent to another account in place: Ctrl-C in its window,
                           copy its transcript, resume the same session there (asks first unless --yes). The
                           dispatcher does this by itself when an agent hits its usage limit
-  pl accounts [--reset NAME|all]
+  pl accounts [--reset NAME|all] [--check-trust]
                           which Claude profile is parked for running out of usage credits (the dispatcher
                           detects the limit on an agent's screen, parks that profile, and restarts the card
                           under the other one); --reset un-parks a profile by hand
+                          --check-trust shows, per Claude account, whether the work folder and the worktrees folder
+                          are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
   pl assistant log "text" | idea save ... | idea file <idea-id>
@@ -301,6 +303,7 @@ def _main():
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
     q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
     p = sub.add_parser("accounts"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand")
+    p.add_argument("--check-trust", action="store_true", help="show whether each Claude account trusts the work and worktrees folders (reads only)")
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     p.add_argument("--open", metavar="CARD", help="open this card on start")
@@ -320,7 +323,7 @@ def _main():
     p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
-    p.add_argument("--json", action="store_true", help="with --by card: minutes, tokens and caps per card and stage as JSON")
+    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts, or with --by card minutes, tokens and caps per card and stage")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")

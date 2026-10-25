@@ -340,6 +340,19 @@ def memory_arg(c, stage, dry):
         return ""
 
 
+def _small_run(c):
+    """True when c's approved PLAN budget fits [stages.run.small] and no rework round is running, so its run agent
+    takes the small model. The PLAN is refetched (a board list cuts descriptions); no call without a small table."""
+    small = (C.STAGES.get("run") or {}).get("small")
+    if not isinstance(small, dict) or ((c.get("metadata") or {}).get("rework") or {}).get("active"):
+        return False
+    try:
+        budget = harnesses.plan_budget(sections(card(c["id"]).get("description")).get("PLAN"))
+    except (RateLimited, OSError):
+        return False
+    return budget is not None and budget[0] <= small["max_files"] and budget[1] <= small["max_lines"]
+
+
 def bootstrap_warning(c):
     err = (c.get("metadata") or {}).get("bootstrap_error")
     if not err:
@@ -382,8 +395,9 @@ def start_worker(c, stage, attempts, dry):
         link = reader.extract_thread_link(c)
         prompt += f" fields={shlex.quote(fields_json)} thread={shlex.quote(link)}"
     prompt += questions.prompt_arg(c)
+    small = stage == "run" and _small_run(c)
     if dry:
-        print(f"  would start {name} under {profile}: {prompt}")
+        print(f"  would start {name} under {profile}{' (small model)' if small else ''}: {prompt}")
         return
     try:
         harnesses.refuse_bypass(h)
@@ -421,7 +435,7 @@ def start_worker(c, stage, attempts, dry):
         connectors_proxy.write_mcp_config(host_mcp, connectors_proxy.make_mcp_config(f"http://{bridge}:{srv.port}", scope.bearer))
         sandbox.transfer_in(sandbox.vm_name(), host_mcp, f"/tmp/mcp-{sid}.json")
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
-                                                         stage=stage, hooks=(c["id"], win)), script)
+                                                         stage=stage, hooks=(c["id"], win), small=small), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid)
@@ -944,6 +958,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                                       f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions"):
                     notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
             if bool(ask) != bool(w.get("permission_wait")):
+                if ask and not hooks.hook_permission(w):
+                    events.emit("state_transition", c["id"], source="screen", transition="permission_wait")
                 w = {**w, "permission_wait": ask} if ask else {k: v for k, v in w.items() if k != "permission_wait"}
                 update(c["id"], metadata={"worker": w})
         if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
@@ -961,6 +977,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 idle_for = screen_quiet(st, w["pane"])
             if (idle_for > 300 or w.get("finished_turn")) and w.get("window"):
                 print(f"{short_id(c['id'])}  closing finished {w['stage']} agent window (idle {int(idle_for // 60)} min)")
+                if not w.get("finished_turn") and not dry:
+                    events.emit("state_transition", c["id"], source="screen", transition="idle_finish")
                 if not dry:
                     tmux("kill-window", "-t", w["window"], check=False)
                     update(c["id"], metadata={"worker": None})
@@ -1268,7 +1286,8 @@ def check_alerts(all_cards, failed, st=None):
 
 def _check_anomaly_alerts(now, st=None):
     from pl import audit
-    entries = audit.read_entries(since=now - 7 * 86400)
+    since = now - 7 * 86400
+    entries = audit.read_entries(since=since) + audit.read_machine_entries(since=since)
     if not entries:
         alerts.sweep("send_spike:", set(), notify)
         return
@@ -1278,11 +1297,11 @@ def _check_anomaly_alerts(now, st=None):
     hour_writes, week_writes, prior_hosts, recent_auths = {}, {}, {}, []
     for e in entries:
         act, ts = e.get("action") or e.get("kind") or "", audit.parse_entry_ts(e)
-        if act in ("chat.unknown_user", "chat_unknown_sender") and ts >= window_start:
+        if act == audit.CHAT_UNKNOWN_SENDER and ts >= window_start:
             chan = e.get("channel") or e.get("connector") or e.get("target") or "unknown"
             if why := alerts.open(f"chat_unknown:{chan}", "high", f"Unknown chat user in {chan}", "check channel membership or invite them"):
                 notify(alerts.headline(why, f"Unknown chat user: {chan}"), "unauthorized chat message")
-        elif act == "connector.write":
+        elif act == audit.CONNECTOR_TOOL and e.get("access") == "write":
             conn = e.get("connector") or e.get("target") or "unknown"
             week_writes[conn] = week_writes.get(conn, 0) + 1
             if ts >= now - 3600:
