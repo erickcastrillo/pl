@@ -495,6 +495,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
     waits, seen_waits = st.get("run_waits") or {}, {}   # card id -> when its run agent was first seen waiting
     for c in all_cards:
+        if c.get("unreadable"):
+            alerts.open(f"card_unreadable:{c['id']}", "warn", f"Card {short_id(c['id'])} has a broken pl metadata block",
+                        "fix the block on the board; pl card <id> shows it")
+            continue
         m = c.get("metadata") or {}
         if m.get("pipeline_mode") != "auto":
             continue
