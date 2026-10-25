@@ -522,7 +522,8 @@ def cmd_board(a):
         from pl import boardserve
         return boardserve.run(a)
     if a.action == "check":
-        raise SystemExit("pl board check is not yet implemented")
+        from pl import boardcheck
+        return boardcheck.cmd_check(a)
     if a.action != "init":
         raise SystemExit("pl board: only 'init' is supported")
     if "Inbox" in lists():

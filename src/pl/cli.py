@@ -178,9 +178,14 @@ def main():
     p = sub.add_parser("move"); p.add_argument("id"); p.add_argument("column"); p.add_argument("--pr", metavar="URL", help="also record this pull request on the card")
     p = sub.add_parser("board")
     p.add_argument("action", choices=["init", "serve", "check"])
+    p.add_argument("server", nargs="?", help="server for check: local, url, or mcp-config server name")
+    p.add_argument("--board", help="board id on the server")
+    p.add_argument("--mcp-config", help="path to the harness's MCP config file")
+    p.add_argument("--header-env", action="append", default=[], metavar="HEADER=VAR", help="set request header from environment variable")
     p.add_argument("--stdio", action="store_true")
     p.add_argument("--listen", metavar="HOST:PORT")
     p.add_argument("--token-env", metavar="VAR")
+    p.add_argument("--json", action="store_true", help="output JSON")
     p = sub.add_parser("card"); p.add_argument("id"); p.add_argument("--delete", action="store_true")
     p = sub.add_parser("section"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
@@ -220,7 +225,8 @@ def main():
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     a = ap.parse_args()
-    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
+    is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
+    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
     if not a.cmd:
         if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
