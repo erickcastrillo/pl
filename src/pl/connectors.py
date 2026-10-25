@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from pl import alerts
 from pl import config as C
 from pl import connectors_oauth, manager
+from pl.util import ask
 
 ROLES = ("payments", "contacts", "email", "calendar", "messaging", "memory")
 AUTHS = ("oauth", "token", "none")
@@ -248,10 +249,7 @@ def add_cmd(a) -> None:
     if a.name in load_config():
         print(f"connector {a.name} already exists, unchanged")
         return
-    if not a.yes and not sys.stdin.isatty():
-        print(f"pl connectors add: pass --yes to add {a.name} without asking", file=sys.stderr)
-        raise SystemExit(2)
-    if not a.yes and input(f"add connector {a.name} ({url or ' '.join(command)}) and sign in? [y/N] ").strip().lower() != "y":
+    if not a.yes and ask("connectors add", f"add connector {a.name} ({url or ' '.join(command)}) and sign in? [y/N] ").strip().lower() != "y":
         raise SystemExit("pl connectors add: cancelled")
     try:
         state = add(a.name, command=command or None, url=url, pin=getattr(a, "pin", None), role=getattr(a, "role", None),
@@ -573,7 +571,7 @@ def import_servers(source, add_name=None, teams=None, roles=None, yes=False, jso
         _fail(f"unknown role {', '.join(bad)}; choose from {', '.join(ROLES)}")
     if add_name in load_config():
         _fail(f"connector {add_name!r} already exists")
-    if not yes and input(f"add {add_name} from {match['file']}? [y/N] ").strip().lower() != "y":
+    if not yes and ask("connectors add", f"add {add_name} from {match['file']}? [y/N] ").strip().lower() != "y":
         _fail("not added")
     from pl.trackers import mcp
     entry = {"mcp_config": match["file"], "server": add_name, "server_hash": server_hash(mcp._from_file(match["file"], add_name)),

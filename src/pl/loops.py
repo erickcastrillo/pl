@@ -8,7 +8,7 @@ import tomlkit
 
 from pl import config as C
 from pl import schedule
-from pl.util import BadInput, load_state, save_state
+from pl.util import BadInput, ask, load_state, save_state
 
 WAIT_POLLS = 150
 
@@ -21,10 +21,8 @@ def _fail(message: str):
 def _confirm(question: str, yes: bool):
     if yes:
         return
-    if not sys.stdin.isatty():
-        _fail("no terminal to confirm on; add --yes")
     try:
-        answer = input(f"{question} [y/N]: ")
+        answer = ask("loops", f"{question} [y/N]: ")
     except EOFError:
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):

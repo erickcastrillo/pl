@@ -13,6 +13,7 @@ import httpx
 import mcp.client.stdio  # noqa: F401  (bind stdio_client's errlog=sys.stderr default now, not inside a capsys test)
 import pytest
 
+from pl.util import BadInput
 from pl import config as C
 from pl import connectors, connectors_oauth, secrets
 
@@ -145,7 +146,7 @@ def test_add_without_yes_and_no_tty_exits_2(env, monkeypatch, capsys):
     with pytest.raises(SystemExit) as e:
         connectors.cmd_connectors(add_args(yes=False))
 
-    assert e.value.code == 2 and "--yes" in capsys.readouterr().err
+    assert isinstance(e.value, BadInput) and "--yes" in str(e.value)
     assert connectors.load() == {} and env.opened == []
 
 

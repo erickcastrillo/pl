@@ -195,6 +195,9 @@ ENTRIES = [
        "pl sandbox login <account>"),
     _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
        "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
+    _e("2026-10-25.29", "No command waits for an answer without a terminal; adding what exists is a no-op",
+       "scripts and agent sessions: exit 2 names the flag (--yes); a repeated add says already exists, unchanged",
+       "pl skills reset <name> < /dev/null"),
 ]
 
 

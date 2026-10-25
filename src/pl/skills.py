@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl import harnesses, pods
+from pl.util import ask
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,48}")
 KINDS = {"skill": "skills", "agent": "agents", "command": "commands"}
@@ -334,6 +335,10 @@ def share(account, name):
     shutil.move(str(src), str(dest))
     os.symlink(dest, src, target_is_directory=True)
     return dest
+
+
+def _links_to(path, target):
+    return path.is_symlink() and path.resolve() == target.resolve()
 
 
 def link(name, account):
@@ -699,10 +704,8 @@ def _cmd_reset(a):
         raise SystemExit(f"pl: {a.name!r} is not a built-in skill ({', '.join(builtin_names())})")
     dest = library() / a.name / "SKILL.md"
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit("pl skills reset: no terminal to confirm on; add --yes")
         try:
-            ok = input(f"Replace {dest} with the shipped version of {a.name}? A backup is kept. [y/N]: ")
+            ok = ask("skills reset", f"Replace {dest} with the shipped version of {a.name}? A backup is kept. [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):
@@ -736,9 +739,7 @@ def _cmd_enable(a):
                 for c in cmds:
                     print(f"  {c}")
             if not getattr(a, "yes", False):
-                if not sys.stdin.isatty():
-                    raise SystemExit("pl: refused: enabling hooks without a terminal needs --yes")
-                ans = input(f"Enable hooks for plugin {plug_name}? [y/N] ")
+                ans = ask("skills add", f"Enable hooks for plugin {plug_name}? [y/N] ")
                 if ans.strip().lower() not in ("y", "yes"):
                     raise SystemExit("pl: aborted")
         plugins = pod_tbl.setdefault("plugins", tomlkit.array())
@@ -800,7 +801,12 @@ def cmd_skills(a):
     if a.skills_cmd == "reset":
         return _cmd_reset(a)
     if a.skills_cmd == "share":
-        print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
+        account = a.account or harnesses.default_account()
+        placed = _root(account) / "skills" / a.name
+        if _links_to(placed, library() / a.name):
+            print(f"{placed} already exists, unchanged")
+        else:
+            print(f"shared: {share(account, a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":
         target = getattr(a, "account", None) or "all"
         if target == "all":
@@ -809,6 +815,8 @@ def cmd_skills(a):
                 print(f"skill {a.name} is already linked into all accounts (or no linkable accounts configured)")
             for m in msgs:
                 print(m)
+        elif _links_to(placed := _base(target, "skill") / a.name, library() / a.name):
+            print(f"{placed} already exists, unchanged")
         else:
             print(f"linked: {link(a.name, target)}")
     else:

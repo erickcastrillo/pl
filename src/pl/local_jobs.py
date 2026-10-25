@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from pl import board, events, harnesses, ideas, jsonout, local_model
 from pl import config as C
-from pl.util import now_iso, parse_iso
+from pl.util import ask, now_iso, parse_iso
 
 JOBS = {
     "route": {"pick": "pipeline", "system": "Pick the pipeline that fits the item below and say how sure you are. "
@@ -318,9 +318,7 @@ def _models_set(a) -> int:
     if C.path() is None:
         raise SystemExit(C.READ_ONLY)
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit("pl models set: no terminal to confirm on; add --yes")
-        if input(f"Set [models.local] {a.job} = {a.model!r}? [y/N]: ").strip().lower() not in ("y", "yes"):
+        if ask("models set", f"Set [models.local] {a.job} = {a.model!r}? [y/N]: ").strip().lower() not in ("y", "yes"):
             return 1
     doc = tomlkit.parse(C.path().read_text())
     models = doc.setdefault("models", tomlkit.table())
