@@ -12,7 +12,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, registry, run_blocked, worker_status, worker_view
-from pl import events, ideas, move_agent, trackers
+from pl import events, ideas, move_agent, trackers, worktrees
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stop_worker
@@ -731,3 +731,11 @@ def intent_text(pr, body):
     text = "\n".join(out)
     return text if len(text) <= 40000 else text[:40000] + "\n\n(truncated at 40,000 characters)"
 
+
+
+def cmd_worktrees_bootstrap(a):
+    try:
+        for note in worktrees.bootstrap_worktree(worktrees.main_checkout(Path.cwd()), Path(a.path).expanduser().resolve(), a.dry_run):
+            print(note)
+    except ValueError as e:
+        raise SystemExit(f"pl worktrees bootstrap: {e}")

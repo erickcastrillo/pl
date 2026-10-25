@@ -39,6 +39,7 @@ Status and the board:
 - `pl watch --once`: one text frame of the console board.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
+- `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
 

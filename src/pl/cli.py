@@ -77,6 +77,8 @@
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
+  pl worktrees bootstrap PATH [--dry-run]
+                          copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
   pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
   pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
@@ -114,7 +116,7 @@ import sys
 from pl import alerts, assistant, config, events, profiles, rework, setup, skills
 
 from pl import config as C
-from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
+from pl.commands import (cmd_worktrees_bootstrap, cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
                          cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
                          cmd_review, cmd_restart, cmd_hold, cmd_unhold)
 from pl.dispatch import cmd_dispatch
@@ -213,6 +215,8 @@ def main():
     pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    p = sub.add_parser("worktrees"); pw = p.add_subparsers(dest="worktrees_cmd", required=True)
+    q = pw.add_parser("bootstrap"); q.add_argument("path", help="the new worktree"); q.add_argument("--dry-run", action="store_true", help="say what would be copied and linked")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     a = ap.parse_args()
@@ -233,5 +237,6 @@ def main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
+     "worktrees": cmd_worktrees_bootstrap,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a)}[a.cmd](a)
