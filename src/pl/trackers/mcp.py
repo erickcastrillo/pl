@@ -47,10 +47,19 @@ SKIP_EVERY = 3600  # seconds between error events for the same card skipped from
 _skipped = {}  # (board_id, card id) -> when its last skip event was emitted
 CLOSE_WAIT = 10  # seconds close() lets an in-flight call finish before cancelling it
 _secrets = set()  # every resolved ${VAR} value; masked in the SDK's and httpx's log records
+CODES = ("not_found", "conflict", "forbidden", "invalid")
+
+
+class ToolError(SystemExit):
+    def __init__(self, message, code=None, detail=""):
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
+
 
 PROTOCOL_TOOLS = {
     "columns": {"tool": "pl_columns", "args": {"board_id": "{board_id}"}, "result": "columns"},
-    "cards": {"tool": "pl_cards", "args": {"board_id": "{board_id}"}, "result": "cards"},
+    "cards": {"tool": "pl_cards", "args": {"board_id": "{board_id}"}, "result": None},
     "card": {"tool": "pl_card", "args": {"board_id": "{board_id}", "id": "{item_id}"}, "result": "card"},
     "create": {"tool": "pl_create", "args": {"board_id": "{board_id}", "column_id": "{column_id}", "*": "{fields}"}, "result": "card"},
     "update": {"tool": "pl_update", "args": {"board_id": "{board_id}", "id": "{item_id}", "fields": "{fields}"}, "result": "card"},
@@ -444,7 +453,15 @@ class Mcp:
         texts = [c.text for c in res.content if getattr(c, "type", None) == "text"]
         text = texts[0] if texts else ""
         if res.isError:
-            raise SystemExit(f"pl: MCP tool {tool} ({action}) failed: {s.scrub(text, 200)}")
+            prefix = text.split(":", 1)[0].strip().lower()
+            if prefix not in CODES and "error executing tool" in prefix and ":" in text:
+                prefix = text.split(":", 2)[1].strip().lower()
+            code = prefix if prefix in CODES else None
+            masked = s.scrub(text, 200)
+            msg = f"pl: MCP tool {tool} ({action}) failed: {masked}"
+            if code:
+                raise ToolError(msg, code=code, detail=masked)
+            raise SystemExit(msg)
         if not text.strip():
             return {}
         try:
@@ -507,6 +524,13 @@ class Mcp:
     def cards(self, query=None):
         """Every card. Only query keys in the mapping's query table (pl key -> server argument) reach the
         server; the rest are dropped (callers still filter client-side)."""
+        if self.mode is None:
+            self._protocol()
+        if self.mode == "pl":
+            extra = {}
+            if query and "assigned_to" in query:
+                extra["assigned_to"] = query["assigned_to"]
+            return self._cursor_pages(extra)
         spec = self.tools.get("cards", {})
         qmap = spec.get("query") or {}
         extra = {qmap[k]: v for k, v in (query or {}).items() if k in qmap}
@@ -524,6 +548,29 @@ class Mcp:
             rows += page
             if not pk or len(page) < size:
                 break
+        return [self._norm("cards", r) for r in rows if r is not None]
+
+    def _cursor_pages(self, extra):
+        cursor = None
+        seen_cursors = set()
+        seen_ids = set()
+        rows = []
+        for _ in range(MAX_PAGES):
+            reply = self._call("cards", extra={"cursor": cursor, "limit": 100, **extra})
+            if not isinstance(reply, dict):
+                raise SystemExit("pl: MCP tracker cards: expected a dict reply")
+            for c in reply.get("cards") or []:
+                cid = c.get("id") if isinstance(c, dict) else None
+                if cid is None or cid not in seen_ids:
+                    if cid is not None:
+                        seen_ids.add(cid)
+                    rows.append(c)
+            cursor = reply.get("next_cursor")
+            if cursor is None:
+                break
+            if cursor in seen_cursors:
+                raise SystemExit(f"pl: the board server repeated cursor {cursor}")
+            seen_cursors.add(cursor)
         return [self._norm("cards", r) for r in rows if r is not None]
 
     def _page(self, extra, paging):
@@ -577,13 +624,27 @@ class Mcp:
         move = column is not None and "move" in self.tools
         if column is not None and not move:
             fields["list_id"] = col_id
+        orig_meta = dict(fields.get("metadata") or {})
         if verify and "metadata" in fields:
-            fields["metadata"] = {**(self.card(item_id).get("metadata") or {}), **fields["metadata"]}
+            fields["metadata"] = {**(self.card(item_id).get("metadata") or {}), **orig_meta}
         got = {}
-        if fields or not move:  # fields first: a failed write must not leave the card moved
-            got = self._call("update", item_id=item_id, fields=self._out("update", fields))
-        if move:
-            got = self._call("move", item_id=item_id, column=column, column_id=col_id)
+        for attempt in (1, 2):
+            try:
+                if fields or not move:  # fields first: a failed write must not leave the card moved
+                    got = self._call("update", item_id=item_id, fields=self._out("update", fields))
+                if move:
+                    got = self._call("move", item_id=item_id, column=column, column_id=col_id)
+                break
+            except ToolError as e:
+                if e.code == "conflict" and attempt == 1:
+                    fresh = self.card(item_id)
+                    if verify and "metadata" in fields:
+                        fields["metadata"] = {**(fresh.get("metadata") or {}), **orig_meta}
+                    continue
+                if e.code and e.code != "conflict":
+                    from pl import alerts
+                    alerts.open(f"board_{e.code}:{self.board_id}", "warn", f"Board refused a write: {e.code}", e.detail)
+                raise
         if not verify:
             return self._norm("update", got) if isinstance(got, dict) and got else {}
         got = self.card(item_id)

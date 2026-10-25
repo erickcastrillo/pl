@@ -812,11 +812,13 @@ def test_as_is_missing_var_without_default_names_only_the_var(tmp_path, monkeypa
 PROTO_SERVER = textwrap.dedent('''
     import json, os, sys
     from mcp.server.fastmcp import FastMCP
+    from mcp.types import CallToolResult, TextContent
 
     srv = FastMCP("proto-board")
     COLS = {"col-1": "Inbox", "col-2": "Spec ready"}
     ITEMS = {}
     SEQ = 0
+    CONFLICT_COUNT = 0
 
     def _board(board_id):
         if board_id != "b-1":
@@ -850,6 +852,20 @@ PROTO_SERVER = textwrap.dedent('''
     def pl_cards(board_id: str = "", cursor: str | None = None, limit: int = 100,
                  assigned_to: str | None = None, updated_since: str | None = None) -> str:
         _board(board_id)
+        if os.environ.get("PAGING_REPEAT_CURSOR"):
+            if cursor == "loop":
+                return json.dumps({"cards": [], "next_cursor": "loop"})
+            return json.dumps({"cards": [{"id": "c1", "title": "C1", "list_id": "col-1"}], "next_cursor": "loop"})
+        if os.environ.get("PAGING_5_CARDS"):
+            if cursor is None:
+                return json.dumps({"cards": [{"id": "it-1", "title": "1", "list_id": "col-1"},
+                                             {"id": "it-2", "title": "2", "list_id": "col-1"}], "next_cursor": "p1"})
+            elif cursor == "p1":
+                return json.dumps({"cards": [{"id": "it-2", "title": "2", "list_id": "col-1"},
+                                             {"id": "it-3", "title": "3", "list_id": "col-1"}], "next_cursor": "p2"})
+            elif cursor == "p2":
+                return json.dumps({"cards": [{"id": "it-4", "title": "4", "list_id": "col-1"},
+                                             {"id": "it-5", "title": "5", "list_id": "col-1"}], "next_cursor": None})
         rows = [c for c in ITEMS.values() if assigned_to is None or c.get("assigned_to") == assigned_to]
         start = int(cursor) if cursor else 0
         nxt = str(start + limit) if start + limit < len(rows) else None
@@ -877,15 +893,24 @@ PROTO_SERVER = textwrap.dedent('''
         return json.dumps({"card": ITEMS[n]})
 
     @srv.tool()
-    def pl_update(board_id: str = "", id: str = "", fields: dict | None = None) -> str:
+    def pl_update(board_id: str = "", id: str = "", fields: dict | None = None) -> CallToolResult:
+        global CONFLICT_COUNT
         _board(board_id)
         if id not in ITEMS:
-            raise ValueError("not_found: no card " + id)
+            return CallToolResult(isError=True, content=[TextContent(type="text", text="not_found: no card " + id)])
+        if os.environ.get("FAIL_FORBIDDEN"):
+            return CallToolResult(isError=True, content=[TextContent(type="text", text="forbidden: read-only board")])
+        if os.environ.get("FAIL_CONFLICT_ONCE"):
+            if CONFLICT_COUNT == 0:
+                CONFLICT_COUNT += 1
+                return CallToolResult(isError=True, content=[TextContent(type="text", text="conflict: stale")])
+        if os.environ.get("FAIL_CONFLICT_ALWAYS"):
+            return CallToolResult(isError=True, content=[TextContent(type="text", text="conflict: stale")])
         f = dict(fields or {})
         if "metadata" in f:
             f["metadata"] = _meta(f["metadata"])
         ITEMS[id].update(f)
-        return json.dumps({"card": ITEMS[id]})
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps({"card": ITEMS[id]}))])
 
     @srv.tool()
     def pl_move(board_id: str = "", id: str = "", column_id: str = "") -> str:
@@ -914,6 +939,64 @@ def proto_script(tmp_path):
     p = tmp_path / "proto_board_server.py"
     p.write_text(PROTO_SERVER)
     return p
+
+
+def proto_cfg(script, **env):
+    return {"type": "mcp", "board_id": "b-1",
+            "server": {"command": sys.executable, "args": [str(script)], "env": {k: str(v) for k, v in env.items()}}}
+
+
+def test_protocol_cards_follow_next_cursor_and_return_each_card_once(proto_script):
+    t = tracker(proto_cfg(proto_script, PAGING_5_CARDS=1))
+    cards = t.cards()
+    assert [c["id"] for c in cards] == ["it-1", "it-2", "it-3", "it-4", "it-5"]
+
+
+def test_protocol_cards_stop_on_a_repeated_cursor(proto_script):
+    t = tracker(proto_cfg(proto_script, PAGING_REPEAT_CURSOR=1))
+    with pytest.raises(SystemExit, match="the board server repeated cursor loop"):
+        t.cards()
+
+
+def test_a_conflict_rereads_and_retries_once(proto_script):
+    t = tracker(proto_cfg(proto_script, FAIL_CONFLICT_ONCE=1))
+    made = t.create("Inbox", title="Original", metadata={"pipeline_mode": "auto"})
+    updated = t.update(made["id"], title="Updated", metadata={"worker": "w1"})
+    assert updated["title"] == "Updated"
+    assert updated["metadata"] == {"pipeline_mode": "auto", "worker": "w1"}
+
+
+def test_two_conflicts_in_a_row_raise(proto_script):
+    t = tracker(proto_cfg(proto_script, FAIL_CONFLICT_ALWAYS=1))
+    made = t.create("Inbox", title="Original", metadata={"pipeline_mode": "auto"})
+    with pytest.raises(SystemExit, match="conflict") as e:
+        t.update(made["id"], title="Updated")
+    assert getattr(e.value, "code", None) == "conflict"
+
+
+def test_forbidden_opens_an_alert_and_raises(proto_script, monkeypatch):
+    from pl import alerts
+    opened = []
+    monkeypatch.setattr(alerts, "open", lambda *a: opened.append(a) or "open")
+    t = tracker(proto_cfg(proto_script, FAIL_FORBIDDEN=1))
+    made = t.create("Inbox", title="Original")
+    with pytest.raises(SystemExit, match="forbidden") as e:
+        t.update(made["id"], title="Updated")
+    assert getattr(e.value, "code", None) == "forbidden"
+    assert len(opened) == 1
+    key, sev, title, detail = opened[0]
+    assert key == "board_forbidden:b-1"
+    assert sev == "warn"
+    assert title == "Board refused a write: forbidden"
+    assert "forbidden" in detail
+
+
+def test_protocol_server_that_drops_a_metadata_key_is_named(proto_script):
+    t = tracker(proto_cfg(proto_script, LOSSY="worker"))
+    made = t.create("Inbox", title="Original", metadata={"pipeline_mode": "auto"})
+    with pytest.raises(SystemExit, match=r"metadata\.worker did not persist"):
+        t.update(made["id"], metadata={"worker": "w1"})
+
 
 
 def test_protocol_server_needs_no_mapping_and_round_trips(proto_script):
