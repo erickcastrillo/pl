@@ -174,6 +174,8 @@ ENTRIES = [
        "[stages.run.small] max_lines = 60"),
     _e("2026-10-25.19", "pl-plan files later slices as Plan N slice M with plan metadata",
        "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
+    _e("2026-10-25.20", "Stages wait for folder trust instead of starting a stuck Claude agent",
+       "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
 ]
 
 
