@@ -857,7 +857,7 @@ def local_board():
 
 def _sync_pass():
     """The pass's sync: pull GitHub edits at most every sync.PULL_EVERY s (local board only), then replay.
-    A failed pull is logged and this pass does not replay: conflicts were not checked. The next pass tries again."""
+    Until a pull has succeeded the replay waits, even on passes inside the window: conflicts were not checked."""
     if not C.SYNC.get("github"):
         return
     if local_board() and sync.pull_due():
@@ -868,7 +868,8 @@ def _sync_pass():
         if p["stopped_because"] == "error":
             print(f"sync pull failed: {p['error']}", file=sys.stderr)
             events.emit("error", message=f"sync pull: {p['error']}")
-            return
+    if local_board() and not sync.pull_ok():
+        return
     try:   # a local board's queued changes go to its GitHub Project (sync.py)
         if outbox.count():
             r = sync.replay(limit=SYNC_PER_PASS)

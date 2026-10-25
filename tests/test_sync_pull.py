@@ -367,6 +367,26 @@ def test_pull_read_error_logs_and_skips_replay(world, passes):
     assert "replay" not in passes[0] and local.cards() == before
 
 
+def test_failed_pull_blocks_replay_on_passes_inside_the_window(world, passes, monkeypatch):
+    world[2].fail = "boom"
+    dispatch._sync_pass()
+    _at(monkeypatch, NOW + 60)
+    dispatch._sync_pass()
+    assert "replay" not in passes[0] and len(outbox.entries()) == 1
+    world[2].fail = None
+    _at(monkeypatch, NOW + sync.PULL_EVERY)
+    dispatch._sync_pass()
+    assert passes[0].count("replay") == 1
+
+
+def test_reserve_pull_blocks_replay_until_a_pull_succeeds(world, passes, monkeypatch):
+    _ledger(200)
+    dispatch._sync_pass()
+    _at(monkeypatch, NOW + 60)
+    dispatch._sync_pass()
+    assert "replay" not in passes[0]
+
+
 def test_pull_crash_logs_and_skips_replay(world, passes, monkeypatch):
     def crash():
         raise RuntimeError("x")

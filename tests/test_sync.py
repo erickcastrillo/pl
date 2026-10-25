@@ -304,6 +304,7 @@ def pass_env(monkeypatch):
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     monkeypatch.setattr(dispatch, "paused", lambda: False)
     monkeypatch.setattr(sync, "pull_due", lambda: False)
+    monkeypatch.setattr(sync, "pull_ok", lambda: True)
     outbox.append("1", "delete", {})
     calls, evs = [], []
     monkeypatch.setattr(events, "emit", lambda kind, cid=None, **d: evs.append((kind, d)))
