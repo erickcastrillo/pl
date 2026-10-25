@@ -37,10 +37,15 @@
   pl board init           create the Inbox column if the board lacks it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
-  pl titles check [--json]
+  pl titles check [--json] [--fix [--dry-run]]
                           list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
-                          one side, or share a pair with another card (Done left out); changes nothing; exits 1
-                          when it finds any (2: the board could not be read); --json prints them as a list
+                          one side, or share a pair with another card (Done left out); exits 1 when it finds
+                          any (2: the board could not be read); --json prints them as a list; --fix adds the
+                          missing prefix or metadata and leaves clashes for a person (exit 1 if any are left);
+                          --dry-run says what it would change
+  pl titles next          the next free plan number on the board (Done cards count)
+  pl titles set <id> --plan N --slice M
+                          title the card "Plan N slice M: ..." (any old prefix replaced) and record both in its metadata
   pl section <id> NAME [--from FILE [--force]]
                           print one section of a card in full; --from replaces SPEC, DESIGN or PLAN with the
                           file's text (- reads stdin). Stage agents write their result this way; an approved PLAN
@@ -62,7 +67,10 @@
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
                           2-3 plain sentences above it, written by the local model ([local_model])
-  pl usage [--since 24h|7d|YYYY-MM-DD] [--by card|account|model|loop] [--github]
+  pl caps set <id> [--minutes M] [--tokens 4M]
+                          give one card its own time and token caps in place of the profile's; pl caps reset <id>
+                          clears them; pl retry <id> restarts a card the dispatcher stopped at a cap
+  pl usage [--since 24h|7d|YYYY-MM-DD] [--by card|account|model|loop] [--json] [--github]
                           tokens spent (input, output, cache read, cache write), read from Claude transcripts;
                           [usage] prices = {model = dollars per million tokens} adds a cost column; [usage]
                           windows = {model = context tokens} sets a context window (200k by default; a session
@@ -106,6 +114,9 @@
                           [updates] check = false turns it off)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
+  pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
+                          test JOB [--json] runs the job's sample 3 times (answer, schema pass|fail, ms);
+                          set JOB MODEL [--yes] writes [models.local]; JOB is route, summarise, title or embed
   pl triggers add NAME --connector C --query Q --every 5m --pipeline P [--cap N] --yes [--dry-run]
                           turn matching incoming messages into cards; list [--json] shows status;
                           pause/resume NAME toggles whether it runs
@@ -114,7 +125,7 @@
   pl sandbox create|status|start|stop|destroy [--yes]
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
                           work folder and worktrees folder; --yes destroys the VM without asking
-  pl worktrees bootstrap PATH [--dry-run]
+  pl worktrees bootstrap PATH [--dry-run] [--card ID]
                           copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
@@ -144,12 +155,14 @@
                           move a card's live Claude agent to another account in place: Ctrl-C in its window,
                           copy its transcript, resume the same session there (asks first unless --yes). The
                           dispatcher does this by itself when an agent hits its usage limit
-  pl accounts [--reset NAME|all]
+  pl accounts [--reset NAME|all] [--check-trust]
                           which Claude profile is parked for running out of usage credits (the dispatcher
                           detects the limit on an agent's screen, parks that profile, and restarts the card
                           under the other one); --reset un-parks a profile by hand
+                          --check-trust shows, per Claude account, whether the work folder and the worktrees folder
+                          are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
-                          the pipeline's pods: rules (pod.md), knowledge, skills, plugins and layer budgets
+                          the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
   pl assistant log "text" | idea save ... | idea file <idea-id>
                           the Assistant tab's live harness session uses these: log records a change it made outside pl; idea save drafts an idea brief, idea file
                           marks it ready (you file it in the console with ctrl+f, after a confirm)
@@ -166,10 +179,10 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, hooks, links, outward, pods, profiles, retention, rework, setup, skills, titles
+from pl import alerts, assistant, config, events, hooks, links, loops, outward, pods, profiles, retention, rework, setup, skills, titles
 
 from pl import config as C
-from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
+from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
                          cmd_outbox, cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
                          cmd_review, cmd_restart, cmd_hold, cmd_unhold, cmd_depends, cmd_sync)
 from pl.dispatch import cmd_dispatch
@@ -282,12 +295,22 @@ def _main():
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
     q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
+    q.add_argument("--fix", action="store_true", help="add the missing title prefix or plan/slice metadata; clashes are left for a person")
+    q.add_argument("--dry-run", action="store_true", help="with --fix: say what would change, change nothing")
+    pt.add_parser("next")
+    q = pt.add_parser("set"); q.add_argument("id"); q.add_argument("--plan", type=int, required=True); q.add_argument("--slice", type=int, required=True)
+    p = sub.add_parser("caps"); pc = p.add_subparsers(dest="caps_cmd", required=True)
+    q = pc.add_parser("set"); q.add_argument("id"); q.add_argument("--minutes"); q.add_argument("--tokens", help="2M, 500k or a number")
+    q = pc.add_parser("reset"); q.add_argument("id")
+    p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
+    q = pl_.add_parser("run"); q.add_argument("name"); q.add_argument("--wait", action="store_true", help="follow until the run ends and print its record"); q.add_argument("--json", action="store_true", help="with --wait: print the record as JSON")
     p = sub.add_parser("retry"); p.add_argument("id", help="card id, #issue number, or all"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("restart"); p.add_argument("id"); p.add_argument("--stage", choices=["spec", "design", "plan", "run"])
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
     q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
     p = sub.add_parser("accounts"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand")
+    p.add_argument("--check-trust", action="store_true", help="show whether each Claude account trusts the work and worktrees folders (reads only)")
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     p.add_argument("--open", metavar="CARD", help="open this card on start")
@@ -307,6 +330,7 @@ def _main():
     p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
+    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts, or with --by card minutes, tokens and caps per card and stage")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
@@ -346,13 +370,21 @@ def _main():
     q = pk.add_parser("enable"); q.add_argument("name", nargs="?", help="skill name"); q.add_argument("--plugin", help="plugin name")
     q.add_argument("--pod", required=True, help="pod name"); q.add_argument("--hooks", action="store_true", help="enable plugin hooks")
     q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pk.add_parser("disable"); q.add_argument("name"); q.add_argument("--pod", required=True, help="pod name")
+    q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc", "bootstrap"])
     p.add_argument("path", nargs="?", help="bootstrap: the new worktree")
     p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
-    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied and linked")
+    p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
+    p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
+    q = pm.add_parser("list"); q.add_argument("--json", action="store_true", help="output as JSON")
+    q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")
+    q = pm.add_parser("set"); q.add_argument("job"); q.add_argument("model")
+    q.add_argument("--yes", action="store_true", help="write without asking")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
@@ -415,7 +447,7 @@ def _main():
      "outbox": cmd_outbox,
      "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
-     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
+     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework,
      "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
@@ -434,5 +466,6 @@ def _main():
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
+     "models": lambda a: __import__("pl.local_jobs").local_jobs.cmd_models(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
      "kill-switch": outward.cmd_kill_switch}[a.cmd](a)

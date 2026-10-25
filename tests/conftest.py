@@ -204,6 +204,13 @@ def no_stage_hooks(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def trusted_work_dir(monkeypatch):
+    """The dispatcher's trust gate reads the account's .claude.json: off unless a test turns it on."""
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account: None)
+
+
+@pytest.fixture(autouse=True)
 def no_live_agent_window(monkeypatch):
     """The dispatcher's look for an agent window it does not track reads tmux: off unless a test turns it on."""
     from pl import dispatch

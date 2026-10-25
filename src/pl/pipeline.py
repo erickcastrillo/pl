@@ -59,3 +59,52 @@ def _outward(stage, connectors) -> bool:
     if stage.get("outward") is True:
         return True
     return any((connectors or {}).get(c, {}).get("access") == "read-write" for c in stage.get("connectors") or [])
+
+
+def is_config() -> bool:
+    """True for a profile that defines stages of its own; no [pipeline], or one without stages, is engineering."""
+    p = C.PIPELINE or {}
+    return bool(p.get("stages")) and p.get("template") != "engineering"
+
+
+def stage_at(col) -> str | None:
+    return next((n for n, s in C.PIPELINE["stages"].items() if s.get("column") == col), None)
+
+
+def complete(col, stage) -> bool:
+    cols = C.PIPELINE["columns"]
+    return cols.index(col) >= cols.index(C.PIPELINE["stages"][stage]["done"])
+
+
+def prompt(stage, card_id) -> str:
+    if override := C.PROMPTS.get(stage):
+        return override.format(id=card_id, worktrees_dir=C.WORKTREES_DIR or "")
+    return f"/{C.PIPELINE['stages'][stage]['skill']} {card_id} stage={stage}"
+
+
+def writable() -> tuple:
+    """The sections stage agents write; INPUT and REVIEW NOTES are a person's."""
+    if not is_config():
+        return ("SPEC", "DESIGN", "PLAN")
+    return tuple(dict.fromkeys(s["section"] for s in C.PIPELINE["stages"].values() if s.get("section")))
+
+
+def past_gate(col, section) -> bool:
+    """True when the card has left the owner gate of the stage that writes `section`."""
+    cols = C.PIPELINE["columns"]
+    return any(s.get("section") == section and s.get("gate") == "owner" and cols.index(col) > cols.index(s["done"])
+               for s in C.PIPELINE["stages"].values())
+
+
+def gate_for(col) -> tuple | None:
+    """(name, stage) of the owner-gated stage that finishes in column `col`."""
+    return next(((n, s) for n, s in C.PIPELINE["stages"].items() if s.get("gate") == "owner" and s.get("done") == col), None)
+
+
+def approved_column(stage) -> str:
+    """Where approval sends a card: the stage's `next`, else the column after `done`, else `done` itself."""
+    if stage.get("next"):
+        return stage["next"]
+    cols = C.PIPELINE["columns"]
+    i = cols.index(stage["done"])
+    return cols[min(i + 1, len(cols) - 1)]

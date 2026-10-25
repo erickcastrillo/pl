@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -336,6 +337,10 @@ def totals(st, since, by="account", cards=None):
         c = cost(model, sum(n))
         row[4] += c or 0
         row[5] = row[5] or c is None
+    if by == "loop":
+        for name, s in (load_state().get("services") or {}).items():
+            if n := sum(_run_tokens((s or {}).get("runs"), since)) if (C.SERVICES.get(name) or {}).get("every") else 0:
+                out.setdefault(name, [0, 0, 0, 0, 0.0, False])[0] += n
     return out
 
 
@@ -363,6 +368,11 @@ def _spent(st, sids, since):
     return sum(sum(n[:4]) for k, n in (st.get("buckets") or {}).items() if k.rsplit("|", 1)[-1] in sids and k[:13] >= cut)
 
 
+def _run_tokens(runs, since):
+    """The token counts of the recorded runs that ended after `since` (a run without a count adds nothing)."""
+    return [r["tokens"] for r in runs or [] if isinstance(r.get("tokens"), int) and (parse_iso(r.get("ended_at") or "") or 0) >= since]
+
+
 def summary(st, now=None):
     """What the console shows: tokens per account in each Dashboard window, and per loop its context, tokens in
     the last hour and whether it looks dead (a Claude loop with recorded sessions, on for 3 fires of its /loop
@@ -379,7 +389,24 @@ def summary(st, now=None):
         claude = ((C.ACCOUNTS.get(acct) or {}).get("harness") or "claude") == "claude"
         dead = bool(claude and sids and three and started and now - started >= three and _spent(st, sids, now - three) == 0)
         loops[name] = {"context": context_pct(st, sids[-1]) if sids else None, "tokens_1h": _spent(st, sids, now - 3600), "dead": dead}
+        if (C.SERVICES.get(name) or {}).get("every"):
+            loops[name]["tokens_7d"] = sum(_run_tokens((s or {}).get("runs"), now - 604800))
     return {"by_window": by_window, "loops": loops, "accounts": list(C.ACCOUNTS)}
+
+
+def card_report(st, since, cards):
+    """One record per card and stage with tokens: minutes of its running agent (None when none runs) and the caps."""
+    from pl.dispatch import cap_spent, effective_caps
+    now, state, rows = time.time(), load_state(), []
+    for group, r in totals(st, since, "card", cards).items():
+        short, _, stage = group.partition(" ")
+        c = next((c for c in cards if short_id(c["id"]) == short), None)
+        if not c:
+            continue
+        w = (c.get("metadata") or {}).get("worker") or {}
+        minutes = round(cap_spent(c, w, state, now)[0]) if w.get("stage") == stage else None
+        rows.append({"card": short, "stage": stage, "minutes": minutes, "tokens": sum(r[:4]), "caps": effective_caps(c, stage)})
+    return rows
 
 
 def cmd_usage(a):
@@ -388,7 +415,11 @@ def cmd_usage(a):
         print(ghquota.report())
         return
     from pl.standup import parse_since
-    since = parse_since(a.since or "24h").timestamp()
+    try:
+        since = parse_since(a.since or "24h").timestamp()
+    except SystemExit as e:
+        print(e.code, file=sys.stderr)
+        raise SystemExit(2) from None
     cards = None
     if a.by == "card":   # titles and current workers; offline, card ids come from the event log only
         try:
@@ -396,4 +427,14 @@ def cmd_usage(a):
             cards = board_cards()
         except (Exception, SystemExit):  # noqa: BLE001
             cards = None
-    print(table(scan(), since, a.by or "account", cards))
+    by = a.by or "account"
+    if by == "card" and getattr(a, "json", False):
+        print(json.dumps(card_report(scan(), since, cards or [])))
+        return
+    if getattr(a, "json", False):
+        from pl import jsonout
+        rows = totals(scan(), since, by, cards)
+        usage = {g: dict(zip(("input", "output", "cache_read", "cache_write", "cost", "unpriced"), r)) for g, r in rows.items()}
+        jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage})
+        return
+    print(table(scan(), since, by, cards))
