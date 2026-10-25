@@ -1,6 +1,8 @@
 """Replay the outbox of a local board to its GitHub Project, in order, within the shared GraphQL budget."""
+import fcntl
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from pl import board, ghquota, outbox
@@ -11,6 +13,10 @@ ENTRY_POINTS = 8   # estimate of one entry's cost: a create is the dearest, an u
 
 
 class _NoItem(Exception):
+    pass
+
+
+class _Busy(Exception):
     pass
 
 
@@ -33,6 +39,19 @@ def _save(state):
     with os.fdopen(fd, "w") as f:
         f.write(json.dumps(state))
     os.replace(tmp, p)
+
+
+@contextmanager
+def _replay_lock():
+    fd = os.open(_ids_path().with_name("sync-ids.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise _Busy from None
+        yield
+    finally:
+        os.close(fd)
 
 
 def target():
@@ -77,7 +96,19 @@ def _send(gh, e, state):
 
 
 def replay(limit=None):
-    """Send queued entries until done, an error, the reserve, or half of the points left at the start."""
+    """Send queued entries until done, an error, the reserve, or half of the points left at the start.
+
+    One replay at a time: a second caller sends nothing and reports stopped_because "busy".
+    """
+    try:
+        with _replay_lock():
+            return _replay(limit)
+    except _Busy:
+        return {"sent": 0, "remaining": outbox.count(), "stopped_because": "busy", "next_window": None,
+                "error": None}
+
+
+def _replay(limit):
     state = _state()
     outbox.drop_through(state["last_sent"])
     rem0, lim, reset = _reading()

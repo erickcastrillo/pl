@@ -115,6 +115,22 @@ def test_replay_sends_create_move_edit_and_empties_outbox(fake):
     assert outbox.count() == 0 and r["sent"] == 3 and r["stopped_because"] == "done"
 
 
+def test_replay_while_another_replay_runs_sends_nothing(fake):
+    _ledger(4000)
+    _queue_three()
+    with sync._replay_lock():
+        r = sync.replay()
+    assert fake.calls == [] and outbox.count() == 3
+    assert r["sent"] == 0 and r["stopped_because"] == "busy" and r["error"] is None
+
+
+def test_replay_releases_its_lock_when_done(fake):
+    _ledger(4000)
+    _queue_three()
+    sync.replay()
+    assert sync.replay()["stopped_because"] == "done"
+
+
 def test_replay_keeps_seq_order(fake):
     _ledger(4000)
     _queue_three()
