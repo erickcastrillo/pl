@@ -438,3 +438,62 @@ def test_old_buckets_and_files_are_dropped_after_14_days(fake_home):
     t = time.time() - 15 * 86400
     os.utime(old, (t, t))
     assert total(usage.scan(), since=30 * 86400) == {"main": 100}
+
+
+def _transition(source, ago):
+    events.emit("state_transition", "o/r#1", source=source)
+    lines = events._path().read_text().splitlines()
+    rec = json.loads(lines[-1])
+    rec["ts"] = (datetime.now(timezone.utc) - timedelta(seconds=ago)).isoformat(timespec="seconds")
+    lines[-1] = json.dumps(rec)
+    events._path().write_text("\n".join(lines) + "\n")
+
+
+def _usage_json(capsys, **kw):
+    usage.cmd_usage(argparse.Namespace(since=kw.pop("since", None), by=kw.pop("by", None), json=True, **kw))
+    return json.loads(capsys.readouterr().out)
+
+
+def test_state_transition_counts_aggregates_hook_and_screen(fake_home):
+    _transition("hook", 60)
+    _transition("hook", 120)
+    _transition("screen", 60)
+    _transition("hook", 3 * 86400)
+    assert events.state_transition_counts(time.time() - 86400) == {"hook": 2, "screen": 1}
+    assert events.state_transition_counts(time.time() - 7 * 86400) == {"hook": 3, "screen": 1}
+
+
+def test_state_transition_counts_zero_when_empty(fake_home):
+    assert events.state_transition_counts(time.time() - 86400) == {"hook": 0, "screen": 0}
+
+
+def test_usage_json_default_last_24h(fake_home, capsys):
+    _transition("hook", 60)
+    _transition("screen", 2 * 86400)
+    out = _usage_json(capsys)
+    assert out["state_transitions"] == {"hook": 1, "screen": 0}
+    assert out["since"] == "24h" and out["by"] == "account"
+
+
+def test_usage_json_since_window_filtering(fake_home, capsys):
+    _transition("hook", 30 * 60)
+    _transition("screen", 3 * 3600)
+    assert _usage_json(capsys, since="90m")["state_transitions"] == {"hook": 1, "screen": 0}
+    assert _usage_json(capsys, since="7d")["state_transitions"] == {"hook": 1, "screen": 1}
+    day = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert _usage_json(capsys, since=day)["state_transitions"] == {"hook": 1, "screen": 1}
+
+
+def test_usage_json_with_by_dimension_returns_tokens_and_transitions(fake_home, capsys):
+    write(transcript(fake_home), [turn("m1", inp=100, out=10, model="claude-test-1")])
+    _transition("screen", 60)
+    out = _usage_json(capsys, by="model")
+    assert out["state_transitions"] == {"hook": 0, "screen": 1}
+    assert out["usage"]["claude-test-1"]["input"] == 100 and out["by"] == "model"
+
+
+def test_usage_invalid_since_exits_2_with_stderr(fake_home, capsys):
+    with pytest.raises(SystemExit) as e:
+        usage.cmd_usage(argparse.Namespace(since="invalid-date", by=None, json=True))
+    assert e.value.code == 2
+    assert "invalid-date" in capsys.readouterr().err

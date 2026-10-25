@@ -71,6 +71,16 @@ def _read():
     return out
 
 
+def state_transition_counts(since_ts, now_ts=None):
+    """{"hook": n, "screen": n}: state_transition events from `since_ts` (epoch seconds) to `now_ts` (default: now)."""
+    end = now_ts if now_ts is not None else float("inf")
+    out = {"hook": 0, "screen": 0}
+    for e in _read():
+        if e["kind"] == "state_transition" and e.get("source") in out and since_ts <= e["_t"].timestamp() <= end:
+            out[e["source"]] += 1
+    return out
+
+
 def _prune():
     path = _path()
     if path.stat().st_size < MAX_LINES or path.read_bytes().count(b"\n") <= MAX_LINES:

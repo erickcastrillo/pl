@@ -303,7 +303,7 @@ def _main():
     q.add_argument("--json", action="store_true", help="print JSON")
     p.add_argument("--dry-run", action="store_true", help="say what would be retained")
     p.add_argument("--json", action="store_true", help="print JSON")
-    p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
+    p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM"); p.add_argument("--json", action="store_true", help="print token usage and hook vs screen state transition counts as JSON")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
