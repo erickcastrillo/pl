@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, recall, rework, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -65,6 +65,22 @@ def stage_complete(c, col, stage):
         return has_design(c) or C.COLUMNS.index(col) > C.COLUMNS.index("Spec ready")
     return C.COLUMNS.index(col) >= C.COLUMNS.index(C.STAGE_DONE_AT[stage])
 
+
+
+def finished_stage(c, col):
+    """The (stage, worker) whose done column the card just reached: the live worker, else the newest finished one."""
+    m = c.get("metadata") or {}
+    for w in [m.get("worker"), *reversed(m.get("finished_workers") or [])]:
+        if w and w.get("stage") in C.STAGE_DONE_AT and C.STAGE_DONE_AT[w["stage"]] == col:
+            return w["stage"], w
+    return None
+
+
+def record_finished_run(c, stage, worker):
+    try:
+        recall.record_run(c, stage, worker)
+    except Exception as e:   # a store problem prints and goes on, like rework.sweep
+        print(f"memory: run summary for {short_id(c['id'])} not saved: {e}", file=sys.stderr)
 
 
 def _gh_env_args():
@@ -483,9 +499,16 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
         dropped = {c["id"] for c in all_cards if (c.get("metadata") or {}).get("dropped_at")}   # pl drop: not finished
+        by_id = {c["id"]: c for c in all_cards}
         for cid, col in now_col.items():
             if cid in last and last[cid] != col:   # first sighting records without emitting
                 events.emit("moved", cid, **{"from": last[cid], "to": col}, **({"dropped": True} if col == "Done" and cid in dropped else {}))
+                if done := finished_stage(by_id[cid], col):
+                    record_finished_run(by_id[cid], *done)
+        for c in all_cards:   # a design stage ends without a column move: its DESIGN section appears
+            w = (c.get("metadata") or {}).get("worker") or {}
+            if w.get("stage") == "design" and has_design(c):
+                record_finished_run(c, "design", w)
         st["last_col"] = now_col
     runs_alive = 0
     runs_live = 0   # every live run agent, waiting ones included
