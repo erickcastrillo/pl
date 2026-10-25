@@ -41,6 +41,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     from pl import harnesses
     monkeypatch.setattr(harnesses, "MODEL_LIST_ARGV", {})    # agy models / codex's catalog: test_model_effort fakes them
     harnesses._MODELS.clear()
+    from pl import ghquota
+    monkeypatch.setattr(ghquota, "_ask_token", lambda: "")   # no test asks gh for a token; test_gh_rate_limit.py fakes gh
+    ghquota._TOKENS.clear()
 
 
 PY = re.compile(r"python[\d.]*$")
