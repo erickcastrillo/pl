@@ -168,6 +168,8 @@ ENTRIES = [
        "rule add, rollback and rules suggested from repeated edits", "pl pods show engineering"),
     _e("2026-10-25.17", "pl titles check --fix repairs drift; next and set number plan cards",
        "pl titles next, pl titles set", "pl titles check --fix --dry-run"),
+    _e("2026-10-25.18", "pl-plan files later slices as Plan N slice M with plan metadata",
+       "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
 ]
 
 
