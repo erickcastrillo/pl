@@ -69,6 +69,8 @@
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
+  pl kill-switch on|off|status [--json]
+                          machine-wide kill switch: holds approved cards with outward actions; off releases them
   pl manager start|stop [--all]|status|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
@@ -112,7 +114,7 @@ import argparse
 import os
 import sys
 
-from pl import alerts, assistant, config, events, profiles, rework, setup, skills
+from pl import alerts, assistant, config, events, outward, profiles, rework, setup, skills
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -226,9 +228,11 @@ def main():
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
+    p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
+    p.add_argument("--json", action="store_true", help="output as JSON")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
-    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
+    if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
         raise SystemExit(NO_PROFILE)
     if not a.cmd:
         if sys.stdin.isatty() and sys.stdout.isatty():   # bare pl on a terminal opens the console; piped, it prints help
@@ -247,4 +251,5 @@ def main():
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills,
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
-     "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a)}[a.cmd](a)
+     "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
+     "kill-switch": outward.cmd_kill_switch}[a.cmd](a)

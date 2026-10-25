@@ -116,6 +116,9 @@ ENTRIES = [
        "pl setup: the default board for a new non-code pipeline", "pl board check local"),
     _e("2026-10-23.02", "pl inbox: every gate waiting on you, in every profile",
        "CLI: pl inbox, or pl inbox --json", "pl inbox"),
+    _e("2026-10-23.03", "Kill switch: hold every outward action across profiles",
+       "pl kill-switch on pauses runs with outward actions; pl kill-switch off releases them",
+       "pl kill-switch status"),
 ]
 
 
