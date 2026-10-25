@@ -1,4 +1,5 @@
 """CLI rules: exit 0 for done, 1 for failed work, 2 for bad input or setup, with a one-line reason on stderr."""
+import argparse
 import copy
 import sys
 
@@ -306,3 +307,63 @@ def test_every_write_command_accepts_dry_run(monkeypatch, capsys, argv):
     with pytest.raises(SystemExit):
         cli.main()
     assert "--dry-run" in capsys.readouterr().out
+
+
+def _walk(entries):
+    for e in entries:
+        yield e
+        yield from _walk(e["commands"])
+
+
+def test_help_json_lists_every_subparser_and_pre_command(monkeypatch, capsys):
+    import json
+    import re
+    monkeypatch.setattr(sys, "argv", ["pl", "--profile", "t", "help", "--json"])
+    cli.main()
+    top = {e["name"] for e in json.loads(capsys.readouterr().out)["commands"]}
+    parser_names = set(next(a for a in cli.build_parser()._actions if a.dest == "cmd").choices)
+    pre_names = set(re.findall(r'pre_a\.rest\[:1\] == \["(\w+)"\]', open(cli.__file__).read()))
+    assert parser_names | pre_names <= top
+    assert {"help", "jobs", "setup", "mcp"} <= top
+
+
+def test_every_read_command_names_a_shape():
+    from pl import jsonout
+    found = {e["name"].replace(" ", "-"): e for e in _walk(jsonout.commands(cli.build_parser(), cli.PRE_COMMANDS))}
+    for key, shape in jsonout.SHAPES.items():
+        if key in found:
+            assert found[key]["shape"] == shape
+    assert found["list"]["shape"] == "board" and found["skills-list"]["shape"] == "skills-list"
+    assert any(f["name"] == "--json" and f["type"] == "flag" for f in found["card"]["flags"])
+
+
+@pytest.fixture
+def machine(tmp_path, monkeypatch):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+
+
+def _jobs_json(capsys):
+    import json
+    cli.cmd_jobs(argparse.Namespace(json=True))
+    return json.loads(capsys.readouterr().out)["jobs"]
+
+
+def test_a_running_job_shows_in_pl_jobs_json_and_is_gone_after(machine, capsys):
+    import os
+    from pl import jobs
+    with jobs.track("rework"):
+        jobs.progress("sweeping")
+        capsys.readouterr()
+        (job,) = _jobs_json(capsys)
+        assert job["name"] == "rework" and job["pid"] == os.getpid() and job["progress"] == "sweeping"
+        assert oct(next((jobs.jobs_dir()).iterdir()).stat().st_mode & 0o777) == "0o600"
+    assert _jobs_json(capsys) == []
+
+
+def test_a_dead_pid_job_file_is_dropped(machine, capsys):
+    import json
+    from pl import jobs
+    jobs.jobs_dir().mkdir(parents=True)
+    stale = jobs.jobs_dir() / "e2e-1.json"
+    stale.write_text(json.dumps({"id": "e2e-1", "name": "e2e", "pid": 2**31 - 1, "argv": [], "started": 0, "progress": None}))
+    assert _jobs_json(capsys) == [] and not stale.exists()
