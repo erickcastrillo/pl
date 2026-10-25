@@ -25,6 +25,10 @@ COMMANDS = {
     "CardsView.plan_filter": "pl list --plan N",
     "CardsView.retry": "pl retry <id>",
     "CardsView.restart": "pl restart <id>",
+    "LoopsView.edit": "pl loops edit NAME",
+    "LoopsView.pause": "pl loops pause|resume NAME",
+    "LoopsView.run_now": "pl loops run NAME",
+    "LoopsView.delete": "pl loops rm NAME",
     "CardsView.move_agent": "pl move-agent <card> <account>",
     "CardsView.edit_input": "pl section <id> INPUT",
     "AlertsView.ack": "pl alerts --ack KEY",
@@ -154,6 +158,8 @@ NAV = {
     "press",
     "show_overlay",
 }
+
+LOOPS_KEYS = {"e": "pl loops edit", "p": "pl loops pause", "g": "pl loops run", "d": "pl loops rm"}   # w and R are navigation (NAV)
 
 PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
     "details": "pl pipelines show NAME --json",

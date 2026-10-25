@@ -170,3 +170,24 @@ def test_every_mapped_command_parses(tmp_path, monkeypatch):
         except SystemExit as exc:
             assert exc.code in (0, None), f"{key}: {cmd} failed with exit {exc.code}"
 
+
+
+def test_every_loops_tab_key_has_a_pl_loops_command(monkeypatch, tmp_path):
+    from pl import cli
+    from pl.tui.loops import LoopsView
+    from pl.tui.parity import LOOPS_KEYS, NAV
+
+    keys = {b.key: b.action for b in LoopsView.BINDINGS}
+    for key, action in keys.items():
+        assert key in LOOPS_KEYS or action in NAV, f"Loops tab key {key} ({action}) has no pl loops command"
+    assert {"e", "p", "g", "d"} <= set(LOOPS_KEYS)
+    prof = tmp_path / ".pl-fake"
+    prof.mkdir()
+    (prof / "config.toml").write_text("")
+    monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for key, cmd in LOOPS_KEYS.items():
+        monkeypatch.setattr(sys, "argv", [*cmd.split()[:3], "--help"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code in (0, None), f"{key}: {cmd}"
