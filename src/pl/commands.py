@@ -518,6 +518,11 @@ def cmd_section(a):
 
 
 def cmd_board(a):
+    if a.action == "serve":
+        from pl import boardserve
+        return boardserve.run(a)
+    if a.action == "check":
+        raise SystemExit("pl board check is not yet implemented")
     if a.action != "init":
         raise SystemExit("pl board: only 'init' is supported")
     if "Inbox" in lists():
