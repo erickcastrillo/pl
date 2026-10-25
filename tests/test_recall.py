@@ -91,3 +91,32 @@ def test_fts_syntax_in_a_query_is_treated_as_words():
         recall.search(q)
     assert recall.search("alpha OR zzz") == []
     assert len(recall.search("alpha beta")) == 1
+
+
+@pytest.mark.parametrize("source", ["email:inbox/1", "connector:gmail", "trigger:t1"])
+def test_an_email_or_connector_source_is_refused(source):
+    with pytest.raises(recall.Refused, match="no text from emails or connector results"):
+        recall.add("the invoice is due", "fact", source)
+    assert recall.search("invoice") == []
+
+
+def test_a_save_under_pl_untrusted_is_refused(monkeypatch):
+    monkeypatch.setenv("PL_UNTRUSTED", "1")
+    with pytest.raises(recall.Refused, match="no text from emails or connector results"):
+        recall.add("the invoice is due", "fact", "owner:erick")
+    assert recall.search("invoice") == []
+
+
+def test_text_holding_a_configured_secret_is_refused(monkeypatch):
+    from pl.trackers import mcp
+    monkeypatch.setattr(mcp, "_secrets", {"hunter2-secret-value"})
+    with pytest.raises(recall.Refused):
+        recall.add("the key is hunter2-secret-value", "fact", "owner:erick")
+    assert recall.search("hunter2") == []
+
+
+def test_a_card_number_is_masked_and_a_plain_number_is_kept():
+    masked = recall.get(recall.add("paid with 4111 1111 1111 1111 today", "fact", "owner:erick"))["text"]
+    assert masked == "paid with ****1111 today"
+    plain = recall.get(recall.add("order 1234567890123 shipped", "fact", "owner:erick"))["text"]
+    assert plain == "order 1234567890123 shipped"
