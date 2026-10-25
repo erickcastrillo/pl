@@ -1,5 +1,11 @@
 """A profile's pipeline: its columns, stages and gates. No [pipeline] table means the engineering pipeline."""
+import json
 import re
+import subprocess
+import sys
+import tomllib
+from importlib import resources
+from pathlib import Path
 
 from pl import config as C
 
@@ -108,3 +114,75 @@ def approved_column(stage) -> str:
     cols = C.PIPELINE["columns"]
     i = cols.index(stage["done"])
     return cols[min(i + 1, len(cols) - 1)]
+
+
+def templates() -> dict:
+    """The built-in pipeline templates by name."""
+    found = {}
+    for f in resources.files("pl").joinpath("pipelines_builtin").iterdir():
+        if f.name.endswith(".toml"):
+            p = from_toml(tomllib.loads(f.read_text())["pipeline"])
+            found[p["name"]] = p
+    return found
+
+
+def _run(argv):
+    return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+
+
+def shown(p) -> dict:
+    gates = {n: s["gate"] for n, s in p["stages"].items() if "gate" in s}
+    return {"name": p["name"], "template": p["template"], "columns": p["columns"], "stages": p["stages"], "gates": gates}
+
+
+def _other_profile(name) -> dict:
+    r = _run([sys.executable, "-m", "pl", "--profile", name, "pipelines", "show", "--json"])
+    if r.returncode:
+        raise SystemExit(r.stderr.strip() or f"pl: could not read the pipeline of profile {name}")
+    return json.loads(r.stdout)
+
+
+def _print_show(d):
+    print(f"pipeline {d['name']}" + (f" (template {d['template']})" if d["template"] else ""))
+    print("columns: " + " → ".join(d["columns"]))
+    for n, s in d["stages"].items():
+        fields = [f"{k} {s[k]}" for k in ("skill", "account", "section", "gate", "next") if k in s]
+        print(f"  {n}: {s.get('column')} → {s.get('done')}; " + ", ".join(fields))
+    print("gates: " + (", ".join(f"{n} {g}" for n, g in d["gates"].items()) or "none"))
+
+
+def _profile_pipeline_name(dir_) -> str:
+    try:
+        t = tomllib.loads((Path(dir_) / "config.toml").read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        t = {}
+    return (t.get("pipeline") or {}).get("name", "engineering")
+
+
+def _list_rows() -> list[dict]:
+    from pl import profiles, summary
+    return [{"profile": r["name"], "pipeline": _profile_pipeline_name(r["dir"]),
+             "summary": summary.read(Path(r["dir"]))} for r in profiles.list_profiles(check_lock=False)]
+
+
+def cmd_pipelines(a):
+    if a.pipelines_cmd == "show":
+        d = _other_profile(a.name) if a.name and a.name != C.PROFILE_NAME else shown(C.PIPELINE)
+        if a.json:
+            print(json.dumps(d))
+        else:
+            _print_show(d)
+    elif a.templates:
+        rows = [{"name": n, "stages": len(p["stages"])} for n, p in sorted(templates().items())]
+        if a.json:
+            print(json.dumps(rows))
+        else:
+            print("\n".join(f"  {r['name']:<16}{r['stages']} stages" for r in rows))
+    else:
+        rows = _list_rows()
+        if a.json:
+            print(json.dumps(rows))
+            return
+        for r in rows:
+            state = "running" if (r["summary"] or {}).get("running") else "stopped"
+            print(f"  {r['profile']:<14}{r['pipeline']:<16}{state}")

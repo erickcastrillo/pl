@@ -110,3 +110,15 @@ def test_validate_returns_the_same_errors_for_the_settings_screen(fake_home):
     errs = C.validate(doc)
     assert any(e.startswith("pipeline.stages.prepare.column") for e in errs)
     assert not any("pipeline" in e for e in C.validate(tomlkit.parse("")))
+
+
+def test_engineering_template_equals_the_builtin_pipeline():
+    assert pipeline.templates()["engineering"] == pipeline.engineering()
+
+
+def test_every_template_passes_validation():
+    templates = pipeline.templates()
+    assert {"engineering", "new-client"} <= set(templates)
+    for name, p in templates.items():
+        if name != "engineering":   # engineering keeps its own code path, where design and plan share a column
+            assert pipeline.errors(p) == [], name
