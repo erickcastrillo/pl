@@ -194,6 +194,26 @@ def model_effort(h, account, stage=None, small=False):
     return model, (effort if effort in EFFORT_LEVELS.get(h.name, ()) else None)
 
 
+def model_reason(h, account, stage=None, small=None, rework=False):
+    """(model, reason) for the record of a launch: the model model_effort picks and where it came from. small is the
+    (lines, files) budget of a small change; a template that sets its own model flag is reported as "template"."""
+    if any(MODEL_FLAG_RE.search(t) for t in h.interactive or ()):
+        return "template", f"[harnesses.{h.name}] template"
+    model, _ = model_effort(h, account, stage, bool(small))
+    cfg = C.STAGES.get(stage) or {}
+    small_models = (cfg.get("small") or {}).get("models") or {}
+    stage_models = cfg.get("models") or {}
+    if not model:
+        return "default", "harness default"
+    if small and small_models.get(h.name) == model:
+        reason = f"small change: {small[0]} lines, {small[1]} files"
+    elif stage_models.get(h.name) == model:
+        reason = f"stage {stage}, harness {h.name}"
+    else:
+        reason = f"account {account}"
+    return model, reason + (" (rework)" if rework else "")
+
+
 def worktrees_dir():
     """The profile's worktrees folder, made (0700) when missing; None when unset or it cannot be made."""
     d = C.WORKTREES_DIR
