@@ -1,4 +1,5 @@
 """Agent memory: entries about runs, approvals and decisions, in a SQLite store with full-text search."""
+import json
 import os
 import re
 import secrets
@@ -69,6 +70,48 @@ def _db():
     return con
 
 
+class McpMemory:
+    """The memory tools of an MCP server (a connector with role "memory"), returning what the local store returns."""
+
+    def __init__(self, server, timeout=30):
+        self.server, self.timeout = server, timeout
+
+    def _call(self, tool, args):
+        from pl.trackers import mcp as M
+        key, s = M._session(self.server, self.timeout)
+        res = s.run(lambda session: session.call_tool(tool, args))
+        text = next((c.text for c in res.content if getattr(c, "type", None) == "text"), "")
+        if res.isError:
+            raise RuntimeError(f"pl: memory tool {tool} failed: {util.mask(text)[:200]}")
+        return json.loads(text) if text.strip() else None
+
+    def search(self, q, limit, pod, card):
+        args = {"query": q, "limit": limit, **{k: v for k, v in (("pod", pod), ("card", card)) if v}}
+        found = self._call("memory_search", args)
+        return found.get("results", []) if isinstance(found, dict) else found or []
+
+    def add(self, entry):
+        return self._call("memory_add", entry)["id"]
+
+    def get(self, entry_id):
+        return self._call("memory_get", {"id": entry_id})
+
+    def forget_contact(self, contact):
+        return int(self._call("memory_forget", {"contact": contact}).get("deleted", 0))
+
+
+def backend():
+    """The MCP memory server when a connector has role "memory"; None means the local store."""
+    from pl import connectors
+    for _, c in connectors.load().items():
+        if c["enabled"] and "memory" in c.get("role", []):
+            cmd = [c["command"]] if isinstance(c.get("command"), str) else list(c.get("command") or [])
+            server = {"url": c["url"], "headers": c.get("headers") or {}} if c.get("url") else \
+                {"command": cmd[0], "args": [*cmd[1:], *(c.get("args") or [])], "env": c.get("env") or {}}
+            return McpMemory(server)
+    return None
+
+
 def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, contact=None, author=None,
         replaces=None, link=None):
     if kind not in KINDS:
@@ -78,6 +121,9 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
     text = _clean(text)
     pipeline = pipeline or C.PROFILE_NAME
     pod = pod or pipeline
+    if (remote := backend()):
+        return remote.add({"text": text, "kind": kind, "source": source, "card": card, "pipeline": pipeline, "pod": pod,
+                           "client": client, "contact": contact, "author": author, "replaces": replaces, "link": link})
     entry_id = "m-" + secrets.token_hex(4)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     con = _db()
@@ -94,6 +140,8 @@ def add(text, kind, source, card=None, pipeline=None, pod=None, client=None, con
 
 
 def get(entry_id):
+    if (remote := backend()):
+        return remote.get(entry_id)
     con = _db()
     try:
         row = con.execute("SELECT * FROM entries WHERE id=?", (entry_id,)).fetchone()
@@ -106,16 +154,21 @@ def _match(q):
     return " ".join('"' + w.replace('"', '""') + '"' for w in q.split())
 
 
-def search(q, limit=10, pod=None):
+def search(q, limit=10, pod=None, card=None):
     match = _match(q)
     if not match:
         return []
+    if (remote := backend()):
+        return remote.search(q, limit, pod, card)
     sql = ("SELECT e.* FROM entries_fts f JOIN entries e ON e.rowid = f.rowid "
            "WHERE entries_fts MATCH ? AND e.replaced_by IS NULL")
     args = [match]
     if pod:
         sql += " AND e.pod = ?"
         args.append(pod)
+    if card:
+        sql += " AND e.card = ?"
+        args.append(card)
     con = _db()
     try:
         rows = con.execute(sql + " ORDER BY bm25(entries_fts) LIMIT ?", (*args, limit)).fetchall()
@@ -213,3 +266,15 @@ def forget(entry_id) -> bool:
             con.close()
     except Exception:
         return False
+
+
+def forget_contact(contact) -> int:
+    """Delete every entry linked to this contact; the count."""
+    if (remote := backend()):
+        return remote.forget_contact(contact)
+    con = _db()
+    try:
+        with con:
+            return con.execute("DELETE FROM entries WHERE contact = ?", (contact,)).rowcount
+    finally:
+        con.close()

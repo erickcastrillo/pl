@@ -31,11 +31,17 @@ def run_pl(argv: list[str]) -> Any:
         return out
 
 
+def memory_search(query: str, limit: int = 10, pod: str | None = None, card: str | None = None) -> list[dict]:
+    from pl import recall
+    return recall.search(query, limit=limit, pod=pod, card=card)
+
+
 def cmd_mcp(argv: list[str], profile: str | None = None) -> None:
     ap = argparse.ArgumentParser(prog="pl mcp", description="serve pl tools over MCP")
     sub = ap.add_subparsers(dest="mcp_cmd")
     p = sub.add_parser("serve")
     p.add_argument("--brain", action="store_true", help="serve the central brain read-only tool set")
+    p.add_argument("--memory", action="store_true", help="serve memory_search over the agent memory")
     p.add_argument("--stdio", action="store_true", help="use stdio transport")
     p.add_argument("--conv", default="default", help="conversation id for brain source logging")
     a = ap.parse_args(argv)
@@ -44,5 +50,10 @@ def cmd_mcp(argv: list[str], profile: str | None = None) -> None:
             from pl import brain_tools
             server = brain_tools.build(conv=a.conv)
             server.run(transport="stdio")
+        elif a.memory:
+            from mcp.server.fastmcp import FastMCP
+            server = FastMCP("pl-memory")
+            server.tool(name="memory_search", description="Search saved run summaries and approval reasons.")(memory_search)
+            server.run(transport="stdio")
         else:
-            raise SystemExit("pl mcp: specify --brain")
+            raise SystemExit("pl mcp: specify --brain or --memory")

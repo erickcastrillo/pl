@@ -111,6 +111,8 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
+  pl mcp serve --brain|--memory
+                          serve the brain tools, or memory_search over the agent memory, to an MCP client
   pl sandbox create|status|start|stop|destroy [--yes]
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
                           work folder and worktrees folder; --yes destroys the VM without asking
