@@ -63,18 +63,9 @@ NAV = {
     "app.focus_next",
     "app.focus_previous",
     "leave_box",
-    # Table cursor and scrolling (DataTable's own keys, inherited by FitTable)
-    "select_cursor",
-    "cursor_up",
-    "cursor_down",
-    "cursor_left",
-    "cursor_right",
-    "page_up",
-    "page_down",
+    # DataTable's own top and bottom keys, inherited by FitTable (the other table keys are listed below)
     "scroll_top",
     "scroll_bottom",
-    "scroll_home",
-    "scroll_end",
     # Window and screen navigation
     "cycle_window",
     "open_window",
