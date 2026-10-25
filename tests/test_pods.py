@@ -313,6 +313,15 @@ def test_a_profile_without_pods_keeps_the_whole_library(fake_env):
     assert "/pl:outside" in harnesses.launch_script(claude, None, "/outside x", "sid", "label")
 
 
+def test_a_pod_table_without_skills_keeps_the_whole_library(fake_env, monkeypatch):
+    _library_skill(fake_env, "outside")
+    monkeypatch.setattr(C, "PODS", {"billing": {"knowledge": []}})
+    monkeypatch.setattr(C, "POD", "billing")
+    claude = harnesses.get("claude")
+    assert pods.launch_pod() is None
+    assert "/pl:outside" in harnesses.launch_script(claude, None, "/outside x", "sid", "label")
+
+
 def _enable(monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["pl", "skills", "enable", *argv])
     cli.main()
@@ -347,3 +356,26 @@ def test_enable_of_an_unknown_skill_exits_2(fake_env, monkeypatch, capsys):
         _enable(monkeypatch, "no-such-skill", "--pod", "engineering", "--yes")
     assert exc.value.code == 2
     assert "no-such-skill" in capsys.readouterr().err
+
+
+def test_show_json_includes_approval_rate_edits_per_draft_and_escalations(fake_home, capsys):
+    from datetime import datetime, timedelta, timezone
+    from pl import alerts
+    d = _profile(fake_home, "sales", "[pods.sales]\nskills = []\n")
+    now = datetime.now(timezone.utc)
+
+    def at(days):
+        return (now - timedelta(days=days)).isoformat(timespec="seconds")
+
+    rows = [("approved", 1), ("spec_approved", 2), ("approved", 3), ("rejected", 4), ("approved", 40),
+            ("moved", 5, {"to": "Manual"}), ("moved", 6, {"to": "Done"})]
+    (d / "state" / "events.jsonl").write_text("".join(
+        json.dumps({"kind": r[0], "card": "c1", "ts": at(r[1]), **(r[2] if len(r) > 2 else {})}) + "\n" for r in rows))
+    (d / "state" / "pod-edits.jsonl").write_text("".join(
+        json.dumps({"pod": "sales", "sentence_hash": h, "card": "c1", "ts": at(2)}) + "\n" for h in "abcd"))
+    alerts.open("stage_failed:c1:run", "high", "failed", "pl retry")
+    alerts.open("pod_rule:x", "info", "suggested", "pl pods rule accept x")
+
+    pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="sales", json=True))
+    m = json.loads(capsys.readouterr().out)["metrics"]
+    assert m == {"approval_rate": 0.75, "edits_per_draft": 4 / 3, "escalations": 2, "window_days": 30}
