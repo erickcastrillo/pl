@@ -88,6 +88,7 @@ def _defaults():
     POD = None            # [pipeline] pod: the pipeline's pod (default the profile name)
     SANDBOX = {}          # [sandbox] enabled, cpus, memory, disk: optional Multipass VM for stage agents
     CAPS = {}             # [caps.<stage>] minutes, tokens ("2M", "500k" or a number): a stage's agent is stopped at the cap
+    SYNC = {}
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
     TRIGGERS = {}         # [triggers.<name>]
     CONNECTORS = {}       # [connectors.<name>]
@@ -234,6 +235,7 @@ def _apply(g, t):
     g["RETENTION"] = {**g["RETENTION"], **t.get("retention", {})}
     g["SANDBOX"] = dict(t.get("sandbox", {}))
     g["WORKTREES"] = {"cleanup": True, **t.get("worktrees", {})}
+    g["SYNC"] = dict(t.get("sync", {}))
 
 
 def default_worktrees(work_dir) -> Path:
@@ -404,6 +406,17 @@ def validate(doc) -> list[str]:
     if ed is not None and (isinstance(ed, bool) or not isinstance(ed, int) or ed < 0):
         errs.append("retention.email_days must be a whole number of at least 0")
     errs += _sandbox_errors(doc.get("sandbox", {}))
+    sync = doc.get("sync") if isinstance(doc.get("sync"), dict) else {}
+    if "github" in sync:
+        gh = sync["github"]
+        if not (isinstance(gh, str) and re.match(r"^[^/\s]+/projects/\d+$", gh)):
+            errs.append("sync.github must look like owner/projects/N")
+        if doc.get("tracker", {}).get("type") != "local":
+            errs.append('sync.github needs [tracker] type = "local"')
+    if "git" in sync:
+        git = sync["git"]
+        if not (isinstance(git, str) and git.strip()):
+            errs.append("sync.git must be a folder path")
     mc = doc.get("tracker", {}).get("max_card_chars")
     if mc is not None and (isinstance(mc, bool) or not isinstance(mc, int) or mc < 1000):
         errs.append("tracker.max_card_chars must be a whole number of at least 1000")

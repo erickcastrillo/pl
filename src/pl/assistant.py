@@ -32,7 +32,7 @@ LOG_CHARS = 200
 # Reads and the read-only commands below run without a prompt; any other pl command, gh or git push asks.
 READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
 READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)",
-             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl titles*)",
+             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl titles*)", "Bash(pl sync*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry",
              "restart", "hold", "unhold", "rework", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",

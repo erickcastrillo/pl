@@ -50,6 +50,10 @@ def get(kind):
     mod, cls = TYPES[t].split(":")
     tracker = getattr(importlib.import_module(mod), cls)(cfg)
     if kind == "tracker":
+        if t == "local" and C.SYNC.get("github"):
+            for name in ("create", "update", "delete"):
+                if hasattr(tracker, name):
+                    setattr(tracker, name, _queued(name, getattr(tracker, name)))
         for name in ("create", "update", "delete", "move", "adopt"):
             if hasattr(tracker, name):
                 setattr(tracker, name, _marked(getattr(tracker, name), name))
@@ -73,6 +77,34 @@ def _marked(write, name=None):
             return res
         finally:
             board.dirty()
+    return run
+
+
+def _queued(op, write):
+    def run(*a, **kw):
+        from pl import outbox
+        res = write(*a, **kw)
+        try:
+            if op == "create":
+                fields = {
+                    "column": a[0] if len(a) > 0 else kw.get("column"),
+                    "title": a[1] if len(a) > 1 else kw.get("title"),
+                    "description": a[2] if len(a) > 2 else kw.get("description", ""),
+                    "tags": a[3] if len(a) > 3 else kw.get("tags", ()),
+                    "metadata": a[4] if len(a) > 4 else kw.get("metadata"),
+                    "assigned_to": a[5] if len(a) > 5 else kw.get("assigned_to"),
+                }
+                outbox.append(res["id"], "create", fields)
+            elif op == "update":
+                item_id = a[0] if len(a) > 0 else kw["item_id"]
+                fields = {k: v for k, v in kw.items() if k != "verify"}
+                outbox.append(item_id, "update", fields)
+            elif op == "delete":
+                item_id = a[0] if len(a) > 0 else kw["item_id"]
+                outbox.append(item_id, "delete", {})
+        except OSError as e:
+            raise SystemExit(f"pl: outbox: {e}")
+        return res
     return run
 
 

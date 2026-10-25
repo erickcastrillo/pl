@@ -7,7 +7,7 @@ import stat
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
@@ -981,3 +981,27 @@ def cmd_worktrees_bootstrap(a):
             print(note)
     except ValueError as e:
         raise SystemExit(f"pl worktrees bootstrap: {e}")
+
+def cmd_sync(a):
+    from pl import ghquota, outbox
+    target = C.SYNC.get("github")
+    if not target:
+        raise SystemExit("pl sync: set [sync] github in config.toml")
+    n = outbox.count()
+    led = ghquota.ledger()
+    reset = led.get("reset")
+    now = time.time()
+    if isinstance(reset, (int, float)) and reset > now:
+        window_txt = f"next GitHub window: {time.strftime('%H:%M', time.localtime(reset))}"
+        window_iso = datetime.fromtimestamp(reset, timezone.utc).isoformat(timespec="seconds")
+    else:
+        window_txt = "next GitHub window: unknown (no reading yet)"
+        window_iso = None
+
+    if getattr(a, "json", False):
+        print(json.dumps({"queued": n, "target": target, "next_window": window_iso}))
+    else:
+        print(f"{n} changes queued for {target}")
+        print(window_txt)
+
+

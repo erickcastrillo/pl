@@ -82,6 +82,8 @@
                           when it opens and again after 1 h and 4 h, and clears itself when its check passes;
                           --all adds the resolved ones; --ack stops the reminders until it clears
   pl intent <PR URL>      what a PR was meant to do: the spec + plan scope of the card behind it (for reviewers)
+  pl sync status [--json]
+                          how many changes are queued for the GitHub board and when the next window opens
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
   pl kill-switch on|off|status [--json]
@@ -164,7 +166,7 @@ from pl import alerts, assistant, config, events, hooks, links, outward, pods, p
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
                          cmd_outbox, cmd_pause, cmd_profiles as cmd_accounts, cmd_pull, cmd_reject, cmd_resume, cmd_retry,
-                         cmd_review, cmd_restart, cmd_hold, cmd_unhold, cmd_depends)
+                         cmd_review, cmd_restart, cmd_hold, cmd_unhold, cmd_depends, cmd_sync)
 from pl.dispatch import cmd_dispatch
 from pl.move_agent import cmd_move_agent
 from pl.standup import cmd_standup
@@ -371,6 +373,7 @@ def _main():
     q = pb.add_parser("prune"); q.add_argument("--dry-run", action="store_true")
     q = pb.add_parser("end"); q.add_argument("conv")
     q = pb.add_parser("undo"); q.add_argument("conv")
+    p = sub.add_parser("sync"); p.add_argument("action", choices=["status"]); p.add_argument("--json", action="store_true")
     a = ap.parse_args()
     is_board_check = a.cmd == "board" and getattr(a, "action", None) == "check"
     if C.CONFIG_DIR is None and a.cmd not in ("profiles", "update", "kill-switch", "brain") and not is_board_check and (a.cmd or (sys.stdin.isatty() and sys.stdout.isatty())):
@@ -404,6 +407,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,
      "hook": hooks.cmd_hook,

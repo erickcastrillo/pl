@@ -482,7 +482,7 @@ def test_a_broken_state_file_never_crashes_install(lib, shipped):
     (lib / ".pl-builtin.json").write_text(json.dumps(st))
     version = _bump(shipped, "pl-plan")
     out = skills.install_builtins()
-    assert "updated built-in pl-plan to version 4" in out
+    assert f"updated built-in pl-plan to version {version}" in out
     (lib / ".pl-builtin.json").write_text('["not", "a", "dict"]')
     skills.install_builtins()
 
