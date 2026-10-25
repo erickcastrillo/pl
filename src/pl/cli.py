@@ -285,6 +285,9 @@ def _main():
     p = sub.add_parser("profiles"); ps = p.add_subparsers(dest="profiles_cmd")
     q = ps.add_parser("new"); q.add_argument("name"); q.add_argument("--from-current", action="store_true", help="copy the profile you are running as, not the defaults")
     q.add_argument("--from-legacy", action="store_true", help="copy the settings of the old one-file pl script")
+    p = sub.add_parser("pipelines"); pl_ = p.add_subparsers(dest="pipelines_cmd", required=True)
+    q = pl_.add_parser("list"); q.add_argument("--templates", action="store_true", help="list the built-in templates"); q.add_argument("--json", action="store_true")
+    q = pl_.add_parser("show"); q.add_argument("name", nargs="?", help="a profile (default: this one)"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("accounts"); p.add_argument("--reset", metavar="NAME|all", help="un-park a profile (or all) by hand")
     p = sub.add_parser("watch"); p.add_argument("--interval", type=int, default=None); p.add_argument("--once", action="store_true", help="print one frame and exit")
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
@@ -417,6 +420,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "pipelines": lambda a: __import__("pl.pipeline").pipeline.cmd_pipelines(a),
      "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,
