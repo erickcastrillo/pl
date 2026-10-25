@@ -173,6 +173,10 @@ def cmd_alerts(a):
         print(f"acknowledged {a.ack}: no more reminders until it clears")
         return
     rows = listing(a.all)
+    if getattr(a, "json", False):
+        from pl.jsonout import emit
+        emit({"alerts": rows})
+        return
     if not rows:
         print("no open alerts")
         return

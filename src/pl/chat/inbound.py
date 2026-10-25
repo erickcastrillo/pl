@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from typing import Any
 import uuid
 
@@ -61,10 +62,25 @@ def consume_nonce(nonce: str) -> dict[str, Any] | None:
     return val
 
 
-def _pl(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
+class PlResult(tuple):
+    """(returncode, output) that also reads like a CompletedProcess."""
+
+    @property
+    def returncode(self) -> int:
+        return self[0]
+
+    @property
+    def output(self) -> str:
+        return self[1]
+
+    stdout = output
+    stderr = ""
+
+
+def _pl(argv: list[str], env: dict[str, str] | None = None) -> PlResult:
     full_env = {**os.environ, **(env or {}), "PL_SOURCE": "chat"}
     proc = subprocess.run([sys.executable, "-m", "pl", *argv], capture_output=True, text=True, env=full_env)
-    return proc.returncode, (proc.stdout + proc.stderr).strip()
+    return PlResult((proc.returncode, (proc.stdout + proc.stderr).strip()))
 
 
 def _sender_and_chat(update: dict[str, Any]) -> tuple[str, str]:
@@ -195,7 +211,6 @@ def poll(adapter: Any = None) -> None:
                 st["offset"] = up_id + 1
                 save_state(st)
             handle_update(ad, u)
-from dataclasses import dataclass, field
 
 
 @dataclass
@@ -210,10 +225,6 @@ class InboundEvent:
     trigger_id: str = ""
     adapter: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
-
-
-def _pl(argv: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, env={**os.environ, "PL_SOURCE": "chat", **(env or {})})
 
 
 def audit_record(kind: str, **fields: Any) -> None:
@@ -238,11 +249,11 @@ def dispatch_action(adapter_inst: Any, event: InboundEvent) -> Any:
     val = event.action_id or event.value
     if event.kind == "action" and (val.startswith("approve:") or val.startswith("app:")):
         profile, card = parse_action_target(val)
-        res = _pl([sys.executable, "-m", "pl", "--profile", profile, "approve", card])
+        res = _pl(["--profile", profile, "approve", card])
         if res.returncode == 0 and event.chat_id and event.message_id and hasattr(adapter_inst, "edit"):
             adapter_inst.edit(event.chat_id, event.message_id, f"Approved by you at {time.strftime('%H:%M UTC', time.gmtime())}")
         return res
     if event.kind == "modal_submission":
         profile, card = parse_action_target(event.value or event.action_id)
-        return _pl([sys.executable, "-m", "pl", "--profile", profile, "reject", card, event.notes])
+        return _pl(["--profile", profile, "reject", card, event.notes])
     return None

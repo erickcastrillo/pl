@@ -1,0 +1,46 @@
+{
+ "alerts": {
+  "alerts": [
+   {
+    "key": "str",
+    "severity": "str",
+    "title": "str",
+    "fix": "str",
+    "first_seen": "float",
+    "count": "int"
+   }
+  ]
+ },
+ "card": {
+  "id": "str",
+  "title": "str",
+  "column": "str",
+  "tags": [
+   "str"
+  ],
+  "updated_at": "str",
+  "metadata": {
+   "pipeline_mode": "str"
+  },
+  "sections": {
+   "SPEC": "int"
+  }
+ },
+ "list": {
+  "pipeline": [
+   {
+    "id": "str",
+    "title": "str",
+    "column": "str",
+    "agent": "str",
+    "age_seconds": "int"
+   }
+  ],
+  "intake": []
+ },
+ "section": {
+  "card": "str",
+  "name": "str",
+  "text": "str"
+ }
+}
