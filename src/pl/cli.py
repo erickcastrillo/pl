@@ -111,6 +111,10 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
+  pl memory search Q [--card ID] [--pod P] [--limit N] | add TEXT --kind K [--card ID] [--client C] [--contact C]
+                          [--replaces ID] | show ID  (each takes --json)
+                          what agents remember: run summaries, approval reasons, decisions; says when search is
+                          full-text only
   pl sandbox create|status|start|stop|destroy [--yes]
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
                           work folder and worktrees folder; --yes destroys the VM without asking
@@ -376,6 +380,14 @@ def _main():
     p.add_argument("--yes", action="store_true", help="confirm without prompting")
     p.add_argument("--dry-run", action="store_true", help="count what would be removed without changing anything")
     p.add_argument("--json", action="store_true", help="output counts as JSON")
+    p = sub.add_parser("memory"); msub = p.add_subparsers(dest="action", required=True)
+    m = msub.add_parser("search"); m.add_argument("query"); m.add_argument("--card"); m.add_argument("--pod")
+    m.add_argument("--limit", type=int, default=10)
+    m = msub.add_parser("add"); m.add_argument("text"); m.add_argument("--kind", required=True, choices=__import__("pl.recall").recall.KINDS)
+    m.add_argument("--card"); m.add_argument("--client"); m.add_argument("--contact"); m.add_argument("--replaces", help="id of the entry this one contradicts")
+    m = msub.add_parser("show"); m.add_argument("id")
+    for m in msub.choices.values():
+        m.add_argument("--json", action="store_true")
     p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
     p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
     p = sub.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
@@ -417,6 +429,7 @@ def _main():
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
+     "memory": lambda a: __import__("pl.recall").recall.cmd_memory(a),
      "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,

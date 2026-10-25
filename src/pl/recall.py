@@ -7,7 +7,7 @@ import sys
 from datetime import datetime, timezone
 
 from pl import config as C
-from pl import util
+from pl import jsonout, util
 from pl.board import sections
 
 KINDS = ("run", "approval", "rejection", "decision", "fact", "preference", "commitment")
@@ -106,16 +106,19 @@ def _match(q):
     return " ".join('"' + w.replace('"', '""') + '"' for w in q.split())
 
 
-def search(q, limit=10, pod=None):
+def search(q, limit=10, pod=None, card=None):
     match = _match(q)
     if not match:
         return []
-    sql = ("SELECT e.* FROM entries_fts f JOIN entries e ON e.rowid = f.rowid "
+    sql = ("SELECT e.*, bm25(entries_fts) AS score FROM entries_fts f JOIN entries e ON e.rowid = f.rowid "
            "WHERE entries_fts MATCH ? AND e.replaced_by IS NULL")
     args = [match]
     if pod:
         sql += " AND e.pod = ?"
         args.append(pod)
+    if card:
+        sql += " AND e.card = ?"
+        args.append(str(card))
     con = _db()
     try:
         rows = con.execute(sql + " ORDER BY bm25(entries_fts) LIMIT ?", (*args, limit)).fetchall()
@@ -213,3 +216,55 @@ def forget(entry_id) -> bool:
             con.close()
     except Exception:
         return False
+
+
+def _link(e):
+    return f"pl card {e['card']}" if e["card"] else f"pl memory show {e['id']}"
+
+
+def _memory_search(a):
+    entries = [{**e, "link": _link(e)} for e in search(a.query, a.limit, a.pod, a.card)]
+    mode = "full-text"
+    if a.json:
+        jsonout.emit({"mode": mode, "entries": entries})
+        return 0
+    print("full-text search only (no local embeddings)")
+    for e in entries:
+        print(f"{e['id']}  {e['created_at'][:10]} {e['kind']}: {' '.join(e['text'].split())}  ({e['source']}, {e['link']})")
+    return 0
+
+
+def _memory_add(a):
+    try:
+        entry_id = add(a.text, a.kind, f"owner:{C.USER_EMAIL or 'cli'}", card=a.card, client=a.client,
+                       contact=a.contact, author=C.USER_EMAIL or None, replaces=a.replaces)
+    except (Refused, ValueError) as e:
+        print(f"pl: {e}", file=sys.stderr)
+        return 2
+    if a.json:
+        jsonout.emit({"id": entry_id})
+    else:
+        print(entry_id)
+    return 0
+
+
+def _memory_show(a):
+    entry = get(a.id)
+    if not entry:
+        print(f"pl: no memory entry {a.id}", file=sys.stderr)
+        return 1
+    entry = {**entry, "link": _link(entry)}
+    if a.json:
+        jsonout.emit(entry)
+        return 0
+    for key in ("id", "kind", "source", "card", "client", "contact", "pipeline", "pod", "author", "created_at", "link"):
+        if entry.get(key):
+            print(f"{key}: {entry[key]}")
+    if entry["replaced_by"]:
+        print(f"replaced by {entry['replaced_by']}")
+    print(f"\n{entry['text']}")
+    return 0
+
+
+def cmd_memory(a):
+    return {"search": _memory_search, "add": _memory_add, "show": _memory_show}[a.action](a)

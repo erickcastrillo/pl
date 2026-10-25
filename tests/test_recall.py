@@ -91,3 +91,60 @@ def test_fts_syntax_in_a_query_is_treated_as_words():
         recall.search(q)
     assert recall.search("alpha OR zzz") == []
     assert len(recall.search("alpha beta")) == 1
+
+
+def _memory(capsys, **kw):
+    from argparse import Namespace
+    args = dict(card=None, pod=None, limit=10, json=False, kind=None, client=None, contact=None, replaces=None)
+    code = recall.cmd_memory(Namespace(**{**args, **kw}))
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_cli_search_json_returns_the_entry_with_its_source_link(capsys):
+    import json
+    recall.add("split into 3 PRs", "rejection", "owner:a@b.c", card="42")
+    code, out, _ = _memory(capsys, action="search", query="split into 3 PRs", json=True)
+    data = json.loads(out)
+    assert code == 0 and data["mode"] == "full-text"
+    (e,) = data["entries"]
+    assert e["card"] == "42" and e["link"] == "pl card 42" and e["source"] == "owner:a@b.c"
+    assert {"id", "kind", "text", "pipeline", "pod", "author", "created_at", "score"} <= set(e)
+
+
+def test_cli_search_filters_by_card_and_links_other_entries_to_show(capsys):
+    import json
+    recall.add("billing note", "fact", "owner:cli", card="7")
+    other = recall.add("billing rule", "fact", "owner:cli")
+    _, out, _ = _memory(capsys, action="search", query="billing", card="7", json=True)
+    assert [e["card"] for e in json.loads(out)["entries"]] == ["7"]
+    _, out, _ = _memory(capsys, action="search", query="billing", json=True)
+    links = {e["id"]: e["link"] for e in json.loads(out)["entries"]}
+    assert links[other] == f"pl memory show {other}"
+
+
+def test_cli_add_with_replaces_then_show_marks_the_old_one(capsys):
+    old = recall.add("use two PRs", "decision", "owner:cli")
+    code, out, _ = _memory(capsys, action="add", text="use three PRs", kind="decision", replaces=old)
+    new = out.strip()
+    assert code == 0 and new.startswith("m-")
+    code, out, _ = _memory(capsys, action="show", id=old)
+    assert code == 0 and f"replaced by {new}" in out
+    _, out, _ = _memory(capsys, action="search", query="PRs")
+    assert new in out and old not in out
+
+
+def test_cli_add_of_a_secret_exits_2(capsys):
+    code, out, err = _memory(capsys, action="add", text="key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", kind="fact")
+    assert code == 2 and out == "" and "secrets" in err
+
+
+def test_cli_show_of_an_unknown_id_exits_1(capsys):
+    code, _, err = _memory(capsys, action="show", id="m-nope")
+    assert code == 1 and "m-nope" in err
+
+
+def test_cli_search_says_full_text_only(capsys):
+    recall.add("hello world", "fact", "owner:cli")
+    _, out, _ = _memory(capsys, action="search", query="hello")
+    assert out.splitlines()[0] == "full-text search only (no local embeddings)"
