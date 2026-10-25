@@ -373,7 +373,7 @@ class SettingsView(Widget):
                     t.pop(path[-1], None)
                 else:
                     _set(doc, path, v)
-            C.save(doc)
+            warns = C.save(doc) or []
             C.load(config_dir=str(C.CONFIG_DIR))
         except (SystemExit, Exception) as e:
             self.app.notify(str(e), severity="error", markup=False)
@@ -382,6 +382,8 @@ class SettingsView(Widget):
             w = self.query_one(f"#{wid}")
             self.fields[wid] = (path, None if isinstance(w, Select) and w.value is Select.NULL else w.value, kind)
         self.app.notify(f"saved {len(changed)} change(s); the dispatcher uses them from its next pass", markup=False)
+        for w in warns:
+            self.app.notify(w, severity="warning", markup=False)
 
     def on_button_pressed(self, m):
         if m.button.id != "create-project":

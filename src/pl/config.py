@@ -448,6 +448,10 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: prompt or skill is required")
             if table == "loops":
                 errs += _loop_schedule_errors(name, v)
+            if table == "stages" and is_local_account(v.get("account")):
+                if why := local_stage_problem(name, v):
+                    errs.append(why)
+                continue
             if accounts and v.get("account") and v["account"] not in accounts:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
@@ -462,6 +466,25 @@ def validate(doc) -> list[str]:
     from pl import triggers
     errs += triggers.validate(doc)
     return errs
+
+
+LOCAL_PREFIX = "local:"
+
+
+def is_local_account(account) -> bool:
+    return isinstance(account, str) and account.startswith(LOCAL_PREFIX)
+
+
+def local_stage_problem(name, v) -> str | None:
+    """Why [stages.<name>] cannot run on its local:<model> account, or None. pl never guesses which stages need tools:
+    the stage says so with tools = false, and the built-in stages always need them."""
+    from pl import harnesses
+    model = v["account"][len(LOCAL_PREFIX):]
+    if name in ("spec", "design", "plan", "run") or v.get("tools") is not False:
+        return (f"stages.{name}: a local model cannot use tools; set tools = false only for a stage that needs none")
+    if not harnesses.MODEL_RE.fullmatch(model):
+        return f"stages.{name}: account must be local:<model>, a model name like \"local:gemma4:e4b\""
+    return None
 
 
 def _pod_path_error(label, v, root):
@@ -514,6 +537,37 @@ def _loop_schedule_errors(name, v) -> list[str]:
     if not isinstance(v.get("writes", False), bool):
         errs.append(f"loops.{name}: writes must be true or false")
     return errs
+
+
+def check_models(doc) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for every set claude or antigravity model name: an error when antigravity does not offer
+    it, a warning when a claude name is outside pl's fixed list or antigravity's list could not be read. It runs
+    a CLI, so validate never calls it."""
+    from pl import harnesses
+    named = [(f"accounts.{n}.model", a.get("harness") or "claude", a["model"])
+             for n, a in doc.get("accounts", {}).items() if isinstance(a, dict) and isinstance(a.get("model"), str)]
+    for s, v in doc.get("stages", {}).items():
+        if not isinstance(v, dict):
+            continue
+        tables = [(f"stages.{s}.models", v.get("models"))]
+        if isinstance(v.get("small"), dict):
+            tables.append((f"stages.{s}.small.models", v["small"].get("models")))
+        named += [(f"{path}.{h}", h, m) for path, t in tables if isinstance(t, dict)
+                  for h, m in t.items() if isinstance(m, str)]
+    errs, warns = [], []
+    for key, h, m in named:
+        if h not in ("claude", "antigravity"):
+            continue
+        names = harnesses.models(h)
+        if not names:
+            warns.append(f"{key}: {m!r} not checked; the {h} model list could not be read (agy models)")
+        elif m not in names:
+            msg = f"{key}: {m!r} is not a model {h} offers; accepted: {', '.join(names)}"
+            if h == "claude":   # pl's list is fixed, not read from the CLI, so an older id, alias or newer model may be valid
+                warns.append(msg.replace("is not a model claude offers", "is not in pl's claude list, passed on as given"))
+            else:
+                errs.append(msg)
+    return errs, warns
 
 
 def _model_errors(name, a) -> list[str]:
@@ -700,9 +754,9 @@ def _sandbox_errors(sb) -> list[str]:
     return errs
 
 
-def save(doc, target=None) -> None:
+def save(doc, target=None) -> list[str]:
     """Write a tomlkit document over the profile's config.toml: validated, temp file 0600 in the same folder,
-    fsync, os.replace. A refused or failed save leaves the old file untouched."""
+    fsync, os.replace. A refused or failed save leaves the old file untouched. Returns the model-name warnings."""
     import tomlkit
     from pl import harnesses
     target = Path(target) if target else path()
@@ -711,6 +765,9 @@ def save(doc, target=None) -> None:
     errs = validate(doc)
     if errs:
         raise SystemExit("pl: not saved: " + "; ".join(errs))
+    bad, warns = check_models(doc)
+    if bad:
+        raise SystemExit("pl: not saved:\n" + "\n".join(f"  {e}" for e in bad))
     text = tomlkit.dumps(doc)
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -724,6 +781,7 @@ def save(doc, target=None) -> None:
         tmp.unlink(missing_ok=True)
         raise
     harnesses._CACHE.clear()
+    return warns
 
 
 # pl manager's machine.toml [limits]: caps across every profile on the machine

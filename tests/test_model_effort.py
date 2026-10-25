@@ -380,13 +380,14 @@ async def test_settings_offers_only_each_accounts_harness_models_and_saves_a_pic
                                                                  settings.CUSTOM]
         assert _options(view, ("accounts", "main", "effort")) == list(harnesses.EFFORTS)
         assert _options(view, ("stages", "run", "effort")) == list(harnesses.EFFORTS)
+        view.query_one(f"#{_wid(view, ('accounts', 'main', 'model'))}", Select).value = "opus"
         view.query_one(f"#{_wid(view, ('accounts', 'agy', 'model'))}", Select).value = "gemini-3.1-pro-high"
         view.query_one(f"#{_wid(view, ('stages', 'run', 'effort'))}", Select).value = "high"
         view.action_save()
         await settle(pilot)
     doc = tomlkit.parse(work.read_text())
     assert doc["accounts"]["agy"]["model"] == "gemini-3.1-pro-high" and doc["stages"]["run"]["effort"] == "high"
-    assert doc["accounts"]["main"]["model"] == "my-custom-model" and "effort" not in doc["accounts"]["main"]
+    assert doc["accounts"]["main"]["model"] == "opus" and "effort" not in doc["accounts"]["main"]
 
 
 async def test_custom_opens_an_input_and_the_typed_model_is_saved(work, monkeypatch):
@@ -404,8 +405,12 @@ async def test_custom_opens_an_input_and_the_typed_model_is_saved(work, monkeypa
         await pilot.press(*"gemini-9", "enter")
         await settle(pilot)
         assert sel.value == "gemini-9"
+        view.query_one(f"#{_wid(view, ('accounts', 'main', 'model'))}", Select).value = "opus"
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((msg, kw.get("severity"))))
         view.action_save()
         await settle(pilot)
+    assert any(sev == "warning" and "accounts.agy.model" in msg and "could not be read" in msg for msg, sev in notes)
     assert tomlkit.parse(work.read_text())["accounts"]["agy"]["model"] == "gemini-9"
 
 

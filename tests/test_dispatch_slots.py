@@ -12,6 +12,7 @@ from pl import accounts, agents, alerts, dispatch, harnesses
 from pl import config as C
 
 REAL_LIVE_WINDOW = dispatch.live_agent_window   # conftest fakes the module name for every other test
+REAL_GATE = dispatch.untrusted_folder   # conftest fakes it for every other test
 TRUST_SCREEN = ("Accessing workspace:\n\n /Users/me/Code/Proj\n\n Quick safety check: Is this a project you created or one you\n"
                 " trust?\n\n Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n")
 
@@ -523,3 +524,104 @@ def test_an_unreadable_card_is_skipped_and_alerted_once(monkeypatch):
     assert len([al for al in alerts.listing(all=True) if al["key"] == f"card_unreadable:{c['id']}"]) == 1
     assert alerts.get(f"card_unreadable:{c['id']}").get("resolved_at") is None
 
+
+
+# ---------- Plan 26 slice 4: trust before start ----------
+
+@pytest.fixture
+def gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(dispatch, "untrusted_folder", REAL_GATE)
+    monkeypatch.setattr(C, "WORK_DIR", tmp_path / "code" / "pl")
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: None)
+    return tmp_path
+
+
+def _claude_json(tmp, text):
+    f = tmp / ".claude" / ".claude.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(text)
+    return f
+
+
+def _trusting(folder):
+    return json.dumps({"projects": {str(folder): {"hasTrustDialogAccepted": True}}})
+
+
+def _trust_alerts(all=False):
+    return [a for a in alerts.listing(all=all) if a["key"].startswith("trust:")]
+
+
+def test_an_untrusted_claude_account_starts_none_of_its_cards_and_opens_one_trust_alert(gate, monkeypatch, capsys):
+    _claude_json(gate, json.dumps({"projects": {}}))
+    cs = [_card(n, profile="claude") for n in (1, 2, 3)]
+    started, writes = _pass(monkeypatch, cs)
+    out = capsys.readouterr().out
+    assert started == [] and writes == []
+    lines = [ln for ln in out.splitlines() if "waits: account claude" in ln]
+    assert len(lines) == 3
+    assert all(str(C.WORK_DIR) in ln and f"o/r#{i}"[-3:] in ln for i, ln in zip((1, 2, 3), lines))
+    (a,) = _trust_alerts()
+    assert a["key"] == f"trust:claude:{C.WORK_DIR}"
+    assert harnesses.trust_command(harnesses.get("claude"), "claude", str(C.WORK_DIR)) in a["title"]
+    assert "Yes, I trust this folder" in a["title"]
+
+
+@pytest.mark.parametrize("text", [None, "", "{not json"])
+def test_a_missing_empty_or_broken_claude_json_counts_as_untrusted(gate, monkeypatch, text):
+    if text is not None:
+        _claude_json(gate, text)
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert started == []
+    assert len(_trust_alerts()) == 1
+
+
+def test_trusting_the_folder_starts_the_waiting_stage_and_closes_the_alert(gate, monkeypatch):
+    f = _claude_json(gate, "{}")
+    cs = [_card(1, profile="claude")]
+    started, _ = _pass(monkeypatch, cs)
+    assert started == []
+    f.write_text(_trusting(C.WORK_DIR))
+    started, _ = _pass(monkeypatch, cs)
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert alerts.get(f"trust:claude:{C.WORK_DIR}")["resolved_at"]
+
+
+def test_a_trusted_parent_folder_lets_the_stage_start(gate, monkeypatch):
+    _claude_json(gate, _trusting(C.WORK_DIR.parent))
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert _trust_alerts() == []
+
+
+def test_a_trusted_account_starts_as_today_with_no_trust_alert(gate, monkeypatch):
+    _claude_json(gate, _trusting(C.WORK_DIR))
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert _trust_alerts(all=True) == []
+
+
+def test_other_harnesses_never_run_the_trust_check(gate, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("the trust check ran")
+    monkeypatch.setattr(harnesses, "claude_trusts", boom)
+    monkeypatch.setattr(C, "STAGES", {"spec": {"account": "codex"}})
+    started, _ = _pass(monkeypatch, [_card(1)])
+    assert [c["id"] for c in started] == ["o/r#1"]
+
+
+def test_dry_run_says_it_would_wait_and_opens_nothing(gate, monkeypatch, capsys):
+    _claude_json(gate, "{}")
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")], dry=True)
+    assert started == []
+    assert "would wait for trust" in capsys.readouterr().out
+    assert alerts.listing(all=True) == []
+
+
+def test_the_gate_never_writes_or_repeats_claude_json(gate, monkeypatch, capsys):
+    f = _claude_json(gate, json.dumps({"projects": {}, "oauthAccount": "marker-218"}))
+    before = (f.read_bytes(), f.stat().st_mtime_ns)
+    for _ in range(2):
+        _pass(monkeypatch, [_card(1, profile="claude")])
+    assert (f.read_bytes(), f.stat().st_mtime_ns) == before
+    assert "marker-218" not in capsys.readouterr().out
+    assert "marker-218" not in json.dumps(alerts.listing(all=True))
