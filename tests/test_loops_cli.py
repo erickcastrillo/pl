@@ -71,3 +71,12 @@ def test_wait_prints_the_record_once_the_run_ends(monkeypatch, capsys):
     a.wait, a.json = True, True
     loops.cmd_loops(a)
     assert json.loads(capsys.readouterr().out.splitlines()[-1]) == record
+
+
+def test_wait_gives_up_when_the_dispatcher_never_picks_the_run_up(monkeypatch):
+    monkeypatch.setattr(loops.time, "sleep", lambda _: None)
+    monkeypatch.setattr(loops, "WAIT_POLLS", 3)
+    a = _args("invoices")
+    a.wait = True
+    with pytest.raises(SystemExit, match="dispatcher has not picked it up"):
+        loops.cmd_loops(a)

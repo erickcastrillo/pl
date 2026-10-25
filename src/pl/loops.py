@@ -5,6 +5,8 @@ import time
 from pl import config as C
 from pl.util import load_state, save_state
 
+WAIT_POLLS = 150
+
 
 def cmd_loops(a):
     if a.loops_cmd == "run":
@@ -25,6 +27,10 @@ def run(name, wait=False, as_json=False):
     print("queued; the dispatcher starts it on its next pass")
     if not wait:
         return
-    while (record := (load_state().get("services", {}).get(name) or {}).get("last_run")) == before:
+    for _ in range(WAIT_POLLS):
+        if (record := (load_state().get("services", {}).get(name) or {}).get("last_run")) != before:
+            break
         time.sleep(2)
+    else:
+        raise SystemExit(f"pl loops run: the dispatcher has not picked it up; is it running? ({name} stays queued)")
     print(json.dumps(record) if as_json else f"exit {record.get('exit')}: {record.get('result')} (tokens {record.get('tokens')})")

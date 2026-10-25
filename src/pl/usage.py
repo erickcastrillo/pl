@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -414,7 +415,11 @@ def cmd_usage(a):
         print(ghquota.report())
         return
     from pl.standup import parse_since
-    since = parse_since(a.since or "24h").timestamp()
+    try:
+        since = parse_since(a.since or "24h").timestamp()
+    except SystemExit as e:
+        print(e.code, file=sys.stderr)
+        raise SystemExit(2) from None
     cards = None
     if a.by == "card":   # titles and current workers; offline, card ids come from the event log only
         try:
@@ -422,7 +427,14 @@ def cmd_usage(a):
             cards = board_cards()
         except (Exception, SystemExit):  # noqa: BLE001
             cards = None
-    if a.by == "card" and getattr(a, "json", False):
+    by = a.by or "account"
+    if by == "card" and getattr(a, "json", False):
         print(json.dumps(card_report(scan(), since, cards or [])))
         return
-    print(table(scan(), since, a.by or "account", cards))
+    if getattr(a, "json", False):
+        from pl import jsonout
+        rows = totals(scan(), since, by, cards)
+        usage = {g: dict(zip(("input", "output", "cache_read", "cache_write", "cost", "unpriced"), r)) for g, r in rows.items()}
+        jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage})
+        return
+    print(table(scan(), since, by, cards))

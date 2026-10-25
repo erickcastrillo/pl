@@ -203,6 +203,14 @@ def test_a_loop_failing_three_runs_in_a_row_opens_an_alert_and_a_good_run_clears
     assert not _open("loop_failed:invoices")
 
 
+def test_runs_without_an_exit_value_do_not_count_as_failed(monkeypatch):
+    C.SERVICES = {"invoices": {"prompt": "/pl-billing-chase", "profile": "acme", "every": "daily 09:00"}}
+    C.STATE_FILE.parent.mkdir(exist_ok=True)
+    C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": [{}, {"result": "old"}, {"exit": None}]}}}))
+    assert _pass(monkeypatch, []) == []
+    assert not _open("loop_failed:invoices")
+
+
 def _ago(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - seconds))
 
