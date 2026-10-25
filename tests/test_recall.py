@@ -119,6 +119,13 @@ def test_forget_contact_deletes_every_linked_entry_and_prints_the_count(capsys):
     assert capsys.readouterr().out.strip() == "deleted 1 entries"
 
 
+def test_forget_leaves_no_trace_of_the_text_in_the_database_file():
+    recall.add("zanzibarquux was here", "fact", "s", contact="c1")
+    recall.add("keep this", "fact", "s", contact="c2")
+    recall.forget_contact("c1")
+    assert b"zanzibarquux" not in (C.STATE_DIR / "memory.db").read_bytes()
+
+
 def test_forget_leaves_other_contacts_entries():
     keep = recall.add("keep me", "fact", "s", contact="c2")
     none = recall.add("no contact", "fact", "s")

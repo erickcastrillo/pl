@@ -235,6 +235,7 @@ def forget_contact(contact) -> int:
         with con:
             con.execute(f"DELETE FROM vectors WHERE id IN (SELECT id FROM entries WHERE {_OF_CONTACT})", (contact, contact))
             n = con.execute(f"DELETE FROM entries WHERE {_OF_CONTACT}", (contact, contact)).rowcount
+            con.execute("INSERT INTO entries_fts(entries_fts) VALUES ('rebuild')")
         con.execute("VACUUM")
     finally:
         con.close()
