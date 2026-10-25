@@ -195,6 +195,8 @@ ENTRIES = [
        "pl sandbox login <account>"),
     _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
        "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
+    _e("2026-10-25.29", "One plan at a glance: pl list --plan N lists that plan's cards in slice order",
+       "Done cards included; the Product board is skipped", "pl list --plan 21"),
 ]
 
 
