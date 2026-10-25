@@ -142,3 +142,34 @@ def note(text, kind, source, card):
     except Exception as e:
         print(f"pl: memory not saved: {e}", file=sys.stderr)
         return None
+
+
+def _clients(card):
+    meta = card.get("metadata") or {}
+    contacts = (meta.get("refs") or {}).get("contacts") or []
+    return [c for c in [meta.get("client"), *contacts] if isinstance(c, str) and c]
+
+
+def for_prompt(card, pod, cap=8, max_tokens=1500):
+    """The lines of entries a stage on this card may see: its own, its client's and its pod's, newest first."""
+    clients = _clients(card)
+    where = "e.card = ? OR (e.pod = ? AND e.card IS NULL)"
+    args = [str(card["id"]), pod]
+    if clients:
+        where += f" OR e.client IN ({','.join('?' * len(clients))})"
+        args += clients
+    con = _db()
+    try:
+        rows = con.execute(f"SELECT * FROM entries e WHERE ({where}) AND e.pod IN (?, 'company') "
+                           "AND e.replaced_by IS NULL ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+                           (*args, pod, cap)).fetchall()
+    finally:
+        con.close()
+    lines, used = [], 0
+    for r in rows:
+        line = f"- {r['created_at'][:10]} {r['kind']}: {' '.join(r['text'].split())} ({r['source']})"
+        used += len(line) // 4 + 1
+        if used > max_tokens:
+            break
+        lines.append(line)
+    return "\n".join(lines)

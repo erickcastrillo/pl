@@ -1,9 +1,11 @@
 """The dispatcher: start the right agent for every waiting card."""
 import os
+import hashlib
 import json
 import re
 import secrets
 import shlex
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -13,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, inbox, manager, memory, move_agent, recall, rework, schedule, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, inbox, manager, memory, move_agent, recall, rework, schedule, skills, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -214,6 +216,31 @@ def pr_limit_args():
             f" target_lines={lim['pr_auto_merge_lines']} target_files={lim['pr_auto_merge_files']}")
 
 
+def memory_arg(c, stage, dry):
+    """" memory=<file>" with the entries a built-in stage may see, or "" when there are none or the store fails."""
+    if stage not in ("spec", "design", "plan", "run"):
+        return ""
+    try:
+        text = recall.for_prompt(c, C.PROFILE_NAME)
+        if not text:
+            return ""
+        if dry:
+            return " memory=<file>"
+        d = C.STATE_DIR / "launch"
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        skills._clean_inlined(d)
+        key = hashlib.sha1(f"{c['id']}:{stage}".encode()).hexdigest()[:12]
+        out = d / f"skill-memory-{key}.md"
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        return f" memory={shlex.quote(str(out))}"
+    except (OSError, RuntimeError, sqlite3.Error) as e:
+        print(f"  memory: skipped for {c['id']}: {e}")
+        return ""
+
+
 def start_worker(c, stage, attempts, dry):
     h, profile = harnesses.harness_for(stage, c)
     name = f"{stage}-{slug_of(c)[:28]}"      # tmux window name: no colon, so "pipeline:<name>" targets stay unambiguous
@@ -228,6 +255,8 @@ def start_worker(c, stage, attempts, dry):
         prompt += pr_limit_args()
     if stage == "run" and C.PROMPTS[stage] == C.BUILTIN_PROMPTS["run"]:
         prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
+    if C.PROMPTS[stage] == C.BUILTIN_PROMPTS.get(stage):
+        prompt += memory_arg(c, stage, dry)
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return
