@@ -19,7 +19,7 @@ AUTHS = ("oauth", "token", "none")
 ACCESS = ("read", "read-write")
 TIERS = ("vendor", "community", "adapter")
 KEYS = {"url", "command", "args", "env", "mcp_config", "server", "auth", "token", "headers", "role", "teams", "access",
-        "tier", "enabled", "brain", "read_tools", "write_tools", "tools", "test", "pin"}
+        "tier", "enabled", "brain", "read_tools", "write_tools", "tools", "test", "pin", "server_hash"}
 VAR_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$")
 SECRET_HEADER = re.compile(r"auth|key|token|secret|cookie", re.I)
 ADAPTER_WARNING = "filled by an adapter, not the vendor's own server"
@@ -292,12 +292,19 @@ def _run(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
+def server_hash(entry: dict) -> str:
+    return hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+
+
 def resolve_server(cfg: dict) -> dict:
     """cfg with an `mcp_config` + `server` pair replaced by the harness file's entry, ${VAR} expanded as the harness does."""
     if "mcp_config" not in cfg:
         return cfg
     from pl.trackers import mcp
-    server = mcp._expand_env(mcp._from_file(cfg["mcp_config"], cfg["server"]), [])
+    entry = mcp._from_file(cfg["mcp_config"], cfg["server"])
+    if cfg.get("server_hash") and server_hash(entry) != cfg["server_hash"]:
+        raise SystemExit(f"pl: MCP server {cfg['server']!r} in {cfg['mcp_config']} changed since it was imported; re-import it to approve the new entry")
+    server = mcp._expand_env(entry, [])
     return {k: v for k, v in server.items() if k in ("url", "command", "args", "env", "headers")}
 
 
@@ -522,7 +529,9 @@ def import_servers(source, add_name=None, teams=None, roles=None, yes=False, jso
         _fail(f"connector {add_name!r} already exists")
     if not yes and input(f"add {add_name} from {match['file']}? [y/N] ").strip().lower() != "y":
         _fail("not added")
-    entry = {"mcp_config": match["file"], "server": add_name, **({"teams": teams} if teams else {}), **({"role": roles} if roles else {})}
+    from pl.trackers import mcp
+    entry = {"mcp_config": match["file"], "server": add_name, "server_hash": server_hash(mcp._from_file(match["file"], add_name)),
+             **({"teams": teams} if teams else {}), **({"role": roles} if roles else {})}
     _edit_config(lambda table: table.__setitem__(add_name, entry))
     _audit("connectors.import", add_name)
     print(f"added connector {add_name} (uses {match['file']}; no key copied)")

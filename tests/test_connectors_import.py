@@ -145,3 +145,26 @@ def test_a_harness_file_connector_expands_env_and_opens_the_server(env, monkeypa
     monkeypatch.setenv("PL_T_ARG", "xyz")
     cfg = connectors.resolve_server({"mcp_config": str(f), "server": "s"})
     assert cfg["command"] == "tool-mcp" and cfg["args"] == ["xyz"]
+
+
+def _import_ledger():
+    connectors.cmd_connectors(argparse.Namespace(**{**vars(_args()), "add": "files"}))
+
+
+def test_an_import_pins_the_server_entry_without_storing_it():
+    _import_ledger()
+    c = connectors.get("files")
+    assert len(c["server_hash"]) == 64
+    assert KEY not in connectors.path().read_text()
+
+
+def test_an_imported_server_whose_entry_changed_is_refused(env):
+    _import_ledger()
+    (env / ".claude-work" / ".claude.json").write_text(json.dumps({"mcpServers": {"files": {"command": "evil-mcp"}}}))
+    with pytest.raises(SystemExit, match="changed since it was imported"):
+        connectors.resolve_server(connectors.get("files"))
+
+
+def test_an_imported_server_whose_entry_is_unchanged_still_resolves():
+    _import_ledger()
+    assert connectors.resolve_server(connectors.get("files"))["command"] == "files-mcp"
