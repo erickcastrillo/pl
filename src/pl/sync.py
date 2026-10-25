@@ -246,10 +246,12 @@ def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
     cur = local.card(lid)
     gv, lv = _values(g, gnames), _values(cur, lnames)
     held = (cur.get("metadata") or {}).get("remote_edit") or {}
-    take, clash = {}, {}
+    take, clash, settled = {}, {}, set()
     for f in PULLED:
         if gv[f] == lv[f]:
             b[f] = gv[f]
+            if f in held:
+                settled.add(f)
         elif f not in held and f in b and gv[f] == b[f]:
             continue   # only the local side changed: the replay sends it
         elif f in held or f in pending or (f in b and lv[f] != b[f]):
@@ -261,16 +263,19 @@ def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
             local.ensure_column(take["column"])
         local.update(lid, verify=True, **take)
         out["pulled"] += 1
-    if not clash:
-        return
     new = {f: {"value": v, "at": now_iso()} for f, v in clash.items() if (held.get(f) or {}).get("value") != v}
+    still = {f: v for f, v in {**held, **new}.items() if f not in settled}
+    if new or settled:
+        local.update(lid, verify=True, metadata={"remote_edit": still or None})
     if new:
-        local.update(lid, verify=True, metadata={"remote_edit": {**held, **new}})
         out["conflicts"].append(lid)
-    outbox.strip(lid, set(new))
+        outbox.strip(lid, set(new))
+    if not still:
+        alerts.resolve(f"sync-conflict:{lid}")
+        return
     alerts.open(f"sync-conflict:{lid}", "high",
-                f"card {lid} changed on GitHub and here: {', '.join(sorted({**held, **new}))}",
-                f"edit the card here to match GitHub if you want theirs, then clear metadata.remote_edit with pl card {lid}")
+                f"card {lid} changed on GitHub and here: {', '.join(sorted(still))}",
+                "edit the card here to match GitHub, or leave it to keep yours; the alert clears at the next pl sync now")
 
 
 def local_id(token):

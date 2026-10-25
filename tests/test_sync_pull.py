@@ -142,7 +142,7 @@ def test_conflict_keeps_local_saves_remote_edit_and_alerts(world):
     assert got["title"] == "mine" and edit["value"] == "theirs" and edit["at"]
     [alert] = alerts.listing()
     assert alert["key"] == f"sync-conflict:{lid}" and "title" in alert["title"]
-    assert "sync resolve" not in alert["fix"] and "remote_edit" in alert["fix"]
+    assert "sync resolve" not in alert["fix"] and "pl sync now" in alert["fix"]
     assert outbox.entries()[0]["fields"] == {"description": "keep"}
     assert r["conflicts"] == [lid] and r["pulled"] == 0
 
@@ -153,6 +153,26 @@ def test_later_local_edit_after_conflict_stays_queued(world):
     outbox.append(lid, "update", {"title": "mine again"})
     sync.pull()
     assert outbox.entries()[-1]["fields"] == {"title": "mine again"}
+
+
+def test_matching_github_value_clears_conflict_and_alert(world):
+    local, lid, fake = _conflict(world, queued=False)
+    sync.pull()
+    local.update(lid, title="theirs")
+    assert sync.pull()["conflicts"] == []
+    assert not (local.card(lid).get("metadata") or {}).get("remote_edit")
+    assert alerts.listing() == []
+
+
+def test_one_field_resolved_other_still_held(world):
+    local, lid, fake = _conflict(world, queued=False)
+    local.update(lid, description="mine")
+    fake.board[:] = [_gcard(title="theirs", description="theirs")]
+    sync.pull()
+    local.update(lid, title="theirs")
+    sync.pull()
+    assert list(local.card(lid)["metadata"]["remote_edit"]) == ["description"]
+    assert len(alerts.listing()) == 1
 
 
 def test_conflict_when_local_changed_after_last_sync(world):
