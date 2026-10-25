@@ -383,6 +383,21 @@ def summary(st, now=None):
     return {"by_window": by_window, "loops": loops, "accounts": list(C.ACCOUNTS)}
 
 
+def card_report(st, since, cards):
+    """One record per card and stage with tokens: minutes of its running agent (None when none runs) and the caps."""
+    from pl.dispatch import cap_spent, effective_caps
+    now, state, rows = time.time(), load_state(), []
+    for group, r in totals(st, since, "card", cards).items():
+        short, _, stage = group.partition(" ")
+        c = next((c for c in cards if short_id(c["id"]) == short), None)
+        if not c:
+            continue
+        w = (c.get("metadata") or {}).get("worker") or {}
+        minutes = round(cap_spent(c, w, state, now)[0]) if w.get("stage") == stage else None
+        rows.append({"card": short, "stage": stage, "minutes": minutes, "tokens": sum(r[:4]), "caps": effective_caps(c, stage)})
+    return rows
+
+
 def cmd_usage(a):
     if getattr(a, "github", False):
         from pl import ghquota
@@ -402,6 +417,9 @@ def cmd_usage(a):
         except (Exception, SystemExit):  # noqa: BLE001
             cards = None
     by = a.by or "account"
+    if by == "card" and getattr(a, "json", False):
+        print(json.dumps(card_report(scan(), since, cards or [])))
+        return
     if getattr(a, "json", False):
         from pl import jsonout
         rows = totals(scan(), since, by, cards)

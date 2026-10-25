@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -1262,3 +1263,33 @@ def test_in_a_session_pl_marks_only_its_own_agent_windows_count(machine, monkeyp
     st = manager.tick({})
     rows = {p["name"]: p["agents"]["used"] for p in st["profiles"]}
     assert st["live_agents"] == 2 and rows == {"work": 1, "home": 1}
+
+
+def test_exited_agent_windows_are_counted_apart_and_named_in_the_status(machine, monkeypatch):
+    """A run/spec/plan window left on a shell holds no slot and is counted in exited_windows; a loop window on a
+    shell and a window running an agent are not."""
+    (machine["home"] / ".pl-work" / "config.toml").write_text(TR + '[loops.merge]\nprompt = "/loop 5m /m"\n')
+    limits(machine, "[limits]\nmax_live_agents = 8\n")
+    panes = ("pl-work @1 100 run-a\tpl\t1\tclaude\n"
+             "pl-work @2 101 run-b\tpl\t1\tzsh\n"
+             "pl-work @3 102 plan-c\tpl\t1\tbash\n"
+             "pl-work @4 103 merge\tpl\t1\tzsh\n")
+    fake_machine(monkeypatch, panes, "1 0 5000 /sbin/launchd\n")
+    st = manager.tick({})
+    assert st["live_agents"] == 1 and st["exited_windows"] == 2
+
+
+@pytest.mark.parametrize("n, text", [(3, "3 exited windows not counted"), (1, "1 exited window not counted")])
+def test_status_says_how_many_exited_windows_were_not_counted(machine, n, text):
+    f = hold(manager.machine_dir() / "manager.lock")
+    f.write("pid 32 since now")
+    f.flush()
+    machine["alive"].add(32)
+    try:
+        for count in (n, 0):
+            manager._write("status.json", {"at": time.time(), "pid": 32, "profiles": [], "live_agents": 0,
+                                           "max_live_agents": 8, "exited_windows": count})
+            assert ("exited window" in manager.show()) == bool(count)
+            assert not count or text in manager.show()
+    finally:
+        f.close()

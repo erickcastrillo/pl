@@ -497,3 +497,13 @@ def test_usage_invalid_since_exits_2_with_stderr(fake_home, capsys):
         usage.cmd_usage(argparse.Namespace(since="invalid-date", by=None, json=True))
     assert e.value.code == 2
     assert "invalid-date" in capsys.readouterr().err
+
+
+def test_usage_parser_accepts_json_flag(monkeypatch):
+    import sys
+
+    from pl import cli
+    monkeypatch.setattr(sys, "argv", ["pl", "usage", "--json", "--help"])
+    with pytest.raises(SystemExit) as e:
+        cli.main()
+    assert e.value.code == 0
