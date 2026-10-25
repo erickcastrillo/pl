@@ -258,7 +258,12 @@ def cmd_approve(a):
         events.emit("spec_approved", c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
         return
-    if col != "Plan for review" and not a.force:
+    from pl import outbound
+    if outbound.has_reply(c):
+        outside = getattr(outbound, "flagged_recipients", lambda _: [])(c)
+        if outside and not getattr(a, "confirm", False) and not a.force:
+            raise BadInput(f"pl approve: outside recipient {', '.join(outside)}; pass --confirm to approve")
+    if col != "Plan for review" and not outbound.has_reply(c) and not a.force:
         raise BadInput(f"pl approve: card is in '{col}', not 'Plan for review' (use --force to override)")
     parts = sections(c.get("description"))
     draft_p = pods.draft_path(c["id"], "PLAN")
@@ -278,6 +283,8 @@ def cmd_approve(a):
     pods.learn(c["id"], "PLAN", draft, approved)
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
+    if outbound.has_reply(c):
+        outbound.enqueue(c)
     events.emit("approved", c["id"])
     recall.note((getattr(a, "reason", None) or "approved").strip(), "approval", f"approval:{c['id']}", c["id"])
     from pl import outward
@@ -805,4 +812,13 @@ def intent_text(pr, body):
                    "Review against the PR description only, and say so.")
     text = "\n".join(out)
     return text if len(text) <= 40000 else text[:40000] + "\n\n(truncated at 40,000 characters)"
+
+
+def cmd_outbox(a):
+    from pl import outbound
+    if getattr(a, "action", "") == "cancel":
+        if outbound.cancel(a.id):
+            print(f"cancelled {a.id}")
+        else:
+            raise SystemExit(f"pl outbox cancel: no queued send matching '{a.id}'")
 
