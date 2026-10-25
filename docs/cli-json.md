@@ -80,6 +80,14 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 ```
 `plan_scope` is the plan's scope sections (minimum change, acceptance, non-goals), joined; empty when there is no plan.
 
+## merges
+`pl merges --dry-run --json`
+
+```
+{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
+```
+`ok` is `true`, `false`, or `null` for a rule not checked yet.
+
 ## manager-status
 `pl manager status --json`
 
@@ -106,8 +114,9 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 `pl skills list --json`
 
 ```
-{"skills": [{"name", "account", "kind", "origin", "in_library": bool, "linked": ["account"], "description"}], "library"}
+{"skills": [{"name", "account", "kind", "origin", "in_library": bool, "linked": ["account"], "description", "source"?}], "library"}
 ```
+`source` (where the skill was installed from) appears only for library skills installed with `pl skills install`.
 
 ## update-check
 `pl update --check --json`

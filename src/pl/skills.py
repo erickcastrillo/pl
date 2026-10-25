@@ -792,13 +792,16 @@ def _cmd_disable(a):
 
 
 def cmd_skills(a):
-    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
+    """pl skills list [--json] | install SOURCE | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
     if a.skills_cmd == "enable":
         return _cmd_enable(a)
     if a.skills_cmd == "disable":
         return _cmd_disable(a)
     if a.skills_cmd == "reset":
         return _cmd_reset(a)
+    if a.skills_cmd == "install":
+        from pl import skill_sources
+        return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name)
     if a.skills_cmd == "share":
         print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":
@@ -812,8 +815,11 @@ def cmd_skills(a):
         else:
             print(f"linked: {link(a.name, target)}")
     elif getattr(a, "json", False):
+        from pl import skill_sources
+        rec = skill_sources.records()
         jsonout.emit({"skills": [{"name": i["name"], "account": i["account"], "kind": i["kind"], "origin": i["origin"],
-                                  "in_library": i["library"], "linked": i["linked"], "description": i["description"]}
+                                  "in_library": i["library"], "linked": i["linked"], "description": i["description"],
+                                  **({"source": rec[i["name"]]} if i["name"] in rec and (i["account"] == LIBRARY or i["library"]) else {})}
                                  for i in scan()], "library": str(library())})
     else:
         rows = [(i["name"], i["account"], i["kind"], i["origin"],
