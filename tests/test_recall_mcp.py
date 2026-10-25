@@ -84,3 +84,23 @@ def test_mcp_memory_search_equals_the_cli_json(monkeypatch):
     hits = [{"id": "m-1", "text": "split into 3 PRs"}]
     monkeypatch.setattr(recall, "search", lambda q, limit=10, pod=None, card=None: hits)
     assert mcp_serve.memory_search("split") == hits
+
+
+def test_forget_by_id_goes_to_the_server(hub):
+    hub.replies["memory_forget"] = {"deleted": 1}
+    assert recall.forget("m-1") is True
+    assert hub.calls == [("memory_forget", {"id": "m-1"})]
+
+
+def test_forget_by_id_is_false_when_the_server_deleted_nothing_or_fails(hub):
+    hub.replies["memory_forget"] = {"deleted": 0}
+    assert recall.forget("m-1") is False
+    hub.replies.clear()
+    assert recall.forget("m-1") is False
+
+
+def test_a_non_json_reply_is_reported_like_a_server_error(hub, monkeypatch):
+    hub.replies["memory_get"] = {}
+    monkeypatch.setattr(json, "dumps", lambda v: "not json")
+    with pytest.raises(RuntimeError, match="pl: memory tool memory_get failed"):
+        recall.get("m-1")

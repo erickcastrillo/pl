@@ -83,7 +83,10 @@ class McpMemory:
         text = next((c.text for c in res.content if getattr(c, "type", None) == "text"), "")
         if res.isError:
             raise RuntimeError(f"pl: memory tool {tool} failed: {util.mask(text)[:200]}")
-        return json.loads(text) if text.strip() else None
+        try:
+            return json.loads(text) if text.strip() else None
+        except ValueError:
+            raise RuntimeError(f"pl: memory tool {tool} failed: reply is not JSON") from None
 
     def search(self, q, limit, pod, card):
         args = {"query": q, "limit": limit, **{k: v for k, v in (("pod", pod), ("card", card)) if v}}
@@ -95,6 +98,9 @@ class McpMemory:
 
     def get(self, entry_id):
         return self._call("memory_get", {"id": entry_id})
+
+    def forget(self, entry_id):
+        return int(self._call("memory_forget", {"id": entry_id}).get("deleted", 0)) > 0
 
     def forget_contact(self, contact):
         return int(self._call("memory_forget", {"contact": contact}).get("deleted", 0))
@@ -258,6 +264,8 @@ def for_prompt(card, pod, cap=8, max_tokens=1500):
 def forget(entry_id) -> bool:
     """Delete one entry (the Brain tab's undo of what a conversation saved)."""
     try:
+        if (remote := backend()):
+            return remote.forget(entry_id)
         con = _db()
         try:
             with con:
