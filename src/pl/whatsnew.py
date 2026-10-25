@@ -178,6 +178,10 @@ ENTRIES = [
        "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
     _e("2026-10-25.21", "Move a pipeline to another board without losing a card", "pl board migrate",
        "pl board migrate --to local --dry-run"),
+    _e("2026-10-25.22", "One key, one meaning in the console; merge is M and asks first",
+       "Pull requests: M merges (a PR that is not ready asks 'Merge anyway?'). Dashboard: [ and ] change the window. "
+       "Pipeline: f only mine, F done. Settings: T tests connections. Ideas: F2 rename, H harness, ctrl+n skip question. "
+       "Home: space opens details", "pl"),
 ]
 
 

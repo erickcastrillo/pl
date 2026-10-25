@@ -70,7 +70,7 @@ def home_rows(summaries) -> list[dict]:
 
 class HomeView(Widget):
     """The Home tab DataTable showing all configured pipelines."""
-    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("i", "details", "details")]
+    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details")]
 
     def __init__(self, selected_profile=None):
         super().__init__()
