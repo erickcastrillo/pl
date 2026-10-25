@@ -176,6 +176,8 @@ ENTRIES = [
        "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
     _e("2026-10-25.20", "Stages wait for folder trust instead of starting a stuck Claude agent",
        "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
+    _e("2026-10-25.21", "Move a pipeline to another board without losing a card", "pl board migrate",
+       "pl board migrate --to local --dry-run"),
 ]
 
 
