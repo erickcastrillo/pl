@@ -632,7 +632,7 @@ def test_path_check_from_a_clone_asks_the_login_shell(fake_home, monkeypatch):
 def test_eof_at_a_prompt_cancels_cleanly(fake_home, monkeypatch, capsys):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda p="": (_ for _ in ()).throw(EOFError))
-    with pytest.raises(SystemExit) as e:
+    with pytest.raises(SystemExit):
         _pl(monkeypatch)
     assert "setup cancelled, nothing written" in capsys.readouterr().err
     assert not list(fake_home.glob(".pl-*"))
