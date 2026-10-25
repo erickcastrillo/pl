@@ -82,6 +82,7 @@ def _wp2_expected(args, legacy):
         out = out.replace("skills,update,", "skills,pods,update,")   # pl pods (list, show)
         out = out.replace("skills,pods,update,", "skills,pods,loops,update,")   # pl loops (list, add, pause, resume, rm)
         out = out.replace("skills,update,local-model}", "skills,update,local-model,forget}")   # pl forget (removes a contact everywhere)
+        out = out.replace("local-model,forget}", "local-model,forget,memory}")   # pl memory (search, add, show)
         out = out.replace(",board,card,section,", ",board,card,titles,section,")   # pl titles check (title/metadata drift)
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
         out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all] [--check-trust]\n")
