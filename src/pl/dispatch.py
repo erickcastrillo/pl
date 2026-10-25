@@ -479,6 +479,22 @@ def loop_prompt(svc):
     return svc["prompt"]
 
 
+def _check_auto_merge(name, svc):
+    """The built-in review loop just started: alert once when its repository has auto-merge off, since pl-review
+    then leaves every passing PR for a person to merge. Skipped without a merge_ready label (no auto-merge asked)."""
+    repo = (C.TRACKER or {}).get("repo")
+    if name != "auto-review" or not svc.get("builtin") or not repo or not (C.CODE_HOST.get("labels") or {}).get("merge_ready"):
+        return
+    key, allowed = f"auto_merge_off:{repo}", github.auto_merge_allowed(repo)
+    if allowed is None:
+        print(f"auto-review: could not read allow_auto_merge for {repo}; check skipped", file=sys.stderr)
+    elif allowed:
+        alerts.resolve(key)
+    elif why := alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
+                            f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand"):
+        notify(alerts.headline(why, f"Auto-merge is off for {repo}"), "pl alerts")
+
+
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
     """Start any service loop that is not running; restart one whose Claude exited or hit a usage limit, or whose
     session is idle with its context above max_context (80 unless the loop sets it; 0 is off): see _context_restart.
@@ -569,6 +585,7 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         svc_state[name] = {"profile": use, "started_at": now_iso(), "ran_at": now_iso(), "sessions": old.get("sessions", []),
                            **({"context_restarts": old["context_restarts"]} if old.get("context_restarts") else {}),
                            **({"fallback_from": moved} if moved else {})}
+        _check_auto_merge(name, svc)
         if moved:
             events.emit("loop_fallback", None, loop=name, account=use, parked=moved)
 
