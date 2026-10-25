@@ -259,14 +259,22 @@ def test_builtin_review_prompt_keeps_every_outcome_visible_to_pl(fake_home):
     C.load("gh")
     p = C.SERVICES["auto-review"]["prompt"]
     assert p == ("/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready-for-review "
-                 "rework=pl:needs-rework failed=pl:review-failed")
+                 "rework=pl:needs-rework failed=pl:review-failed auto_lines=150 auto_files=6")
     rules = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    assert "remove `<review>`, add `<ready>` and `pl:merge-ready`." in rules
+    assert "remove `<review>`, add `<ready>` and `<merge_ready>`," in rules
     assert "| Review passes & Requires Human Review" in rules
     assert ("| Review finds problems | post problems as one PR comment in plain words, remove `<review>`, "
             "add both `<ready>` and `<rework>` |") in rules
     assert ("| Review cannot run | comment why, remove `<review>`, add `<failed>`; "
             "a person decides, then adds `<review>` back |") in rules
+
+
+def test_builtin_review_prompt_carries_the_merge_ready_label_and_auto_merge_size(fake_home):
+    _write(fake_home, "gh", GH_PROFILE.replace("[code_host.labels]", "[code_host]\npr_auto_merge_lines = 120\n[code_host.labels]")
+           + 'merge_ready = "pl:merge-ready"\n')
+    C.load("gh")
+    assert C.SERVICES["auto-review"]["prompt"].endswith(
+        "failed=pl:review-failed merge_ready=pl:merge-ready auto_lines=120 auto_files=6")
 
 
 def test_pr_size_limits_default_and_load_from_code_host(fake_home):
@@ -325,3 +333,25 @@ def test_a_skill_loop_needs_no_prompt():
     import tomlkit
     assert not [e for e in C.validate(tomlkit.parse('[loops.l]\nskill = "pl-x"\n')) if "prompt" in e]
     assert any("prompt" in e for e in C.validate(tomlkit.parse('[loops.l]\naccount = "a"\n')))
+
+
+def test_auto_merge_table_is_settings_not_a_service(fake_home):
+    C.load(config_dir=str(_write(fake_home, "am", '[loops.auto-merge]\nenabled = true\nevery = "15m"\n')))
+    assert C.AUTO_MERGE == {"enabled": True, "every": "15m"}
+    assert "auto-merge" not in C.SERVICES
+
+
+def test_auto_merge_off_is_not_in_loops_off(fake_home):
+    C.load(config_dir=str(_write(fake_home, "amoff", '[loops.auto-merge]\nenabled = false\n')))
+    assert "auto-merge" not in C.SERVICES and "auto-merge" not in C.LOOPS_OFF
+
+
+def test_auto_merge_defaults_to_empty(fake_home):
+    C.load(config_dir=str(_write(fake_home, "noam", '[loops.l]\nprompt = "p"\n')))
+    assert C.AUTO_MERGE == {} and "l" in C.SERVICES
+
+
+def test_auto_merge_needs_no_prompt_but_every_is_checked():
+    import tomlkit
+    assert not [e for e in C.validate(tomlkit.parse('[loops.auto-merge]\nenabled = true\n')) if "prompt" in e]
+    assert any("loops.auto-merge: every" in e for e in C.validate(tomlkit.parse('[loops.auto-merge]\nenabled = true\nevery = "soon"\n')))

@@ -1,0 +1,25 @@
+[pipeline]
+name = "billing"
+template = "billing"
+columns = ["To invoice", "Invoice review", "Overdue", "Overdue review", "Done"]
+
+[pipeline.stages.prepare-invoice]
+column = "To invoice"
+done = "Invoice review"
+next = "Overdue"
+skill = "pl-stage"
+section = "INVOICE"
+gate = "owner"
+outward = true
+connectors = []
+instructions = "Prepare the invoice from the card: client, lines, amounts and due date. Keep the payment ids on metadata.refs.payments only. A person approves it before it is sent."
+
+[pipeline.stages.chase-overdue]
+column = "Overdue"
+done = "Overdue review"
+skill = "pl-stage"
+section = "REMINDER"
+gate = "owner"
+outward = true
+connectors = []
+instructions = "Write the reminder for an overdue invoice, polite and specific about the amount and date. A person approves it before it is sent."

@@ -32,11 +32,11 @@ LOG_CHARS = 200
 # Reads and the read-only commands below run without a prompt; any other pl command, gh or git push asks.
 READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
 READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)",
-             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl titles*)", "Bash(pl sync*)",
+             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl sync*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
-PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry",
-             "restart", "hold", "unhold", "rework", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
-             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit")   # move also covers move-agent
+PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry", "caps", "loops",
+             "restart", "hold", "unhold", "rework", "merges", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
+             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit", "models", "memory", "pipelines")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
           "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",
           "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable",
@@ -45,7 +45,7 @@ GH_PR_WRITES = ("checkout", "close", "comment", "create", "edit", "lock", "merge
                 "review", "unlock", "update-branch")
 # --ac, --r, --d: argparse also takes a unique prefix of a long flag (--ack, --reset, --delete)
 ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), "Bash(pl alerts *--ac*)",
-             "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
+             "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl titles set*)", "Bash(pl titles *--fix*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
              "Bash(pl manager *run*)", "Bash(pl manager -*)", "Bash(gh -*)", *(f"Bash(gh {c}*)" for c in GH_TOP), "Bash(gh pr -*)",
              *(f"Bash(gh pr {c}*)" for c in GH_PR_WRITES), "Bash(git push*)", "Bash(git push:*)", "Bash(git -*)",
              "Bash(git diff *--output*)", "Bash(git log *--output*)", "Bash(git difftool*)"]

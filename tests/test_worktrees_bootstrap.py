@@ -121,7 +121,7 @@ def test_logging_contains_file_names_only_not_contents(repo, tmp_path):
 
 def _cli(monkeypatch, repo, wt, dry_run=False):
     monkeypatch.chdir(repo)
-    return commands.cmd_worktrees_bootstrap(argparse.Namespace(path=str(wt), dry_run=dry_run))
+    return commands.cmd_worktrees_bootstrap(argparse.Namespace(path=str(wt), dry_run=dry_run, card=None))
 
 
 def test_cli_bootstrap_applies_manifest(repo, tmp_path, monkeypatch, capsys):

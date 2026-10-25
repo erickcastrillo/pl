@@ -33,7 +33,7 @@ def env(tmp_path, monkeypatch):
         if argv[:2] == ["git", "ls-remote"]:
             return f"{SHA}\trefs/heads/main\n"
         if argv[:2] == ["git", "checkout"]:
-            shutil.copytree(up, cwd, dirs_exist_ok=True)
+            shutil.copytree(up, cwd, dirs_exist_ok=True, symlinks=True)
         return ""
     monkeypatch.setattr(S, "_git", fake)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -160,3 +160,40 @@ def test_list_json_shows_the_source(env, capsys):
     rows = json.loads(capsys.readouterr().out)
     row = next(r for r in rows if r["name"] == "review")
     assert row["source"]["repo"] == "acme/kit" and row["source"]["sha"] == SHA
+
+
+def test_a_link_that_leaves_the_skill_folder_but_stays_in_the_checkout_is_refused(env, capsys):
+    (env["up"] / ".ssh").mkdir()
+    (env["up"] / ".ssh" / "id_rsa").write_text("harmless")
+    (env["up"] / "skills" / "review" / "notes.md").unlink()
+    (env["up"] / "skills" / "review" / "notes.md").symlink_to("../../.ssh/id_rsa")
+    code, _ = run(yes=True)
+    assert code == 2
+    assert "link out of the source" in capsys.readouterr().err
+    assert not (env["lib"] / "review").exists()
+
+
+def test_a_link_inside_the_skill_folder_is_still_installed(env):
+    (env["up"] / "skills" / "review" / "notes.md").unlink()
+    (env["up"] / "skills" / "review" / "notes.md").symlink_to("check.py")
+    code, _ = run(yes=True)
+    assert code == 0
+    assert (env["lib"] / "review" / "notes.md").is_symlink()
+
+
+def test_a_path_component_that_is_a_link_out_of_the_checkout_is_refused(env, capsys, tmp_path):
+    outside = tmp_path / "private"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n")
+    (outside / "note.txt").write_text("secret")
+    (env["up"] / "linked").symlink_to(outside)
+    code, _ = run("github:acme/kit/linked@main", yes=True)
+    assert code == 2
+    assert "outside the source" in capsys.readouterr().err
+    assert not (env["lib"] / "linked").exists()
+
+
+def test_ls_remote_ends_options_before_the_url(env):
+    run(yes=True)
+    ls = next(a for a in env["calls"] if a[:2] == ["git", "ls-remote"])
+    assert ls[2] == "--"

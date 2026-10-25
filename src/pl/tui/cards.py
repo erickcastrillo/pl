@@ -113,7 +113,7 @@ class CardScreen(Screen):
     #card-head { height: auto; padding: 0 1; border: round $primary; }
     #card-doc { height: 1fr; border: round $primary; }
     """
-    BINDINGS = [Binding("escape", "close", "close"), Binding("q", "close", "close"),
+    BINDINGS = [Binding("escape", "close", "close"),
                 Binding("y", "copy", "copy card text"), Binding("O", "open", "open in browser"),
                 Binding("a", "approve", "approve"), Binding("x", "send_back", "send back"),
                 Binding("p", "hold", "hold / release"), Binding("R", "restart", "restart agent"),
@@ -403,16 +403,16 @@ class CardsView(CardActions, Horizontal):
     #cards-body { height: 1fr; }
     """
     BINDINGS = [Binding("tab", "app.focus_next", "list / text"), *CardActions.CARD_BINDINGS,
-                Binding("v", "move_column", "move to column"), Binding("n", "only_mine", "only mine / all"),
+                Binding("v", "move_column", "move to column"), Binding("f", "only_mine", "only mine / all"),
                 Binding("o", "answer", "answer questions"), Binding("d", "drop", "drop"), Binding("h", "hand_off", "to Manual"),
-                Binding("f", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
+                Binding("F", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
                 Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
                 Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold")]
 
     def __init__(self):
         super().__init__()
         self._rows, self._built, self._now, self._data = {}, [], {}, None
-        self.only_mine = False   # n: list only the cards that wait on a person
+        self.only_mine = False   # f: list only the cards that wait on a person
         self.show_done = False   # z: a Done group from the last refresh's Done cards (no extra board read)
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
@@ -438,9 +438,9 @@ class CardsView(CardActions, Horizontal):
         t = self.query_one(DataTable)
         if self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
-            t.border_title = f"Pipeline · needs you only · {mine} of {total} cards · n shows all"
+            t.border_title = f"Pipeline · needs you only · {mine} of {total} cards · f shows all"
         else:
-            t.border_title = f"Pipeline · {total} cards · {mine} need you (n only those) · " + (
+            t.border_title = f"Pipeline · {total} cards · {mine} need you (f only those) · " + (
                 "z hides Done" if self.show_done else "Done is hidden (z shows it)")
         keep, keep_key = t.cursor_row, self._current()[0]
         self._rows, built = {}, []
@@ -551,7 +551,7 @@ class CardsView(CardActions, Horizontal):
             self.query_one("#cards-md", Markdown).update(md)
 
     def action_only_mine(self):
-        """n: only the cards that wait on a person, or all of them again."""
+        """f: only the cards that wait on a person, or all of them again."""
         self.show_attention(not self.only_mine)
 
     def show_attention(self, on=True, group=None):
@@ -664,8 +664,8 @@ class CardsView(CardActions, Horizontal):
                        lambda: [f"moved {head} to Manual" if move_to(c["id"], "Manual") else f"not moved: {head}"], "not moved: ")
 
     def action_done(self):
-        """f: confirm, then pl done off the UI thread."""
-        r = self._open_row("f", "finish")
+        """F: confirm, then pl done off the UI thread."""
+        r = self._open_row("F", "finish")
         if r is None:
             return
         c, head = r["card"], self._head(r["card"])

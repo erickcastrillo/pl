@@ -163,6 +163,42 @@ ENTRIES = [
     _e("2026-10-25.15", "pl e2e: your repo's Playwright tests in a throwaway Multipass VM",
        "set up from the repo's .pl/e2e.yaml; ~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
        "pl e2e --help. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
+    _e("2026-10-25.16", "Pods: rules, knowledge and skills per team",
+       "pl pods show NAME --json adds approval rate, edits per draft and escalations over 30 days; pod.md versions, "
+       "rule add, rollback and rules suggested from repeated edits", "pl pods show engineering"),
+    _e("2026-10-25.17", "pl titles check --fix repairs drift; next and set number plan cards",
+       "pl titles next, pl titles set", "pl titles check --fix --dry-run"),
+    _e("2026-10-25.18", "Small changes run on a cheaper model",
+       "[stages.run.small] in config.toml: a run agent whose approved PLAN budget is at or under max_lines and max_files "
+       "starts on the small model for its harness; rework rounds use the normal one",
+       "[stages.run.small] max_lines = 60"),
+    _e("2026-10-25.19", "pl-plan files later slices as Plan N slice M with plan metadata",
+       "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
+    _e("2026-10-25.20", "Stages wait for folder trust instead of starting a stuck Claude agent",
+       "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
+    _e("2026-10-25.21", "Move a pipeline to another board without losing a card", "pl board migrate",
+       "pl board migrate --to local --dry-run"),
+    _e("2026-10-25.22", "One key, one meaning in the console; merge is M and asks first",
+       "Pull requests: M merges (a PR that is not ready asks 'Merge anyway?'). Dashboard: [ and ] change the window. "
+       "Pipeline: f only mine, F done. Settings: T tests connections. Ideas: F2 rename, H harness, ctrl+n skip question. "
+       "Home: space opens details", "pl"),
+    _e("2026-10-25.23", "Small jobs on local models, checked, with fallbacks",
+       "[models.local]: a model per job (route, summarise, title, embed); setup writes it for a new profile",
+       "pl models test summarise"),
+    _e("2026-10-25.24", "Pipelines from templates: sales, clients, billing, team", "pl pipelines", "pl pipelines list --templates"),
+    _e("2026-10-25.25", "Add a pipeline as a new profile; export and import it", "pl pipelines add",
+       "pl pipelines add sales --template new-client --board local --yes"),
+    _e("2026-10-25.26", "Connectors: plug any MCP server in by role, sign in through the browser",
+       "docs/connectors.md; pl connectors import --from claude lists the servers you already set up", "pl connectors list"),
+    _e("2026-10-25.27", "pl sandbox login: sign a harness in from inside the profile's Multipass VM",
+       "pl sandbox create, status, start, stop, destroy, login; [sandbox] in the profile config",
+       "pl sandbox login <account>"),
+    _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
+       "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
+    _e("2026-10-25.29", "One plan at a glance: pl list --plan N lists that plan's cards in slice order",
+       "Done cards included; the Product board is skipped", "pl list --plan 21"),
+    _e("2026-10-25.30", "Exited agents' windows close by themselves",
+       "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert", "pl alerts"),
 ]
 
 

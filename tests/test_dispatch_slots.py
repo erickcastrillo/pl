@@ -1,5 +1,6 @@
 """Prep slots count what really runs; one account is logged, stored and launched; the folder trust prompt is
 reported and never answered."""
+import json
 import subprocess
 import time
 import types
@@ -11,6 +12,7 @@ from pl import accounts, agents, alerts, dispatch, harnesses
 from pl import config as C
 
 REAL_LIVE_WINDOW = dispatch.live_agent_window   # conftest fakes the module name for every other test
+REAL_GATE = dispatch.untrusted_folder   # conftest fakes it for every other test
 TRUST_SCREEN = ("Accessing workspace:\n\n /Users/me/Code/Proj\n\n Quick safety check: Is this a project you created or one you\n"
                 " trust?\n\n Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n")
 
@@ -38,7 +40,7 @@ def _card(n, **meta):
             "metadata": {"pipeline_mode": "auto", **meta}}
 
 
-def _pass(monkeypatch, cs, swept=0, parked=(), max_prep=2):
+def _pass(monkeypatch, cs, swept=0, parked=(), max_prep=2, dry=False):
     """One dispatcher pass, board and tmux faked. Returns (started cards, board writes)."""
     started, writes = [], []
     monkeypatch.setattr(dispatch, "registry", lambda: {})
@@ -50,7 +52,7 @@ def _pass(monkeypatch, cs, swept=0, parked=(), max_prep=2):
     monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set(parked))
     for name in ("mirror_to_product", "ensure_services"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
-    dispatch.dispatch_once(1, False, max_prep=max_prep, pull=False)
+    dispatch.dispatch_once(1, dry, max_prep=max_prep, pull=False)
     return started, writes
 
 
@@ -150,7 +152,8 @@ def test_untracked_stage_windows_holding_only_a_shell_are_closed_and_never_count
     out = (f"@1 %1 {now - 5000} - 0 run-restored zsh\n@2 %2 {now - 5000} - 0 plan-restored bash\n"
            f"@3 %3 {now} - 0 run-fresh zsh\n@5 %5 {now - 5000} pl 0 run-tracked zsh\n")
     calls = _sweep_tmux(monkeypatch, out)
-    assert dispatch.sweep_untracked([_card(1, worker=w)], {}, False, {}) == 0
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    assert dispatch.sweep_untracked([{**_card(1, worker=w), "list_id": "In progress"}], {}, False, {}) == 0
     kills = [c for c in calls if c[:2] == ["tmux", "kill-window"]]
     assert kills == [["tmux", "kill-window", "-t", "@1"], ["tmux", "kill-window", "-t", "@2"]]   # never a tracked one
 
@@ -308,6 +311,49 @@ def test_trust_command_quotes_odd_folders_and_falls_back_to_the_work_dir(monkeyp
     assert harnesses.trust_command(claude, "x", "this folder") == "cd ~/work && claude"
 
 
+def _trust_file(path, **folders):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"projects": {f: {"hasTrustDialogAccepted": v} for f, v in folders.items()}}))
+
+
+def test_claude_trusts_reads_the_account_config_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "HOME", tmp_path)
+    monkeypatch.setattr(C, "WORK_DIR", tmp_path / "code/pl")
+    monkeypatch.setattr(C, "PROFILES", {"a": tmp_path / ".claude-a"})
+    pl, x = str(tmp_path / "code/pl"), str(tmp_path / "code/x")
+    _trust_file(tmp_path / ".claude-a/.claude.json", **{pl: True, x: False})
+    assert harnesses.claude_trusts("a", pl) is True
+    assert harnesses.claude_trusts("a", pl + "/") is True
+    assert harnesses.claude_trusts("a", x) is False
+    assert harnesses.claude_trusts("a", str(tmp_path / "code")) is False
+    assert harnesses.claude_trusts("a", "this folder") is True
+    assert harnesses.claude_trusts("a", "~/code/pl") is True
+    _trust_file(tmp_path / ".claude.json", **{pl: True})
+    assert harnesses.claude_trusts("nobody", pl) is True
+
+
+def test_claude_trusts_says_no_on_a_missing_empty_or_broken_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(C, "HOME", tmp_path)
+    monkeypatch.setattr(C, "PROFILES", {"a": tmp_path / ".claude-a"})
+    f = tmp_path / ".claude-a/.claude.json"
+    assert harnesses.claude_trusts("a", "/x") is False
+    f.parent.mkdir()
+    for text in ("", "{not json", "[]", '{"projects": []}', '{"projects": {"/y": {"hasTrustDialogAccepted": true}}}',
+                 '{"projects": {"/x": "yes"}}', '{"projects": {"/x": {"hasTrustDialogAccepted": "true"}}}'):
+        f.write_text(text)
+        assert harnesses.claude_trusts("a", "/x") is False
+    assert capsys.readouterr() == ("", "")
+
+
+def test_claude_trusts_never_writes_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "PROFILES", {"a": tmp_path})
+    f = tmp_path / ".claude.json"
+    _trust_file(f, **{"/x": True})
+    before = (f.read_bytes(), f.stat().st_mtime_ns)
+    assert harnesses.claude_trusts("a", "/x") is True
+    assert (f.read_bytes(), f.stat().st_mtime_ns) == before
+
+
 def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch):
     w = {"stage": "spec", "pane": "%1", "window": "@1", "session_id": "s", "profile": "claude", "harness": "claude",
          "started_at": "2020-01-01T00:00:00+00:00"}
@@ -330,6 +376,73 @@ def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch
     monkeypatch.setattr(agents, "col_name", lambda lid: "Inbox")
     assert agents.worker_view({**c, "metadata": {**c["metadata"], "worker": writes[-1][1]["metadata"]["worker"]}}, {}) \
         == "spec agent waiting: trust the folder (claude)"
+
+
+def _trusted_agent(monkeypatch, trusts, **meta):
+    """A Claude spec agent at the trust prompt for /Users/me/Code/Proj; returns (keys sent, events emitted, stops)."""
+    w = {"stage": "spec", "pane": "%1", "window": "@1", "session_id": "s", "profile": "claude", "harness": "claude",
+         "started_at": "2020-01-01T00:00:00+00:00"}
+    keys, evs, stops = [], [], []
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: keys.append(a))
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
+    monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w["session_id"]))
+    monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)
+    monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: "/Users/me/Code/Proj")
+    monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: None)
+    monkeypatch.setattr(dispatch, "pane_exists", lambda pane: False)
+    monkeypatch.setattr(harnesses, "claude_trusts", lambda account, folder: trusts)
+    monkeypatch.setattr(dispatch.move_agent, "lock", lambda cid: True)
+    monkeypatch.setattr(dispatch.move_agent, "unlock", lambda cid: None)
+    monkeypatch.setattr(dispatch.move_agent, "pane_refusal", lambda c, w: None)
+    monkeypatch.setattr(dispatch.move_agent, "stop", lambda pane, sid: stops.append(pane) or True)
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: evs.append((a, k)))
+    return _card(1, profile="claude", worker=w, **meta), keys, evs, stops
+
+
+def test_the_dispatcher_keeps_an_untrusted_agent_at_the_prompt(monkeypatch):
+    c, keys, evs, stops = _trusted_agent(monkeypatch, False)
+    started, writes = _pass(monkeypatch, [c])
+    assert evs == [] and stops == [] and started == []
+    assert not [k for k in keys if k and k[0] == "send-keys"]
+    assert alerts.get("permission_wait:o/r#1") and not alerts.get("permission_wait:o/r#1").get("resolved_at")
+    assert writes[-1][1]["metadata"]["worker"]["trust_wait"] == "/Users/me/Code/Proj"
+
+
+def test_the_dispatcher_restarts_a_trusted_agent_once(monkeypatch, capsys):
+    c, keys, evs, stops = _trusted_agent(monkeypatch, True)
+    alerts.open("permission_wait:o/r#1", "warn", "agent waiting: trust the folder", "an earlier pass opened it")
+    started, writes = _pass(monkeypatch, [c])
+    assert evs == [(("agent_restarted", "o/r#1"), {"stage": "spec", "reason": "folder trusted"})]
+    assert stops == ["%1"] and not [k for k in keys if k and k[0] == "send-keys"]
+    assert writes[0][1]["metadata"]["worker"] is None and writes[0][1]["metadata"]["trust_restarted"] == ["spec"]
+    assert started == [c]
+    assert "now trusted" in capsys.readouterr().out
+    assert not alerts.get("permission_wait:o/r#1").get("resolved_at")
+
+
+def test_a_second_trust_prompt_after_the_restart_is_not_restarted(monkeypatch):
+    c, keys, evs, stops = _trusted_agent(monkeypatch, True, trust_restarted=["spec"])
+    started, _ = _pass(monkeypatch, [c])
+    assert evs == [] and stops == [] and started == []
+    assert not alerts.get("permission_wait:o/r#1").get("resolved_at")
+
+
+def test_the_trust_alert_closes_once_the_new_agent_is_past_the_prompt(monkeypatch):
+    c, keys, evs, stops = _trusted_agent(monkeypatch, False)
+    _pass(monkeypatch, [c])
+    assert alerts.get("permission_wait:o/r#1")
+    monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: None)
+    c = {**c, "metadata": {**c["metadata"], "worker": {**c["metadata"]["worker"], "trust_wait": "/Users/me/Code/Proj"}}}
+    _, writes = _pass(monkeypatch, [c])
+    assert alerts.get("permission_wait:o/r#1")["resolved_at"]
+    assert "trust_wait" not in writes[-1][1]["metadata"]["worker"]
+
+
+def test_a_dry_run_only_says_it_would_restart_the_trusted_agent(monkeypatch, capsys):
+    c, keys, evs, stops = _trusted_agent(monkeypatch, True)
+    started, writes = _pass(monkeypatch, [c], dry=True)
+    assert "would stop it" in capsys.readouterr().out
+    assert stops == [] and evs == [] and writes == [] and started == []
 
 
 # ---------- profiles do not starve each other: the manager's share ----------
@@ -411,3 +524,104 @@ def test_an_unreadable_card_is_skipped_and_alerted_once(monkeypatch):
     assert len([al for al in alerts.listing(all=True) if al["key"] == f"card_unreadable:{c['id']}"]) == 1
     assert alerts.get(f"card_unreadable:{c['id']}").get("resolved_at") is None
 
+
+
+# ---------- Plan 26 slice 4: trust before start ----------
+
+@pytest.fixture
+def gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(dispatch, "untrusted_folder", REAL_GATE)
+    monkeypatch.setattr(C, "WORK_DIR", tmp_path / "code" / "pl")
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: None)
+    return tmp_path
+
+
+def _claude_json(tmp, text):
+    f = tmp / ".claude" / ".claude.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(text)
+    return f
+
+
+def _trusting(folder):
+    return json.dumps({"projects": {str(folder): {"hasTrustDialogAccepted": True}}})
+
+
+def _trust_alerts(all=False):
+    return [a for a in alerts.listing(all=all) if a["key"].startswith("trust:")]
+
+
+def test_an_untrusted_claude_account_starts_none_of_its_cards_and_opens_one_trust_alert(gate, monkeypatch, capsys):
+    _claude_json(gate, json.dumps({"projects": {}}))
+    cs = [_card(n, profile="claude") for n in (1, 2, 3)]
+    started, writes = _pass(monkeypatch, cs)
+    out = capsys.readouterr().out
+    assert started == [] and writes == []
+    lines = [ln for ln in out.splitlines() if "waits: account claude" in ln]
+    assert len(lines) == 3
+    assert all(str(C.WORK_DIR) in ln and f"o/r#{i}"[-3:] in ln for i, ln in zip((1, 2, 3), lines))
+    (a,) = _trust_alerts()
+    assert a["key"] == f"trust:claude:{C.WORK_DIR}"
+    assert harnesses.trust_command(harnesses.get("claude"), "claude", str(C.WORK_DIR)) in a["title"]
+    assert "Yes, I trust this folder" in a["title"]
+
+
+@pytest.mark.parametrize("text", [None, "", "{not json"])
+def test_a_missing_empty_or_broken_claude_json_counts_as_untrusted(gate, monkeypatch, text):
+    if text is not None:
+        _claude_json(gate, text)
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert started == []
+    assert len(_trust_alerts()) == 1
+
+
+def test_trusting_the_folder_starts_the_waiting_stage_and_closes_the_alert(gate, monkeypatch):
+    f = _claude_json(gate, "{}")
+    cs = [_card(1, profile="claude")]
+    started, _ = _pass(monkeypatch, cs)
+    assert started == []
+    f.write_text(_trusting(C.WORK_DIR))
+    started, _ = _pass(monkeypatch, cs)
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert alerts.get(f"trust:claude:{C.WORK_DIR}")["resolved_at"]
+
+
+def test_a_trusted_parent_folder_lets_the_stage_start(gate, monkeypatch):
+    _claude_json(gate, _trusting(C.WORK_DIR.parent))
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert _trust_alerts() == []
+
+
+def test_a_trusted_account_starts_as_today_with_no_trust_alert(gate, monkeypatch):
+    _claude_json(gate, _trusting(C.WORK_DIR))
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert _trust_alerts(all=True) == []
+
+
+def test_other_harnesses_never_run_the_trust_check(gate, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("the trust check ran")
+    monkeypatch.setattr(harnesses, "claude_trusts", boom)
+    monkeypatch.setattr(C, "STAGES", {"spec": {"account": "codex"}})
+    started, _ = _pass(monkeypatch, [_card(1)])
+    assert [c["id"] for c in started] == ["o/r#1"]
+
+
+def test_dry_run_says_it_would_wait_and_opens_nothing(gate, monkeypatch, capsys):
+    _claude_json(gate, "{}")
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")], dry=True)
+    assert started == []
+    assert "would wait for trust" in capsys.readouterr().out
+    assert alerts.listing(all=True) == []
+
+
+def test_the_gate_never_writes_or_repeats_claude_json(gate, monkeypatch, capsys):
+    f = _claude_json(gate, json.dumps({"projects": {}, "oauthAccount": "marker-218"}))
+    before = (f.read_bytes(), f.stat().st_mtime_ns)
+    for _ in range(2):
+        _pass(monkeypatch, [_card(1, profile="claude")])
+    assert (f.read_bytes(), f.stat().st_mtime_ns) == before
+    assert "marker-218" not in capsys.readouterr().out
+    assert "marker-218" not in json.dumps(alerts.listing(all=True))

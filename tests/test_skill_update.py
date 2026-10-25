@@ -32,7 +32,7 @@ def env(tmp_path, monkeypatch):
                 raise RuntimeError("could not resolve host")
             return f"{head['sha']}\trefs/heads/main\n"
         if argv[:2] == ["git", "checkout"]:
-            shutil.copytree(up, cwd, dirs_exist_ok=True)
+            shutil.copytree(up, cwd, dirs_exist_ok=True, symlinks=True)
         return ""
     monkeypatch.setattr(S, "_git", fake)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -147,3 +147,27 @@ def test_nothing_calls_update_on_its_own():
     src = Path(__file__).parent.parent / "src" / "pl"
     callers = {p.name for p in src.rglob("*.py") if "skill_sources.update(" in p.read_text()}
     assert callers <= {"skills.py"}
+
+
+def test_update_refuses_a_link_that_leaves_the_skill_folder_but_stays_in_the_checkout(env, capsys):
+    publish(env)
+    (env["up"] / ".ssh").mkdir()
+    (env["up"] / ".ssh" / "id_rsa").write_text("harmless")
+    (env["up"] / "skills" / "review" / "leak.md").symlink_to("../../.ssh/id_rsa")
+    before = tree(env["lib"])
+    code, _ = update(yes=True)
+    assert code == 2
+    assert "link out of the source" in capsys.readouterr().err
+    assert tree(env["lib"]) == before
+
+
+def test_update_replaces_a_skill_folder_that_has_become_a_link(env, tmp_path):
+    publish(env)
+    target = tmp_path / "elsewhere"
+    shutil.move(env["lib"] / "review", target)
+    (env["lib"] / "review").symlink_to(target)
+    code, _ = update(yes=True)
+    assert code == 0
+    assert not (env["lib"] / "review").is_symlink()
+    assert "Better body" in (env["lib"] / "review" / "SKILL.md").read_text()
+    assert (target / "SKILL.md").read_text().endswith("Body\n")
