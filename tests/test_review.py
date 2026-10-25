@@ -1513,3 +1513,15 @@ def test_watch_rows_mark_only_an_agent_dead_at_the_attempt_limit_as_failed(board
         got = [r for r in watch.watch_snapshot()["rows"] if r.get("card") and r["card"]["id"] == A_ID]
         failed[attempts] = got[0].get("failed")
     assert failed == {3: True, 2: False}
+
+
+def test_pl_list_json_plan_returns_only_that_plans_cards_and_no_intake(board, monkeypatch):
+    _quiet_list(monkeypatch, intake=True)
+    monkeypatch.setattr(commands, "product_cards_mine", lambda: pytest.fail("the Product board is skipped"))
+    emitted = []
+    monkeypatch.setattr(commands, "emit", emitted.append)
+    for c in (_plan_card(41, "one", "Done", 21, 1), _plan_card(43, "other plan", "Approved", 7, 1),
+              mk("o/r#44", "no plan", "Approved")):
+        board.items[c["id"]] = c
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=21, json=True))
+    assert [r["id"] for r in emitted[0]["pipeline"]] == ["o/r#41"] and emitted[0]["intake"] == []

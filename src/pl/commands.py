@@ -83,12 +83,15 @@ def _list_json(a):
     reg = registry()
     share("read")
     pipeline = cards()
+    plan = getattr(a, "plan", None)
     rows = {"pipeline": [], "intake": []}
     if not a.product:
         for c in pipeline:
-            if (col := col_name(c["list_id"])) != "Done" or a.all:
+            if plan and str((c.get("metadata") or {}).get("plan")) != str(plan):
+                continue
+            if (col := col_name(c["list_id"])) != "Done" or a.all or plan:
                 rows["pipeline"].append(row(c, col, approved_label(c, col, reg) or worker_view(c, reg), deps=True))
-    if intake_configured():
+    if intake_configured() and not plan:
         linked = {(c.get("metadata") or {}).get("product_card"): c for c in pipeline if (c.get("metadata") or {}).get("product_card")}
         for c in product_cards_mine():
             if (col := product_col(c["list_id"])) != "Done" or a.all:
@@ -668,16 +671,22 @@ def cmd_section(a):
                 text = _strip_email_block(text)
             print(text.rstrip("\n"))
         return
+    text = _section_source(a.from_)
+    print(write_section(a.id, name, text, force=getattr(a, "force", False)))
+
+
+def write_section(card_id, name, text, force=False) -> str:
+    """Replace one writable section of a card with text; the one place the WRITABLE, '# PIPELINE:' and approval
+    rules live. Returns the line to print."""
     if name not in WRITABLE:
         raise BadInput(f"pl section: only SPEC, DESIGN or PLAN can be written, not {name}")
-    text = _section_source(a.from_)
     if not text.strip():
         raise SystemExit("pl section: the text is empty; nothing was written")
     if re.search(r"^# PIPELINE:", text, re.M):
         raise SystemExit("pl section: the text has a line starting with '# PIPELINE:', which would split the card")
     fresh_next()   # it rebuilds the whole body from what it read: never from a copy that may be minutes old
-    c = find_card(a.id)
-    if not getattr(a, "force", False):
+    c = find_card(card_id)
+    if not force:
         if name == "PLAN" and (col := col_name(c.get("list_id"))) in APPROVED_COLUMNS:
             raise SystemExit(f"pl section: the plan was approved (card is in '{col}'); a person can override with --force")
         if name == "SPEC" and (c.get("metadata") or {}).get("spec_approved_at"):
@@ -685,7 +694,7 @@ def cmd_section(a):
     parts = sections(c.get("description"))
     parts[name] = text.strip("\n")
     update(c["id"], description=check_size(render(parts)))
-    print(f"wrote {name} ({len(text.strip())} chars) to card {short_id(c['id'])}")
+    return f"wrote {name} ({len(text.strip())} chars) to card {short_id(c['id'])}"
 
 
 def cmd_board(a):

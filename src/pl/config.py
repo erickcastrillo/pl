@@ -448,6 +448,10 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: prompt or skill is required")
             if table == "loops":
                 errs += _loop_schedule_errors(name, v)
+            if table == "stages" and is_local_account(v.get("account")):
+                if why := local_stage_problem(name, v):
+                    errs.append(why)
+                continue
             if accounts and v.get("account") and v["account"] not in accounts:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
@@ -462,6 +466,25 @@ def validate(doc) -> list[str]:
     from pl import triggers
     errs += triggers.validate(doc)
     return errs
+
+
+LOCAL_PREFIX = "local:"
+
+
+def is_local_account(account) -> bool:
+    return isinstance(account, str) and account.startswith(LOCAL_PREFIX)
+
+
+def local_stage_problem(name, v) -> str | None:
+    """Why [stages.<name>] cannot run on its local:<model> account, or None. pl never guesses which stages need tools:
+    the stage says so with tools = false, and the built-in stages always need them."""
+    from pl import harnesses
+    model = v["account"][len(LOCAL_PREFIX):]
+    if name in ("spec", "design", "plan", "run") or v.get("tools") is not False:
+        return (f"stages.{name}: a local model cannot use tools; set tools = false only for a stage that needs none")
+    if not harnesses.MODEL_RE.fullmatch(model):
+        return f"stages.{name}: account must be local:<model>, a model name like \"local:gemma4:e4b\""
+    return None
 
 
 def _pod_path_error(label, v, root):

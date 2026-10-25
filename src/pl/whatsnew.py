@@ -174,7 +174,9 @@ ENTRIES = [
        "[stages.run.small] max_lines = 60"),
     _e("2026-10-25.19", "pl-plan files later slices as Plan N slice M with plan metadata",
        "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
-    _e("2026-10-25.20", "One plan at a glance: pl list --plan N lists that plan's cards in slice order",
+    _e("2026-10-25.20", "Stages wait for folder trust instead of starting a stuck Claude agent",
+       "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
+    _e("2026-10-25.21", "One plan at a glance: pl list --plan N lists that plan's cards in slice order",
        "Done cards included; the Product board is skipped", "pl list --plan 21"),
 ]
 
