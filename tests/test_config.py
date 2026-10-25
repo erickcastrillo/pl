@@ -261,8 +261,9 @@ def test_builtin_review_prompt_keeps_every_outcome_visible_to_pl(fake_home):
     assert p == ("/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready-for-review "
                  "rework=pl:needs-rework failed=pl:review-failed")
     rules = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    assert "| Review passes | remove `<review>`, add `<ready>` |" in rules
-    assert ("| Review finds problems | post them as one PR comment in plain words, remove `<review>`, "
+    assert "remove `<review>`, add `<ready>` and `pl:merge-ready`." in rules
+    assert "| Review passes & Requires Human Review" in rules
+    assert ("| Review finds problems | post problems as one PR comment in plain words, remove `<review>`, "
             "add both `<ready>` and `<rework>` |") in rules
     assert ("| Review cannot run | comment why, remove `<review>`, add `<failed>`; "
             "a person decides, then adds `<review>` back |") in rules
