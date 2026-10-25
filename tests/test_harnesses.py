@@ -893,3 +893,15 @@ def test_claude_launch_uses_strict_mcp_config_with_only_team_servers(fake_home, 
     assert len(mcp) == 1 and "--strict-mcp-config" in argv
     servers = json.loads(open(mcp[0].split("=", 1)[1]).read())["mcpServers"]
     assert list(servers) == ["docs"]
+
+
+def test_every_builtin_harness_has_a_login_command():
+    assert set(harnesses.LOGIN) == set(harnesses.BUILTINS)
+    for n, b in harnesses.BUILTINS.items():
+        assert harnesses.login_argv(harnesses.get(n))[0] == b.bin
+
+
+def test_login_argv_is_empty_for_an_unknown_harness():
+    h = harnesses.BUILTINS["claude"]
+    assert harnesses.login_argv(type("H", (), {"name": "mine"})()) == []
+    assert harnesses.login_argv(h) == ["claude", "/login"]
