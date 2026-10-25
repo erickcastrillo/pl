@@ -8,10 +8,12 @@ is not part of the document; `src/pl/jsonout.py` (`SHAPES`) maps each command to
 `pl list --json` (`--all` includes Done; `--product` leaves out `pipeline`)
 
 ```
-{"pipeline": [{"id", "title", "column", "agent", "age_seconds"}], "intake": [same keys]}
+{"pipeline": [{"id", "title", "column", "agent", "depends_on": [], "waiting_on": [], "age_seconds"}],
+ "intake": [{"id", "title", "column", "agent", "age_seconds"}]}
 ```
 
-`agent` is the short phrase `pl list` shows. `intake` is empty when no intake board is configured.
+`agent` is the short phrase `pl list` shows. `depends_on` lists the card ids a pipeline card waits for, and `waiting_on` the ones
+not yet in Done (or dropped); both are empty when there are none. `intake` is empty when no intake board is configured.
 
 ## card
 `pl card <id> --json`
