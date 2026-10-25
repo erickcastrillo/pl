@@ -163,6 +163,9 @@ ENTRIES = [
     _e("2026-10-25.15", "pl e2e: your repo's Playwright tests in a throwaway Multipass VM",
        "set up from the repo's .pl/e2e.yaml; ~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
        "pl e2e --help. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
+    _e("2026-10-25.16", "Install skills and plugins from GitHub, pinned and reviewed",
+       "every file is listed, code that runs is flagged, the commit is pinned and recorded; pl skills remove names the stages "
+       "and loops that used a skill", "pl skills install github:owner/repo --dry-run"),
 ]
 
 

@@ -772,7 +772,7 @@ def _cmd_enable(a):
 
 
 def cmd_skills(a):
-    """pl skills list [--json] | install SOURCE | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable."""
+    """pl skills list [--json] | install SOURCE | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | remove NAME [--yes] | enable."""
     if a.skills_cmd == "enable":
         return _cmd_enable(a)
     if a.skills_cmd == "reset":
@@ -780,6 +780,9 @@ def cmd_skills(a):
     if a.skills_cmd == "install":
         from pl import skill_sources
         return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name)
+    if a.skills_cmd == "remove":
+        from pl import skill_sources
+        return skill_sources.remove(a.name, a.yes, sys.stdout)
     if a.skills_cmd == "share":
         print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":

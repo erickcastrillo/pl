@@ -182,7 +182,10 @@ def _record(lib, name, entry):
         except (OSError, ValueError):
             rec = {}
         rec = rec if isinstance(rec, dict) else {}
-        rec[name] = entry
+        if entry is None:
+            rec.pop(name, None)
+        else:
+            rec[name] = entry
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -263,4 +266,60 @@ def install(text, yes, out, dry_run=False, name=None):
     print(f"installed {name} into {skills.library() / name}", file=out)
     for line in skills.install_in_all_harnesses(name):
         print(line, file=out)
+    return 0
+
+
+def _prompt_uses(prompt, name):
+    m = re.fullmatch(r"(?:/loop\s+.*?\s)?/(?:pl:)?([\w.-]+)(?:\s.*)?", str(prompt or "").strip(), re.S)
+    return bool(m) and m.group(1) == name
+
+
+def users(name):
+    """['stage plan', 'loop nightly', ...]: what is set to run skill `name`."""
+    from pl import pods
+    found = [f"stage {s}" for s, p in C.PROMPTS.items() if _prompt_uses(p, name)]
+    loops = {**C.LOOPS_OFF, **C.SERVICES}
+    found += [f"loop {n}" for n, v in sorted(loops.items()) if _prompt_uses(v.get("prompt"), name) or v.get("skill") == name]
+    found += [f"pod {n}" for n in sorted(C.PODS) if name in (pods.find(n) or {}).get("skills", [])]
+    return found
+
+
+def _unlink_from_accounts(lib, name):
+    target = os.path.realpath(lib / name)
+    for _, root in skills.sources():
+        link = root / "skills" / name
+        if link.is_symlink() and os.path.realpath(link) == target:
+            link.unlink()
+
+
+def remove(name, yes, out):
+    """Unlink an installed skill from every account, move its folder to the library's trash, drop its record and
+    say which stages and loops used it. Returns the exit code: 0 done (or declined), 2 refused."""
+    lib = skills.library()
+    if name not in records():
+        print(f"pl skills remove: {name!r} was not installed from GitHub; built-in skills use reset, your own skills the console's delete",
+              file=sys.stderr)
+        return 2
+    if not yes and not sys.stdin.isatty():
+        print("pl skills remove: no terminal to confirm on; add --yes", file=sys.stderr)
+        return 2
+    used = users(name)
+    if not yes:
+        try:
+            ok = input(f"Remove {name} from {lib}?" + (f" Used by: {', '.join(used)}." if used else "") + " [y/N]: ")
+        except EOFError:
+            ok = ""
+        if ok.strip().lower() not in ("y", "yes"):
+            print("nothing removed", file=out)
+            return 0
+    skills._check_name(name)
+    trash = lib / ".pl-trash"
+    trash.mkdir(exist_ok=True, mode=0o700)
+    _unlink_from_accounts(lib, name)
+    if os.path.lexists(lib / name):
+        os.rename(lib / name, skills._stamp(trash / name))
+    _record(lib, name, None)
+    print(f"removed {name}", file=out)
+    if used:
+        print(f"used by: {', '.join(used)}", file=out)
     return 0
