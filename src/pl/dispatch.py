@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, manager, memory, move_agent, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
+from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, local_jobs, manager, memory, move_agent, pods, questions, recall, rework, schedule, skills, summary, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -23,7 +23,7 @@ from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
 from pl.trackers.github import OverBudget, RateLimited, limited
-from pl.util import age, cmd_id, load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
+from pl.util import BadInput, age, cmd_id, load_state, notify, now_iso, parse_iso, save_state, short_id, slug_of, tmux
 
 
 def has_design(c):
@@ -318,6 +318,14 @@ def memory_arg(c, stage, dry):
 
 
 def start_worker(c, stage, attempts, dry):
+    if C.is_local_account((C.STAGES.get(stage) or {}).get("account")):
+        if why := C.local_stage_problem(stage, C.STAGES[stage]):
+            raise BadInput(why)
+        if dry:
+            print(f"  would run {stage} for {c['id']} on {C.STAGES[stage]['account']}")
+            return
+        local_jobs.run_stage(c, stage, C.STAGES[stage]["account"][len(C.LOCAL_PREFIX):], attempts)
+        return
     if (C.STAGES.get(stage) or {}).get("reader"):
         if dry:
             print(f"  would run reader for {c['id']}")
@@ -1472,6 +1480,8 @@ def cmd_dispatch(a):
             noted = e.until
         except SystemExit as e:
             print(f"pass failed: {e}", file=sys.stderr)
+            if a.once and isinstance(e, BadInput):
+                raise
             if not a.dry_run:
                 summary.mark_failed(str(e))
             if isinstance(e, RateLimited) and (why := alerts.open(

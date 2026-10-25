@@ -3,10 +3,11 @@ job's named fallback (skip, person, or a cloud account). Every call leaves one l
 the job, model, time and outcome, and never the prompt or the answer. The model's answer is untrusted data."""
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from pl import board, harnesses, ideas, local_model
+from pl import board, events, harnesses, ideas, local_model
 from pl import config as C
 from pl.util import now_iso
 
@@ -129,3 +130,58 @@ def card_summary(card) -> str | None:
     parts = [(k, v) for k, v in board.sections(card.get("description")).items() if k]
     body = f"{card.get('title') or ''}\n\n{parts[-1][1] if parts else card.get('description') or ''}".strip()
     return run("summarise", body)[0]
+
+
+STAGE_FORMAT = ' Reply with JSON only: {"section": "<the text of the section>", "done": <true when it is complete>}.'
+STAGE_SCHEMA = {"section": ("str", 256 * 1024)}
+
+
+def _stage_instructions(stage) -> str:
+    """The stage's skill text from the library when its prompt names one, else the prompt itself."""
+    from pl import skills
+    prompt = C.PROMPTS.get(stage) or ""
+    m = re.match(r"\s*/([a-z0-9][a-z0-9-]*)", prompt)
+    f = skills.library() / m.group(1) / "SKILL.md" if m else None
+    return f.read_text() if f and f.is_file() else prompt
+
+
+def _stage_answer(c, stage, model, s) -> dict:
+    card = "\n\n".join(f"## {k}\n{v}" for k, v in board.sections(c.get("description")).items() if k)
+    obj = _ask_local(model, s, _stage_instructions(stage) + STAGE_FORMAT, f"{c.get('title') or ''}\n\n{card}")
+    if not isinstance(obj, dict):
+        raise ValueError("bad answer")
+    if why := validate(obj, STAGE_SCHEMA) or (None if isinstance(obj.get("done"), bool) else "schema: done is not true or false"):
+        raise ValueError(why)
+    return obj
+
+
+def run_stage(c, stage, model, attempts=1) -> bool:
+    """Run a tool-free stage on a local model: write its section through pl section's writer and, when the model says
+    it is done, move the card on. Any failure leaves the card for a person; True when the stage finished."""
+    from pl import commands
+    s, started = local_model.job_settings(), time.monotonic()
+    done, why = False, local_model.url_problem(s["host"], s["allow_lan"] is True) or ""
+    if not why:
+        local_model.warn_if_lan()
+        try:
+            obj = _stage_answer(c, stage, model, s)
+        except ValueError as e:
+            why = str(e)
+        except Exception as e:  # noqa: BLE001 - whatever the call raises leaves the card for a person
+            why = _failure(e)
+        else:
+            try:
+                commands.write_section(c["id"], stage.upper(), obj["section"])
+                done = obj["done"]
+            except SystemExit as e:
+                why = str(e.code)[:200]
+    record(f"stage:{stage}", model, round((time.monotonic() - started) * 1000), not why, "person" if why else None, why)
+    target = (C.STAGES.get(stage) or {}).get("done_at") or C.STAGE_DONE_AT.get(stage)
+    if why:
+        events.emit("local_stage_failed", c["id"], stage=stage, model=model, why=why)
+    if done and target:
+        board.update(c["id"], metadata={"worker": None})
+        commands.move_to(c["id"], target)
+        return True
+    board.update(c["id"], metadata={"worker": {"stage": stage, "attempts": attempts}})   # counted, so a stuck stage ends at MAX_ATTEMPTS
+    return False
