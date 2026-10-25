@@ -1,7 +1,7 @@
 ---
 name: pl-plan
 description: Turn a pl card's approved SPEC (and DESIGN, if any) into a plan of small work packages with tests first and a minimum-change budget, write it as the card's PLAN section, and move the card to Plan for review. Use as the plan stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 4
+pl-builtin-version: 5
 ---
 
 # pl-plan: write the implementation plan for one card
@@ -50,10 +50,8 @@ record each decision you had to make in the plan, with the option you picked.
    Decisions and go on.
 
    The first line is for an independent slice, the second for a dependent one.
-
    - When two behaviours need the same new groundwork (a shared module, a config key), keep them in one slice, or put the groundwork alone in the first slice, at or under 60 lines, and say why in "Decisions". Groundwork over 60 lines means the split is by layer: redo it.
    - A slice that still needs another is the exception. Name it in one `Depends on: <slice>` line under the plan's Summary. A dependency is one step: a slice never depends on a slice that itself depends on another. Record it in the filed idea's title as "(after <id>)".
-
    - **Isolate high-impact changes into dedicated slices**:
      - **Database Migrations / Schema**: Place EF Core migrations and SQL schema changes in their own dedicated slice. Tag it in the plan header: `Sensitivity: Migration (Requires Human Review)`. Never mix schema migrations with large business logic.
      - **Data Mutations / Backfills**: Isolate data migrations, backfill jobs, or destructive purge routines in their own slice. Tag it: `Sensitivity: Data Changes (Requires Human Review)`.
@@ -96,6 +94,17 @@ Why this is the smallest change that meets the spec, in one or two sentences.
 - Acceptance criteria: which AC-n from the spec this package proves, and how to check it.
 
 ### WP2: ...
+### WPn: End-to-end tests
+Last package. Only when the card changes what a user sees or does in the app (screens, flows, behaviour driven
+from the interface) and the repo has a Playwright suite (`playwright.config.*`) or a `.pl/e2e.yaml`. Check the repo.
+- Criteria: which AC-n get an end-to-end test.
+- Where: the test files to add or extend in the existing suite. Follow its folders, names, fixtures, login
+  helpers and baseURL.
+- Tests: one title per test that names its criterion, for example `AC-3: a coach sees the new roster`.
+- e2e.yaml: what `.pl/e2e.yaml` needs (a package, service, env var, seed or migration step), or "no change".
+  When it is missing but Playwright exists, this package writes it in the format below.
+When it does not apply, write one line in its place, such as "No end-to-end tests: back-end only change" or
+"No end-to-end tests: the repo has no Playwright suite".
 
 ## Later slices
 Only when the change is split: one line per later slice, starting with "independent" or "after <slice>", then what it builds. Leave out otherwise.
@@ -107,11 +116,33 @@ Only when the change is split: one line per later slice, starting with "independ
 - Anything that could break, and how the tests catch it. "None" when there are none.
 ```
 
+`.pl/e2e.yaml`, read by "pl e2e" to run the suite in a fresh virtual machine. Secrets are `${VAR}`, never values:
+
+```yaml
+version: 1
+packages: [docker.io, docker-compose-v2]   # apt
+env:
+  API_KEY: ${API_KEY}                      # read from the host, masked in logs
+setup:                                     # once, in order, from the repo root
+  - name: infra
+    run: sudo docker compose up -d db
+services:                                  # started in the background, polled until ready
+  - name: web
+    run: npm run start
+    ready: http://localhost:3000           # or tcp:5432
+tests:
+  dir: frontend
+  run: npx playwright test --trace=on --reporter=list,json
+  report: test-results/results.json
+artifacts: [frontend/playwright-report, frontend/test-results]
+```
+
 ## Rules
 
 - Every plan has exactly one `Depends on:` line: the card ids this card needs merged first, or `Depends on: none`. Write it at the start of the line, without bold or a list marker.
 - Every acceptance criterion in the spec maps to at least one work package.
 - Order the packages so each one leaves the tests green on its own.
+- The End-to-end tests package counts toward the budget like any other package.
 - A small fix is one package of one or two files. Do not split a small change into many packages.
 - No refactoring, renaming or clean-up the spec does not need. Note such things under "Risks" as follow-ups.
 - Every slice builds and passes the tests on the default branch without any other unmerged slice, unless its plan names one `Depends on` line.

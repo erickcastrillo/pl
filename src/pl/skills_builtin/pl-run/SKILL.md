@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 6
+pl-builtin-version: 7
 ---
 
 # pl-run: build the approved plan for one card
@@ -53,34 +53,28 @@ such choice in the pull request description.
    pl worktrees bootstrap "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" --card <id>
    ```
 
-   If bootstrap reports a missing file or a setup failure, proceed with the work packages using the
-   diagnostics it printed; do not stop.
+   If bootstrap reports a problem, carry on with the diagnostics it printed; do not stop.
 
-   If the branch or worktree already exists from an earlier attempt, reuse it where it is and continue where
-   it stopped. `git worktree list` shows where it is; an older one may be at `../<repo>-pl-<short-name>`.
-   Run every later command inside the worktree.
+   If the branch or worktree already exists from an earlier attempt, reuse it (`git worktree list` shows where; an
+   older one may be at `../<repo>-pl-<short-name>`) and continue where it stopped. Run every later command inside it.
 
-3. For each work package, in order:
+3. For each work package, in order (an "End-to-end tests" package comes last, as below):
    1. Write the tests the package lists. Run them and confirm they fail for the expected reason.
    2. Make the change the package describes, and nothing else.
    3. Run the package's tests until they pass, then the project's usual test and lint commands.
-   4. Check `git diff --stat` against the plan's "Minimum change" budget. If you went over, remove code
-      until you are back inside it.
+   4. Check `git diff --stat` against the plan's "Minimum change" budget; if over, remove code until inside it.
    5. Commit with a message that names the work package.
 
 4. When every package is done, run the full test suite once more.
-
-5. Count the change the way CI does. Lines are added plus deleted lines of every path outside `tests/`;
-   files are every changed file:
+5. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
 
    ```
    git diff --numstat origin/<default branch>...HEAD
    git diff --name-only origin/<default branch>...HEAD
    ```
 
-   Note the diff metrics. If the change is within target_lines and target_files, note that it qualifies
-   for auto-merge. If larger, note the metrics in the pull request description for standard review. Always
-   proceed to step 6 to push and open the pull request so downstream automated review and CI can run.
+   Note the diff metrics: within target_lines and target_files it qualifies for auto-merge; if larger, put the
+   metrics in the pull request description for standard review. Always go on to step 6 so review and CI can run.
 
 6. Push and open the pull request:
 
@@ -89,9 +83,9 @@ such choice in the pull request description.
    gh pr create --base <default branch> --title "<card title>" --body-file <file> --label <review label>
    ```
 
-   `<review label>` is the `review=<label>` argument. Leave out `--label` when there is none. The body says what changed, which acceptance
-   criteria it meets, how it was tested, and every choice you made where the plan was unclear. Put the card
-   id in the body.
+   `<review label>` is the `review=<label>` argument; leave out `--label` when there is none. The body says what
+   changed, which acceptance criteria it meets, how it was tested, and every choice you made where the plan was
+   unclear, with the card id.
 
 7. Move the card and record the pull request on it:
 
@@ -100,6 +94,15 @@ such choice in the pull request description.
    ```
 
    Moving the card is what tells the dispatcher the run is done. Then stop.
+
+## End-to-end tests package
+
+Build it last, once every other package passes. Write the Playwright tests the plan lists against the code you built,
+each titled by its criterion; they need not fail first. Use roles, labels or test ids; add test ids to the new interface
+if needed. Update `.pl/e2e.yaml` if the plan says so. Run the tests only when the repo's documented setup starts the app
+cheaply; else prove they compile and are found (`npx tsc --noEmit`, `npx playwright test --list`). Never run "pl e2e":
+it starts a virtual machine for many minutes; a person runs it. In the pull request body add an "End-to-end" section:
+each test file and title with its criterion, and "pl e2e <repo path> --ref pl/<short-name>"; or why there are none.
 
 ## Rework mode
 
@@ -115,19 +118,17 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
    ```
 
    Every problem it lists as still open is the work. Findings it says are fixed need nothing.
-3. Do not make a new branch or a new pull request. Reuse the branch's worktree (`git worktree list`), or add
-   one from `origin/<branch>` in `$PL_WORKTREES_DIR` and bootstrap it with `pl worktrees bootstrap <worktree path> --card <id>`. `git fetch origin`, then merge the pull request's base
-   branch into it (a merge, never a rebase or force-push) and resolve conflicts, so it stays mergeable.
+3. Make no new branch or pull request. Reuse the branch's worktree (`git worktree list`), or add one from
+   `origin/<branch>` in `$PL_WORKTREES_DIR` and run `pl worktrees bootstrap <worktree path> --card <id>`. `git fetch
+   origin`, then merge the pull request's base branch into it (never rebase or force-push), resolving conflicts.
 4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.
    Where a finding is marked unsure or is a product call, pick the safer behaviour and say so. When a finding
    is caused by code on the default branch that another card is fixing, leave it and name that card.
 5. Run the project's usual test and lint commands, then push to the same branch (no force-push).
-6. Post one comment on each pull request you fixed that starts with "Rework round N" and lists each finding
-   and what you changed for it, or why you did not.
-7. Send each fixed pull request back to review: remove the `rework_label` and `ready` labels and add the
-   `review` label. `gh pr edit --add-label/--remove-label` works; when it fails, use the REST API
-   (`gh api -X DELETE repos/<owner>/<repo>/issues/<number>/labels/<label>`, and
-   `gh api -X POST repos/<owner>/<repo>/issues/<number>/labels -f 'labels[]=<label>'`).
+6. Comment on each pull request you fixed, starting "Rework round N": each finding and what you changed, or why not.
+7. Send each fixed pull request back to review: remove the `rework_label` and `ready` labels and add the `review`
+   label (`gh pr edit --add-label/--remove-label`; when it fails, `gh api -X DELETE
+   repos/<owner>/<repo>/issues/<number>/labels/<label>` and `gh api -X POST .../labels -f 'labels[]=<label>'`).
 8. Move the card back: `pl move <id> "PR open"` (no `--pr`: the pull requests are recorded). Then stop.
 
 When the card has a stack of pull requests (each one's base is the branch of the one before), work bottom-up:
@@ -137,9 +138,8 @@ to the top, then push every branch. Merge the default branch only into the botto
 ## When the plan is wrong
 
 If a package cannot be built as written (a file does not exist, or a test cannot pass without breaking
-another), do the smallest change that keeps to the spec, and explain it in the pull request. If the whole
-plan cannot work, do not open a pull request: leave the card where it is and write why at the end of your
-session. A person will see the failed agent and decide.
+another), do the smallest change that keeps to the spec, and explain it in the pull request. If the whole plan
+cannot work, open no pull request: leave the card where it is and write why at the end of your session.
 
 ## Rules
 

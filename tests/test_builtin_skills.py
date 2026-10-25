@@ -482,7 +482,7 @@ def test_a_broken_state_file_never_crashes_install(lib, shipped):
     (lib / ".pl-builtin.json").write_text(json.dumps(st))
     _bump(shipped, "pl-plan")
     out = skills.install_builtins()
-    assert any(m.startswith("updated built-in pl-plan to version") for m in out)
+    assert f"updated built-in pl-plan to version {skills._builtin('pl-plan')[1]}" in out
     (lib / ".pl-builtin.json").write_text('["not", "a", "dict"]')
     skills.install_builtins()
 
@@ -604,6 +604,25 @@ def test_skills_keep_pull_requests_small():
     assert "restate" in review
 
 
+def _flat(name):
+    return " ".join((skills.BUILTIN_DIR / name / "SKILL.md").read_text().split())
+
+
+def test_pl_plan_adds_an_end_to_end_tests_package_or_says_why_not():
+    plan = _flat("pl-plan")
+    for words in ("End-to-end tests", "playwright.config", ".pl/e2e.yaml", "AC-3:", "${VAR}", "No end-to-end tests:"):
+        assert words in plan, words
+    assert skills._builtin("pl-plan")[1] >= 3
+
+
+def test_pl_run_builds_the_end_to_end_package_last_and_never_runs_pl_e2e():
+    run = _flat("pl-run")
+    for words in ("End-to-end tests", "last", "npx playwright test --list", 'Never run "pl e2e"', '"End-to-end" section',
+                  '"pl e2e <repo path> --ref pl/<short-name>"', ".pl/e2e.yaml", "test ids"):
+        assert words in run, words
+    assert skills._builtin("pl-run")[1] >= 5
+
+
 def test_a_bare_loop_prompt_of_a_library_skill_gets_the_plugin_name(lib, monkeypatch):
     skills.install_builtins()
     monkeypatch.setattr(C, "PROFILES", {"a": lib.parent / "acct"})
@@ -642,7 +661,7 @@ def test_pl_plan_splits_into_independent_slices():
                    "(after <id>)"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 4" in text
+    assert "pl-builtin-version: 5" in text
 
 
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
