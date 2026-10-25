@@ -87,3 +87,40 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 {"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
 ```
 `ok` is `true`, `false`, or `null` for a rule not checked yet.
+
+## manager-status
+`pl manager status --json`
+
+```
+{"running": bool, ...the manager's status.json: "at", "pid", "hold", "profiles": [{"name", "running", ...}]}
+```
+`{"running": false}` alone when no manager is running.
+
+## local-model
+`pl local-model --json` (exit 0 when `ok`, else 1)
+
+```
+{"enabled": bool, "url", "model", "ok": bool, "detail"}
+```
+
+## whatsnew
+`pl whatsnew --json`
+
+```
+{"entries": [{"key", "title", "where", "try"}]}
+```
+
+## skills-list
+`pl skills list --json`
+
+```
+{"skills": [{"name", "account", "kind", "origin", "in_library": bool, "linked": ["account"], "description", "source"?}], "library"}
+```
+`source` (where the skill was installed from) appears only for library skills installed with `pl skills install`.
+
+## update-check
+`pl update --check --json`
+
+```
+{"version", "enabled": bool, "latest": "vX.Y.Z" | null, "update_available": bool}
+```

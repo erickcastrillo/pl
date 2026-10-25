@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from pl import config as C
-from pl import harnesses, pods
+from pl import harnesses, jsonout, pods
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,48}")
 KINDS = {"skill": "skills", "agent": "agents", "command": "commands"}
@@ -817,9 +817,10 @@ def cmd_skills(a):
     elif getattr(a, "json", False):
         from pl import skill_sources
         rec = skill_sources.records()
-        from pl import jsonout
-        jsonout.emit([{**i, **({"source": rec[i["name"]]} if i["name"] in rec and (i["account"] == LIBRARY or i["library"]) else {})}
-                      for i in scan()])
+        jsonout.emit({"skills": [{"name": i["name"], "account": i["account"], "kind": i["kind"], "origin": i["origin"],
+                                  "in_library": i["library"], "linked": i["linked"], "description": i["description"],
+                                  **({"source": rec[i["name"]]} if i["name"] in rec and (i["account"] == LIBRARY or i["library"]) else {})}
+                                 for i in scan()], "library": str(library())})
     else:
         rows = [(i["name"], i["account"], i["kind"], i["origin"],
                  ", ".join(i["linked"]) if i["account"] == LIBRARY else ("library" if i["library"] else ""),

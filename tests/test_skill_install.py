@@ -157,7 +157,7 @@ def test_list_json_shows_the_source(env, capsys):
     import argparse
     a = argparse.Namespace(skills_cmd="list", json=True)
     assert skills.cmd_skills(a) == 0
-    rows = json.loads(capsys.readouterr().out)
+    rows = json.loads(capsys.readouterr().out)["skills"]
     row = next(r for r in rows if r["name"] == "review")
     assert row["source"]["repo"] == "acme/kit" and row["source"]["sha"] == SHA
 
