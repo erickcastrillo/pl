@@ -219,6 +219,13 @@ def test_fix_does_not_rename_into_a_slot_another_card_holds(board, capsys):
     assert "00000001" in out and "fix by hand" in out
 
 
+def test_fix_does_not_write_metadata_into_a_slot_a_done_card_holds(board, capsys):
+    board.items = [mk(1, "Plan 5 slice 2: old work", col="Done", plan=5, slice=2), mk(2, "Plan 5 slice 2: again")]
+    code, out, _ = check(capsys, fix=True)
+    assert code == 1 and board.writes == []
+    assert "00000002" in out and "fix by hand" in out
+
+
 def test_fix_rename_keeps_80_chars_and_whole_words(board, capsys):
     words = ("alpha " * 17).split()
     board.items = [mk(1, " ".join(words), plan=3, slice=2)]

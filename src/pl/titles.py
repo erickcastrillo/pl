@@ -139,10 +139,11 @@ def cmd_titles(a):
         return set_plan(a.id, a.plan, a.slice)
     if a.dry_run and not a.fix:
         raise SystemExit("pl titles check: --dry-run goes with --fix")
-    cs = [c for c in _read_cards() if board.col_name(c["list_id"]) != "Done"]
+    every = _read_cards()
+    cs = [c for c in every if board.col_name(c["list_id"]) != "Done"]
     rows = drift(cs)
     if a.fix:
-        rows = fix_rows(rows, cs, a.dry_run)
+        rows = fix_rows(rows, every, a.dry_run)
         if a.json:
             print(json.dumps(rows, indent=2))
         elif not rows:
