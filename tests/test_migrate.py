@@ -7,7 +7,7 @@ import sys
 import pytest
 import tomlkit
 
-from pl import agents, migrate, trackers
+from pl import agents, boardcheck, migrate, trackers
 from pl import config as C
 
 
@@ -156,11 +156,12 @@ def boards(profile, monkeypatch):
     monkeypatch.setattr(trackers, "get", lambda kind: src)
     monkeypatch.setattr(migrate, "_build", lambda cfg: dst)
     monkeypatch.setattr(agents, "registry", lambda: {})
+    monkeypatch.setattr(boardcheck, "check", lambda t: [{"id": "R1", "text": "ok", "ok": True, "reason": None}])
     return src, dst
 
 
 def args(**kw):
-    base = dict(action="migrate", to="local", board=None, mcp_config=None, token_env=None, yes=True, dry_run=False, json=False)
+    base = dict(action="migrate", to="local", board=None, mcp_config=None, token_env=None, yes=True, dry_run=False, json=False, skip_check=False)
     return argparse.Namespace(**{**base, **kw})
 
 
@@ -245,3 +246,52 @@ def test_target_cfg_forms(profile, tmp_path, monkeypatch):
     assert named == {"type": "mcp", "protocol": "pl", "mcp_config": str(tmp_path / "m.json"), "server": "hub"}
     with pytest.raises(SystemExit):
         migrate.target_cfg("hub", args())
+
+
+FAILING = [{"id": "R1", "text": "a card round-trips", "ok": True, "reason": None},
+           {"id": "R4", "text": "metadata survives", "ok": False, "reason": "dropped k"}]
+
+
+def test_a_target_that_fails_board_check_copies_nothing(boards, profile, monkeypatch, capsys):
+    monkeypatch.setattr(boardcheck, "check", lambda t: FAILING)
+    with pytest.raises(SystemExit) as e:
+        migrate.cmd_migrate(args())
+    assert e.value.code == 1
+    err = capsys.readouterr().err
+    assert "FAIL R4 metadata survives: dropped k" in err and "PASS R1" not in err
+    assert boards[1].cards() == [] and boards[1].columns() == {}
+    assert (profile / "config.toml").read_text() == OLD
+
+
+def test_the_lossy_server_from_board_check_stops_the_migration(profile, tmp_path, monkeypatch, capsys):
+    from test_tracker_mcp import PROTO_SERVER
+    script = tmp_path / "proto_board_server.py"
+    script.write_text(PROTO_SERVER)
+    mcp_config = tmp_path / "mcp.json"
+    mcp_config.write_text(json.dumps({"mcpServers": {"lossy": {
+        "command": sys.executable, "args": [str(script)], "env": {"LOSSY": "1"}}}}))
+    monkeypatch.setattr(trackers, "get", lambda kind: seeded(3))
+    monkeypatch.setattr(agents, "registry", lambda: {})
+    from pl.trackers import mcp
+    monkeypatch.setattr(mcp, "_secrets", set())   # the server's env values ("1") would mask later tests' output
+    with pytest.raises(SystemExit) as e:
+        migrate.cmd_migrate(args(to="lossy", mcp_config=str(mcp_config), board="b-1"))
+    assert e.value.code == 1
+    assert "FAIL R4" in capsys.readouterr().err
+    assert (profile / "config.toml").read_text() == OLD
+
+
+def test_skip_check_copies_without_running_the_rules(boards, profile, monkeypatch):
+    def not_called(t):
+        raise AssertionError("the check ran")
+    monkeypatch.setattr(boardcheck, "check", not_called)
+    migrate.cmd_migrate(args(skip_check=True))
+    assert len(boards[1].cards()) == 50
+
+
+def test_dry_run_prints_the_check_results_with_the_plan(boards, profile, monkeypatch, capsys):
+    monkeypatch.setattr(boardcheck, "check", lambda t: FAILING)
+    migrate.cmd_migrate(args(dry_run=True, yes=False))
+    out = capsys.readouterr().out
+    assert "PASS R1 a card round-trips" in out and "FAIL R4 metadata survives: dropped k" in out
+    assert "would copy card" in out and boards[1].cards() == []
