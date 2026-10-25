@@ -142,9 +142,17 @@ def test_conflict_keeps_local_saves_remote_edit_and_alerts(world):
     assert got["title"] == "mine" and edit["value"] == "theirs" and edit["at"]
     [alert] = alerts.listing()
     assert alert["key"] == f"sync-conflict:{lid}" and "title" in alert["title"]
-    assert f"pl sync resolve {lid} --keep remote" in alert["fix"]
+    assert "sync resolve" not in alert["fix"] and "remote_edit" in alert["fix"]
     assert outbox.entries()[0]["fields"] == {"description": "keep"}
     assert r["conflicts"] == [lid] and r["pulled"] == 0
+
+
+def test_later_local_edit_after_conflict_stays_queued(world):
+    local, lid, fake = _conflict(world)
+    sync.pull()
+    outbox.append(lid, "update", {"title": "mine again"})
+    sync.pull()
+    assert outbox.entries()[-1]["fields"] == {"title": "mine again"}
 
 
 def test_conflict_when_local_changed_after_last_sync(world):

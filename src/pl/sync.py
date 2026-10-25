@@ -267,10 +267,10 @@ def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
     if new:
         local.update(lid, verify=True, metadata={"remote_edit": {**held, **new}})
         out["conflicts"].append(lid)
-    outbox.strip(lid, set(clash))
+    outbox.strip(lid, set(new))
     alerts.open(f"sync-conflict:{lid}", "high",
                 f"card {lid} changed on GitHub and here: {', '.join(sorted({**held, **new}))}",
-                f"pl sync resolve {lid} --keep remote   (or --keep local)")
+                f"edit the card here to match GitHub if you want theirs, then clear metadata.remote_edit with pl card {lid}")
 
 
 def local_id(token):
