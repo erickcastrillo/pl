@@ -10,7 +10,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pl import audit, connectors
+from pl import alerts, audit, connectors, outbound, outward
+from pl.util import now_iso
 
 
 def is_write_forbidden(connector: str, tool: str) -> bool:
@@ -173,17 +174,48 @@ class Forbidden(Exception):
     pass
 
 
+def _read_write(name: str) -> bool:
+    return (connectors.get(name) or {}).get("access") == "read-write"
+
+
 def visible_tools(name: str) -> list[dict]:
-    return [t for t in connectors.tools(name) if not t.get("write")]
+    write_ok = _read_write(name)
+    return [t for t in connectors.tools(name) if write_ok or not t.get("write")]
 
 
-def proxy_call(name: str, tool: str, args: dict | None):
-    if tool not in {t["name"] for t in visible_tools(name)}:
+def _gate_approved(card_id: str | None, stage: str | None) -> bool:
+    from pl import board
+    if not (card_id and stage):
+        return False
+    board.fresh_next()
+    return stage in ((board.find_card(card_id).get("metadata") or {}).get("gates") or {})
+
+
+def _queue(name: str, tool: str, args: dict | None, card_id: str | None) -> str:
+    with outbound._locked_queue() as items:
+        items.append({"id": f"out-{name}-{tool}-{len(items)}", "card": card_id, "connector": name, "tool": tool,
+                      "args": args or {}, "not_before": 0, "status": "queued", "created_at": now_iso()})
+    return "queued: the kill switch is on"
+
+
+def proxy_call(name: str, tool: str, args: dict | None, card: str | None = None, stage: str | None = None):
+    listed = {t["name"]: t for t in connectors.tools(name)}
+    if not listed.get(tool, {"write": True}).get("write"):
+        return connectors.call(name, tool, args, mode="stage")
+    if not _read_write(name):
+        alerts.open(f"connector_forbidden:{name}:{stage}", "warn", "a stage tried to write through a read-only connector",
+                    f"set access = \"read-write\" on connector {name} if stage {stage} should write")
         raise Forbidden(f"forbidden: {tool} is not available on connector {name}")
+    if tool not in listed:
+        raise Forbidden(f"forbidden: {tool} is not available on connector {name}")
+    if not _gate_approved(card, stage):
+        raise Forbidden("gate_required: approve the card's gate first")
+    if outward.state().get("on"):
+        return _queue(name, tool, args, card)
     return connectors.call(name, tool, args, mode="stage")
 
 
-def build_server(name: str):
+def build_server(name: str, card: str | None = None, stage: str | None = None):
     from mcp import types
     from mcp.server.lowlevel import Server
     server = Server(f"pl-{name}")
@@ -195,16 +227,16 @@ def build_server(name: str):
 
     @server.call_tool()
     async def _call(tool, args):
-        return [types.TextContent(type="text", text=str(await asyncio.to_thread(proxy_call, name, tool, args)))]
+        return [types.TextContent(type="text", text=str(await asyncio.to_thread(proxy_call, name, tool, args, card, stage)))]
 
     return server
 
 
-def serve(name: str) -> None:
+def serve(name: str, card: str | None = None, stage: str | None = None) -> None:
     from mcp.server.stdio import stdio_server
 
     async def _run():
-        server = build_server(name)
+        server = build_server(name, card, stage)
         async with stdio_server() as (r, w):
             await server.run(r, w, server.create_initialization_options())
     asyncio.run(_run())
