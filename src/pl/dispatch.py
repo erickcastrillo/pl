@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, trackers, usage
+from pl import accounts, alerts, board, events, ghquota, harnesses, manager, memory, move_agent, rework, summary, trackers, usage
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, trust_wait, worker_status)
@@ -813,6 +813,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     if not dry:
         check_alerts(all_cards, failed, st)
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
+        summary.write(summary.build(all_cards, reg, time.time()))
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
 
@@ -1106,6 +1107,8 @@ def cmd_dispatch(a):
             noted = e.until
         except SystemExit as e:
             print(f"pass failed: {e}", file=sys.stderr)
+            if not a.dry_run:
+                summary.mark_failed(str(e))
             if isinstance(e, RateLimited) and (why := alerts.open(
                     "github_rate_limited", "warn", "GitHub rate limit: pl is backing off",
                     "pl waits out the back-off and tries again by itself; nothing to do")):
