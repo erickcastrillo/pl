@@ -6,6 +6,8 @@ import socket
 from pathlib import Path
 import tomllib
 
+from pl import schedule
+
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
@@ -145,10 +147,12 @@ def _apply(g, t):
     g["STAGES"] = dict(t.get("stages", {}))
     g["PROMPTS"] = {**g["PROMPTS"], **{s: v["prompt"] for s, v in g["STAGES"].items() if "prompt" in v}}
     if "loops" in t:
-        g["SERVICES"] = {n: {"prompt": v["prompt"], "profile": v.get("account"),
+        g["SERVICES"] = {n: {"prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""), "profile": v.get("account"),
                              **({"max_context": v["max_context"]} if "max_context" in v else {}),
-                             **({"pinned_only": True} if v.get("fallback") is False else {})} for n, v in t["loops"].items()
-                         if v.get("enabled", True) is not False}
+                             **({"pinned_only": True} if v.get("fallback") is False else {}),
+                             **{k: v[k] for k in ("every", "hours", "skill", "team") if k in v},
+                             **({"writes": v.get("writes", False)} if "every" in v or "writes" in v else {})}
+                         for n, v in t["loops"].items() if v.get("enabled", True) is not False}
         g["LOOPS_OFF"] = {n: dict(v) for n, v in t["loops"].items() if v.get("enabled", True) is False}
     ch = t.get("code_host", {})
     repos = [r for r in (ch.get("repos") if isinstance(ch.get("repos"), list) else []) if isinstance(r, str) and r]
@@ -347,8 +351,10 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: max_context must be a whole percent from 0 (off) to 100")
             if table == "loops" and not isinstance(v.get("fallback", True), bool):
                 errs.append(f"loops.{name}: fallback must be true or false")
-            if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or "").strip():
-                errs.append(f"loops.{name}: prompt is required")
+            if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or v.get("skill") or "").strip():
+                errs.append(f"loops.{name}: prompt or skill is required")
+            if table == "loops":
+                errs += _loop_schedule_errors(name, v)
             if accounts and v.get("account") and v["account"] not in accounts:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
@@ -359,6 +365,19 @@ def validate(doc) -> list[str]:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    return errs
+
+
+def _loop_schedule_errors(name, v) -> list[str]:
+    errs = []
+    for key, parse in (("every", schedule.parse_every), ("hours", schedule.parse_hours)):
+        if key in v:
+            try:
+                parse(v[key])
+            except ValueError as e:
+                errs.append(f"loops.{name}: {e}")
+    if not isinstance(v.get("writes", False), bool):
+        errs.append(f"loops.{name}: writes must be true or false")
     return errs
 
 

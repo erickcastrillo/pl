@@ -286,3 +286,30 @@ def test_validate_pr_size_limits_are_whole_numbers_and_auto_merge_fits_the_max()
     errs = C.validate(tomlkit.parse("[code_host]\npr_auto_merge_lines = 301\n"))
     assert any("code_host.pr_auto_merge_lines" in e for e in errs)
     assert C.validate(tomlkit.parse("[code_host]\npr_max_lines = 150\npr_auto_merge_files = 10\n")) == []
+
+
+def test_a_loop_takes_every_hours_skill_and_writes(fake_home):
+    d = _write(fake_home, "loopy", '[loops.chase]\nskill = "pl-billing-chase"\nevery = "weekdays 09:00"\nhours = "08:00-18:00 weekdays"\nwrites = true\nteam = "ops"\n')
+    C.load(config_dir=str(d))
+    s = C.SERVICES["chase"]
+    assert (s["prompt"], s["every"], s["hours"], s["skill"], s["writes"], s["team"]) == (
+        "/pl-billing-chase", "weekdays 09:00", "08:00-18:00 weekdays", "pl-billing-chase", True, "ops")
+
+
+def test_a_scheduled_loop_is_read_only_unless_it_says_otherwise(fake_home):
+    C.load(config_dir=str(_write(fake_home, "ro", '[loops.l]\nprompt = "p"\nevery = "30m"\n')))
+    assert C.SERVICES["l"]["writes"] is False
+
+
+def test_save_refuses_a_loop_with_a_bad_every():
+    import tomlkit
+    errs = C.validate(tomlkit.parse('[loops.l]\nprompt = "p"\nevery = "often"\nhours = "late"\nwrites = "yes"\n'))
+    assert any("loops.l: every" in e and "hourly" in e for e in errs)
+    assert any("loops.l: hours" in e for e in errs)
+    assert any("loops.l: writes" in e for e in errs)
+
+
+def test_a_skill_loop_needs_no_prompt():
+    import tomlkit
+    assert not [e for e in C.validate(tomlkit.parse('[loops.l]\nskill = "pl-x"\n')) if "prompt" in e]
+    assert any("prompt" in e for e in C.validate(tomlkit.parse('[loops.l]\naccount = "a"\n')))
