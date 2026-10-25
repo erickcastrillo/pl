@@ -2501,3 +2501,64 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
     assert calls == [("enabled", "invoices", False), ("run", "invoices"), ("window", "invoices"), ("remove", "invoices"),
                      ("edit", "invoices", {"every": "daily 09:30"})]
+
+
+async def _open_loop_form(app, pilot, monkeypatch):
+    from pl import skills
+    from pl.tui import loops as tui_loops
+    monkeypatch.setattr(skills, "scan", lambda: [{"name": "pl-billing-chase"}])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press("n")
+    await settle(pilot)
+    assert isinstance(app.screen, tui_loops.LoopForm)
+    return app.screen
+
+
+async def test_picking_a_template_fills_every_field_and_each_stays_editable(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-template").value = "overdue-invoices"
+        await settle(pilot)
+        template = loops.TEMPLATES["overdue-invoices"]
+        assert form.query_one("#loop-prompt").value == template["prompt"]
+        assert form.query_one("#loop-every").value == template["every"]
+        assert form.query_one("#loop-hours").value == template["hours"]
+        assert form.query_one("#loop-writes").value is False
+        form.query_one("#loop-every").value = "hourly"
+        form.query_one("#loop-name").value = "invoices"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "hourly", "hours": template["hours"],
+                                   "account": None, "team": None, "writes": False})]
+
+
+async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "Bad Name"
+        form.query_one("#loop-prompt").value = "do it"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm) and "a-z" in str(form.query_one("#loop-problem").render())
+        form.query_one("#loop-name").value = "ok"
+        form.query_one("#loop-every").value = "every tuesday"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        problem = str(form.query_one("#loop-problem").render())
+        assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
+    assert added == []
