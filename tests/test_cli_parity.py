@@ -45,10 +45,12 @@ def _wp2_expected(args, legacy):
         out = out.replace("  --profile {", "  --account {")
     if args[:1] == ["accounts"]:
         out = out.replace("usage: pl profiles", "usage: pl accounts")
+        out = out.replace("[-h] [--reset NAME|all]", "[-h] [--reset NAME|all] [--check-trust]")
+        out = out.replace("  --reset NAME|all", "  --check-trust         show whether each Claude account trusts the work and worktrees folders\n                        (reads only)\n  --reset NAME|all")
     if args[:1] == ["board"]:
         out = out.replace("usage: pl board [-h] action",
-                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check}")
-        out = out.replace("action\n", "{init,serve,check}\n")
+                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check,migrate}")
+        out = out.replace("action\n", "{init,serve,check,migrate}\n")
         flags = "  --stdio\n  --listen HOST:PORT\n  --token-env VAR\n"
         if "options:\n" in out:
             out = out.replace("options:\n", f"options:\n{flags}")
@@ -74,13 +76,21 @@ def _wp2_expected(args, legacy):
         out = out.replace("update,local-model}", "update,local-model,connectors}")   # pl connectors (machine-wide MCP servers)
         out = out.replace("local-model,connectors}", "local-model,connectors,inbox}")   # pl inbox
         out = out.replace("connectors,inbox}", "connectors,inbox,kill-switch}")
+        out = out.replace("local-model,connectors,inbox}", "local-model,connectors,models,inbox}")   # pl models
         out = out.replace("kill-switch}", "kill-switch,triggers}")   # pl triggers
         out = out.replace("triggers}", "triggers,question,answer}")   # pl question, pl answer
         out = out.replace("skills,update,", "skills,pods,update,")   # pl pods (list, show)
+        out = out.replace("skills,pods,update,", "skills,pods,loops,update,")   # pl loops (list, add, pause, resume, rm)
         out = out.replace("skills,update,local-model}", "skills,update,local-model,forget}")   # pl forget (removes a contact everywhere)
+        out = out.replace("local-model,forget}", "local-model,forget,memory}")   # pl memory (search, add, show)
+        out = out.replace("forget,memory}", "forget,memory,pipelines}")   # pl pipelines (list, show)
         out = out.replace(",board,card,section,", ",board,card,titles,section,")   # pl titles check (title/metadata drift)
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
-        out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all]\n")
+        out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all] [--check-trust]\n")
+        out = out.replace("under the other one); --reset un-parks a profile by hand\n",
+                          "under the other one); --reset un-parks a profile by hand\n"
+                          "                          --check-trust shows, per Claude account, whether the work folder and the worktrees folder\n"
+                          "                          are trusted, with the command to fix each one that is not\n")
         out = out.replace("usage: pl [-h]\n", "usage: pl [-h] [--profile NAME] [--version]\n", 1)
         out = out.replace("show this help message and exit\n",
                           "show this help message and exit\n  --profile NAME        " + PROFILE_HELP + "\n"

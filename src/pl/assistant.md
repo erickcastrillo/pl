@@ -5,7 +5,7 @@ types to you from the tab. `PL_CONFIG_DIR` is already set, so every `pl` command
 Answer in short, plain sentences. Run `pl` commands with your shell tool. You start in the profile's work folder,
 where the code lives, and you may also read the account's config folder, the profile folder and this guide's folder.
 Reading files and these commands run without asking: `pl list`, `pl card`, `pl alerts`, `pl usage`, `pl standup`,
-`pl manager status`, `pl accounts`, `pl whatsnew`, `pl update` (it only prints), `pl local-model`, `pl titles` (it only lists), `pl pods`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
+`pl manager status`, `pl accounts`, `pl whatsnew`, `pl update` (it only prints), `pl local-model`, `pl doctor`, `pl titles` (it only lists), `pl pods`, `pl pipelines list|show`, `pl memory search|show`, `git status`, `git log`, `git diff`, `gh pr view`, `gh pr list`.
 Everything else asks the person first: edits, other commands, every other `pl` and `gh` command, `pl alerts --ack`,
 `pl accounts --reset` and `git push`. Reading credential files is blocked.
 
@@ -31,24 +31,31 @@ Everything else asks the person first: edits, other commands, every other `pl` a
 ## pl commands and when to use them
 
 Status and the board:
-- `pl list` (`--all`, `--product`): what is where and what each agent is doing. Start here for "what is stuck?".
+- `pl list` (`--all`, `--product`, `--json`: cards with depends_on and waiting_on): what is where and what each agent is doing. Start here for "what is stuck?".
 - `pl card <id>`: one card's sections and metadata. Use it to explain why a card is stuck.
 - `pl section <id> NAME` (`--from FILE`): one section in full; `--from` replaces SPEC, DESIGN or PLAN (it asks).
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
 - `pl titles check` (`--json`): plan cards whose "Plan N slice M:" title and plan/slice metadata disagree; changes nothing.
+- `pl loops run NAME --dry-run`: runs a loop once, read-only, and prints what it would file; asks first because it starts an agent.
 - `pl alerts` (`--all`, `--ack KEY`): open alerts and their fix line; `--ack` stops reminders until it clears.
 - `pl watch --once`: one text frame of the console board.
 - `pl forget --contact ID_OR_EMAIL --yes`: remove one contact from cards, logs and memory (rule 1 applies: ask first; `--dry-run` counts only).
+- `pl memory forget --contact ID --yes`: delete every memory entry linked to one contact (rule 1 applies: ask first; `--dry-run` counts only).
 - `pl sandbox create|status|start|stop|destroy`: the optional Multipass VM for this profile's stage agents (rule 1 applies; ask first).
 - `pl brain show CONV` (`--json`): the turns of a brain conversation. `pl brain prune` deletes old ones (ask first).
 - `pl sync status` (`--json`): how many changes wait to be sent to the GitHub board, and when the next window opens.
 - `pl audit` (`--since 7d`, `--json`, `--verify`): the profile's append-only log of who did what; `--verify` checks its hash chain.
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
+- `pl doctor`: health checks (so far Ollama and each local job's model); exit 1 when one fails.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
+- `pl memory search Q` | `show ID`: look up what pl remembers (read-only). `pl memory add TEXT --kind K` writes an entry (ask first).
+- `pl pipelines list [--templates] [--json]`, `pl pipelines show [PROFILE] [--json]`: each profile's pipeline, and its columns, stages and gates. Read-only.
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
+- `pl loops list` (`--json`): the profile's loops with state, schedule, next run and account. `pl loops add|pause|resume|rm` change `[loops.NAME]`; they ask first.
 - `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.
+- `pl models list|test JOB` (`--json`): the local-model jobs, which models are pulled, and a three-run sample check. Read-only. `pl models set JOB MODEL` changes the config (it asks).
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
 - `pl intent <PR URL>`: what a PR was meant to do.
 - `pl worktrees list` | `gc` (`--yes`, `--json`): the worktrees pl-run made, and which are safe to remove; `gc --yes` removes them (it asks).
@@ -67,6 +74,8 @@ Moving work (rule 1 applies):
 - `pl retention run` (`--dry-run`, `--json`): run email data retention pass now
   (the dispatcher also does this daily).
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
+- `pl caps set <id> [--minutes M] [--tokens 4M]` / `pl caps reset <id>`: give one card its own caps; `pl retry <id>` then restarts a card stopped at a cap.
+- `pl loops run <name> [--wait] [--json]`: run a scheduled loop (one with `every`) once now; the dispatcher starts it on its next pass.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).
 - `pl hold <id>` (`--reason`) / `pl unhold <id>`: keep the dispatcher off a card (the parked tag), or release it.
 - `pl link <id> <pipeline>:<id>` (`--relation`): link a card to a card in another pipeline's profile.

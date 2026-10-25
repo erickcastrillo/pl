@@ -216,8 +216,8 @@ def test_parity_map_matches_spec():
            PARITY_MAP.get(("details", "dispatcher")) == "pl manager restart NAME"
 
 
-async def test_home_view_binding_i():
+async def test_home_view_binding_space():
     view = HomeView(selected_profile="sales")
-    binding = next((b for b in view.BINDINGS if b.key == "i"), None)
+    binding = next((b for b in view.BINDINGS if b.key == "space"), None)
     assert binding is not None
     assert binding.action == "details"

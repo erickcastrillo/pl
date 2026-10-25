@@ -416,9 +416,9 @@ def _standup_cli(monkeypatch, *flags):
 
 
 def test_summary_from_the_local_model_goes_above_the_standup(monkeypatch, capsys):
-    from pl import local_model
+    from pl import local_jobs
     seen = []
-    monkeypatch.setattr(local_model, "chat", lambda system, text, max_chars: seen.append(text) or ("Two PRs moved. All calm.", ""))
+    monkeypatch.setattr(local_jobs, "run", lambda job, text: seen.append(text) or ("Two PRs moved. All calm.", {}))
     _standup_cli(monkeypatch, "--summary")
     got = capsys.readouterr()
     assert got.out.startswith("Two PRs moved. All calm.\n\nStandup for t") and got.err == ""
@@ -426,8 +426,8 @@ def test_summary_from_the_local_model_goes_above_the_standup(monkeypatch, capsys
 
 
 def test_slack_summary_is_escaped(monkeypatch, capsys):
-    from pl import local_model
-    monkeypatch.setattr(local_model, "chat", lambda *a, **k: ("Ping <!channel> & <http://x|y>", ""))
+    from pl import local_jobs
+    monkeypatch.setattr(local_jobs, "run", lambda *a: ("Ping <!channel> & <http://x|y>", {}))
     _standup_cli(monkeypatch, "--summary", "--slack")
     assert capsys.readouterr().out.startswith("Ping &lt;!channel&gt; &amp; &lt;http://x|y&gt;\n\n*Standup")
 

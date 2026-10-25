@@ -134,7 +134,7 @@ class HelpScreen(ModalScreen):
     HelpScreen > Vertical { width: 100%; max-width: 96; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
     #help-body { height: 1fr; }
     """
-    BINDINGS = [Binding("escape", "close", "close"), Binding("question_mark", "close", "close", show=False)]
+    BINDINGS = [Binding("escape", "close", "close"), Binding("question_mark", "help", "close", show=False)]
 
     def __init__(self, title, about, keys):
         super().__init__()
@@ -147,6 +147,9 @@ class HelpScreen(ModalScreen):
                 yield Static(Text(self.about + "\n\n" + "\n".join(f"{k}  {what}" for k, what in self.keys)))
             yield Static(Text("esc close · the palette (ctrl+p) has What's new", style="dim"))
 
+    def action_help(self):
+        self.dismiss(None)
+
     def action_close(self):
         self.dismiss(None)
 
@@ -157,7 +160,7 @@ class UpdateScreen(ModalScreen):
     UpdateScreen { align: center middle; }
     UpdateScreen > Vertical { width: 100%; max-width: 120; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     """
-    BINDINGS = [Binding("c", "copy", "copy"), Binding("escape", "close", "close")]
+    BINDINGS = [Binding("y", "copy", "copy"), Binding("escape", "close", "close")]
 
     def __init__(self, note):
         super().__init__()
@@ -167,7 +170,7 @@ class UpdateScreen(ModalScreen):
         with Vertical():
             yield Static(Text(self.note or f"pl v{update.__version__}", style="bold"))
             yield Static(Text(update.HOW + update.COMMANDS))
-            yield Static(Text("c copy the commands · esc close · pl update prints them", style="dim"))
+            yield Static(Text("y copy the commands · esc close · pl update prints them", style="dim"))
 
     def action_copy(self):
         copy_text(self.app, update.COMMANDS)
@@ -206,7 +209,8 @@ class PlApp(App):
                 for i, (tid, name) in enumerate(TABS)] + [
         Binding(f"{mod}+{TAB_KEYS[tid]}", f"tab('{tid}')", name, show=False)   # work even while the Assistant box has focus
         for mod in ("ctrl", "alt") for tid, name in TABS] + [
-        Binding("w", "cycle_window", "window"), Binding("s", "standup", "standup"),
+        Binding("left_square_bracket", "cycle_window(-1)", "earlier window", key_display="["),
+        Binding("right_square_bracket", "cycle_window(1)", "later window", key_display="]"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
@@ -587,8 +591,8 @@ class PlApp(App):
             return False
         return bool(row) and (review_kind(row) is not None or row.get("col") == "Spec ready")
 
-    async def action_cycle_window(self):
-        self.window = (self.window + 1) % len(WINDOWS)
+    async def action_cycle_window(self, step):
+        self.window = (self.window + step) % len(WINDOWS)
         if self.data is not None:
             self.query_one(DashboardView).show(self.data, self.window)
 

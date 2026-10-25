@@ -310,6 +310,7 @@ def _caps(state, profs):
     procs, by_session, trees, live, extra = memory._procs(), {p["session"]: p for p in profs}, [], 0, 0
     waits = {p["name"]: _waiting(p) for p in profs}
     active, stuck = {p["name"]: 0 for p in profs}, {p["name"]: 0 for p in profs}
+    exited = 0
     for line in (panes or "").splitlines():
         head, _, tail = line.partition("\t")
         s = head.split(" ", 3)
@@ -322,6 +323,8 @@ def _caps(state, profs):
             continue
         tree = memory._below(procs, [int(s[2])])
         trees.append((sum(procs[x][1] for x in tree), p["name"], s[3], int(s[2]), tree))
+        if cmd in harnesses.SHELLS and s[3].startswith(memory.AGENT_PREFIXES):
+            exited += 1
         if cmd in harnesses.SHELLS or (marked == "1" and mark != "pl"):
             continue   # only a shell (the agent exited, or tmux-resurrect restored the window), or pl did not start it
         # a run agent waiting at a GATE or idle holds no start, as in the dispatcher; it still counts toward memory
@@ -337,6 +340,7 @@ def _caps(state, profs):
               + (f" ({row['stuck']} waiting at a prompt)" if row["stuck"] else "")
               + f"; machine {live} of {lim['max_live_agents']}", flush=True)
     state["full"] = full
+    state["exited"] = exited
     pct, before = None, set(state.get("runaway") or ())
     over = set()
     if r:
@@ -479,7 +483,7 @@ def tick(state):
         except Exception as e:  # noqa: BLE001 - prune failure never stops the tick
             print(f"brain prune failed: {type(e).__name__}: {e}", flush=True)
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
-              "room": max(0, cap - live), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error,
+              "room": max(0, cap - live), "exited_windows": state.get("exited", 0), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error,
               "build": build, "pkg": str(update.PKG)}
     _write("status.json", status)
     return status
@@ -744,7 +748,8 @@ def show():
         lines.append(f"{p['name']:<16}{state:<12}{str(p['dispatcher_pid'] or '-'):<8}{p['restarts']:<10}{agents:<9}"
                      f"{github:<12}{'; '.join(why) or '-'}{who}")
     lines.append(f"agents: {st.get('live_agents', 0)} live of {st.get('max_live_agents', '?')} on this machine "
-                 "(agents column: in use/allowed now; each profile has its own share)")
+                 "(agents column: in use/allowed now; each profile has its own share)"
+                 + (f"; {n} exited window{'s' * (n != 1)} not counted" if (n := st.get("exited_windows")) else ""))
     for acct, g in sorted(accounts.items()):
         lines.append(f"GitHub {acct.split('@')[0]}: {g['remaining']} of {g['limit']} GraphQL points left, resets "
                      f"{time.strftime('%H:%M', time.localtime(g['reset']))} (github column: spent/fair share; "

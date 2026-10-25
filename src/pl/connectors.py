@@ -12,14 +12,14 @@ from urllib.parse import urlsplit
 
 from pl import alerts
 from pl import config as C
-from pl import manager
+from pl import connectors_oauth, manager
 
 ROLES = ("payments", "contacts", "email", "calendar", "messaging", "memory")
 AUTHS = ("oauth", "token", "none")
 ACCESS = ("read", "read-write")
 TIERS = ("vendor", "community", "adapter")
 KEYS = {"url", "command", "args", "env", "mcp_config", "server", "auth", "token", "headers", "role", "teams", "access",
-        "tier", "enabled", "brain", "read_tools", "write_tools", "tools", "test", "pin"}
+        "tier", "enabled", "brain", "read_tools", "write_tools", "tools", "test", "pin", "server_hash"}
 VAR_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$")
 SECRET_HEADER = re.compile(r"auth|key|token|secret|cookie", re.I)
 ADAPTER_WARNING = "filled by an adapter, not the vendor's own server"
@@ -230,12 +230,42 @@ def cmd_connectors(a):
         revoke(a.name)
         _audit("connectors.revoke", a.name)
         print(f"revoked connector {a.name}")
+    elif sub == "import":
+        import_servers(a.source, add_name=a.add, teams=a.team, roles=a.role, yes=a.yes, json_out=a.json)
     elif sub == "add":
-        add(a.name, command=getattr(a, "command", None) or None, url=getattr(a, "url", None), pin=getattr(a, "pin", None))
-        _audit("connectors.add", a.name)
-        print(f"added connector {a.name}")
+        add_cmd(a)
+    elif sub == "serve":
+        from pl import connectors_proxy
+        connectors_proxy.serve(a.name)
     else:
-        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME")
+        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | import --from claude [--add NAME] | approve-tools NAME | revoke NAME | serve NAME --card ID --stage S")
+
+
+def add_cmd(a) -> None:
+    command, url = list(getattr(a, "command", None) or []), getattr(a, "url", None)
+    if not url and len(command) == 1 and re.match(r"https?://", command[0]):
+        url, command = command[0], []
+    if a.name in load_config():
+        print(f"connector {a.name} already exists, unchanged")
+        return
+    if not a.yes and not sys.stdin.isatty():
+        print(f"pl connectors add: pass --yes to add {a.name} without asking", file=sys.stderr)
+        raise SystemExit(2)
+    if not a.yes and input(f"add connector {a.name} ({url or ' '.join(command)}) and sign in? [y/N] ").strip().lower() != "y":
+        raise SystemExit("pl connectors add: cancelled")
+    try:
+        state = add(a.name, command=command or None, url=url, pin=getattr(a, "pin", None), role=getattr(a, "role", None),
+                    teams=getattr(a, "team", None), access=getattr(a, "access", None), tier=getattr(a, "tier", None))
+    except BaseExceptionGroup as group:
+        while isinstance(group, BaseExceptionGroup):
+            group = group.exceptions[0]
+        raise SystemExit(f"pl connectors add: {a.name}: {group}")
+    _audit("connectors.add", a.name)
+    count = len(state["approved_snapshot"])
+    if getattr(a, "json", False):
+        print(json.dumps({"connector": a.name, "status": "connected", "tools": count}))
+    else:
+        print(f"connector {a.name} connected ({count} tools)")
 
 
 def load_config() -> dict:
@@ -290,11 +320,27 @@ def _run(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
-def _transport(cfg: dict):
+def server_hash(entry: dict) -> str:
+    return hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+
+
+def resolve_server(cfg: dict) -> dict:
+    """cfg with an `mcp_config` + `server` pair replaced by the harness file's entry, ${VAR} expanded as the harness does."""
+    if "mcp_config" not in cfg:
+        return cfg
+    from pl.trackers import mcp
+    entry = mcp._from_file(cfg["mcp_config"], cfg["server"])
+    if cfg.get("server_hash") and server_hash(entry) != cfg["server_hash"]:
+        raise SystemExit(f"pl: MCP server {cfg['server']!r} in {cfg['mcp_config']} changed since it was imported; re-import it to approve the new entry")
+    server = mcp._expand_env(entry, [])
+    return {k: v for k, v in server.items() if k in ("url", "command", "args", "env", "headers")}
+
+
+def _transport(cfg: dict, auth=None):
+    cfg = resolve_server(cfg)
     if cfg.get("url"):
         from mcp.client.streamable_http import streamable_http_client
-        from mcp.shared._httpx_utils import create_mcp_http_client
-        return streamable_http_client(cfg["url"], http_client=create_mcp_http_client(headers=cfg.get("headers") or {}))
+        return streamable_http_client(cfg["url"], http_client=connectors_oauth.http_client(cfg.get("headers") or {}, auth))
     cmd = cfg.get("command") or []
     cmd = [cmd] if isinstance(cmd, str) else list(cmd)
     cmd += list(cfg.get("args") or [])
@@ -304,9 +350,9 @@ def _transport(cfg: dict):
     return stdio_client(StdioServerParameters(command=cmd[0], args=cmd[1:], env=env))
 
 
-async def _query_raw(cfg: dict):
+async def _query_raw(cfg: dict, auth=None):
     from mcp import ClientSession
-    async with _transport(cfg) as (r, w):
+    async with _transport(cfg, auth) as (r, w, *_):
         async with ClientSession(r, w) as session:
             init = await session.initialize()
             version = str(getattr(getattr(init, "serverInfo", None), "version", "") or "")
@@ -352,12 +398,31 @@ def active_tools_alerts() -> set:
     return {f"connector_tools:{n}" for n, cs in load_state().items() if cs.get("tools_changed")}
 
 
-def add(name: str, command=None, url: str | None = None, pin: str | None = None) -> dict:
+async def _needs_oauth(url: str) -> bool:
+    """A 401 that names its resource metadata (header or well-known document) means the server wants OAuth."""
+    async with connectors_oauth.http_client() as http:
+        r = await http.post(url, json={"jsonrpc": "2.0", "id": 0, "method": "ping"},
+                            headers={"accept": "application/json, text/event-stream"})
+        if r.status_code != 401:
+            return False
+        if "www-authenticate" in r.headers:
+            return True
+        parts = urlsplit(url)
+        return (await http.get(f"{parts.scheme}://{parts.netloc}/.well-known/oauth-protected-resource")).status_code == 200
+
+
+def add(name: str, command=None, url: str | None = None, pin: str | None = None, role=None, teams=None, access=None,
+        tier=None) -> dict:
     c = {"command": list(command)} if command else ({"url": url} if url else {})
-    if pin:
-        c["pin"] = pin
+    c.update({k: v for k, v in (("pin", pin), ("role", role), ("teams", teams), ("access", access), ("tier", tier)) if v})
     _edit_config(lambda table: table.__setitem__(name, c))
-    version, raw = _run(_query_raw(c))
+    auth = None
+    if url and _run(_needs_oauth(url)):
+        _edit_config(lambda table: table[name].__setitem__("auth", "oauth"))
+        c["auth"], auth = "oauth", connectors_oauth.provider(name, url, interactive=True)
+    version, raw = _run(_query_raw(c, auth))
+    if auth:
+        connectors_oauth.record_sign_in(name)
     fp, snap = _fingerprint_tools(raw, version)
     reads = [t.get("name", "") for t in raw if not is_write_tool(name, t.get("name", ""), t)]
     state = load_state()
@@ -413,7 +478,7 @@ def call(name: str, tool_name: str, args: dict | None = None, mode: str | None =
     cfg = load_config().get(name, {})
     async def _call():
         from mcp import ClientSession
-        async with _transport(cfg) as (r, w):
+        async with _transport(cfg) as (r, w, *_):
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 return await s.call_tool(tool_name, args or {})
@@ -440,3 +505,79 @@ def approve_tools(name: str, yes: bool = True, json_out: bool = False) -> dict:
     print(json.dumps({"ok": True, "connector": name, "diff": diff}, indent=2) if json_out
           else f"approved tools for connector {name}: {diff}")
     return diff
+
+
+def role(name: str):
+    """(connector name, table) of the one enabled connector that fills `name` for this pipeline's team."""
+    team = (getattr(C, "PIPELINE", None) or {}).get("name") or C.PROFILE_NAME
+    hits = [(n, c) for n, c in for_team(team) if name in c.get("role", [])]
+    if len(hits) > 1:
+        raise SystemExit(f"pl: more than one connector fills role {name!r} for team {team!r}: {', '.join(n for n, _ in hits)}")
+    if not hits:
+        raise SystemExit(f"pl: no connector fills role {name!r} for team {team!r}")
+    return hits[0]
+
+
+def call_role(role_name: str, std_tool: str, **args):
+    """Call a standard role tool on whichever connector fills the role, through that connector's `tools` mapping."""
+    name, c = role(role_name)
+    return call(name, (c.get("tools") or {}).get(std_tool, std_tool), args)
+
+
+def claude_servers_in(file) -> dict:
+    """The mcpServers of one Claude Code file; {} for a credentials file (never opened) or an unreadable one."""
+    from pathlib import Path
+    from pl import harnesses
+    file = Path(file)
+    if harnesses.SECRET_RE.fullmatch(file.name):
+        return {}
+    try:
+        servers = json.loads(file.read_text()).get("mcpServers")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {n: v for n, v in servers.items() if isinstance(v, dict)} if isinstance(servers, dict) else {}
+
+
+def claude_servers() -> list[dict]:
+    """Every server in each account's .claude.json and the work folder's .mcp.json, as {name, file, kind}: no values."""
+    from pathlib import Path
+    files = [Path(d) / ".claude.json" for d in C.PROFILES.values()] + ([Path(C.WORK_DIR) / ".mcp.json"] if C.WORK_DIR else [])
+    out = []
+    for f in dict.fromkeys(files):
+        out += [{"name": n, "file": str(f), "kind": "url" if "url" in v else "command"} for n, v in claude_servers_in(f).items()]
+    return out
+
+
+def _fail(msg):
+    print(f"pl connectors import: {msg}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def import_servers(source, add_name=None, teams=None, roles=None, yes=False, json_out=False):
+    if source != "claude":
+        _fail("Codex's TOML MCP file is not supported yet")
+    found = claude_servers()
+    if not add_name:
+        if json_out:
+            print(json.dumps(found, indent=2))
+        else:
+            for r in found:
+                print(f"{r['name']}  {r['kind']}  {r['file']}")
+            if not found:
+                print("no MCP servers found in Claude Code's files")
+        return
+    match = next((r for r in found if r["name"] == add_name), None)
+    if not match:
+        _fail(f"no server {add_name!r} in Claude Code's files")
+    if bad := [r for r in roles or [] if r not in ROLES]:
+        _fail(f"unknown role {', '.join(bad)}; choose from {', '.join(ROLES)}")
+    if add_name in load_config():
+        _fail(f"connector {add_name!r} already exists")
+    if not yes and input(f"add {add_name} from {match['file']}? [y/N] ").strip().lower() != "y":
+        _fail("not added")
+    from pl.trackers import mcp
+    entry = {"mcp_config": match["file"], "server": add_name, "server_hash": server_hash(mcp._from_file(match["file"], add_name)),
+             **({"teams": teams} if teams else {}), **({"role": roles} if roles else {})}
+    _edit_config(lambda table: table.__setitem__(add_name, entry))
+    _audit("connectors.import", add_name)
+    print(f"added connector {add_name} (uses {match['file']}; no key copied)")

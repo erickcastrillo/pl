@@ -126,7 +126,7 @@ class SettingsView(Widget):
     SettingsView .field Input, SettingsView .field Select { width: 1fr; }
     #settings-hint { height: 1; margin: 0 1; }
     """
-    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("t", "test", "test connections")]
+    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("T", "test", "test connections")]
 
     def __init__(self):
         super().__init__()
@@ -157,7 +157,7 @@ class SettingsView(Widget):
 
     def compose(self):
         yield Static(Text(LEGACY_HINT if C.path() is None else
-                          f"profile {C.PROFILE_NAME} · {C.path()} · ctrl+s save (the dispatcher uses it from its next pass) · t test connections",
+                          f"profile {C.PROFILE_NAME} · {C.path()} · ctrl+s save (the dispatcher uses it from its next pass) · T test connections",
                           style="bold #e0a040" if C.path() is None else "dim"), id="settings-hint")
         accounts = list(C.PROFILES)
         with VerticalScroll(id="settings-scroll"):
@@ -175,7 +175,7 @@ class SettingsView(Widget):
                     typ = cfg.get("type") or "not set"
                     target = cfg.get("board_id") or f"{cfg.get('owner') or cfg.get('repo') or '?'} {cfg.get('number') or ''}"
                     yield Static(Text(f"{kind:<8} {typ}  {target}"))
-                    yield Static(Text("  press t to test", style="dim"), id=f"test-{kind}")
+                    yield Static(Text("  press T to test", style="dim"), id=f"test-{kind}")
                     if typ == "mcp":
                         yield from self._field(f"{kind} board id", (kind, "board_id"), cfg.get("board_id"))
                 if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
@@ -373,7 +373,7 @@ class SettingsView(Widget):
                     t.pop(path[-1], None)
                 else:
                     _set(doc, path, v)
-            C.save(doc)
+            warns = C.save(doc) or []
             C.load(config_dir=str(C.CONFIG_DIR))
         except (SystemExit, Exception) as e:
             self.app.notify(str(e), severity="error", markup=False)
@@ -382,6 +382,8 @@ class SettingsView(Widget):
             w = self.query_one(f"#{wid}")
             self.fields[wid] = (path, None if isinstance(w, Select) and w.value is Select.NULL else w.value, kind)
         self.app.notify(f"saved {len(changed)} change(s); the dispatcher uses them from its next pass", markup=False)
+        for w in warns:
+            self.app.notify(w, severity="warning", markup=False)
 
     def on_button_pressed(self, m):
         if m.button.id != "create-project":

@@ -8,10 +8,12 @@ is not part of the document; `src/pl/jsonout.py` (`SHAPES`) maps each command to
 `pl list --json` (`--all` includes Done; `--product` leaves out `pipeline`)
 
 ```
-{"pipeline": [{"id", "title", "column", "agent", "age_seconds"}], "intake": [same keys]}
+{"pipeline": [{"id", "title", "column", "agent", "depends_on": [], "waiting_on": [], "age_seconds"}],
+ "intake": [{"id", "title", "column", "agent", "age_seconds"}]}
 ```
 
-`agent` is the short phrase `pl list` shows. `intake` is empty when no intake board is configured.
+`agent` is the short phrase `pl list` shows. `depends_on` lists the card ids a pipeline card waits for, and `waiting_on` the ones
+not yet in Done (or dropped); both are empty when there are none. `intake` is empty when no intake board is configured.
 
 ## card
 `pl card <id> --json`
@@ -35,3 +37,45 @@ is not part of the document; `src/pl/jsonout.py` (`SHAPES`) maps each command to
 ```
 {"alerts": [{"key", "severity", "title", "fix", "first_seen", "count", ...}]}
 ```
+
+## usage
+`pl usage [--since S] [--by account|model|loop] --json`
+
+```
+{"since", "by", "state_transitions": {"hook", "screen"},
+ "usage": {group: {"input", "output", "cache_read", "cache_write", "cost", "unpriced"}}}
+```
+`--by card --json` prints minutes, tokens and caps per card and stage instead.
+
+## standup
+`pl standup [--since S] --json` (`--markdown`, `--slack` and `--summary` only change the text form)
+
+```
+{"since", "prs": {"merged"|"opened"|"closed": {"total", "items": [{"repo", "number", "title", "url", "yours"}]}},
+ "pipeline": {"ideas added": n, ...}, "needs_you": ["title"], "errors": [{"message", "count"}]}
+```
+When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
+
+## accounts
+`pl accounts [--reset NAME|all] --json`
+
+```
+{"accounts": [{"name", "parked", "until", "reason", "dir"}]}
+```
+`until` and `reason` are empty when the account is not parked.
+
+## profiles
+`pl profiles --json`
+
+```
+{"profiles": [{"name", "dir", "running", "holder", "tmux_session", "tracker", "board_id", "accounts": {name: dir}}],
+ "warnings": ["text"]}
+```
+
+## intent
+`pl intent <PR URL> --json`
+
+```
+{"pr", "cards": [{"id", "title", "spec", "plan_scope"}]}
+```
+`plan_scope` is the plan's scope sections (minimum change, acceptance, non-goals), joined; empty when there is no plan.
