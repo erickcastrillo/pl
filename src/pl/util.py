@@ -14,6 +14,10 @@ TOKEN_RE = re.compile(r"(?i:bearer\s+)[A-Za-z0-9._~+/=-]{8,}|\b(?:sk-[A-Za-z0-9_
 PEM_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
 
 
+class BadInput(SystemExit):
+    """A refusal caused by what the caller gave or how pl is set up: exit code 2 (other failures exit 1)."""
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 

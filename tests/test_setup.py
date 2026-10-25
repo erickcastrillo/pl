@@ -544,11 +544,12 @@ def test_existing_folder_without_config_is_written(fake_home, monkeypatch, capsy
     assert stat.S_IMODE((d / "config.toml").stat().st_mode) == 0o600
 
 
-def test_profiles_new_still_refuses_an_existing_profile(fake_home, monkeypatch):
+def test_profiles_new_still_refuses_an_existing_profile(fake_home, monkeypatch, capsys):
     (fake_home / ".pl-work-acme").mkdir()
     monkeypatch.setattr(sys, "argv", ["pl", "profiles", "new", "work-acme"])
-    with pytest.raises(SystemExit, match="exists"):
+    with pytest.raises(SystemExit) as e:
         cli.main()
+    assert e.value.code == 1 and "exists" in capsys.readouterr().err
     assert list((fake_home / ".pl-work-acme").iterdir()) == []
 
 
@@ -628,11 +629,12 @@ def test_path_check_from_a_clone_asks_the_login_shell(fake_home, monkeypatch):
     assert setup.path_check() is None
 
 
-def test_eof_at_a_prompt_cancels_cleanly(fake_home, monkeypatch):
+def test_eof_at_a_prompt_cancels_cleanly(fake_home, monkeypatch, capsys):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda p="": (_ for _ in ()).throw(EOFError))
-    with pytest.raises(SystemExit, match="setup cancelled, nothing written"):
+    with pytest.raises(SystemExit) as e:
         _pl(monkeypatch)
+    assert "setup cancelled, nothing written" in capsys.readouterr().err
     assert not list(fake_home.glob(".pl-*"))
 
 
@@ -678,11 +680,11 @@ def test_interactive_happy_path_uses_the_defaults(fake_home, monkeypatch, capsys
     assert any("email" in p.lower() for p in prompts)
 
 
-def test_pl_without_a_profile_points_at_setup(fake_home, monkeypatch):
+def test_pl_without_a_profile_points_at_setup(fake_home, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["pl", "list"])
     with pytest.raises(SystemExit) as e:
         cli.main()
-    assert "pl setup" in str(e.value)
+    assert e.value.code == 2 and "pl setup" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("name", ["Status", " status ", "STATUS", "", "  "])
@@ -1004,14 +1006,16 @@ def test_a_rerun_keeps_a_stage_accounts_pool(fake_home, monkeypatch):
     assert t["stages"]["spec"]["account"] == "claude"
 
 
-def test_use_builtin_stages_needs_an_existing_profile(fake_home, monkeypatch):
-    with pytest.raises(SystemExit, match="no profile"):
+def test_use_builtin_stages_needs_an_existing_profile(fake_home, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
         _pl(monkeypatch, "--use-builtin-stages", "--slug", "nope", "--yes")
+    assert "no profile" in capsys.readouterr().err
 
 
-def test_use_builtin_stages_checks_the_slug(fake_home, monkeypatch):
-    with pytest.raises(SystemExit, match="lower-case"):
+def test_use_builtin_stages_checks_the_slug(fake_home, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
         _pl(monkeypatch, "--use-builtin-stages", "--slug", "../evil", "--yes")
+    assert "lower-case" in capsys.readouterr().err
 
 
 # ---------- the optional local model (Ollama + Gemma 4) ----------

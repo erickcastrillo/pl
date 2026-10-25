@@ -112,6 +112,8 @@ ENTRIES = [
     _e("2026-10-13.01", "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it",
        "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits "
        "for you with the failed label", "pl rework --dry-run"),
+    _e("2026-10-24.01", "Exit codes for scripts: 0 done, 1 failed, 2 bad input or setup, with a one-line reason on stderr",
+       "every pl command; an unknown card or column now exits 2 (it was 1)", "pl card nosuch; echo $?"),
 ]
 
 
