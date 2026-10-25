@@ -377,6 +377,7 @@ def _main():
     q.add_argument("--access", choices=["read", "read-write"]); q.add_argument("--tier", choices=["vendor", "community", "adapter"])
     q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--json", action="store_true")
     q = pc.add_parser("revoke"); q.add_argument("name"); q.add_argument("--yes", action="store_true")
+    q = pc.add_parser("serve"); q.add_argument("name"); q.add_argument("--card", required=True); q.add_argument("--stage", required=True)
     q = pc.add_parser("approve-tools"); q.add_argument("name"); q.add_argument("--yes", action="store_true"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("loops"); pl_ = p.add_subparsers(dest="loops_cmd", required=True)
     q = pl_.add_parser("list"); q.add_argument("--json", action="store_true")

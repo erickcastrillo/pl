@@ -232,8 +232,11 @@ def cmd_connectors(a):
         print(f"revoked connector {a.name}")
     elif sub == "add":
         add_cmd(a)
+    elif sub == "serve":
+        from pl import connectors_proxy
+        connectors_proxy.serve(a.name)
     else:
-        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME")
+        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME | serve NAME --card ID --stage S")
 
 
 def add_cmd(a) -> None:
