@@ -4,6 +4,7 @@ the job, model, time and outcome, and never the prompt or the answer. The model'
 import json
 import os
 import re
+import statistics
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,7 +12,7 @@ from urllib.parse import urlsplit
 
 from pl import board, events, harnesses, ideas, jsonout, local_model
 from pl import config as C
-from pl.util import now_iso
+from pl.util import now_iso, parse_iso
 
 JOBS = {
     "route": {"pick": "pipeline", "system": "Pick the pipeline that fits the item below and say how sure you are. "
@@ -51,6 +52,24 @@ def record(job, model, ms, ok, fallback, why) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write("\n".join(kept) + "\n")
+
+
+def stats(since) -> dict:
+    """{job: {calls, median_ms, fallback_rate}} for the log lines written at or after `since` (epoch seconds)."""
+    by_job = {}
+    try:
+        lines = (C.STATE_DIR / "local-jobs.jsonl").read_text().splitlines()
+    except OSError:
+        return {}
+    for ln in lines:
+        try:
+            e = json.loads(ln)
+            if parse_iso(e["ts"]) >= since:
+                by_job.setdefault(e["job"], []).append((e["ms"], e["fallback"] is not None))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return {job: {"calls": len(rows), "median_ms": round(statistics.median(ms for ms, _ in rows)),
+                  "fallback_rate": sum(fb for _, fb in rows) / len(rows)} for job, rows in by_job.items()}
 
 
 def _ask_local(model, s, system, text):

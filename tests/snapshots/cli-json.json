@@ -149,6 +149,7 @@
  },
  "usage": {
   "by": "str",
+  "local_jobs": {},
   "since": "str",
   "state_transitions": {
    "hook": "int",

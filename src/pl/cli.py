@@ -114,6 +114,7 @@
   pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
+  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
   pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
@@ -336,7 +337,7 @@ def _main():
     p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
-    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts, or with --by card minutes, tokens and caps per card and stage")
+    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
@@ -393,6 +394,7 @@ def _main():
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
+    p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
     q = pm.add_parser("list"); q.add_argument("--json", action="store_true", help="output as JSON")
@@ -481,6 +483,7 @@ def _main():
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
+     "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
      "models": lambda a: __import__("pl.local_jobs").local_jobs.cmd_models(a),
      "inbox": lambda a: __import__("pl.inbox").inbox.cmd_inbox(a),
