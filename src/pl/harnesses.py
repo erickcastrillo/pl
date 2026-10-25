@@ -327,9 +327,10 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
     plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
     hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook."""
-    from pl import hooks as pl_hooks, skills
-    pdir = skills.launch_plugin(h, plugin)
-    prompt = skills.library_prompt(h, account, prompt, pdir) if prompt else prompt
+    from pl import hooks as pl_hooks, pods, skills
+    pod = pods.launch_pod()
+    pdir = skills.launch_plugin(h, plugin, pod)
+    prompt = skills.library_prompt(h, account, prompt, pdir, pod) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
     template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
@@ -392,10 +393,11 @@ def headless_argv(h, account, prompt, stage=None):
         env[h.env_var] = str(d)
     if C.GH_CONFIG_DIR:
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
-    from pl import skills
-    pdir = skills.launch_plugin(h)
+    from pl import pods, skills
+    pod = pods.launch_pod()
+    pdir = skills.launch_plugin(h, pod=pod)
     template, values = _with_model(h.headless, h, account, stage)
-    return skills.with_plugin(_argv(template, {**values, "prompt": skills.library_prompt(h, account, prompt, pdir)}),
+    return skills.with_plugin(_argv(template, {**values, "prompt": skills.library_prompt(h, account, prompt, pdir, pod)}),
                               pdir), env
 
 
