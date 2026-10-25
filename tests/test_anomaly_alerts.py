@@ -1,8 +1,12 @@
 """Anomaly alerts: unknown chat user, send spike, sign-in from a new host."""
 import json
+import time
+
 import pytest
 
-from pl import alerts, dispatch
+from datetime import datetime, timezone
+
+from pl import alerts, audit, connectors_proxy, dispatch
 from pl import config as C
 
 
@@ -10,6 +14,7 @@ from pl import config as C
 def fake_home(tmp_path, monkeypatch):
     saved = {k: v for k, v in vars(C).items() if k.isupper()}
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
     monkeypatch.delenv("PL_CONFIG_DIR", raising=False)
     d = tmp_path / ".pl-t"
     d.mkdir()
@@ -34,31 +39,100 @@ def _write_audit(entry):
         f.write(json.dumps(entry) + "\n")
 
 
+def _write_machine_audit(entry):
+    p = audit.manager.machine_dir() / "audit.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+
+
+def _unknown_sender(now, sender="U1"):
+    return {"kind": audit.CHAT_UNKNOWN_SENDER, "connector": "slack", "sender_id": sender, "ts": _iso(now)}
+
+
+def _write_call(when, access="write"):
+    return {"action": audit.CONNECTOR_TOOL, "connector": "slack", "access": access, "when": when}
+
+
 def test_an_unknown_chat_user_opens_an_alert(clock):
-    _write_audit({"action": "chat.unknown_user", "channel": "general", "when": clock["now"]})
+    _write_machine_audit(_unknown_sender(clock["now"]))
     dispatch.check_alerts([], set())
-    a = alerts.get("chat_unknown:general")
+    a = alerts.get("chat_unknown:slack")
     assert a is not None
-    assert "Unknown chat user in general" in a["title"]
+    assert "Unknown chat user in slack" in a["title"]
+
+
+def test_two_unknown_senders_on_one_channel_open_one_alert(clock, monkeypatch):
+    sent = []
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: sent.append(a))
+    _write_machine_audit(_unknown_sender(clock["now"], "U1"))
+    _write_machine_audit(_unknown_sender(clock["now"], "U2"))
+    dispatch.check_alerts([], set())
+    assert alerts.get("chat_unknown:slack") is not None
+    assert len(sent) == 1
+
+
+def test_slack_adapter_unknown_sender_raises_the_alert(clock, monkeypatch):
+    from pl.chat.slack import Slack
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.setattr("pl.chat.slack._http", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr("pl.chat.inbound._pl", lambda *a, **k: None)
+    clock["now"] = time.time()
+    slack = Slack("slack", {"token": "${SLACK_BOT_TOKEN}", "app_token": "${SLACK_APP_TOKEN}", "allow": ["U12345"]})
+
+    class Ws:
+        def send(self, data):
+            pass
+
+    envelope = {"envelope_id": "e1", "type": "interactive", "payload": {
+        "type": "block_actions", "user": {"id": "U_UNKNOWN"},
+        "actions": [{"action_id": "approve:pl:pl#44", "value": "approve:pl:pl#44"}]}}
+    slack.handle_envelope(envelope, ws=Ws())
+    dispatch.check_alerts([], set())
+    assert alerts.get("chat_unknown:slack") is not None
 
 
 def test_more_than_three_times_the_7_day_hourly_average_opens_a_send_spike(clock):
     now = clock["now"]
     for h in range(1, 168, 2):
-        _write_audit({"action": "connector.write", "connector": "slack", "when": now - h * 3600})
+        _write_audit(_write_call(now - h * 3600))
     for _ in range(4):
-        _write_audit({"action": "connector.write", "connector": "slack", "when": now - 60})
+        _write_audit(_write_call(now - 60))
     dispatch.check_alerts([], set())
     a = alerts.get("send_spike:slack")
     assert a is not None
     assert "Send spike on slack" in a["title"]
 
 
+def test_a_read_only_burst_opens_no_send_spike(clock):
+    now = clock["now"]
+    for h in range(1, 168, 2):
+        _write_audit(_write_call(now - h * 3600, access="read"))
+    for _ in range(4):
+        _write_audit(_write_call(now - 60, access="read"))
+    dispatch.check_alerts([], set())
+    assert alerts.get("send_spike:slack") is None
+
+
+def test_proxy_write_calls_raise_a_send_spike(clock):
+    clock["now"] = time.time()
+    for _ in range(5):
+        connectors_proxy.record_tool_call("slack", "post", access="write")
+    dispatch.check_alerts([], set())
+    assert alerts.get("send_spike:slack") is not None
+
+
 def test_a_steady_rate_opens_nothing(clock):
     now = clock["now"]
     for h in range(168):
         for _ in range(4):
-            _write_audit({"action": "connector.write", "connector": "slack", "when": now - h * 3600 + 10})
+            _write_audit(_write_call(now - h * 3600 + 10))
     dispatch.check_alerts([], set())
     assert alerts.get("send_spike:slack") is None
 
@@ -82,3 +156,25 @@ def test_connectors_oauth_records_sign_in_and_token(clock):
     assert len(lines) == 2
     assert lines[0]["connector"] == "slack" and lines[0]["host"] == "host-a"
     assert lines[1]["connector"] == "slack" and lines[1]["host"] == "host-b"
+
+
+def test_an_old_chat_event_does_not_reopen_a_closed_alert(clock):
+    st = {}
+    _write_machine_audit(_unknown_sender(clock["now"] - 10))
+    dispatch._check_anomaly_alerts(clock["now"], st)
+    assert alerts.get("chat_unknown:slack") is not None
+    alerts.resolve("chat_unknown:slack")
+    clock["now"] += 600
+    dispatch._check_anomaly_alerts(clock["now"], st)
+    a = alerts.get("chat_unknown:slack")
+    assert a is None or a.get("resolved_at") or a.get("status") == "resolved"
+
+
+def test_reading_the_machine_log_leaves_the_profile_chain_verified(clock):
+    audit.append("card.move", card="x#1")
+    audit.append("card.move", card="x#2")
+    _write_machine_audit(_unknown_sender(clock["now"]))
+    dispatch.check_alerts([], set())
+    assert audit.verify()
+    assert [e["kind"] for e in audit.read_machine_entries()] == [audit.CHAT_UNKNOWN_SENDER]
+    assert [e["action"] for e in audit.read_entries()] == ["card.move", "card.move"]

@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
                       share, update)
@@ -494,7 +494,29 @@ def move_to(ref, column, cid=None):
     return cid
 
 
+def _check_trust():
+    accts = [n for n in C.PROFILES if harnesses.account_harness(n).name == "claude"]
+    if not accts:
+        print("no Claude accounts in this profile")
+        return
+    folders = [(label, d) for label, d in (("work", C.WORK_DIR), ("worktrees", C.WORKTREES_DIR)) if d]
+    untrusted = False
+    for acct in accts:
+        for label, folder in folders:
+            ok, reason = harnesses.folder_trust(acct, folder)
+            note = f" ({reason})" if reason else ""
+            print(f"  {acct:<10} {label:<10} {'trusted' if ok else 'NOT trusted'}  {harnesses._shown(folder)}{note}")
+            if not ok:
+                untrusted = True
+                fix = harnesses.trust_command(harnesses.account_harness(acct), acct, str(folder))
+                print(f'      fix: {fix}, choose "Yes, I trust this folder" and exit')
+    if untrusted:
+        raise SystemExit(1)
+
+
 def cmd_profiles(a):
+    if getattr(a, "check_trust", False):
+        return _check_trust()
     st = profile_state()
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):
@@ -644,16 +666,22 @@ def cmd_section(a):
                 text = _strip_email_block(text)
             print(text.rstrip("\n"))
         return
+    text = _section_source(a.from_)
+    print(write_section(a.id, name, text, force=getattr(a, "force", False)))
+
+
+def write_section(card_id, name, text, force=False) -> str:
+    """Replace one writable section of a card with text; the one place the writable-section, '# PIPELINE:' and approval
+    rules live. Returns the line to print."""
     if name not in (writable := pipeline.writable()):
         raise BadInput(f"pl section: only {', '.join(writable[:-1])}{' or ' if len(writable) > 1 else ''}{writable[-1]} can be written, not {name}")
-    text = _section_source(a.from_)
     if not text.strip():
         raise SystemExit("pl section: the text is empty; nothing was written")
     if re.search(r"^# PIPELINE:", text, re.M):
         raise SystemExit("pl section: the text has a line starting with '# PIPELINE:', which would split the card")
     fresh_next()   # it rebuilds the whole body from what it read: never from a copy that may be minutes old
-    c = find_card(a.id)
-    if not getattr(a, "force", False):
+    c = find_card(card_id)
+    if not force:
         if name == "PLAN" and (col := col_name(c.get("list_id"))) in APPROVED_COLUMNS:
             raise SystemExit(f"pl section: the plan was approved (card is in '{col}'); a person can override with --force")
         if name == "SPEC" and (c.get("metadata") or {}).get("spec_approved_at"):
@@ -663,7 +691,7 @@ def cmd_section(a):
     parts = sections(c.get("description"))
     parts[name] = text.strip("\n")
     update(c["id"], description=check_size(render(parts)))
-    print(f"wrote {name} ({len(text.strip())} chars) to card {short_id(c['id'])}")
+    return f"wrote {name} ({len(text.strip())} chars) to card {short_id(c['id'])}"
 
 
 def cmd_board(a):

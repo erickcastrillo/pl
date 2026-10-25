@@ -448,6 +448,10 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: prompt or skill is required")
             if table == "loops":
                 errs += _loop_schedule_errors(name, v)
+            if table == "stages" and is_local_account(v.get("account")):
+                if why := local_stage_problem(name, v):
+                    errs.append(why)
+                continue
             if accounts and v.get("account") and v["account"] not in accounts:
                 errs.append(f"{table}.{name}: account {v['account']!r} is not one of {', '.join(accounts)}")
             if v.get("harness") and v["harness"] not in known:
@@ -462,6 +466,25 @@ def validate(doc) -> list[str]:
     from pl import triggers
     errs += triggers.validate(doc)
     return errs
+
+
+LOCAL_PREFIX = "local:"
+
+
+def is_local_account(account) -> bool:
+    return isinstance(account, str) and account.startswith(LOCAL_PREFIX)
+
+
+def local_stage_problem(name, v) -> str | None:
+    """Why [stages.<name>] cannot run on its local:<model> account, or None. pl never guesses which stages need tools:
+    the stage says so with tools = false, and the built-in stages always need them."""
+    from pl import harnesses
+    model = v["account"][len(LOCAL_PREFIX):]
+    if name in ("spec", "design", "plan", "run") or v.get("tools") is not False:
+        return (f"stages.{name}: a local model cannot use tools; set tools = false only for a stage that needs none")
+    if not harnesses.MODEL_RE.fullmatch(model):
+        return f"stages.{name}: account must be local:<model>, a model name like \"local:gemma4:e4b\""
+    return None
 
 
 def _pod_path_error(label, v, root):
@@ -549,6 +572,34 @@ def stage_harnesses(v, accounts) -> set[str]:
     return {(accounts.get(a) or {}).get("harness") or "claude" for a in pool if a in accounts}
 
 
+def _models_errors(path, models) -> list[str]:
+    from pl import harnesses
+    if not isinstance(models, dict):
+        return [f"{path} must be a table of harness = \"model\""]
+    errs = []
+    for h, m in models.items():
+        if h not in harnesses.MODEL_FLAGS:
+            errs.append(f"{path}.{h}: harness {h} takes no model; models take {', '.join(harnesses.MODEL_FLAGS)}")
+        elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
+            errs.append(f"{path}.{h}: must be a model id like \"opus\" (no spaces or quotes, not starting with -)")
+        elif h != "claude" and m in harnesses.CLAUDE_MODELS:
+            errs.append(f"{path}.{h}: {m!r} is a claude model name; use a model {h} offers")
+    return errs
+
+
+def _small_errors(name, small) -> list[str]:
+    """[stages.run.small]: the plan budget limits and the model per harness a small change runs on."""
+    if name != "run":
+        return [f"stages.{name}.small: only the run stage takes a small-change model"]
+    if not isinstance(small, dict):
+        return ["stages.run.small must be a table with max_lines, max_files and models"]
+    errs = [f"stages.run.small.{k}: must be a whole number above 0" for k in ("max_lines", "max_files")
+            if isinstance(small.get(k), bool) or not isinstance(small.get(k), int) or small[k] < 1]
+    if "models" in small:
+        errs += _models_errors("stages.run.small.models", small["models"])
+    return errs
+
+
 def _stage_effort_errors(name, v, accounts) -> list[str]:
     """[stages.<name>] effort: a level every harness the stage can run on takes. models: a model per harness."""
     from pl import harnesses
@@ -557,19 +608,9 @@ def _stage_effort_errors(name, v, accounts) -> list[str]:
         errs.append(f"stages.{name}: model is not a stage setting; set one per harness in [stages.{name}.models], "
                     "like claude = \"opus\" (a stage may pool accounts of different harnesses)")
     if "models" in v:
-        models = v["models"]
-        if not isinstance(models, dict):
-            errs.append(f"stages.{name}.models must be a table of harness = \"model\"")
-        else:
-            for h, m in models.items():
-                if h not in harnesses.MODEL_FLAGS:
-                    errs.append(f"stages.{name}.models.{h}: harness {h} takes no model; "
-                                f"models take {', '.join(harnesses.MODEL_FLAGS)}")
-                elif not (isinstance(m, str) and harnesses.MODEL_RE.fullmatch(m)):
-                    errs.append(f"stages.{name}.models.{h}: must be a model id like \"opus\" "
-                                "(no spaces or quotes, not starting with -)")
-                elif h != "claude" and m in harnesses.CLAUDE_MODELS:
-                    errs.append(f"stages.{name}.models.{h}: {m!r} is a claude model name; use a model {h} offers")
+        errs += _models_errors(f"stages.{name}.models", v["models"])
+    if "small" in v:
+        errs += _small_errors(name, v["small"])
     if "effort" not in v:
         return errs
     hs = stage_harnesses(v, accounts)
