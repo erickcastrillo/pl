@@ -199,3 +199,9 @@ def test_import_of_an_invalid_file_exits_2_naming_the_key(fake_home, capsys, tmp
         pipeline.cmd_pipelines(_args(pipelines_cmd="import", file=str(bad), name="x", board="local", yes=True))
     assert e.value.code == 2 and "pipeline.stages.qualify.column" in capsys.readouterr().err
     assert not (fake_home / ".pl-x").exists()
+
+
+def test_list_templates_names_all_five(capsys):
+    pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
+    names = {r["name"] for r in json.loads(capsys.readouterr().out)}
+    assert names == {"engineering", "new-client", "existing-client", "billing", "team"}
