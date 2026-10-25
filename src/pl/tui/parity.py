@@ -12,6 +12,8 @@ COMMANDS = {
     "PlApp.switcher": "pl list --json",
     "PlApp.oldest": "pl inbox --json",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
+    "CardScreen.approve": "pl approve <id>",
+    "CardScreen.send_back": "pl reject <id> NOTES",
     "CardsView.drop": "pl drop <id>",
     "CardsView.undrop": "pl undrop <id>",
     "CardsView.hold": "pl hold <id>",
@@ -153,3 +155,13 @@ PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
     "dispatcher": "pl manager restart NAME",
     ("details", "dispatcher"): "pl manager restart NAME",
 }
+PARITY = {   # the card screen's own header actions (and the Connectors panel's)
+    "card.approve": "pl approve", "card.send_back": "pl reject", "card.hold": "pl hold",
+    "card.restart": "pl restart", "card.drop": "pl drop",
+    ("card", "approve"): "pl approve", ("card", "send_back"): "pl reject",
+    ("card", "hold"): "pl hold", ("card", "restart"): "pl restart", ("card", "drop"): "pl drop",
+    "approve": "pl approve", "send_back": "pl reject", "hold": "pl hold", "restart": "pl restart", "drop": "pl drop",
+    "connectors.add": "pl connectors add", "connectors.test": "pl connectors test", "connectors.revoke": "pl connectors revoke",
+    ("connectors", "add"): "pl connectors add", ("connectors", "test"): "pl connectors test", ("connectors", "revoke"): "pl connectors revoke",
+}
+MAP = PARITY

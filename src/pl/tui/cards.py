@@ -16,9 +16,9 @@ from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop
 from pl.tui.chrome import show_first_heading, skip_headings
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, review_kind, start_review
-from pl.tui.review import ConfirmScreen, open_editor, review_file, safe_link, write_section
+from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
 from pl.tui.subagents import TODO_MARK
-from pl.util import short_id
+from pl.util import ago, short_id
 
 TITLE_WIDTH = 34   # two less than before: the state column starts with the ! marker
 
@@ -46,13 +46,51 @@ def open_card_url(app, cid):
     app.run_worker(run, thread=True, group="keys")
 
 
+def header_summary(c, col):
+    m, w = c.get("metadata") or {}, (c.get("metadata") or {}).get("worker") or {}
+    is_gate = col == "Plan for review" or (
+        col == "Spec ready" and bool((C.GATES or {}).get("spec")) and not m.get("spec_approved_at"))
+    stage = w.get("stage") if w else None
+    if not stage:
+        for sname, sinfo in (getattr(C, "PIPELINE", None) or {}).get("stages", {}).items():
+            if sinfo.get("column") == col:
+                stage = sname
+                break
+        stages = {"Inbox": "spec", "Approved": "run", "In progress": "run"}
+        stage = stage or stages.get(col) or (
+            col if is_gate else ("design" if "DESIGN" in (c.get("description") or "") else "plan")
+            if col == "Spec ready" else col)
+    if is_gate:
+        return stage, "you", "approve or send back"
+    if col == "Manual":
+        return stage, "you", "yours to do"
+    if w and w.get("stage") and not w.get("dead") and not m.get("agent_error"):
+        return stage, f"{stage} agent", "agent builds PLAN" if stage == "run" else f"agent writes {stage.upper()}"
+    queued = col in ("Inbox", "Approved", "Spec ready") or (stage in ("spec", "plan", "design", "run") and col not in ("Done", "PR open", "Manual"))
+    return stage, "nobody", "waits for a slot" if queued else "-"
+
+
 def card_head(c, col, url, approved=None):
-    """The plain header lines of the card screen: title, then column, tags, assignee, updated, link, metadata."""
-    meta = ", ".join(f"{k}={str(v)[:40]}" for k, v in (c.get("metadata") or {}).items())
+    """The plain header lines of the card screen: title, then stage/who/next, column, tags, assignee, links, updated, link, metadata."""
+    m = c.get("metadata") or {}
+    stage, who, next_step = header_summary(c, col)
+    meta = ", ".join(f"{k}={str(v)[:40]}" for k, v in m.items())
+    links = ", ".join(f"{l.get('pipeline')}:{short_id(l.get('id'))} ({l.get('relation', 'related')})"
+                      for l in m.get("links") or [])
     t = Text(f"{c.get('title') or ''}\n", style="bold")
-    for label, value in (("column", col), *([("status", approved)] if approved else []), ("tags", ", ".join(map(str, c.get("tags") or []))),
+    t.append(f"{stage} · {who} · {next_step}\n")
+    for label, value in (("column", col), *([("status", approved)] if approved else []),
+                         ("tags", ", ".join(map(str, c.get("tags") or []))),
                          ("assignee", c.get("assigned_to_display") or c.get("assigned_to")),
-                         ("updated", c.get("updated_at")), ("link", url), ("metadata", meta)):
+                         ("links", links)):
+        t.append(f"{label:<9}", style="dim")
+        t.append(f"{value or '-'}\n")
+    t.append(f"{'updated':<9}", style="dim")
+    up = c.get("updated_at")
+    t.append(f"{ago(up)}  " if up else "-\n")
+    if up:
+        t.append(f"{up}\n", style="dim")
+    for label, value in (("link", url), ("metadata", meta)):
         t.append(f"{label:<9}", style="dim")
         t.append(f"{value or '-'}\n")
     return t
@@ -76,7 +114,10 @@ class CardScreen(Screen):
     #card-doc { height: 1fr; border: round $primary; }
     """
     BINDINGS = [Binding("escape", "close", "close"), Binding("q", "close", "close"),
-                Binding("y", "copy", "copy card text"), Binding("O", "open", "open in browser")]
+                Binding("y", "copy", "copy card text"), Binding("O", "open", "open in browser"),
+                Binding("a", "approve", "approve"), Binding("x", "send_back", "send back"),
+                Binding("p", "hold", "hold / release"), Binding("R", "restart", "restart agent"),
+                Binding("d", "drop", "drop")]
 
     def __init__(self, card_id, col, approved=None, now=None):
         super().__init__()
@@ -135,6 +176,80 @@ class CardScreen(Screen):
             self.app.open_url(m.href)
         else:
             self.app.notify("only web links open from here", markup=False)
+
+    def check_action(self, action, parameters):
+        if action in ("approve", "send_back"):
+            m = (self.card or {}).get("metadata") or {}
+            is_gate = (self.col == "Plan for review") or (
+                self.col == "Spec ready" and bool((C.GATES or {}).get("spec")) and not m.get("spec_approved_at")
+            )
+            return True if is_gate else None
+        if action in ("hold", "drop"):
+            return True if self.col != "Done" else None
+        if action == "restart":
+            stage = (((self.card or {}).get("metadata") or {}).get("worker") or {}).get("stage")
+            return True if (self.col != "Done" and bool(stage)) else None
+        return True
+
+    def _ask_then(self, question, job, failed):
+        def run():
+            try:
+                msg = "\n".join(job())
+            except (SystemExit, Exception) as e:
+                msg = f"{failed}{e}"
+            self.app.call_from_thread(self.app.notify, msg, markup=False)
+            self.app.call_from_thread(self.app.refresh_data)
+            self.app.call_from_thread(self.action_close)
+        self.app.push_screen(ConfirmScreen(question), lambda yes: yes and self.app.run_worker(run, thread=True, group="keys"))
+
+    def action_approve(self):
+        if self.card:
+            kind = "spec" if self.col == "Spec ready" else "plan"
+            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close)
+
+    def action_send_back(self):
+        if self.card:
+            kind = "spec" if self.col == "Spec ready" else "plan"
+            self.app.push_screen(ReviewScreen(kind, self.card["id"], ids=[self.card["id"]], notes_first=True))
+
+    def action_hold(self):
+        if not self.card:
+            return
+        head = f"{short_id(self.card['id'])}  {str(self.card.get('title') or '')[:50]}"
+        if "parked" in (self.card.get("tags") or []):
+            self._ask_then(f"Release the hold on {head}? The dispatcher takes it again.", lambda: unhold(self.card["id"]), "not released: ")
+            return
+
+        def reason(why):
+            if why is not None:
+                note = f" Reason: {w}" if (w := why.strip()) else ""
+                self._ask_then(f"Hold {head}? The dispatcher starts no agent on it until you press p again (pl unhold).{note}",
+                               lambda: hold(self.card["id"], w or None), "not held: ")
+        self.app.push_screen(ReasonScreen(f"Hold {head}: why does it wait? (optional)"), reason)
+
+    def action_drop(self):
+        if not self.card:
+            return
+        head = f"{short_id(self.card['id'])}  {str(self.card.get('title') or '')[:50]}"
+
+        def reason(why):
+            if why is not None:
+                note = f" Reason: {w}" if (w := why.strip()) else ""
+                self._ask_then(f"Drop {head}? It moves to Done marked dropped, not done; u or pl undrop puts it back.{note}",
+                               lambda: drop(self.card["id"], w or None), "not dropped: ")
+        self.app.push_screen(ReasonScreen(f"Drop {head}: why is it no longer needed? (optional)"), reason)
+
+    def action_restart(self):
+        if not self.card:
+            return
+        stage = ((self.card.get("metadata") or {}).get("worker") or {}).get("stage")
+        if not stage:
+            self.app.notify("R restarts a card's agent; this card has none", markup=False)
+            return
+        head = f"{short_id(self.card['id'])}  {str(self.card.get('title') or '')[:50]}"
+        self._ask_then(f"Restart the {stage} agent of {head}? pl stops it (Ctrl-C in its window) and the "
+                       f"dispatcher starts the {stage} stage fresh (attempt 1).", lambda: restart(self.card["id"]), "not restarted: ")
+
 
 
 class CardActions:

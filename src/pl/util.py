@@ -34,6 +34,11 @@ def age(ts):
     return f"{d // 60}m" if d < 3600 else (f"{d // 3600}h" if d < 86400 else f"{d // 86400}d")
 
 
+def ago(iso):
+    ts = parse_iso(iso) if iso else 0
+    return f"{age(ts)} ago" if ts else "-"
+
+
 def short_id(cid):
     """A card id cut for display: "repo#43" for a GitHub id ("owner/repo#43"), else its first 8 characters."""
     cid = str(cid)
