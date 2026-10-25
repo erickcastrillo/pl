@@ -172,7 +172,9 @@ ENTRIES = [
        "[stages.run.small] in config.toml: a run agent whose approved PLAN budget is at or under max_lines and max_files "
        "starts on the small model for its harness; rework rounds use the normal one",
        "[stages.run.small] max_lines = 60"),
-    _e("2026-10-25.19", "Stages wait for folder trust instead of starting a stuck Claude agent",
+    _e("2026-10-25.19", "pl-plan files later slices as Plan N slice M with plan metadata",
+       "built-in skill pl-plan v6; unedited copies update themselves", "pl skills reset pl-plan"),
+    _e("2026-10-25.20", "Stages wait for folder trust instead of starting a stuck Claude agent",
        "Alerts tab: trust:<account>", "pl dispatch --once --dry-run"),
 ]
 

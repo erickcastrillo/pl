@@ -585,6 +585,13 @@ def test_trusting_the_folder_starts_the_waiting_stage_and_closes_the_alert(gate,
     assert alerts.get(f"trust:claude:{C.WORK_DIR}")["resolved_at"]
 
 
+def test_a_trusted_parent_folder_lets_the_stage_start(gate, monkeypatch):
+    _claude_json(gate, _trusting(C.WORK_DIR.parent))
+    started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
+    assert [c["id"] for c in started] == ["o/r#1"]
+    assert _trust_alerts() == []
+
+
 def test_a_trusted_account_starts_as_today_with_no_trust_alert(gate, monkeypatch):
     _claude_json(gate, _trusting(C.WORK_DIR))
     started, _ = _pass(monkeypatch, [_card(1, profile="claude")])
