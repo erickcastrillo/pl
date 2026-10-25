@@ -1281,7 +1281,7 @@ async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch)
         assert not isinstance(app.screen, P.CardScreen)
         await pilot.press("enter")
         await settle(pilot)
-        await pilot.press("q")
+        await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, P.CardScreen) and app.is_running
 
