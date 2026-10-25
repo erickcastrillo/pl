@@ -350,3 +350,104 @@ def install(text, yes, out, dry_run=False, name=None, plugin=None):
         for line in skills.install_in_all_harnesses(n):
             print(line, file=out)
     return 0
+
+
+def _src_of(rec):
+    owner, _, repo = rec["repo"].partition("/")
+    return _src(owner, repo, rec["path"], rec["ref"])
+
+
+def _hashes(folder):
+    return {p.relative_to(folder).as_posix(): skills._sha256(p.read_bytes())
+            for p in sorted(folder.rglob("*")) if p.is_file() and ".git" not in p.relative_to(folder).parts}
+
+
+def check(out, as_json=False):
+    """List the installed skills whose ref now points at a newer commit; changes nothing. Exit 1 only when every
+    check failed."""
+    rows = []
+    for name, rec in sorted(records().items()):
+        row = {"name": name, "repo": rec.get("repo"), "path": rec.get("path"), "ref": rec.get("ref"),
+               "pinned": rec.get("sha"), "latest": None, "update": False, "error": None}
+        try:
+            row["latest"] = resolve(_src_of(rec))
+            row["update"] = row["latest"] != rec["sha"]
+        except (Refused, RuntimeError, KeyError, OSError, subprocess.SubprocessError) as e:
+            row["error"] = str(e) or type(e).__name__
+        rows.append(row)
+    if as_json:
+        print(json.dumps(rows, indent=1), file=out)
+    for r in rows:
+        if r["error"] and not as_json:
+            print(f"{r['name']}  check failed: {r['error']}", file=out)
+        elif r["update"] and not as_json:
+            print(f"{r['name']}  {r['repo']}@{r['pinned'][:7]} -> {r['latest'][:7]}", file=out)
+    return 1 if rows and all(r["error"] for r in rows) else 0
+
+
+def _print_changes(old, new, hashes, inv, out):
+    changed = {f for f in inv["files"] if hashes.get(f) != skills._sha256((new / f).read_bytes())}
+    fresh = [f for f in inv["flags"] if f["file"] in changed]
+    if fresh:
+        print("New or changed code: " + ", ".join(f"{f['kind']} {f['file']}" for f in fresh), file=out)
+    for rel in sorted(changed | (set(hashes) - set(inv["files"]))):
+        before = (old / rel).read_text(errors="replace") if (old / rel).is_file() else ""
+        after = (new / rel).read_text(errors="replace") if rel in changed else ""
+        print(skills.diff(before, after, rel) or f"{rel}: binary or empty", file=out)
+
+
+def update(name, yes, out):
+    """Show what the pinned commit's upstream changed in an installed skill, ask, then apply it. An edited copy moves
+    to <library>/.pl-edited/ first. Returns the exit code."""
+    if not yes and not sys.stdin.isatty():
+        return _fail("no terminal to confirm on; add --yes")
+    root = stage = None
+    try:
+        rec = records().get(name)
+        if not rec:
+            return _fail(f"{name!r} was not installed from GitHub")
+        src, lib = _src_of(rec), skills.library()
+        sha = resolve(src)
+        if sha == rec["sha"]:
+            print(f"{name} is up to date", file=out)
+            return 0
+        root = fetch(src, sha)
+        inv = inventory(root, rec["path"])
+        new = Path(root) / rec["path"] if rec["path"] else Path(root)
+        _print_changes(lib / name, new, rec["files"], inv, out)
+        edited = _hashes(lib / name) != rec["files"]
+        if not yes:
+            try:
+                ok = ask("skills update", f"Update {name} to {rec['repo']}@{sha[:7]}? [y/N]: ")
+            except EOFError:
+                ok = ""
+            if ok.strip().lower() not in ("y", "yes"):
+                print("nothing updated", file=out)
+                return 0
+        stage = Path(tempfile.mkdtemp(prefix=".update-", dir=lib))
+        shutil.copytree(new, stage / name, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        with skills._install_lock(lib) as held:
+            if not held:
+                raise RuntimeError("another install holds the library lock; try again")
+            if edited:
+                kept = skills._stamp(lib / ".pl-edited" / name)
+                kept.parent.mkdir(exist_ok=True)
+                os.replace(lib / name, kept)
+                print(f"your edited copy is kept at {kept}", file=out)
+            elif (lib / name).is_symlink():
+                (lib / name).unlink()
+            else:
+                shutil.rmtree(lib / name)
+            os.replace(stage / name, lib / name)
+        _record(lib, name, {**rec, "sha": sha, "files": _hashes(lib / name)})
+    except Refused as e:
+        return _fail(str(e))
+    except RuntimeError as e:
+        print(f"pl skills update: {e}", file=sys.stderr)
+        return 1
+    finally:
+        for d in (root, stage):
+            if d:
+                shutil.rmtree(d, ignore_errors=True)
+    print(f"updated {name} to {sha[:7]}", file=out)
+    return 0
