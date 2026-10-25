@@ -28,6 +28,9 @@ dev = ["pytest", "pytest-asyncio", "ruff"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["e2e: end-to-end tests against real tmux and harness CLIs (skipped unless PL_E2E=1)"]
+# Keep only failed tests' tmp_path folders. Kept runs held every test's files, and with many agents
+# running the suite at once they filled /tmp's inodes on 2026-10-25.
+tmp_path_retention_policy = "failed"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
