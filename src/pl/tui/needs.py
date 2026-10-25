@@ -33,6 +33,23 @@ def waiting_total(g):
     return sum(len(g[k]) for k in GROUPS)
 
 
+def needs_you(data):
+    """The one rule for "needs you": rows at a gate, Manual cards, PRs to decide or merge, and cards whose agent needs
+    you, died or is blocked, each once. Rework PRs are not counted: the run agent fixes them."""
+    out = []
+    for r in ((data or {}).get("snapshot") or {}).get("rows") or []:   # none before the first board read
+        if r.get("pr"):
+            if r["pr"]["state"] in ("decide", "merge"):
+                out.append(r)
+        elif needs_me(r):
+            out.append(r)
+    return out
+
+
+def needs_you_count(data):
+    return len(needs_you(data))
+
+
 CARD_GROUPS = ("specs", "plans", "manual")   # the groups that hold cards; the rest hold PRs
 
 
