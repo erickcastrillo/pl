@@ -57,6 +57,8 @@ def home_rows(summaries) -> list[dict]:
 
         oldest = s.get("oldest_wait")
         ts = oldest.get("since") or oldest.get("ts") if isinstance(oldest, dict) else (oldest if isinstance(oldest, (int, float)) else None)
+        if isinstance(ts, str):   # summary.py writes the card's updated_at, an ISO time
+            ts = util.parse_iso(ts) or None
         al = s.get("alerts", 0)
 
         out.append({

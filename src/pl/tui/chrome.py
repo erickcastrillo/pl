@@ -34,7 +34,7 @@ MEANING = {
     "hold": "hold", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
     "open_window": "open window", "jump": "open window", "drop": "remove", "discard": "remove", "delete": "remove",
     "revoke": "remove", "retry": "try again", "move_agent": "move to account", "move_column": "move to column",
-    "only_mine": "filter", "next_filter": "filter", "done": "done", "show_done": "show done", "undrop": "undo",
+    "only_mine": "filter", "plan_filter": "filter", "next_filter": "filter", "done": "done", "show_done": "show done", "undrop": "undo",
     "undo": "undo", "adopt": "to pipeline", "hand_off": "to Manual", "answer": "answer", "edit": "edit",
     "edit_brief": "edit", "edit_input": "edit", "external_edit": "edit in $EDITOR", "ack": "acknowledge",
     "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",

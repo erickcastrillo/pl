@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from pl import config as C
-from pl.util import now_iso, parse_iso, short_id
+from pl.util import ask, now_iso, parse_iso, short_id
 
 BUILTIN_DIR = Path(__file__).parent / "pods_builtin"
 BUDGETS = {"knowledge": 2000, "pod": 1500, "client": 1500}   # tokens; the role and card layers are uncut
@@ -218,11 +218,8 @@ def add_rule(text: str, rule: str) -> str:
 def _confirm(question: str, yes: bool):
     if yes:
         return
-    if not sys.stdin.isatty():
-        print("pl pods: no terminal to confirm on; add --yes", file=sys.stderr)
-        raise SystemExit(2)
     try:
-        ok = input(f"{question} [y/N]: ")
+        ok = ask("pods", f"{question} [y/N]: ")
     except EOFError:
         ok = ""
     if ok.strip().lower() not in ("y", "yes"):
@@ -350,7 +347,9 @@ def _read_pod(pod: str) -> str:
 
 def learn(card, section, draft, approved, pod=None):
     """Compare draft and approved text, record removed sentences, and suggest rules."""
-    from pl import alerts
+    from pl import alerts, trackers
+    if trackers.dry_run():
+        return
     pod_name = pod_of(card, explicit_pod=pod)
     approved_norm = {normalize_sentence(s) for s in split_sentences(approved)}
     seen_norm, ts, now = set(), now_iso(), time.time()

@@ -2,12 +2,14 @@
 import argparse
 import json
 import subprocess
+import sys
+import tomllib
 import types
 from datetime import datetime, timedelta
 
 import pytest
 
-from pl import accounts, dispatch, loops, util
+from pl import accounts, cli, dispatch, loops, util
 from pl import config as C
 
 
@@ -80,3 +82,94 @@ def test_wait_gives_up_when_the_dispatcher_never_picks_the_run_up(monkeypatch):
     a.wait = True
     with pytest.raises(SystemExit, match="dispatcher has not picked it up"):
         loops.cmd_loops(a)
+
+
+@pytest.fixture
+def table(profile, monkeypatch):
+    d = profile / ".pl-t"
+    d.mkdir()
+    monkeypatch.setenv("PL_CONFIG_DIR", str(d))
+    (d / "config.toml").write_text('[loops.triage]\nprompt = "/loop 30m /triage the inbox"\n')
+    C.load("t")
+    return d / "config.toml"
+
+
+def pl(monkeypatch, *argv):
+    monkeypatch.setattr(sys, "argv", ["pl", "loops", *argv])
+    try:
+        cli.main()
+    except SystemExit as e:
+        return e.code
+    return 0
+
+
+def _loop(table, name):
+    return tomllib.loads(table.read_text())["loops"][name]
+
+
+def test_convert_sets_every_and_strips_the_loop_prefix(table, monkeypatch):
+    assert pl(monkeypatch, "edit", "triage", "--convert") == 0
+    assert _loop(table, "triage") == {"prompt": "/triage the inbox", "every": "30m"}
+    table.write_text('[loops.a]\nprompt = "/loop 1h /x"\n[loops.b]\nprompt = "/loop 2h /y"\n')
+    C.load(config_dir=str(table.parent))
+    assert pl(monkeypatch, "edit", "a", "--convert") == 0 and pl(monkeypatch, "edit", "b", "--convert") == 0
+    assert (_loop(table, "a")["every"], _loop(table, "a")["prompt"]) == ("hourly", "/x")
+    assert (_loop(table, "b")["every"], _loop(table, "b")["prompt"]) == ("120m", "/y")
+
+
+def test_convert_of_a_day_interval_exits_2(table, monkeypatch, capsys):
+    table.write_text('[loops.daily]\nprompt = "/loop 1d /x"\n')
+    C.load(config_dir=str(table.parent))
+    before = table.read_text()
+    assert pl(monkeypatch, "edit", "daily", "--convert") == 2
+    assert "--every" in capsys.readouterr().err
+    assert table.read_text() == before
+
+
+def test_edit_of_the_builtin_review_loop_writes_its_table(table, monkeypatch):
+    (table.parent / "ha").mkdir()
+    table.write_text('[tracker]\ntype = "github-project"\nowner = "o"\nrepo = "o/r"\n[accounts.a]\nconfig_dir = "~/.pl-t/ha"\n'
+                     '[code_host.labels]\nreview = "r"\nready = "ok"\n[loops.triage]\nprompt = "p"\n')
+    C.load(config_dir=str(table.parent))
+    builtin = C.SERVICES["auto-review"]
+    assert builtin["builtin"] and "loops" in tomllib.loads(table.read_text())
+    assert "auto-review" not in tomllib.loads(table.read_text())["loops"]
+    assert pl(monkeypatch, "edit", "auto-review", "--every", "hourly", "--hours", "08:00-18:00 weekdays") == 0
+    assert _loop(table, "auto-review") == {"prompt": builtin["prompt"], "account": "a", "every": "hourly", "hours": "08:00-18:00 weekdays"}
+    assert "triage" in tomllib.loads(table.read_text())["loops"]
+
+
+def test_edit_changes_fields_and_refuses_a_bad_every(table, monkeypatch, capsys):
+    assert pl(monkeypatch, "edit", "triage", "--skill", "pl-x", "--writes", "--account", "cx") == 0
+    assert (_loop(table, "triage")["skill"], _loop(table, "triage")["writes"]) == ("pl-x", True)
+    assert "prompt" not in _loop(table, "triage")
+    assert pl(monkeypatch, "edit", "triage", "--prompt", "again") == 0
+    assert (_loop(table, "triage")["prompt"], "skill" in _loop(table, "triage")) == ("again", False)
+    assert pl(monkeypatch, "edit", "triage", "--no-writes") == 0 and _loop(table, "triage")["writes"] is False
+    assert pl(monkeypatch, "edit", "triage", "--every", "whenever") == 2
+    assert pl(monkeypatch, "edit", "nope", "--every", "30m") == 2
+
+
+NAMES = ("auto-review", "daily-standup", "inbox-triage", "overdue-invoices", "dependency-updates", "stale-cards")
+
+
+def test_every_template_fills_every_field(table, monkeypatch):
+    assert tuple(loops.TEMPLATES) == NAMES
+    for name in NAMES:
+        assert pl(monkeypatch, "add", f"t-{name}", "--template", name, "--yes") == 0
+        entry = _loop(table, f"t-{name}")
+        assert entry["prompt"] and entry["every"] and entry["hours"] and isinstance(entry["writes"], bool)
+    assert pl(monkeypatch, "add", "x", "--template", "nope", "--yes") == 2
+
+
+def test_flags_override_a_template(table, monkeypatch):
+    assert pl(monkeypatch, "add", "mine", "--template", "stale-cards", "--every", "daily 07:30", "--prompt", "mine", "--writes", "--yes") == 0
+    entry = _loop(table, "mine")
+    assert (entry["every"], entry["prompt"], entry["writes"]) == ("daily 07:30", "mine", True)
+    assert entry["hours"] == loops.TEMPLATES["stale-cards"]["hours"]
+
+
+def test_templates_name_no_vendor():
+    vendors = ("gmail", "outlook", "google", "microsoft", "stripe", "quickbooks", "xero", "paypal", "slack", "github", "gitlab", "jira", "linear", "notion", "sendgrid")
+    for name, template in loops.TEMPLATES.items():
+        assert not [v for v in vendors if v in str(template).lower()], name
