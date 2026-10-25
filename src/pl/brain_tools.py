@@ -10,7 +10,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.tools.base import Tool
-from pl import brain, commands, manager, mcp_serve, profiles
+from pl import brain, commands, manager, mcp_serve, profiles, recall
 from pl import config as C
 from pl.trackers import mcp as M
 
@@ -159,6 +159,56 @@ def is_feature_deployed(card: dict) -> dict:
     }
 
 
+def _run(argv: list[str]) -> str | None:
+    """The one subprocess seam of the memory search; tests fake it."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def cite_decision(date: str, link: str) -> str:
+    return f"you decided this on {date} ({link})"
+
+
+def pl_memory_search(query: str, sources: list[dict] | None = None) -> list[dict]:
+    out = _run(["pl", "memory", "search", query, "--json"])
+    if out:
+        try:
+            data = json.loads(out)
+        except (ValueError, TypeError):
+            data = []
+    else:   # no `pl memory` command here: read the machine's own store
+        try:
+            data = [{"text": e["text"], "date": (e.get("created_at") or "")[:10], "link": e.get("link") or ""}
+                    for e in recall.search(query)]
+        except Exception:
+            data = []
+    items = data.get("results", data) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        items = [items] if isinstance(items, dict) else []
+
+    results = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        results.append(item)
+        src = {
+            "kind": "memory",
+            "date": item.get("date") or item.get("created_at"),
+            "link": item.get("link") or item.get("url"),
+        }
+        if "text" in item:
+            src["text"] = item["text"]
+        elif "decision" in item:
+            src["decision"] = item["decision"]
+        log_source(src)
+        if sources is not None:
+            sources.append(src)
+    return results
+
+
 def build(conv: str = "default") -> FastMCP:
     """Build the read-only FastMCP('pl-brain') server."""
     server = FastMCP("pl-brain")
@@ -205,6 +255,12 @@ def build(conv: str = "default") -> FastMCP:
                 os.environ.pop("PL_SOURCE", None)
             else:
                 os.environ["PL_SOURCE"] = old
+
+    @server.tool(name="pl_memory_search", description="Search saved decisions and preferences; cite a hit as 'you decided this on <date>' with its link.")
+    def pl_memory_search_tool(query: str) -> Any:
+        res = pl_memory_search(query)
+        brain.record_sources(conv, res)
+        return res
 
     @server.tool(name="pl_pr", description="Read a GitHub pull request: title, state, merge commit.")
     def pl_pr_tool(url: str) -> Any:
