@@ -141,6 +141,8 @@ ENTRIES = [
        "Home tab; ctrl+k; Settings", "pl pipelines list"),
     _e("2026-10-25.06", "Connectors whose tools change lose write access until you approve them",
        "Alerts tab; pl connectors approve-tools <name>", "pl connectors approve-tools <name>"),
+    _e("2026-10-25.07", "pl ask: central read-only brain answers with checked sources",
+       "ask questions across every pipeline and connector; every fact links a source", "pl ask \"what needs me today?\""),
 ]
 
 

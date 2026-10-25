@@ -73,6 +73,8 @@
                           machine-wide kill switch: holds approved cards with outward actions; off releases them
   pl chat add|list|remove|test|route
                           messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
+  pl ask "text" [--json] [--conversation ID]
+                          ask the central read-only brain across every pipeline and connector
   pl manager start|stop [--all]|status|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
@@ -195,6 +197,9 @@ def _main():
     if pre_a.rest[:1] == ["mcp"]:              # MCP server: brain or profile server
         from pl import mcp_serve
         return mcp_serve.cmd_mcp(pre_a.rest[1:], pre_a.profile)
+    if pre_a.rest[:1] == ["ask"]:              # central brain: routed before profile load
+        from pl import brain
+        return brain.cmd_ask(pre_a.rest[1:])
     config.load(pre_a.profile)
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)
