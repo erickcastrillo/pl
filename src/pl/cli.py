@@ -340,6 +340,8 @@ def _main():
     q = pk.add_parser("enable"); q.add_argument("name", nargs="?", help="skill name"); q.add_argument("--plugin", help="plugin name")
     q.add_argument("--pod", required=True, help="pod name"); q.add_argument("--hooks", action="store_true", help="enable plugin hooks")
     q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pk.add_parser("disable"); q.add_argument("name"); q.add_argument("--pod", required=True, help="pod name")
+    q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc", "bootstrap"])
     p.add_argument("path", nargs="?", help="bootstrap: the new worktree")
     p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")

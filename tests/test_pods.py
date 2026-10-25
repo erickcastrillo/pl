@@ -258,3 +258,92 @@ def test_enabling_hooks_without_a_terminal_needs_yes(fake_env, monkeypatch, caps
     doc = tomlkit.parse(fake_env["config"].read_text())
     plugins = doc.get("pods", {}).get("engineering", {}).get("plugins", [])
     assert any(p.get("name") == "plug-gamma" and p.get("hooks") is True for p in plugins)
+
+
+def _library_skill(fake_env, name):
+    d = fake_env["library"] / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {name}\n---\n# {name}\n")
+
+
+def _pod_with(fake_env, monkeypatch, skill_names):
+    for n in ("in-pod", "outside"):
+        _library_skill(fake_env, n)
+    pod = {"name": "billing", "skills": skill_names, "plugins": []}
+    monkeypatch.setattr(C, "PODS", {"billing": {"skills": skill_names}})
+    monkeypatch.setattr(C, "POD", "billing")
+    return pod
+
+
+def test_a_skill_outside_the_pods_skills_is_not_in_the_launch_plugin(fake_env, monkeypatch):
+    pod = _pod_with(fake_env, monkeypatch, ["in-pod"])
+    claude = harnesses.get("claude")
+    pdir = skills.launch_plugin(claude, pod=pod)
+    assert not (pdir / "skills" / "outside").exists()
+    assert skills.library_prompt(claude, None, "/outside x", pdir, pod=pod) == "/outside x"
+
+
+def test_a_codex_launch_does_not_inline_a_skill_outside_the_pod(fake_env, monkeypatch):
+    pod = _pod_with(fake_env, monkeypatch, ["in-pod"])
+    codex = harnesses.get("codex")
+    assert skills.library_prompt(codex, None, "/outside x", None, pod=pod) == "/outside x"
+    assert not list((fake_env["state"] / "launch").glob("skill-outside-*"))
+
+
+def test_a_pod_skill_is_present(fake_env, monkeypatch):
+    pod = _pod_with(fake_env, monkeypatch, ["in-pod"])
+    claude, codex = harnesses.get("claude"), harnesses.get("codex")
+    pdir = skills.launch_plugin(claude, pod=pod)
+    assert (pdir / "skills" / "in-pod" / "SKILL.md").is_file()
+    assert skills.library_prompt(claude, None, "/in-pod x", pdir, pod=pod) == "/pl:in-pod x"
+    assert "Follow the instructions in" in skills.library_prompt(codex, None, "/in-pod x", None, pod=pod)
+
+
+def test_a_launch_script_of_a_configured_pod_leaves_out_other_skills(fake_env, monkeypatch):
+    _pod_with(fake_env, monkeypatch, ["in-pod"])
+    claude = harnesses.get("claude")
+    script = harnesses.launch_script(claude, None, "/outside x", "sid", "label")
+    assert "/pl:outside" not in script
+    assert "/pl:in-pod" in harnesses.launch_script(claude, None, "/in-pod x", "sid", "label")
+
+
+def test_a_profile_without_pods_keeps_the_whole_library(fake_env):
+    _library_skill(fake_env, "outside")
+    claude = harnesses.get("claude")
+    assert "/pl:outside" in harnesses.launch_script(claude, None, "/outside x", "sid", "label")
+
+
+def _enable(monkeypatch, *argv):
+    monkeypatch.setattr(sys, "argv", ["pl", "skills", "enable", *argv])
+    cli.main()
+
+
+def test_enable_adds_the_skill_and_the_next_launch_has_it(fake_env, monkeypatch, capsys):
+    _library_skill(fake_env, "migration-checklist")
+    _enable(monkeypatch, "migration-checklist", "--pod", "engineering", "--yes")
+    doc = tomlkit.parse(fake_env["config"].read_text())
+    assert "migration-checklist" in doc["pods"]["engineering"]["skills"]
+    assert "pl-run" in doc["pods"]["engineering"]["skills"]
+    monkeypatch.setattr(C, "PODS", {"engineering": dict(doc["pods"]["engineering"])})
+    claude = harnesses.get("claude")
+    pdir = skills.launch_plugin(claude, pod=pods.current())
+    assert (pdir / "skills" / "migration-checklist").exists()
+    capsys.readouterr()
+    _enable(monkeypatch, "migration-checklist", "--pod", "engineering", "--yes")
+    assert "already enabled" in capsys.readouterr().out
+
+
+def test_disable_removes_the_skill(fake_env, monkeypatch, capsys):
+    _library_skill(fake_env, "migration-checklist")
+    _enable(monkeypatch, "migration-checklist", "--pod", "engineering", "--yes")
+    monkeypatch.setattr(sys, "argv", ["pl", "skills", "disable", "migration-checklist", "--pod", "engineering", "--yes"])
+    cli.main()
+    doc = tomlkit.parse(fake_env["config"].read_text())
+    assert "migration-checklist" not in doc["pods"]["engineering"]["skills"]
+
+
+def test_enable_of_an_unknown_skill_exits_2(fake_env, monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _enable(monkeypatch, "no-such-skill", "--pod", "engineering", "--yes")
+    assert exc.value.code == 2
+    assert "no-such-skill" in capsys.readouterr().err
