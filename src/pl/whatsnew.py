@@ -164,6 +164,8 @@ ENTRIES = [
        "set up from the repo's .pl/e2e.yaml; ~/pl-e2e/<repo>/<time>/report.md: each failing test with file:line, its trace, video and screenshot; "
        "pl e2e --help. pl-plan now plans Playwright tests per card and pl-run builds them", "pl e2e --keep-vm"),
     _e("2026-10-25.16", "Pipelines from templates: sales, clients, billing, team", "pl pipelines", "pl pipelines list --templates"),
+    _e("2026-10-25.17", "Add a pipeline as a new profile; export and import it", "pl pipelines add",
+       "pl pipelines add sales --template new-client --board local --yes"),
 ]
 
 
