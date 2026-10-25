@@ -86,4 +86,4 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 ```
 {"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
 ```
-`ok` is `true`, `false`, or `null` for a rule not checked yet.
+`ok` is `true`, `false`, or `null` for a rule that was not run (for example `tests` after a conflict). `action` is `"would merge"` when every rule passes, else `"needs a person: <rules>"`.
