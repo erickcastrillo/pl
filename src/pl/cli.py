@@ -123,11 +123,13 @@
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
-                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...)
+                          reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
+                          install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
+                          and installs into the library only after a yes
   pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | approve-tools NAME | revoke NAME
                           the machine's MCP connectors (<machine dir>/connectors.toml): role, teams, access, tier,
                           status; a custom adapter is warned about; no token ever shows
@@ -319,7 +321,11 @@ def _main():
     r.add_argument("--brief", required=True, help="JSON: problem, who, outcome, in_scope, out_of_scope, repos, open_questions")
     r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
-    pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
+    q = pk.add_parser("list"); q.add_argument("--json", action="store_true", help="machine-readable, with the source of installed skills")
+    q = pk.add_parser("install"); q.add_argument("source", help="github:owner/repo[/path][@ref]")
+    q.add_argument("--yes", action="store_true", help="do not ask first"); q.add_argument("--dry-run", action="store_true", help="list the files and stop")
+    q.add_argument("--name", help="the library name (default: the skill's folder name)")
+    q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
