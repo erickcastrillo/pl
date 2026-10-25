@@ -44,7 +44,13 @@ def current():
     pod = find(C.POD or C.PROFILE_NAME)
     if pod is None and C.POD:
         raise SystemExit(f"pl: [pipeline] pod names {C.POD!r}, which is not in [pods]")
-    return pod or _builtin()
+    return pod or find("engineering")
+
+
+def launch_pod():
+    """The pod whose skills a launch is limited to: only one the profile configures with a `skills` key, so a profile without pods, or a pod table that sets only file or knowledge, keeps the whole library."""
+    name = next((n for n in (C.POD or C.PROFILE_NAME, "engineering") if n in C.PODS), None)
+    return find(name) if name and "skills" in C.PODS[name] else None
 
 
 def names():
@@ -70,6 +76,48 @@ def describe(pod):
             "budgets": pod["budgets"], "version": _version(pod["name"])}
 
 
+ESCALATION_ALERTS = ("stage_failed:", "api_error:")
+
+
+def _edit_count(pod_name, cutoff):
+    try:
+        lines = _edits_path().read_text().splitlines()
+    except OSError:
+        return 0
+    n = 0
+    for ln in lines:
+        try:
+            rec = json.loads(ln)
+            ts = parse_iso(rec["ts"]) if isinstance(rec.get("ts"), str) else rec.get("ts", 0)
+        except (ValueError, KeyError, TypeError):
+            continue
+        n += rec.get("pod") == pod_name and ts >= cutoff
+    return n
+
+
+def metrics(pod, days=30):
+    """Approval rate, edits per approved draft and escalations of the pod over the last days; the profile's events
+    belong to the pipeline's pod, so any other pod reads as empty."""
+    from datetime import datetime, timedelta, timezone
+
+    from pl import alerts, events
+    window = {"window_days": days, "approval_rate": None, "edits_per_draft": None, "escalations": 0}
+    if pod != current()["name"]:
+        return window
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    seen = [e for e in events._read() if e["_t"] >= since]
+    kinds = [e["kind"] for e in seen]
+    approved = kinds.count("approved") + kinds.count("spec_approved")
+    decided = approved + kinds.count("rejected") + kinds.count("spec_rejected")
+    window["approval_rate"] = approved / decided if decided else None
+    window["edits_per_draft"] = _edit_count(pod, since.timestamp()) / approved if approved else None
+    manual = sum(e["kind"] == "moved" and e.get("to") == "Manual" for e in seen)
+    failures = sum(a["key"].startswith(ESCALATION_ALERTS) and (a.get("first_seen") or 0) >= since.timestamp()
+                   for a in alerts.listing(all=True))
+    window["escalations"] = failures + manual
+    return window
+
+
 def _cmd_list_show(a):
     """pl pods list [--json] | show NAME [--json]."""
     if a.pods_cmd == "list":
@@ -81,6 +129,7 @@ def _cmd_list_show(a):
         raise SystemExit(2)
     d = describe(pod)
     if a.json:
+        d["metrics"] = metrics(pod["name"])
         print(json.dumps(d, indent=2))
         return 0
     print(f"{d['name']}  (version {d['version']})  {d['file'] or 'no pod.md'}")

@@ -1,0 +1,31 @@
+[pipeline]
+name = "engineering"
+template = "engineering"
+columns = ["Inbox", "Spec ready", "Plan for review", "Manual", "Approved", "In progress", "PR open", "Done"]
+
+[pipeline.stages.spec]
+column = "Inbox"
+done = "Spec ready"
+skill = "pl-spec"
+section = "SPEC"
+gate = "none"
+
+[pipeline.stages.design]
+column = "Spec ready"
+done = "Spec ready"
+skill = "pl-design"
+section = "DESIGN"
+gate = "none"
+
+[pipeline.stages.plan]
+column = "Spec ready"
+done = "Plan for review"
+skill = "pl-plan"
+section = "PLAN"
+gate = "owner"
+
+[pipeline.stages.run]
+column = "Approved"
+done = "PR open"
+skill = "pl-run"
+gate = "auto-merge"

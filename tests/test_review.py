@@ -204,6 +204,80 @@ def test_pl_list_shows_the_approved_label(board, monkeypatch, capsys):
     assert "spec approved \u2014 planning (waiting for a planner slot)" in capsys.readouterr().out
 
 
+def _quiet_list(monkeypatch, intake=False):
+    monkeypatch.setattr(commands, "registry", lambda: {})
+    monkeypatch.setattr(commands, "share", lambda *a: None)
+    monkeypatch.setattr(commands, "intake_configured", lambda: intake)
+    monkeypatch.setattr(commands, "exhausted_profiles", lambda: [])
+    monkeypatch.setattr(commands, "paused", lambda: None)
+
+
+def _plan_card(num, title, col, plan, slice_):
+    return mk(f"o/r#{num}", title, col, plan=plan, slice=slice_)
+
+
+def _plan_rows(out):
+    return [ln for ln in out.splitlines() if "slice " in ln]
+
+
+def test_pl_list_plan_shows_only_that_plan_in_slice_order(board, monkeypatch, capsys):
+    _quiet_list(monkeypatch)
+    for c in (_plan_card(50, "five", "Approved", 21, 5), _plan_card(41, "one", "Done", 21, 1),
+              _plan_card(42, "two", "PR open", 21, 2), _plan_card(43, "other plan", "Approved", 7, 1),
+              mk("o/r#44", "no plan", "Approved")):
+        board.items[c["id"]] = c
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=21))
+    rows = _plan_rows(capsys.readouterr().out)
+    assert [r.split()[0] for r in rows] == ["r#41", "r#42", "r#50"]
+    assert "slice 1" in rows[0] and "one" in rows[0] and "Done" in rows[0]
+    assert "other plan" not in "".join(rows) and "no plan" not in "".join(rows)
+
+
+def test_pl_list_plan_includes_done_cards(board, monkeypatch, capsys):
+    _quiet_list(monkeypatch)
+    board.items["o/r#40"] = _plan_card(40, "finished", "Done", 21, 1)
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=21))
+    assert "finished" in capsys.readouterr().out
+
+
+def test_pl_list_plan_keeps_both_cards_that_share_a_slice(board, monkeypatch, capsys):
+    _quiet_list(monkeypatch)
+    board.items["o/r#40"] = _plan_card(40, "forty", "Approved", 21, 2)
+    board.items["o/r#9"] = _plan_card(9, "nine", "Approved", 21, 2)
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=21))
+    rows = _plan_rows(capsys.readouterr().out)
+    assert ["nine" in rows[0], "forty" in rows[1], len(rows)] == [True, True, 2]
+
+
+def test_pl_list_plan_with_no_cards_says_so(board, monkeypatch, capsys):
+    _quiet_list(monkeypatch)
+    board.items["o/r#40"] = _plan_card(40, "forty", "Approved", 21, 1)
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=7))
+    assert "no cards in plan 7" in capsys.readouterr().out
+
+
+def test_pl_list_plan_skips_the_product_board_and_refuses_product(board, monkeypatch, capsys):
+    _quiet_list(monkeypatch, intake=True)
+
+    def fail():
+        raise AssertionError("the product board was read")
+    monkeypatch.setattr(commands, "product_cards_mine", fail)
+    board.items["o/r#40"] = _plan_card(40, "forty", "Approved", 21, 1)
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=21))
+    assert "PRODUCT" not in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="do not go together"):
+        commands.cmd_list(argparse.Namespace(product=True, all=False, plan=21))
+
+
+def test_pl_list_without_plan_is_unchanged(board, monkeypatch, capsys):
+    _quiet_list(monkeypatch)
+    board.items["o/r#40"] = _plan_card(40, "forty", "Approved", 21, 1)
+    commands.cmd_list(argparse.Namespace(product=False, all=False))
+    old = capsys.readouterr().out
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=None))
+    assert capsys.readouterr().out == old and "FEATURE PIPELINE board" in old
+
+
 def test_an_approved_spec_leaves_the_needs_you_spec_group(monkeypatch):
     from pl.tui.needs import needs_groups
     monkeypatch.setattr(C, "GATES", {"spec": True})
@@ -1281,7 +1355,7 @@ async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch)
         assert not isinstance(app.screen, P.CardScreen)
         await pilot.press("enter")
         await settle(pilot)
-        await pilot.press("q")
+        await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, P.CardScreen) and app.is_running
 
@@ -1439,3 +1513,15 @@ def test_watch_rows_mark_only_an_agent_dead_at_the_attempt_limit_as_failed(board
         got = [r for r in watch.watch_snapshot()["rows"] if r.get("card") and r["card"]["id"] == A_ID]
         failed[attempts] = got[0].get("failed")
     assert failed == {3: True, 2: False}
+
+
+def test_pl_list_json_plan_returns_only_that_plans_cards_and_no_intake(board, monkeypatch):
+    _quiet_list(monkeypatch, intake=True)
+    monkeypatch.setattr(commands, "product_cards_mine", lambda: pytest.fail("the Product board is skipped"))
+    emitted = []
+    monkeypatch.setattr(commands, "emit", emitted.append)
+    for c in (_plan_card(41, "one", "Done", 21, 1), _plan_card(43, "other plan", "Approved", 7, 1),
+              mk("o/r#44", "no plan", "Approved")):
+        board.items[c["id"]] = c
+    commands.cmd_list(argparse.Namespace(product=False, all=False, plan=21, json=True))
+    assert [r["id"] for r in emitted[0]["pipeline"]] == ["o/r#41"] and emitted[0]["intake"] == []

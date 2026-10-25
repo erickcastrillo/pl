@@ -69,7 +69,7 @@ def resolve(src):
     ref = src["ref"]
     if SHA_RE.fullmatch(ref):
         return ref
-    out = _git(["git", "ls-remote", _url(src), ref or "HEAD"])
+    out = _git(["git", "ls-remote", "--", _url(src), ref or "HEAD"])
     for line in out.splitlines():
         sha = line.split("\t")[0]
         if SHA_RE.fullmatch(sha):
@@ -110,7 +110,9 @@ def _json_flags(p):
 def inventory(root, path):
     """Every file under root/path, the code in them flagged by kind, and what kind of source it is."""
     root = Path(root).resolve()
-    base = root / path if path else root
+    base = Path(os.path.realpath(root / path)) if path else root
+    if not base.is_relative_to(root):
+        raise Refused(f"{path} leads outside the source")
     if not base.exists():
         raise Refused(f"no such path at the pinned commit: {path}")
     files, flags, skills = [], [], []
@@ -118,7 +120,7 @@ def inventory(root, path):
         dirs[:] = sorted(x for x in dirs if x != ".git")
         for n in sorted(names) + [x for x in dirs if os.path.islink(os.path.join(d, x))]:
             p = Path(d, n)
-            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(root)):
+            if harnesses.SECRET_RE.fullmatch(n) or (p.is_symlink() and not Path(os.path.realpath(p)).is_relative_to(base)):
                 raise Refused(f"{p.relative_to(root)} is a credential file or a link out of the source")
             if p.is_dir():
                 continue
@@ -285,6 +287,7 @@ def install(text, yes, out, dry_run=False, name=None, plugin=None):
             if one != path:
                 inv = inventory(root, one)
             picks = [(name or (one.rsplit("/", 1)[-1] if one else src["repo"]), one)]
+        pick_files = {n: inventory(root, sub)["files"] for n, sub in picks}
         lib = skills.library()
         kept = lib / PLUGINS_DIR / f"{plugin_name}@{sha[:7]}"
         for n, _ in picks:
@@ -328,7 +331,7 @@ def install(text, yes, out, dry_run=False, name=None, plugin=None):
         for n, sub in picks:
             _record(lib, n, {
                 "source": "github", "repo": f"{src['owner']}/{src['repo']}", "path": sub, "ref": src["ref"], "sha": sha,
-                "files": {rel: skills._sha256((lib / n / rel).read_bytes()) for rel in inventory(root, sub)["files"]},
+                "files": {rel: skills._sha256((lib / n / rel).read_bytes()) for rel in pick_files[n]},
                 "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "plugin": plugin_name})
     except Refused as e:
         return _fail(str(e))

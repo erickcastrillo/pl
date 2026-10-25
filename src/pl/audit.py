@@ -14,6 +14,10 @@ from pl import config as C
 from pl import manager
 from pl import util
 
+# The anomaly alerts in dispatch match on these action names.
+CHAT_UNKNOWN_SENDER = "chat_unknown_sender"
+CONNECTOR_TOOL = "connector.tool"
+
 
 def record(kind: str, *args: Any, **fields: Any) -> None:
     """Append one audit entry to machine_dir()/audit.jsonl, opened 0600 with O_APPEND."""
@@ -215,7 +219,14 @@ def cmd_audit(a) -> None:
 
 
 def read_entries(since: float | None = None) -> list[dict]:
-    p = _path()
+    return _read_jsonl(_path(), since)
+
+
+def read_machine_entries(since: float | None = None) -> list[dict]:
+    return _read_jsonl(manager.machine_dir() / "audit.jsonl", since)
+
+
+def _read_jsonl(p, since: float | None) -> list[dict]:
     if not p.exists():
         return []
     try:
