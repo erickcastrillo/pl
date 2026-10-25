@@ -111,9 +111,10 @@
                           pause/resume NAME toggles whether it runs
   pl forget --contact <id|email> --yes [--dry-run] [--json]
                           remove one contact everywhere: cards, logs, memory; records an audit entry
-  pl sandbox create|status|start|stop|destroy [--yes]
+  pl sandbox create|status|start|stop|destroy [--yes] | login ACCOUNT
                           manage the Multipass sandbox VM for this profile (pl-sbx-NAME), mounting only its
-                          work folder and worktrees folder; --yes destroys the VM without asking
+                          work folder and worktrees folder; --yes destroys the VM without asking; login signs
+                          ACCOUNT's harness in from inside the VM (a fresh sign-in; no host credential files are copied)
   pl worktrees bootstrap PATH [--dry-run]
                           copy and link the files .pl/worktree.yaml lists from the main checkout into a new worktree
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
@@ -376,7 +377,8 @@ def _main():
     p.add_argument("--yes", action="store_true", help="confirm without prompting")
     p.add_argument("--dry-run", action="store_true", help="count what would be removed without changing anything")
     p.add_argument("--json", action="store_true", help="output counts as JSON")
-    p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy"])
+    p = sub.add_parser("sandbox"); p.add_argument("action", choices=["create", "status", "start", "stop", "destroy", "login"])
+    p.add_argument("account", nargs="?")
     p.add_argument("--yes", action="store_true", help="do not ask before destroying the VM")
     p = sub.add_parser("brain"); pb = p.add_subparsers(dest="brain_cmd")
     q = pb.add_parser("show"); q.add_argument("conv"); q.add_argument("--json", action="store_true")
