@@ -137,6 +137,8 @@ ENTRIES = [
     _e("2026-10-25.04", "Agents ask you questions; pl answer continues the stage",
        "Pipeline: questions show in pl inbox and in chat; the owner's answer continues the stage",
        "pl answer <id> \"text\""),
+    _e("2026-10-25.05", "Home across pipelines, ctrl+k switcher and new Settings panels",
+       "Home tab; ctrl+k; Settings", "pl pipelines list"),
 ]
 
 

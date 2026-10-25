@@ -17,8 +17,38 @@ from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 HINT = ("e edit · E $EDITOR · n new · d delete (to .pl-trash) · S share to the library · l link a library skill "
-        "to an account · plugin files are read-only")
+        "to an account · I install · u update check · plugin files are read-only")
 DIFF_LINES = 30
+
+
+class PromptScreen(ModalScreen):
+    """Asks for a single text input with a prompt."""
+    DEFAULT_CSS = """
+    PromptScreen { align: center middle; }
+    PromptScreen > Vertical { width: 70; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, prompt, placeholder=""):
+        super().__init__()
+        self.prompt = prompt
+        self.placeholder = placeholder
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(self.prompt))
+            yield Input(placeholder=self.placeholder, id="prompt-input")
+            yield Static(Text("enter submit · esc cancel", style="dim"))
+
+    def on_mount(self):
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self, m):
+        self.dismiss(m.value.strip() or None)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
 
 
 class EditorScreen(ModalScreen):
@@ -109,7 +139,8 @@ class SkillsView(Widget):
     """
     BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new"),
                 Binding("d", "delete", "delete"), Binding("S", "share", "share to library"),
-                Binding("l", "link", "link to account")]
+                Binding("l", "link", "link to account"), Binding("I", "install", "install"),
+                Binding("u", "update", "update check")]
 
     def __init__(self):
         super().__init__()
@@ -293,4 +324,35 @@ class SkillsView(Widget):
                 self._say(e)
             self.rescan()
         self.app.push_screen(TargetScreen(it["name"], targets, verb="Link"), chosen)
+
+    def action_install(self):
+        def asked(source):
+            if not source:
+                return
+
+            def run():
+                try:
+                    r = _run(["pl", "skills", "install", source], capture_output=True, text=True)
+                    msg = (r.stdout.strip() or r.stderr.strip() or "installed").splitlines()[-1]
+                except Exception as e:
+                    msg = str(e)
+                self.app.call_from_thread(self.app.notify, msg, markup=False)
+                self.app.call_from_thread(self.rescan)
+
+            self.run_worker(run, thread=True, group="skills-install")
+
+        self.app.push_screen(PromptScreen("Install skill: <github:...> or owner/repo", placeholder="github:owner/repo"), asked)
+
+    def action_update(self):
+        def run():
+            try:
+                r = _run(["pl", "skills", "update", "--check"], capture_output=True, text=True)
+                msg = (r.stdout.strip() or r.stderr.strip() or "updated").splitlines()[-1]
+            except Exception as e:
+                msg = str(e)
+            self.app.call_from_thread(self.app.notify, msg, markup=False)
+            self.app.call_from_thread(self.rescan)
+
+        self.run_worker(run, thread=True, group="skills-update")
+
 

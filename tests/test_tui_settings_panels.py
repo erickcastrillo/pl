@@ -237,4 +237,3 @@ async def test_settings_view_includes_connectors_panel():
         await settle(pilot)
         view = app.query_one(settings.SettingsView)
         assert view.query(ConnectorsPanel)
-

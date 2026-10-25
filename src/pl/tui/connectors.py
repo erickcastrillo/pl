@@ -136,6 +136,8 @@ class ConnectorsPanel(Widget):
                 return
             try:
                 items = json.loads(r.stdout) if r.stdout.strip() else []
+                if isinstance(items, dict):   # pl connectors list --json prints {"connectors": [...]}
+                    items = items.get("connectors") or []
             except Exception:
                 items = []
             self.app.call_from_thread(self._fill, items)
