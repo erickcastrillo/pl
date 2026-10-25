@@ -4,7 +4,7 @@ import stat
 
 import pytest
 
-from pl import alerts, board, cli, ghquota, outbox, sync
+from pl import accounts, alerts, board, cli, dispatch, events, ghquota, outbox, sync, usage
 from pl import config as C
 from pl.trackers import github
 from pl.trackers.local import Local
@@ -277,3 +277,145 @@ def test_sync_now_pull_error_exits_1_no_replay(world, monkeypatch, capsys):
     with pytest.raises(SystemExit) as e:
         _now(monkeypatch)
     assert e.value.code == 1 and "boom" in capsys.readouterr().err and calls == []
+
+
+# ---------- the 5-minute pull window ----------
+
+def _at(monkeypatch, t):
+    monkeypatch.setattr(github, "_clock", lambda: t)
+
+
+def test_pull_due_at_first_then_not_for_5_minutes(world, monkeypatch):
+    assert sync.pull_due()
+    sync.pull()
+    _at(monkeypatch, NOW + sync.PULL_EVERY - 1)
+    assert not sync.pull_due()
+    _at(monkeypatch, NOW + sync.PULL_EVERY)
+    assert sync.pull_due()
+
+
+def test_reserve_and_error_pulls_count_for_the_window(world):
+    _ledger(200)
+    sync.pull()
+    assert not sync.pull_due()
+    (C.STATE_DIR / "sync-pull.json").unlink()
+    (ghquota._path()).unlink()
+    world[2].fail = "boom"
+    assert sync.pull()["stopped_because"] == "error"
+    assert not sync.pull_due()
+
+
+def test_sync_now_resets_the_window(world, monkeypatch):
+    _stub_replay(monkeypatch)
+    _now(monkeypatch)
+    assert not sync.pull_due()
+
+
+def test_bad_or_future_stamp_is_due(world):
+    stamp = C.STATE_DIR / "sync-pull.json"
+    stamp.write_text("[1")
+    assert sync.pull_due()
+    stamp.write_text(json.dumps({"at": NOW + 60}))
+    assert sync.pull_due()
+
+
+# ---------- the dispatcher pulls before it replays ----------
+
+@pytest.fixture
+def passes(world, monkeypatch):
+    """The dispatcher's sync, with replay recorded; events collected."""
+    order, evs = [], []
+    real_pull, real_replay = sync.pull, sync.replay
+    monkeypatch.setattr(sync, "pull", lambda: order.append("pull") or real_pull())
+    monkeypatch.setattr(sync, "replay", lambda limit=None: order.append("replay") or real_replay(limit=limit))
+    monkeypatch.setattr(events, "emit", lambda kind, cid=None, **d: evs.append((kind, d)))
+    outbox.append(world[1], "update", {"description": "keep"})
+    return order, evs
+
+
+def test_pass_pulls_then_replays(world, passes):
+    local, lid, fake = world
+    fake.board[:] = [_gcard(title="from github")]
+    dispatch._sync_pass()
+    assert local.card(lid)["title"] == "from github"
+    assert passes[0] == ["pull", "replay"]
+
+
+def test_second_pass_inside_5_minutes_reads_no_board(world, passes, monkeypatch):
+    dispatch._sync_pass()
+    _at(monkeypatch, NOW + 60)
+    outbox.append(world[1], "update", {"description": "again"})
+    dispatch._sync_pass()
+    assert world[2].reads == 1 and passes[0].count("replay") == 2
+
+
+def test_conflict_pass_holds_back_the_local_title(world, passes):
+    local, lid, fake = _conflict(world)
+    dispatch._sync_pass()
+    assert fake.board[0]["title"] == "theirs" and "title" not in fake.updated.get("o/r#1", {})
+    assert all("title" not in e["fields"] for e in outbox.entries())
+    assert [a["key"] for a in alerts.listing()] == [f"sync-conflict:{lid}"]
+
+
+def test_pull_read_error_logs_and_skips_replay(world, passes):
+    local, lid, fake = world
+    fake.fail = "boom"
+    before = local.cards()
+    dispatch._sync_pass()
+    [(kind, d)] = passes[1]
+    assert kind == "error" and d["message"].startswith("sync pull:") and "boom" in d["message"]
+    assert "replay" not in passes[0] and local.cards() == before
+
+
+def test_pull_crash_logs_and_skips_replay(world, passes, monkeypatch):
+    def crash():
+        raise RuntimeError("x")
+    monkeypatch.setattr(sync, "pull", crash)
+    dispatch._sync_pass()
+    assert passes[1] == [("error", {"message": "sync pull: x"})] and "replay" not in passes[0]
+
+
+def _one_pass(monkeypatch, paused=False, checked=None):
+    monkeypatch.setattr(accounts, "check_parked", lambda: (checked if checked is not None else []).append(1))
+    monkeypatch.setattr(usage, "scan", lambda save=True: {})
+    monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
+    monkeypatch.setattr(dispatch, "paused", lambda: {"since": "now"} if paused else None)
+    monkeypatch.setattr(dispatch, "registry", lambda: {})
+    monkeypatch.setattr(dispatch, "cards", lambda: [])
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "")
+    for name in ("sweep_untracked", "mirror_to_product", "ensure_services", "notify"):
+        monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+    dispatch.dispatch_once(1, False, pull=False)
+
+
+def test_failed_pull_does_not_stop_the_pass(world, passes, monkeypatch):
+    checked = []
+
+    def crash():
+        raise RuntimeError("x")
+    monkeypatch.setattr(sync, "pull", crash)
+    _one_pass(monkeypatch, checked=checked)
+    assert checked == [1]
+    assert passes[1] == [("error", {"message": "sync pull: x"})]
+
+
+def test_reserve_pull_writes_no_event(world, passes):
+    _ledger(200)
+    before = world[0].cards()
+    dispatch._sync_pass()
+    assert passes[1] == [] and world[0].cards() == before and world[2].reads == 0
+
+
+@pytest.mark.parametrize("case", ["no-sync", "github-tracker", "paused"])
+def test_no_pull_when_off(world, passes, monkeypatch, case):
+    pulls = []
+    monkeypatch.setattr(sync, "pull", lambda: pulls.append(1))
+    if case == "no-sync":
+        C.SYNC.pop("github")
+    elif case == "github-tracker":
+        monkeypatch.setattr(C, "TRACKER", {"type": "github-project"})
+    if case == "paused":
+        _one_pass(monkeypatch, paused=True)
+    else:
+        dispatch._sync_pass()
+    assert pulls == [] and not any("sync pull" in str(e) for e in passes[1])

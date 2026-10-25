@@ -214,6 +214,8 @@ ENTRIES = [
        "unlinks it, moves the folder to a trash folder and names the stages and loops that used it",
        "pl skills remove NAME"),
     _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
+    _e("2026-10-25.37", "pl pulls people's GitHub edits onto the local board and alerts on conflicts",
+       "dispatcher: every 5 min with [sync] github; conflicts in pl alerts", "pl sync now"),
 ]
 
 

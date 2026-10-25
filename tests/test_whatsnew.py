@@ -41,6 +41,13 @@ def test_every_feature_shipped_this_week_has_an_entry():
         assert e["title"] and e["where"] and e["try"] and "\n" not in "".join(e.values())
 
 
+def test_newest_entry_is_pulling_github_edits():
+    last = whatsnew.ENTRIES[-1]
+    assert "GitHub edits" in last["title"] and "conflicts" in last["title"]
+    assert "pl alerts" in last["where"] and last["try"] == "pl sync now"
+    assert all(last["key"] > e["key"] for e in whatsnew.ENTRIES[:-1])
+
+
 def test_unseen_is_everything_first_then_only_newer_entries(profile):
     assert whatsnew.unseen() == whatsnew.ENTRIES
     whatsnew.mark_seen(whatsnew.ENTRIES[-3]["key"])

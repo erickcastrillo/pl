@@ -851,6 +851,34 @@ def github_board():
     return str((C.TRACKER or {}).get("type") or "").startswith("github")
 
 
+def local_board():
+    return str((C.TRACKER or {}).get("type") or "") == "local"
+
+
+def _sync_pass():
+    """The pass's sync: pull GitHub edits at most every sync.PULL_EVERY s (local board only), then replay.
+    A failed pull is logged and this pass does not replay: conflicts were not checked. The next pass tries again."""
+    if not C.SYNC.get("github"):
+        return
+    if local_board() and sync.pull_due():
+        try:
+            p = sync.pull()
+        except Exception as e:  # noqa: BLE001 - a failed pull never stops the pass
+            p = {"stopped_because": "error", "error": str(e)}
+        if p["stopped_because"] == "error":
+            print(f"sync pull failed: {p['error']}", file=sys.stderr)
+            events.emit("error", message=f"sync pull: {p['error']}")
+            return
+    try:   # a local board's queued changes go to its GitHub Project (sync.py)
+        if outbox.count():
+            r = sync.replay(limit=SYNC_PER_PASS)
+            if r["stopped_because"] == "error":
+                events.emit("error", message=f"sync: {r['error']}")
+    except Exception as e:  # noqa: BLE001 - a failed replay never stops the pass
+        print(f"sync failed: {e}", file=sys.stderr)
+        events.emit("error", message=f"sync: {e}")
+
+
 SYNC_PER_PASS = 20   # outbox entries a pass sends to GitHub at most: a long queue never holds up the agents
 INTAKE_EVERY = 300   # seconds between the default issue intake's searches (one GraphQL search each; the board is read every pass)
 _INTAKE = {"at": None, "noted": None}   # noted: the search back-off window already logged as an event
@@ -1175,14 +1203,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             accounts.check_parked()
         except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"account check failed: {e}", file=sys.stderr)
-        try:   # a local board's queued changes go to its GitHub Project (sync.py)
-            if C.SYNC.get("github") and outbox.count():
-                r = sync.replay(limit=SYNC_PER_PASS)
-                if r["stopped_because"] == "error":
-                    events.emit("error", message=f"sync: {r['error']}")
-        except Exception as e:  # noqa: BLE001 - a failed replay never stops the pass
-            print(f"sync failed: {e}", file=sys.stderr)
-            events.emit("error", message=f"sync: {e}")
+        _sync_pass()
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
     room = manager.room_for(ms, C.PROFILE_NAME)   # new agents this profile's share of the machine has room for

@@ -203,8 +203,21 @@ def _replay(limit):
             "error": error}
 
 
+PULL_EVERY = 300   # seconds between the dispatcher's pulls (one board read each)
+
+
+def _pull_stamp():
+    return C.STATE_DIR / "sync-pull.json"
+
+
+def pull_due():
+    at = board._load(_pull_stamp()).get("at")
+    return not isinstance(at, (int, float)) or not 0 <= github._clock() - at < PULL_EVERY   # a stamp from the future (the clock moved back) is due
+
+
 def pull():
     """Take the GitHub edits no local change competes with; keep the local value, save GitHub's and alert on a clash."""
+    board._save(_pull_stamp(), {"at": github._clock()})   # every outcome, reserve and error too, counts for the window
     out = {"pulled": 0, "conflicts": [], "stopped_because": "done", "error": None}
     rem, lim, _ = _reading()
     if rem is not None and rem < ghquota.RESERVE * lim:
