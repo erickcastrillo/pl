@@ -8,6 +8,7 @@ from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import DataTable
 
+from pl import config as C
 from pl import util
 
 
@@ -69,10 +70,11 @@ def home_rows(summaries) -> list[dict]:
 
 class HomeView(Widget):
     """The Home tab DataTable showing all configured pipelines."""
-    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True)]
+    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("i", "details", "details")]
 
-    def __init__(self):
+    def __init__(self, selected_profile=None):
         super().__init__()
+        self.selected_profile = selected_profile
         self.rows = []
 
     def compose(self):
@@ -106,3 +108,8 @@ class HomeView(Widget):
 
     def on_data_table_row_selected(self, _):
         self.action_select()
+
+    def action_details(self):
+        from pl.tui.details import DetailsScreen
+        r = self.selected()
+        self.app.push_screen(DetailsScreen((r or {}).get("name") or self.selected_profile or C.PROFILE_NAME or "default"))

@@ -8,6 +8,7 @@ COMMANDS = {
     "PlApp.whatsnew": "pl whatsnew",
     "PlApp.update": "pl update",
     "HomeView.select": "pl profiles",
+    "HomeView.details": "pl profiles",
     "PlApp.switcher": "pl list --json",
     "PlApp.oldest": "pl inbox --json",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
@@ -143,4 +144,12 @@ NAV = {
     "next_tab",
     "press",
     "show_overlay",
+}
+
+PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
+    "details": "pl pipelines show NAME --json",
+    ("pipelines", "details"): "pl pipelines show NAME --json",
+    ("details", "show"): "pl pipelines show NAME --json",
+    "dispatcher": "pl manager restart NAME",
+    ("details", "dispatcher"): "pl manager restart NAME",
 }
