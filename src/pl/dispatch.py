@@ -198,6 +198,25 @@ def _api_restart(st, c, w, err, failed):
     return True
 
 
+def _trust_restart(c, w, wh, folder, dry, failed):
+    """Stop a Claude agent at the trust prompt once its folder is trusted in the account's config, so its stage starts
+    fresh; once per card and stage. pl only reads that config and never answers the prompt. True when stopped."""
+    stage = w.get("stage")
+    done = (c.get("metadata") or {}).get("trust_restarted") or []
+    if wh.name != "claude" or stage in done or not harnesses.claude_trusts(w.get("profile") or c["metadata"].get("profile"), folder):
+        return False
+    if dry:
+        print(f"{short_id(c['id'])}  {stage} agent at the trust prompt; {folder} is now trusted: would stop it and start {stage} fresh")
+        return False
+    failed.add(f"permission_wait:{c['id']}")   # the alert stays open until the new agent is past the prompt
+    if no := stop_worker(c, w, meta={"trust_restarted": done + [stage]}):
+        print(f"{short_id(c['id'])}  {stage} agent at the trust prompt; {folder} is now trusted: could not stop it ({no})")
+        return False
+    events.emit("agent_restarted", c["id"], stage=stage, reason="folder trusted")
+    print(f"{short_id(c['id'])}  {stage} agent at the trust prompt; {folder} is now trusted: stopped it, its stage starts fresh")
+    return True
+
+
 def _wait_due(waits, seen, c, w, why):
     """True when this waiting run agent has waited [dispatch] release_waiting_after minutes (0 is off). The clock
     starts the first pass that sees it waiting (kept per card and session in the dispatcher state). An agent at a
@@ -858,8 +877,13 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         elif w.get("limit_hit") and status == "alive" and not dry:   # the agent is past its limit screen
             w = {k: v for k, v in w.items() if k != "limit_hit"}
             update(c["id"], metadata={"worker": w})
+        if dry and w and status == "alive" and not busy and not screen and sid not in reg \
+                and (t := trust_wait(wh, w.get("pane"))):
+            _trust_restart(c, w, wh, t, True, failed)
         if w and status == "alive" and not busy and not screen and not dry:   # stuck at a permission prompt: tell, never answer
             trust = None if sid in reg else trust_wait(wh, w.get("pane"))   # a registered session is past the trust prompt
+            if trust and _trust_restart(c, w, wh, trust, False, failed):   # the folder is trusted now: its stage starts fresh
+                m, w, status, trust = c["metadata"], {}, "none", None
             if trust:   # a new folder: the person trusts it once; the agent keeps its window, no restart
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
