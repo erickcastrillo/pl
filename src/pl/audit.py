@@ -12,6 +12,7 @@ from typing import Any
 
 from pl import config as C
 from pl import manager
+from pl import util
 
 
 def record(kind: str, *args: Any, **fields: Any) -> None:
@@ -73,7 +74,8 @@ def _format_what(action: str, detail=None) -> str:
     return action
 
 
-def append(action: str, *, card=None, target=None, detail=None) -> None:
+def append(action: str, *, card=None, target=None, detail=None, host=None, connector=None, channel=None, when=None,
+           **extra) -> None:
     try:
         C.STATE_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -83,16 +85,19 @@ def append(action: str, *, card=None, target=None, detail=None) -> None:
         if lock is not None:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX)
-                _append_locked(action, card=card, target=target, detail=detail)
+                _append_locked(action, card=card, target=target, detail=detail, host=host, connector=connector,
+                               channel=channel, when=when, extra=extra)
             finally:
                 os.close(lock)
         else:
-            _append_locked(action, card=card, target=target, detail=detail)
+            _append_locked(action, card=card, target=target, detail=detail, host=host, connector=connector,
+                           channel=channel, when=when, extra=extra)
     except OSError:
         pass
 
 
-def _append_locked(action: str, *, card=None, target=None, detail=None) -> None:
+def _append_locked(action: str, *, card=None, target=None, detail=None, host=None, connector=None, channel=None,
+                   when=None, extra=None) -> None:
     path = _path()
     prev = None
     if path.exists():
@@ -105,11 +110,18 @@ def _append_locked(action: str, *, card=None, target=None, detail=None) -> None:
 
     rec = {
         "who": who(),
+        "action": action,
         "what": _format_what(action, detail),
-        "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "when": (datetime.fromtimestamp(when, tz=timezone.utc).isoformat(timespec="seconds")
+                 if isinstance(when, (int, float)) else str(when)) if when is not None
+                else datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "session": os.environ.get("PL_SESSION"),
-        "host": getattr(C, "HOST", None) or socket.gethostname(),
+        "host": host or getattr(C, "HOST", None) or socket.gethostname(),
     }
+    for k, v in (("connector", connector), ("channel", channel)):
+        if v is not None:
+            rec[k] = v
+    rec.update(extra or {})
     if card is not None:
         rec["card"] = card
     if target is not None:
@@ -200,3 +212,24 @@ def cmd_audit(a) -> None:
             card = f" {e['card']}" if e.get("card") else ""
             target = f" {e['target']}" if e.get("target") else ""
             print(f"{e.get('when', '')}  {e.get('who', ''):<20}  {e.get('what', '')}{card}{target}{sess}")
+
+
+def read_entries(since: float | None = None) -> list[dict]:
+    p = _path()
+    if not p.exists():
+        return []
+    try:
+        lines = [json.loads(L) for L in p.read_text().splitlines() if L.strip()]
+        return [r for r in lines if since is None or parse_entry_ts(r) >= since]
+    except (OSError, ValueError):
+        return []
+
+
+def parse_entry_ts(rec: dict) -> float:
+    val = rec.get("when") or rec.get("ts") or rec.get("time")
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(val) if isinstance(val, str) else 0.0
+    except ValueError:
+        return util.parse_iso(val) if isinstance(val, str) else 0.0

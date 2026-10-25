@@ -1009,7 +1009,7 @@ def check_alerts(all_cards, failed, st=None):
         alerts.sweep("connector_tools:", connectors.active_tools_alerts(), notify)
     except (ImportError, AttributeError):
         pass
-    waiting, now = set(), time.time()
+    waiting, now = set(), alerts._clock()
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")
         if (c.get("metadata") or {}).get("pipeline_mode") == "auto" and col_name(c["list_id"]) == C.STAGE_DONE_AT["run"] \
@@ -1031,6 +1031,7 @@ def check_alerts(all_cards, failed, st=None):
                               s.get("waits") or "its window is gone; the dispatcher starts it again on its next pass"):
             notify(alerts.headline(why, f"Loop {name} has not run for {age(ran)}"), s.get("waits") or "see the Loops tab")
     alerts.sweep("loop_stale:", stale, notify)
+    _check_anomaly_alerts(now, st)
     if not C.SERVICES:
         return
     try:
@@ -1043,6 +1044,52 @@ def check_alerts(all_cards, failed, st=None):
         if why := alerts.open(key, "warn", f"Loop {name} looks dead: no tokens for 3 fires", f"open the Loops tab and restart {name}"):
             notify(alerts.headline(why, f"Loop {name} looks dead"), "no tokens spent for 3 of its fires; see the Loops tab")
     alerts.sweep("loop_dead:", dead, notify)
+
+
+def _check_anomaly_alerts(now, st=None):
+    from pl import audit
+    entries = audit.read_entries(since=now - 7 * 86400)
+    if not entries:
+        alerts.sweep("send_spike:", set(), notify)
+        return
+    window_start = st.get("last_audit_ts") if st is not None and "last_audit_ts" in st else (now - 300)
+    if st is not None:
+        st["last_audit_ts"] = now
+    hour_writes, week_writes, prior_hosts, recent_auths = {}, {}, {}, []
+    for e in entries:
+        act, ts = e.get("action") or e.get("kind") or "", audit.parse_entry_ts(e)
+        if act in ("chat.unknown_user", "chat_unknown_sender") and ts >= window_start:
+            chan = e.get("channel") or e.get("connector") or e.get("target") or "unknown"
+            if why := alerts.open(f"chat_unknown:{chan}", "high", f"Unknown chat user in {chan}", "check channel membership or invite them"):
+                notify(alerts.headline(why, f"Unknown chat user: {chan}"), "unauthorized chat message")
+        elif act == "connector.write":
+            conn = e.get("connector") or e.get("target") or "unknown"
+            week_writes[conn] = week_writes.get(conn, 0) + 1
+            if ts >= now - 3600:
+                hour_writes[conn] = hour_writes.get(conn, 0) + 1
+        elif (act.startswith("oauth.") or act.startswith("connector.oauth") or "oauth" in act or act == "connector.auth") and e.get("host"):
+            conn, host = e.get("connector") or e.get("target") or e.get("name") or "unknown", e["host"]
+            if ts < window_start:
+                prior_hosts.setdefault(conn, set()).add(host)
+            else:
+                recent_auths.append((conn, host))
+
+    active_spikes = set()
+    for conn, cnt_1h in hour_writes.items():
+        if cnt_1h >= 3 and cnt_1h > 3 * (week_writes.get(conn, 0) / 168.0):
+            key = f"send_spike:{conn}"
+            active_spikes.add(key)
+            if why := alerts.open(key, "high", f"Send spike on {conn}: {cnt_1h} sends in the last hour",
+                                  f"check connector {conn} for runaway scripts or loops"):
+                notify(alerts.headline(why, f"Send spike: {conn}"), f"{cnt_1h} sends in the last hour")
+    alerts.sweep("send_spike:", active_spikes, notify)
+
+    for conn, host in recent_auths:
+        known = prior_hosts.get(conn)
+        if (known and host not in known) or (not known and host != C.HOST):
+            if why := alerts.open(f"connector_new_place:{conn}", "high", f"Sign-in from a new place for {conn}: host {host}",
+                                  f"check recent OAuth sign-ins or token use for connector {conn}"):
+                notify(alerts.headline(why, f"New place sign-in: {conn}"), f"host {host}")
 
 
 def busy_agents(reg):
