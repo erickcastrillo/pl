@@ -105,18 +105,18 @@
                           a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
                           ask the central read-only brain across every pipeline and connector
-  pl manager start|stop [--all]|status|restart NAME
+  pl manager start|stop [--all]|status [--json]|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
   pl worktrees list | gc [--dry-run] [--yes] [--json]
                           the worktrees pl-run made in the worktrees folder: their card, column and keep/remove;
                           gc lists what is safe to remove (finished card, clean, all pushed); --yes removes it
-  pl update [--check]     print the commands that update pl (it never runs them); --check says whether a newer
+  pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
   pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
-  pl local-model [check]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
+  pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
   pl models list|test|set  list [--json] shows the models Ollama has pulled and the local job each is set for;
@@ -140,11 +140,11 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
-  pl whatsnew             what each pl upgrade added, where to see it and a command to try (? in the console)
+  pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
@@ -369,7 +369,8 @@ def _main():
     r.add_argument("--brief", required=True, help="JSON: problem, who, outcome, in_scope, out_of_scope, repos, open_questions")
     r = qi.add_parser("file"); r.add_argument("id", help="the idea id pl assistant idea save printed")
     p = sub.add_parser("skills"); pk = p.add_subparsers(dest="skills_cmd")
-    pk.add_parser("list"); q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
+    q = pk.add_parser("list"); q.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
+    q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES))
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all")
     q = pk.add_parser("reset"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     p = sub.add_parser("connectors"); pc = p.add_subparsers(dest="connectors_cmd", required=True)
@@ -416,9 +417,9 @@ def _main():
     p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
-    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists")
+    p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
-    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check")
+    p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
     q = pm.add_parser("list"); q.add_argument("--json", action="store_true", help="output as JSON")
     q = pm.add_parser("test"); q.add_argument("job"); q.add_argument("--json", action="store_true", help="output as JSON")

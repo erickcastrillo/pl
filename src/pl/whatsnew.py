@@ -5,6 +5,7 @@ import json
 import os
 
 from pl import config as C
+from pl import jsonout
 
 
 def _e(key, title, where, try_):
@@ -195,6 +196,8 @@ ENTRIES = [
        "pl sandbox login <account>"),
     _e("2026-10-25.28", "Local board changes go to GitHub when the budget allows",
        "dispatcher: every pass; [sync] github and repo in config.toml", "pl sync now"),
+    _e("2026-10-25.29", "JSON for manager status, the local model, what's new, skills and the update check",
+       "CLI: pl manager status, local-model, whatsnew, skills list and update --check take --json", "pl whatsnew --json"),
 ]
 
 
@@ -231,6 +234,9 @@ def text(entries):
     return "\n\n".join(f"{e['title']}\n  where: {e['where']}\n  try:   {e['try']}" for e in entries)
 
 
-def cmd_whatsnew(_argv=None):
+def cmd_whatsnew(argv=None):
+    if "--json" in (argv or []):
+        jsonout.emit({"entries": ENTRIES})
+        return 0
     print("What's new in pl\n\n" + text(ENTRIES))
     return 0
