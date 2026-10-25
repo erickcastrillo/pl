@@ -371,7 +371,7 @@ def test_the_console_execs_the_same_command_after_a_restart(monkeypatch):
     runs, execs = [], []
 
     class FakeApp:
-        def __init__(self, interval=None):
+        def __init__(self, interval=None, **kw):
             self.restart_into = None
 
         def run(self):
@@ -386,6 +386,6 @@ def test_the_console_execs_the_same_command_after_a_restart(monkeypatch):
     monkeypatch.setattr(sys, "orig_argv", [sys.executable, "/bin/pl", "--profile", "work"])
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(update, "_BAD", set())
-    watch.cmd_watch(argparse.Namespace(interval=None, once=False, plain=False))
+    watch.cmd_watch(argparse.Namespace(interval=None, once=False, plain=False, open=None, tab=None))
     assert execs == [(sys.executable, [sys.executable, "/bin/pl", "--profile", "work"])]
     assert runs == [1, 1] and update._BAD == {"b9"}   # a failed exec opens this version's console again

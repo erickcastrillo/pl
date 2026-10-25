@@ -280,6 +280,14 @@ def start_worker(c, stage, attempts, dry):
     if dry:
         print(f"  would start {name} under {profile}: {prompt}")
         return
+    try:
+        harnesses.refuse_bypass(h)
+    except SystemExit as e:
+        if why := alerts.open(f"stage_unsafe:{stage}", "high",
+                              f"Stage {stage} template bypasses permissions",
+                              f"remove bypass flags from [harnesses.{h.name}] in {C.path() or 'config.toml'}"):
+            notify(alerts.headline(why, f"Stage {stage} unsafe"), str(e))
+        raise
     if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
         tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
     win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(C.WORK_DIR),
@@ -400,8 +408,10 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         print(f"starting {name} loop under {use}: {prompt}")
         if dry:
             continue
+        h = harnesses.account_harness(use)
+        harnesses.refuse_bypass(h)
         pane = _loop_pane(name)
-        _launch(pane, name, harnesses.launch_script(harnesses.unattended(harnesses.account_harness(use)), use, prompt,
+        _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), use, prompt,
                                                     None, name))
         old = svc_state.get(name, {})
         svc_state[name] = {"profile": use, "started_at": now_iso(), "ran_at": now_iso(), "sessions": old.get("sessions", []),

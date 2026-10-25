@@ -86,7 +86,7 @@ def test_send_keys_string_returns_the_exact_hostile_tokens(fake_home, fake_tmux)
     c = {"id": "x'; rm -rf ~ #", "title": "t", "metadata": {"profile": "acme", "spec_slug": "$(id)"}}
     dispatch.start_worker(c, "spec", 1, False)
     assert len(sent) == 1
-    assert shlex.split(sent[0]) == [f"CLAUDE_CONFIG_DIR={fake_home / 'cfg dir'}", "claude", "--permission-mode", "auto",
+    assert shlex.split(sent[0]) == ["PL_STAGE=spec", f"CLAUDE_CONFIG_DIR={fake_home / 'cfg dir'}", "claude", "--permission-mode", "auto",
                                     "--session-id", SID,
                                     "--name", "spec:$(id)", "/spec-writer x'; rm -rf ~ #"]
 
@@ -146,7 +146,7 @@ def test_claude_builtin_reproduces_the_legacy_commands(fake_home, fake_tmux):
     acme = fake_home / ".claude-acme"
     c = {"id": "abc", "title": "Fix Thing", "metadata": {"profile": "acme", "pipeline_mode": "auto"}}
     dispatch.start_worker(c, "spec", 1, False)
-    legacy = f"CLAUDE_CONFIG_DIR={acme} claude --permission-mode auto --session-id {SID} --name 'spec:fix-thing' '/spec-writer abc'"
+    legacy = f"PL_STAGE=spec CLAUDE_CONFIG_DIR={acme} claude --permission-mode auto --session-id {SID} --name 'spec:fix-thing' '/spec-writer abc'"
     assert shlex.split(sent[0]) == shlex.split(legacy)
     assert updates[0][1]["metadata"]["worker"]["harness"] == "claude"
     # service loops: same command as the snapshot's ensure_services
@@ -659,7 +659,7 @@ def test_a_moved_agent_resumes_with_the_unattended_flags(fake_home, fake_tmux):
     w = {"stage": "run", "session_id": SID, "pane": "%1", "window": "@1"}
     move_agent._relaunch({"id": "abc", "title": "t", "metadata": {}}, w, "acme", "go on")
     argv = shlex.split(sent[0])
-    assert argv[1:4] == ["claude", "--permission-mode", "auto"] and "--resume" in argv
+    assert argv[2:5] == ["claude", "--permission-mode", "auto"] and "--resume" in argv
 
 
 UNSAFE = re.compile(r"yolo|bypass|skip|dangerous|danger-full-access|full-auto|dontask", re.I)
@@ -828,3 +828,27 @@ def test_retry_takes_repo_and_number_and_refuses_an_ambiguous_number(fake_home, 
     assert "o/r#12" in str(e.value) and "o/s#12" in str(e.value) and writes == []
     commands.retry("s#12")
     assert writes == [("o/s#12", {"metadata": {"worker": None}})]
+
+
+def test_a_stage_whose_template_bypasses_permissions_is_refused_and_no_window_opens(fake_home, fake_tmux):
+    from pl import alerts
+    sent, _ = fake_tmux
+    _profile(fake_home, '[accounts.a]\nharness = "antigravity"\nconfig_dir = "~/ag"\n'
+                        '[stages.spec]\nprompt = "/spec {id}"\n'
+                        '[harnesses.antigravity]\ninteractive = ["agy", "--dangerously-skip-permissions", "{prompt}"]\n')
+    card = {"id": "c1", "title": "t", "metadata": {"profile": "a"}}
+    with pytest.raises(SystemExit, match=r"\[harnesses\.antigravity\]"):
+        dispatch.start_worker(card, "spec", 1, False)
+    assert not sent
+    assert alerts.get("stage_unsafe:spec") is not None
+
+
+def test_a_loop_whose_template_bypasses_permissions_is_refused(fake_home, fake_tmux):
+    sent, _ = fake_tmux
+    _profile(fake_home, '[accounts.a]\nharness = "antigravity"\nconfig_dir = "~/ag"\n'
+                        '[harnesses.antigravity]\ninteractive = ["agy", "--yolo", "{prompt}"]\n')
+    C.SERVICES = {"rev": {"prompt": "/rev", "profile": "a"}}
+    with pytest.raises(SystemExit, match=r"\[harnesses\.antigravity\]"):
+        dispatch.ensure_services({}, [], {}, False, None)
+    assert not sent
+

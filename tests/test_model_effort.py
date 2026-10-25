@@ -101,12 +101,18 @@ def test_a_template_that_sets_its_own_model_or_effort_is_left_alone(fake_home, f
 
 
 def test_a_user_agy_template_gets_the_flags_after_the_program_name_once(fake_home, fake_tmux):
-    toml = ('[harnesses.antigravity]\ninteractive = ["agy", "--dangerously-skip-permissions", "-i", "{prompt}"]\n'
-            'headless = ["agy", "--dangerously-skip-permissions", "-p", "{prompt}"]\n')
+    toml = ('[harnesses.antigravity]\ninteractive = ["agy", "--allowed-tools", "-i", "{prompt}"]\n'
+            'headless = ["agy", "--allowed-tools", "-p", "{prompt}"]\n')
     for argv in _launch(fake_home, fake_tmux, "antigravity", 'model = "gemini-3.1-pro-high"\neffort = "xhigh"', toml):
         assert argv[:7] == ["agy", "--model", "gemini-3.1-pro-high", "--effort", "xhigh",
-                            f"--add-dir={C.WORKTREES_DIR}", "--dangerously-skip-permissions"], argv
+                            f"--add-dir={C.WORKTREES_DIR}", "--allowed-tools"], argv
         assert argv.count("--model") == 1 and argv.count("--effort") == 1
+
+
+def test_a_bypass_template_is_refused_for_stages(fake_home, fake_tmux):
+    toml = '[harnesses.antigravity]\ninteractive = ["agy", "--dangerously-skip-permissions", "{prompt}"]\n'
+    with pytest.raises(SystemExit, match=r"\[harnesses\.antigravity\]"):
+        _launch(fake_home, fake_tmux, "antigravity", toml=toml)
 
 
 def test_a_prompt_that_mentions_model_does_not_count_as_a_model_flag(fake_home):

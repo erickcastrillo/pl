@@ -12,7 +12,7 @@ import pytest
 from pl import board, cli, commands, harnesses, skills
 from pl import config as C
 
-NAMES = ["pl-design", "pl-plan", "pl-review", "pl-run", "pl-spec"]
+NAMES = ["pl-design", "pl-plan", "pl-read-mail", "pl-review", "pl-run", "pl-spec"]
 CLI = Path(cli.__file__).read_text()
 
 
@@ -44,7 +44,7 @@ def _bump(shipped, name, text="\nNew step.\n"):
 
 # ---------- the package ----------
 
-def test_the_package_ships_five_skills_with_frontmatter():
+def test_the_package_ships_six_skills_with_frontmatter():
     assert skills.builtin_names() == NAMES
     for n in NAMES:
         text = (skills.BUILTIN_DIR / n / "SKILL.md").read_text()
@@ -91,7 +91,7 @@ def test_install_copies_every_builtin_into_the_library(lib):
     assert sorted(p.name for p in lib.iterdir() if not p.name.startswith(".")) == NAMES
     for n in NAMES:
         assert (lib / n / "SKILL.md").read_bytes() == (skills.BUILTIN_DIR / n / "SKILL.md").read_bytes()
-    assert len(out) == 5 and all(m.startswith("installed built-in ") for m in out)
+    assert len(out) == 6 and all(m.startswith("installed built-in ") for m in out)
     assert skills.install_builtins() == []                       # a second run changes nothing
     assert {i["name"] for i in skills.scan() if i["account"] == "library"} == set(NAMES)
 
@@ -513,7 +513,7 @@ def test_two_interleaved_installs_leave_complete_files(lib, monkeypatch):
         return real(dest, raw)
     monkeypatch.setattr(skills, "_write_builtin", write)
     out = skills.install_builtins()
-    assert inner == [[]] and len(out) == 5
+    assert inner == [[]] and len(out) == 6
     for n in NAMES:
         assert (lib / n / "SKILL.md").read_bytes() == (skills.BUILTIN_DIR / n / "SKILL.md").read_bytes()
 
