@@ -1,8 +1,9 @@
 """pl - the feature funnel: idea -> spec -> plan -> your yes -> PR -> review -> merge-ready.
 
-  pl idea "text" [--doc PATH]... [--title T] [--account NAME] [--repo NAME]... [--start]
+  pl idea "text" [--doc PATH]... [--title T] [--account NAME] [--repo NAME]... [--start] [--plan N --slice M]
                           drop an idea (and files) into Triage on the intake board, unassigned, to be
-                          assessed; --start assigns it to you so the pipeline pulls it in
+                          assessed; --start assigns it to you so the pipeline pulls it in;
+                          --plan/--slice title the card 'Plan N slice M: <--title or first line>' and record both in its metadata
   pl list [--all]         both boards: the Feature Pipeline by column with agent state, then the intake board's
                           cards assigned to you (5 per column; --product shows them all; --all includes Done)
   pl inbox [--json]       every gate waiting on you, in every profile (--json: one document)
@@ -220,6 +221,7 @@ def _main():
     p = sub.add_parser("idea"); p.add_argument("text"); p.add_argument("--doc", action="append", default=[])
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
+    p.add_argument("--plan", type=int); p.add_argument("--slice", type=int)
     p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")

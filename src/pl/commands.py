@@ -30,6 +30,11 @@ def cmd_idea(a):
     direct = not intake_configured()     # no [intake]: the idea goes straight into the pipeline's Inbox
     line = text.splitlines()[0].strip() if direct else text
     title = a.title or (line if len(line) <= 70 else line[:70].rsplit(" ", 1)[0])
+    plan, slice_no = getattr(a, "plan", None), getattr(a, "slice", None)
+    if plan is not None or slice_no is not None:
+        if plan is None or slice_no is None or plan < 1 or slice_no < 1:
+            raise SystemExit("pl idea: --plan and --slice go together, both whole numbers from 1")
+        title = ideas.plan_title(plan, slice_no, a.title or line)
     body, docs = [text, ""], []
     for d in a.doc:
         p = Path(d).expanduser().resolve()
@@ -49,7 +54,8 @@ def cmd_idea(a):
     if not direct and "Triage" not in product_lists():
         raise SystemExit("pl idea: the intake board has no Triage column")
     meta = {"source": os.environ.get("PL_SOURCE") or "pl idea", **({"submitted_by": C.USER_EMAIL} if C.USER_EMAIL else {}), "submitted_at": now_iso(),
-            "submitted_from": C.HOST, "input_docs": docs, **({"preferred_profile": a.account} if a.account else {})}
+            "submitted_from": C.HOST, "input_docs": docs, **({"preferred_profile": a.account} if a.account else {}),
+            **({"plan": plan, "slice": slice_no} if plan is not None else {})}
     desc = "\n".join(["## Where this came from", f"`pl idea`{f' by {C.USER_EMAIL}' if C.USER_EMAIL else ''} on {now_iso()[:10]}.", "", "## The idea"] + body)
     if direct:
         meta = {**meta, "pipeline_mode": "auto", **({"profile": a.account} if a.account else {})}

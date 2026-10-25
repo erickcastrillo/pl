@@ -499,3 +499,65 @@ def test_pl_idea_with_intake_still_goes_to_triage(board):
     assert c["list_id"] == "col-t" and "pipeline_mode" not in c["metadata"]
     assert c["assigned_to"] == "me@example.com" and c["metadata"]["submitted_by"] == "me@example.com"
     assert c["title"] == "Export contacts as CSV\nwith every custom field"     # the whole text up to 70, as before
+
+
+def test_plan_title_prefixes_plan_and_slice():
+    assert ideas.plan_title(3, 2, "kill switch, CLI and dispatcher") == "Plan 3 slice 2: kill switch, CLI and dispatcher"
+
+
+def test_plan_title_is_at_most_80_chars_and_never_cuts_a_word():
+    long_what = "this is a long description with many words that will easily exceed the eighty character maximum limit when combined with prefix, and it has lots of detail"
+    title = ideas.plan_title(3, 2, long_what)
+    assert len(title) <= 80
+    assert not title.endswith(" ") and not title.endswith(",")
+    last_word = title.split()[-1]
+    assert last_word in long_what.split()
+
+
+def test_plan_title_refuses_a_single_word_too_long_to_fit():
+    with pytest.raises(SystemExit):
+        ideas.plan_title(3, 2, "a" * 90)
+
+
+def test_pl_idea_with_plan_and_slice_titles_and_tags_the_card(gh_only):
+    from pl import commands
+    commands.cmd_idea(_idea_args(plan=3, slice=2, title="kill switch, CLI and dispatcher"))
+    card = trackers.get("tracker").card("acme/app#1")
+    assert card["title"] == "Plan 3 slice 2: kill switch, CLI and dispatcher"
+    assert card["metadata"]["plan"] == 3 and card["metadata"]["slice"] == 2
+
+
+def test_pl_idea_with_plan_and_no_title_uses_the_first_line(gh_only):
+    from pl import commands
+    commands.cmd_idea(_idea_args(plan=3, slice=2))
+    card = trackers.get("tracker").card("acme/app#1")
+    assert card["title"] == "Plan 3 slice 2: Export contacts as CSV"
+    assert card["metadata"]["plan"] == 3 and card["metadata"]["slice"] == 2
+
+
+def test_pl_idea_plan_without_slice_is_refused(gh_only):
+    from pl import commands
+    with pytest.raises(SystemExit):
+        commands.cmd_idea(_idea_args(plan=3, slice=None))
+    creates = [a for a in gh_only.log if a[:2] == ["issue", "create"]]
+    assert len(creates) == 0
+
+
+def test_pl_idea_without_plan_keeps_its_title_and_no_plan_metadata(gh_only):
+    from pl import commands
+    commands.cmd_idea(_idea_args(title="A short title"))
+    card = trackers.get("tracker").card("acme/app#1")
+    assert card["title"] == "A short title"
+    assert "plan" not in card["metadata"]
+
+
+def test_pull_keeps_plan_and_slice_from_the_intake_card(board):
+    from pl import product
+    board.url = lambda i: f"https://example.test/{i}"
+    pc = {"id": "prod-1", "title": "A product card", "list_id": "col-Triage", "description": "desc",
+          "tags": [], "metadata": {"plan": 3, "slice": 2}}
+    board.items["prod-1"] = pc
+    item = product.pull_one(pc, [])
+    assert item["metadata"]["plan"] == 3 and item["metadata"]["slice"] == 2
+
+
