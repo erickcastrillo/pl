@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from pl import config as C
-from pl import alerts, events, harnesses
+from pl import alerts, events, harnesses, trackers
 from pl.accounts import exhausted_profiles, healthy_profile
 from pl.agents import alive, registry, worker_status
 from pl.board import card, cards, find_card, fresh_next, update
@@ -90,6 +90,8 @@ def locked(cid):
 def lock(cid):
     """Take this card's move lock; False when a live holder has it. The pid and time go into a private file first,
     which is then linked to the lock path: the link fails when the lock exists, and a lock is never seen half written."""
+    if trackers.dry_run():
+        return True
     p = _lock_path(cid)
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     p.parent.chmod(0o700)
@@ -112,6 +114,8 @@ def lock(cid):
 
 
 def unlock(cid):
+    if trackers.dry_run():
+        return
     try:
         _lock_path(cid).unlink()
     except FileNotFoundError:
@@ -203,6 +207,9 @@ def _pane_cmd(pane):
 def stop(pane, sid):
     """Ctrl-C the harness in its own pane until the pane shows the shell; True once the shell is back and no live
     registry entry holds the session. Nothing but that pane ever gets a key, and no process is signalled."""
+    if trackers.dry_run():
+        print(f"would stop the agent in pane {pane} (Ctrl-C)")
+        return True
     for _ in range(STOP_TRIES):
         cmd = _pane_cmd(pane)
         if cmd in harnesses.SHELLS:

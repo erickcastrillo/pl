@@ -350,7 +350,9 @@ def _read_pod(pod: str) -> str:
 
 def learn(card, section, draft, approved, pod=None):
     """Compare draft and approved text, record removed sentences, and suggest rules."""
-    from pl import alerts
+    from pl import alerts, trackers
+    if trackers.dry_run():
+        return
     pod_name = pod_of(card, explicit_pod=pod)
     approved_norm = {normalize_sentence(s) for s in split_sentences(approved)}
     seen_norm, ts, now = set(), now_iso(), time.time()
