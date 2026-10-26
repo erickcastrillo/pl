@@ -10,12 +10,13 @@ import time
 
 from rich.text import Text
 from textual import work
-from textual.app import App, ComposeResult, SystemCommand
+from textual.app import App, ComposeResult, ScreenStackError, SystemCommand
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Static, Tabs, TabbedContent, TabPane, TextArea
+from textual.widgets import DataTable, Footer, Input, Static, Tabs, TabbedContent, TabPane, TextArea
+from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets._footer import FooterKey
 from textual.css.query import NoMatches
 
@@ -52,6 +53,38 @@ def _titled(title, make):
         pane.styles.height = "1fr"
         return pane
     return build
+
+
+PLACE = "console-place.json"
+
+
+def place_path():
+    return None if C.STATE_DIR is None else C.STATE_DIR / PLACE
+
+
+def save_place(tab, row):
+    """Record the tab and row this console is left on, in this profile's own state folder. A switch never fails over it."""
+    if (path := place_path()) is None:
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"tab": tab, "row": row}))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def read_place():
+    """(tab, row) from the record, or None when it is missing or not usable."""
+    if (path := place_path()) is None:
+        return None
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(d, dict) and isinstance(d.get("tab"), str) and d["tab"] and isinstance(d.get("row"), (str, type(None))):
+        return d["tab"], d["row"]
+    return None
 
 
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
@@ -309,7 +342,7 @@ class PlApp(App):
         Binding("q", "quit", "quit")]
 
     def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None,
-                 restarts=None, open_card=None, tab=None):
+                 restarts=None, open_card=None, tab=None, back=False):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
         self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
@@ -321,6 +354,7 @@ class PlApp(App):
         self.interval = interval or default_interval()
         self.open_card = open_card
         self.initial_tab = tab
+        self.back, self.pending_row = back, None   # pending_row: (tab, row key) to select on the first refresh with data
         self.sub_keys, self.subtabs = {}, {}
         self.data, self.error, self.last_good_at, self.window = None, None, None, 1   # window: index into WINDOWS, 24 hours first
 
@@ -371,7 +405,12 @@ class PlApp(App):
         for gid, letters in self.sub_keys.items():
             for letter, vid in letters.items():
                 self.query_one(f"#{gid}-views", TabbedContent).get_tab(vid).label = sub_label(dict(self.view_names())[vid], letter)
-        if self.initial_tab:
+        place = read_place() if self.back else None
+        if place and resolve(place[0]) is not None:
+            self.action_tab(place[0])
+            if place[1]:
+                self.pending_row = place
+        elif self.initial_tab:
             self.action_tab(self.initial_tab)
 
     @staticmethod
@@ -446,7 +485,20 @@ class PlApp(App):
         self.restart_into = b
         self.exit()
 
+    def selected_row(self):
+        """The key of the selected item on a list tab; None on other tabs and on a heading row."""
+        view = VIEWS.get(self.active_tab)
+        if view is None or not hasattr(view, "_current"):
+            return None
+        try:
+            key, row = self.query_one(view)._current()
+        except NoMatches:
+            return None
+        return key if row is not None else None
+
     def switch_to(self, profile, card=None, tab=None):
+        if self.active_tab:
+            save_place(self.active_tab, self.selected_row())
         self.restart_into = ("profile", profile, card, tab)
         self.exit()
 
@@ -724,6 +776,13 @@ class PlApp(App):
         self.query_one(SubagentsView).show(self.data)
         self.query_one(AlertsView).show(self.data)
         self.query_one(CardsView).show(self.data)
+        if self.pending_row:
+            (tab, key), self.pending_row = self.pending_row, None
+            t = self.query_one(VIEWS[tab]).query_one(DataTable)
+            try:
+                t.move_cursor(row=t.get_row_index(key))
+            except RowDoesNotExist:
+                pass
         failed = (self.error or "").splitlines()[0] if self.error else ""
         for table in ("#cards-table", "#prs-table"):
             self.query_one(table).border_subtitle = failed if failed.startswith("refresh failed") else ""
@@ -739,7 +798,7 @@ class PlApp(App):
         try:
             outer = self.query_one("#tabs", TabbedContent).active
             return self.query_one(f"#{outer.removeprefix('g-')}-views", TabbedContent).active
-        except NoMatches:
+        except (NoMatches, ScreenStackError):
             return None
 
     def action_tab(self, name):
