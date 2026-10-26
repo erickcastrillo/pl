@@ -279,6 +279,8 @@ ENTRIES = [
        "every list tab: ? opens its help", "pl"),
     _e("2026-10-26.63", "Builds can run only the tests a change can affect",
        "pl tests affected --json", "pl tests affected"),
+    _e("2026-10-26.63", "Alerts tab: newest first with cards; a hides one until it changes",
+       "Alerts tab; header: alerts N", "pl alerts"),
 ]
 
 
