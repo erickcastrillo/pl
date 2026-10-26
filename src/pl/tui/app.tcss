@@ -1,6 +1,6 @@
 Screen { background: $background; }
 #header { height: 1; background: $panel; }
-#tabs { height: 1fr; }
+#tabs, #tabs TabbedContent { height: 1fr; }
 TabPane { padding: 0; }
 .panel { border: round $panel-lighten-2; border-title-color: $text; padding: 0 1; }
 #window-bar { height: 1; margin: 0 1; }
@@ -19,3 +19,4 @@ PrsView { height: 1fr; padding: 0 1; }
 #cards-table, #prs-table { width: 84; }
 .-narrow #cards-table, .-narrow #prs-table { width: 1fr; }
 .-narrow #cards-side, .-narrow #prs-side { display: none; }
+.-single > Tabs { display: none; }
