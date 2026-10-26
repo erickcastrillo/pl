@@ -222,6 +222,8 @@ ENTRIES = [
        "Activity tab marks what an agent session did as \"agent session (pl mcp serve)\"", "pl mcp serve --stdio"),
     _e("2026-10-25.40", "Custom loops on any harness, on a schedule", "Loops tab: n add, e p g d w",
        "pl loops add --template stale-cards"),
+    _e("2026-10-25.41", "Settle a sync conflict in one command", "pl alerts: the sync-conflict alert names it",
+       "pl sync resolve <card> --keep remote"),
 ]
 
 

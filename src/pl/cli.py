@@ -105,6 +105,8 @@
   pl sync init --from-github [--dry-run]
                           copy the [sync] github board into the empty local board once, and write sync-ids.json
   pl sync now [--json]  send queued changes to the GitHub board now, within the budget
+  pl sync resolve <id> --keep remote|local
+                          settle a card changed both here and on GitHub: take GitHub's values, or queue yours to send
   pl pause / pl resume    pause: the dispatcher starts no new agents; working agents finish their step, crashed
                           ones are still restarted and finished windows still closed. resume: back to normal
   pl kill-switch on|off|status [--json]
@@ -599,6 +601,7 @@ def build_parser():
     q = pb.add_parser("undo"); q.add_argument("conv")
     p = sub.add_parser("help"); p.add_argument("--json", action="store_true", help="every command with its flags and JSON shape name")
     p = sub.add_parser("jobs"); p.add_argument("--json", action="store_true", help="print one JSON document")
-    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "init", "now"]); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("sync"); p.add_argument("action", choices=["status", "init", "now", "resolve"]); p.add_argument("--json", action="store_true")
     p.add_argument("--from-github", action="store_true"); p.add_argument("--dry-run", action="store_true")
+    p.add_argument("id", nargs="?"); p.add_argument("--keep", choices=["remote", "local"])
     return ap
