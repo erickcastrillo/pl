@@ -5,7 +5,7 @@ import json
 import pytest
 
 from pl import config as C
-from pl import doctor, local_model
+from pl import accounts, doctor, local_model
 
 
 @pytest.fixture(autouse=True)
@@ -16,8 +16,10 @@ def profile(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     d = tmp_path / ".pl-t"
     d.mkdir()
-    (d / "config.toml").write_text('[models.local]\nhost = "http://localhost:11434"\nroute = "r:1"\nsummarise = "s:1"\n')
+    (d / "config.toml").write_text('[models.local]\nhost = "http://localhost:11434"\nroute = "r:1"\nsummarise = "s:1"\n'
+                                   '[accounts.acme]\nconfig_dir = "~/.claude-acme"\n')
     C.load("t")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
     yield
     for k, v in saved.items():
         setattr(C, k, v)
@@ -48,8 +50,10 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch):
                         lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
     code, out = run(capsys, json=True)
     assert code == 0
-    assert json.loads(out) == {"checks": [{"name": "local_models", "ok": True, "lines": [
-        "Ollama: up, 2 models", "route: r:1 is pulled", "summarise: s:1 is pulled"]}]}
+    assert json.loads(out) == {"checks": [
+        {"name": "local_models", "ok": True,
+         "lines": ["Ollama: up, 2 models", "route: r:1 is pulled", "summarise: s:1 is pulled"]},
+        {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]}]}
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -57,3 +61,16 @@ def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
     monkeypatch.setattr(local_model, "_request", lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}]}))
     _, out = run(capsys)
     assert "192.168.1.9 is on your network, not this machine" in out
+
+
+def test_doctor_names_the_stage_the_assistant_account_comes_from(capsys):
+    C.STAGES = {"plan": {"accounts": ["acme"]}}
+    _, out = run(capsys)
+    assert "assistant: acme (claude), from stage plan" in out
+
+
+def test_doctor_fails_when_no_account_can_run_the_assistant(capsys):
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL assistant_account" in out and "[assistant] account" in out

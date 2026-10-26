@@ -23,7 +23,15 @@ def local_models():
     return ok, lines
 
 
-CHECKS = [local_models]
+def assistant_account():
+    from pl import assistant, harnesses   # imported here so doctor's import stays light
+    acct, reason = assistant.pick()
+    if acct is None:
+        return False, ["assistant: no account can run it: set [assistant] account in config.toml to a claude or codex account"]
+    return True, [f"assistant: {acct} ({harnesses.account_harness(acct).name}), {reason}"]
+
+
+CHECKS = [local_models, assistant_account]
 
 
 def cmd_doctor(a):

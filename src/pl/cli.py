@@ -130,7 +130,7 @@
   pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
-  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
+  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the assistant's account)
   pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
