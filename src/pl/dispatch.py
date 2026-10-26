@@ -1202,6 +1202,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
+                gate = f"GATE: {why[9:-1]}" if why and why.startswith("waiting (") and GATE_RE.fullmatch(f"GATE: {why[9:-1]}") else None
+                if not dry and gate != w.get("run_waiting"):   # the console reads this instead of the screen
+                    w = {**w, "run_waiting": gate} if gate else {k: v for k, v in w.items() if k != "run_waiting"}
+                    update(c["id"], metadata={"worker": w})
                 runs_live += why != "exited"
                 if why:
                     print(f"{short_id(c['id'])}  run agent {why}; its slot is free")   # its window stays: no second agent
