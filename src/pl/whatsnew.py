@@ -252,14 +252,20 @@ ENTRIES = [
        "pl skills list"),
     _e("2026-10-25.55", "Remove on the Skills screen says which stages, loops and pods use the skill",
        "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
+    _e("2026-10-26.01", "The Brain tab is gone: ask its questions in the Assistant",
+       "Assistant tab; b opens the Assistant for one release", "press b in the console"),
     _e("2026-10-26.56", "Ctrl+P finds and runs any console action or tab",
        "ctrl+p, type an action like retry", "pl --help"),
     _e("2026-10-26.57", "New loop starts from a template gallery: what each does and needs",
        "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
     _e("2026-10-26.58", "Editing a loop uses the same form as adding one",
        "Loops tab: e opens the add form filled in, with the skill list and schedule check", "pl loops edit"),
-    _e("2026-10-26.59", "All pipelines' waiting items on Dashboard",
+    _e("2026-10-26.59", "Every agent window of this profile in one list",
+       "Automate > Running: top table; Enter opens the live screen", "pl"),
+    _e("2026-10-26.60", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
+    _e("2026-10-26.61", "All pipelines' waiting items on Dashboard",
        "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
+||||||| 3e1d636
 ]
 
 

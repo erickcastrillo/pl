@@ -11,7 +11,7 @@ import pytest
 from rich.console import Console
 from textual.widgets import DataTable, Select, Tabs, TabbedContent
 
-from pl import cli, trackers, watch
+from pl import cli, harnesses, trackers, watch
 from pl import config as C
 from pl.tui import app as tui_app
 from pl.tui import cards as tui_cards
@@ -38,6 +38,7 @@ def fake_home(tmp_path, monkeypatch):
     C.load()
     _accounts(tmp_path)
     monkeypatch.setattr(tui_prs, "_run", FakeGh(), raising=False)          # the PRs tab never reaches the real gh
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", ""))   # no agent window to read
     monkeypatch.setattr(tui_prs, "intent_text", lambda url, body: f"# What {url} was meant to do", raising=False)
     yield tmp_path
     for k, v in saved.items():
@@ -1245,7 +1246,7 @@ async def test_the_top_tabs_are_the_eight_jobs_in_order():
     ("home", ("home", "home")), ("dashboard", ("dashboard", "dashboard")), ("assistant", ("assistant", "assistant")),
     ("ideas", ("work", "ideas")), ("cards", ("work", "cards")), ("prs", ("review", "prs")),
     ("waiting", ("review", "waiting")), ("loops", ("automate", "loops")), ("alerts", ("activity", "alerts")), ("activity", ("activity", "activity")),
-    ("settings", ("settings", "settings")), ("subagents", ("automate", "subagents")), ("brain", ("assistant", "brain"))])
+    ("settings", ("settings", "settings")), ("subagents", ("automate", "subagents"))])
 def test_every_old_tab_id_resolves(monkeypatch, old, place):
     from pl.tui import chrome
     monkeypatch.setattr(chrome, "tabs", lambda: [(v, v) for g in chrome.GROUPS for v, _ in g[2]])
@@ -1263,7 +1264,7 @@ def test_hidden_features_stay_hidden(monkeypatch):
     from pl.tui import chrome
     monkeypatch.setattr(C, "ASSISTANT", {"enabled": False})
     assert "assistant" not in dict(chrome.tabs())
-    assert chrome.resolve("assistant") == ("assistant", None)
+    assert chrome.resolve("assistant") is None   # the group has no view left, so it is hidden too
     assert chrome.resolve("home") is None   # one profile
     gids = [g[0] for g in chrome.groups()]
     assert "home" not in gids and "extend" in gids
@@ -1683,12 +1684,14 @@ async def test_without_the_assistant_the_keys_stay_put(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert _labels(app, "#tabs")[:3] == ["1 Dashboard", "2 Assistant", "3 Work"]
-        assert _labels(app, "#assistant-views") == ["Brain"]
-        for key, view in (("8", "settings"), ("3", "ideas"), ("2", "brain")):
+        assert "2 Assistant" not in _labels(app, "#tabs")
+        for key, view in (("8", "settings"), ("3", "ideas")):
             await pilot.press(key)
             await settle(pilot)
             assert app.active_tab == view, key
+        await pilot.press("2")
+        await settle(pilot)
+        assert app.active_tab == "ideas"
 
 
 async def test_work_shows_ideas_and_board_as_sub_tabs():
@@ -2571,8 +2574,7 @@ async def test_palette_keeps_existing_entries(monkeypatch):
     async with app.run_test(size=(176, 80)) as pilot:
         await settle(pilot)
         commands = _palette(app)
-        old = ["What's new", "Skills: view, edit, create", "Kill switch", "Brain: ask questions across pipelines",
-               "Quit"]
+        old = ["What's new", "Skills: view, edit, create", "Kill switch", "Quit"]
         assert all(t in commands and commands[t].discover for t in old)
         new = [c for t, c in commands.items() if t not in old and t != "Health"]
         assert len(new) > 10 and not any(c.discover for c in new if c.help.startswith(("on ", "go to tab")))
@@ -2605,14 +2607,70 @@ async def test_whatsnew_opens_from_the_palette():
         assert isinstance(app.screen, WhatsNewScreen)
 
 
-async def test_the_brain_command_opens_assistant_brain():
+async def test_b_opens_the_assistant_with_a_notice(monkeypatch):
+    FakeAssistant(monkeypatch)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         assert app.active_tab == "dashboard"
-        app.action_brain()
+        await pilot.press("b")
         await settle(pilot)
-        assert app.active_tab == "brain" and app.query_one("#tabs", TabbedContent).active == "g-assistant"
+        assert app.active_tab == "assistant" and app.query_one("#tabs", TabbedContent).active == "g-assistant"
+        assert "Brain is now part of Assistant" in _notes(app)
+
+
+async def test_b_typed_in_the_assistant_box_stays_in_the_box(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("2")
+        await settle(pilot)
+        await pilot.press("a", "b")
+        await settle(pilot)
+        assert app.query_one("#assistant-input").value.endswith("ab") and app.active_tab == "assistant"
+
+
+async def test_the_assistant_group_has_only_the_assistant(monkeypatch):
+    from pl.tui.chrome import resolve
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert _labels(app, "#assistant-views") == ["Assistant"]
+        assert resolve("brain") is None
+
+
+async def test_no_brain_command_in_the_palette():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert not [c for c in app.get_system_commands(app.screen) if "Brain" in c.title]
+
+
+async def test_b_with_the_assistant_off_notifies_and_stays(monkeypatch):
+    FakeAssistant(monkeypatch)
+    monkeypatch.setattr(C, "ASSISTANT", {"enabled": False})
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("b")
+        await settle(pilot)
+        assert app.active_tab == "dashboard" and "the Assistant is off" in _notes(app)
+
+
+def test_drafts_no_longer_name_a_brain_box():
+    assert "#brain-input" not in tui_app.DRAFTS
+    assert set(tui_app.DRAFTS) == {"#assistant-input", "#idea-input"}
+
+
+def test_no_brain_view_left_in_the_tui_source():
+    from pathlib import Path
+    tui = Path(tui_app.__file__).parent
+    assert not (tui / "brain.py").exists()
+    for f in [*tui.glob("*.py"), *tui.glob("*.tcss")]:
+        text = f.read_text()
+        assert not any(w in text for w in ("BrainView", "#brain-", "tui.brain")), f.name
 
 
 def _every_binding():
@@ -2819,7 +2877,7 @@ async def test_an_empty_board_says_no_cards_and_how_to_add_one():
 def test_empty_state_is_three_lines_for_every_list_tab():
     from pl.tui.chrome import EMPTY, HELP, TABS, empty_state
     assert set(EMPTY) <= {t for t, _ in TABS} and {"ideas", "cards", "prs", "alerts", "loops", "activity", "subagents",
-                                                   "dashboard", "home", "brain"} == set(EMPTY)
+                                                   "dashboard", "home"} == set(EMPTY)
     for tid in EMPTY:
         lines = empty_state(tid)
         assert len(lines) == 3 and all(lines), tid
