@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from rich.console import Console
-from textual.widgets import DataTable, Tabs, TabbedContent
+from textual.widgets import DataTable, Select, Tabs, TabbedContent
 
 from pl import cli, trackers, watch
 from pl import config as C
@@ -2612,8 +2612,137 @@ async def test_an_empty_board_says_no_cards_and_how_to_add_one():
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app)
         text = screen_text(app)
-    assert "No cards yet." in text and "Add one with n on the Ideas tab," in text and 'or pl idea "..."' in text
+    from pl.tui.chrome import empty_state
+    assert all(line in text for line in empty_state("cards"))
     assert "loading" not in text and "not reachable" not in text
+
+
+def test_empty_state_is_three_lines_for_every_list_tab():
+    from pl.tui.chrome import EMPTY, HELP, TABS, empty_state
+    assert set(EMPTY) <= {t for t, _ in TABS} and {"ideas", "cards", "prs", "alerts", "loops", "activity", "subagents",
+                                                   "dashboard", "home", "brain"} == set(EMPTY)
+    for tid in EMPTY:
+        lines = empty_state(tid)
+        assert len(lines) == 3 and all(lines), tid
+        assert lines[2] == "? learn more"
+        assert lines[0] == HELP[tid].split(". ")[0].rstrip(".") + ".", tid
+
+
+def test_empty_state_keys_are_real_bindings():
+    from pl.tui.app import VIEWS
+    from pl.tui.chrome import EMPTY
+    for tab, (_, key, key_tab) in EMPTY.items():
+        if key is not None:
+            assert key in [b.key for b in VIEWS[key_tab].BINDINGS], tab
+
+
+def test_empty_state_line_two_fits_the_pipeline_title():
+    from pl.tui.chrome import EMPTY
+    assert all(len(line2) <= tui_cards.TITLE_WIDTH for line2, _, _ in EMPTY.values())
+
+
+async def test_an_empty_ideas_tab_says_what_it_is_for_and_how_to_add_one(monkeypatch):
+    from pl import ideas
+    from pl.tui.chrome import empty_state
+    monkeypatch.setattr(ideas, "list_ideas", lambda: [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("ideas")
+        await settle(pilot)
+        text = screen_text(app)
+    assert all(line in text for line in empty_state("ideas"))
+
+
+async def test_the_first_idea_replaces_the_empty_state(monkeypatch):
+    from pl import ideas
+    from pl.tui.ideas import IdeasView
+    monkeypatch.setattr(ideas, "list_ideas", lambda: [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("ideas")
+        await settle(pilot)
+        assert "? learn more" in screen_text(app)
+        app.query_one(IdeasView)._fill([{"id": "abcdefabcdef", "title": "Faster page", "status": "interviewing"}])
+        await settle(pilot)
+        text = screen_text(app)
+    assert "Faster page" in text and "? learn more" not in text
+
+
+async def test_a_filtered_empty_pipeline_keeps_its_filter_message(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        await _filter_plan(pilot, "7")
+        text = screen_text(app)
+        assert "No cards in plan 7." in text and "? learn more" not in text
+
+
+async def test_question_mark_on_an_empty_tab_opens_its_help(monkeypatch):
+    from pl import ideas
+    from pl.tui.app import HelpScreen
+    from pl.tui.chrome import HELP
+    monkeypatch.setattr(ideas, "list_ideas", lambda: [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("ideas")
+        await settle(pilot)
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        assert HELP["ideas"] in " ".join(screen_text(app).replace("│", " ").split())
+
+
+async def test_an_empty_prs_tab_says_how_pull_requests_arrive():
+    from pl.tui.chrome import empty_state
+    data = fake_data()
+    data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"] if not r.get("pr")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("prs")
+        await settle(pilot)
+        text = screen_text(app)
+    assert all(line in text for line in empty_state("prs")) and "  none" not in text
+
+
+async def test_an_empty_alerts_tab_says_how_alerts_arrive(monkeypatch):
+    from pl.tui.chrome import empty_state
+    data = fake_data()
+    data["alerts"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        text = screen_text(app)
+        assert all(line in text for line in empty_state("alerts"))
+        told = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
+        await pilot.press("k")
+        await pilot.pause()
+        assert told == ["select an alert to acknowledge"]
+
+
+async def test_the_first_alert_replaces_the_empty_state():
+    from pl.tui.alerts import AlertsView
+    data = fake_data()
+    data["alerts"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        assert "? learn more" in screen_text(app)
+        data["alerts"] = [{"key": "stage_failed:abcd1234:spec", "severity": "high", "title": "Card abcd1234: the spec agent died",
+                           "fix": "pl retry abcd1234", "first_seen": NOW.timestamp(), "last_seen": NOW.timestamp(), "count": 1}]
+        app.query_one(AlertsView).show(data)
+        await settle(pilot)
+        text = screen_text(app)
+    assert "pl retry abcd1234" in text and "? learn more" not in text
 
 
 async def test_a_failed_refresh_shows_last_good_time_and_what_failed(monkeypatch):
@@ -2767,14 +2896,17 @@ async def test_picking_a_template_fills_every_field_and_each_stays_editable(monk
         await settle(pilot)
         template = loops.TEMPLATES["overdue-invoices"]
         assert form.query_one("#loop-prompt").value == template["prompt"]
-        assert form.query_one("#loop-every").value == template["every"]
+        assert form.query_one("#loop-kind").value == "weekdays"
+        assert form.query_one("#loop-at").value == "09:00"
         assert form.query_one("#loop-hours").value == template["hours"]
         assert form.query_one("#loop-writes").value is False
-        form.query_one("#loop-every").value = "hourly"
+        form.query_one("#loop-kind").value = "minutes"
+        form.query_one("#loop-number").value = "1"
+        form.query_one("#loop-unit").value = "hours"
         form.query_one("#loop-name").value = "invoices"
         await pilot.press("ctrl+s")
         await settle(pilot)
-    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "hourly", "hours": template["hours"],
+    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "60m", "hours": template["hours"],
                                    "account": None, "team": None, "writes": False})]
 
 
@@ -2793,12 +2925,89 @@ async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm) and "a-z" in str(form.query_one("#loop-problem").render())
         form.query_one("#loop-name").value = "ok"
-        form.query_one("#loop-every").value = "every tuesday"
+        form.query_one("#loop-kind").value = "cron"
+        form.query_one("#loop-cron").value = "every tuesday"
         await pilot.press("ctrl+s")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
-        problem = str(form.query_one("#loop-every-error").render())
+        problem = str(form.query_one("#loop-problem").render())
         assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
+    assert added == []
+
+
+async def test_add_form_offers_four_schedule_kinds(monkeypatch):
+    from pl import schedule
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        labels = [label for label, _ in form.query_one("#loop-kind", Select)._options if str(label)]
+        assert labels == [label for _, label in schedule.KINDS] and len(labels) == 4
+        assert "no schedule is set" in str(form.query_one("#loop-preview").render())
+
+
+async def test_weekdays_preview_updates_as_you_type(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    monkeypatch.setattr(tui_loops.LoopForm, "_now", staticmethod(lambda: datetime(2026, 10, 30, 10, 0)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-kind").value = "weekdays"
+        await settle(pilot)
+        form.query_one("#loop-at").focus()
+        await pilot.press(*"09:00")
+        await settle(pilot)
+        preview = str(form.query_one("#loop-preview").render())
+    assert all(t in preview for t in ("Mon 02 Nov 09:00", "Tue 03 Nov 09:00", "Wed 04 Nov 09:00"))
+
+
+async def test_picker_saves_the_every_loops_add_accepts(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw["every"])))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "first"
+        form.query_one("#loop-prompt").value = "do it"
+        form.query_one("#loop-kind").value = "minutes"
+        form.query_one("#loop-number").value = "2"
+        form.query_one("#loop-unit").value = "hours"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "second"
+        form.query_one("#loop-prompt").value = "do it"
+        form.query_one("#loop-kind").value = "cron"
+        form.query_one("#loop-cron").value = "0 9 * * 1"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added == [("first", "120m"), ("second", "cron:0 9 * * 1")]
+
+
+async def test_bad_or_never_firing_schedule_blocks_save(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "ok"
+        form.query_one("#loop-prompt").value = "do it"
+        form.query_one("#loop-kind").value = "cron"
+        for cron, words in (("61 * * * *", "not valid"), ("0 0 31 2 *", "never fires")):
+            form.query_one("#loop-cron").value = cron
+            await settle(pilot)
+            preview = form.query_one("#loop-preview").render()
+            assert words in str(preview) and "red" in str(preview.spans)
+            await pilot.press("ctrl+s")
+            await settle(pilot)
+            assert isinstance(app.screen, tui_loops.LoopForm)
+            assert words in str(form.query_one("#loop-problem").render())
     assert added == []
 
 
@@ -2951,7 +3160,7 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         await pilot.press("enter")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
-        assert app.screen.query_one("#loop-every").value == "hourly"
+        assert app.screen.query_one("#loop-kind").value is Select.NULL
         await pilot.press("escape")
         await settle(pilot)
         assert not isinstance(app.screen, tui_loops.LoopForm)
@@ -3086,3 +3295,86 @@ async def test_tab_flag_opens_extend_views(monkeypatch, vid):
         await settle(pilot)
         assert app.active_tab == vid
         assert app.query_one("#tabs", TabbedContent).active == "g-extend"
+
+
+# ---------- plan 36 slice 6: Skills under Extend ----------
+
+SKILLS_KEYS = [("n", "new"), ("I", "install"), ("e", "edit"), ("E", "external_edit"),
+               ("d", "delete"), ("S", "share"), ("l", "link"), ("u", "update")]
+
+
+async def test_settings_shows_one_skills_moved_line(monkeypatch):
+    from pl.tui.skills import SkillsView
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        line = app.query_one("#skills-moved")
+        assert str(line.label) == "Skills moved to Extend → Skills"
+        assert line.size.height == 1
+        assert not list(app.query_one("#settings-scroll").query(SkillsView))
+
+
+@pytest.mark.parametrize("how", ["enter", "click"])
+async def test_skills_moved_line_opens_extend_skills(monkeypatch, how):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        if how == "enter":
+            app.query_one("#skills-moved").focus()
+            await pilot.pause()
+            await pilot.press("enter")
+        else:
+            app.query_one("#skills-moved").scroll_visible(animate=False)
+            await pilot.pause()
+            await pilot.click("#skills-moved")
+        await settle(pilot)
+        assert app.active_tab == "skills"
+        assert app.focused is not None and app.focused.id == "skills-table"
+
+
+async def test_create_project_button_still_asks(monkeypatch, tmp_path):
+    from pl.tui.settings import ProjectScreen
+    _fake_extend_cli(monkeypatch)
+    monkeypatch.setattr(C, "TRACKER", {"type": "github-project", "owner": "octo"})
+    monkeypatch.setattr(C, "path", lambda: tmp_path / "pl.toml")
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        app.query_one("#create-project").press()
+        await settle(pilot)
+        assert isinstance(app.screen, ProjectScreen)
+
+
+@pytest.mark.parametrize("key,name", SKILLS_KEYS)
+async def test_every_skills_key_runs_its_action_on_extend(monkeypatch, key, name):
+    from pl.tui.skills import SkillsView
+    _fake_extend_cli(monkeypatch)
+    ran = []
+    monkeypatch.setattr(SkillsView, f"action_{name}", lambda self: ran.append(name))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_skills()
+        await settle(pilot)
+        await pilot.press(key)
+        await settle(pilot)
+        assert ran == [name]
+
+
+async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_skills()
+        await settle(pilot)
+        assert {"new", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
+                "update check"} <= _footer_keys(app)

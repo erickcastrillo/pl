@@ -46,6 +46,15 @@ def test_remove_deletes_the_files_and_the_account_links(env):
     assert "review" not in S.records()
 
 
+def test_remove_uses_the_users_it_is_given(env, monkeypatch):
+    def boom(name):
+        raise AssertionError("users must not be called")
+    monkeypatch.setattr(S, "users", boom)
+    out = io.StringIO()
+    assert S.remove("review", True, out, used=["pod x"]) == 0
+    assert "used by: pod x" in out.getvalue()
+
+
 def test_remove_reports_the_loops_and_stages_that_used_it(env):
     code, out = remove()
     assert "used by: stage plan, loop nightly, loop weekly" in out
