@@ -2,7 +2,10 @@
 import json
 from urllib.parse import urlsplit
 
-from pl import local_model
+from pl import config as C
+from pl import local_model, trackers, util
+
+NOT_A_BOARD_KEY = ("columns", "skip_tags", "repo_tags", "enabled")
 
 
 def local_models():
@@ -23,7 +26,32 @@ def local_models():
     return ok, lines
 
 
-CHECKS = [local_models]
+def _board(cfg):
+    return {k: v for k, v in cfg.items() if k not in NOT_A_BOARD_KEY}
+
+
+def tracker():
+    boards = [("tracker", "[tracker]")]
+    if C.INTAKE.get("type"):
+        if _board(C.INTAKE) == _board(C.TRACKER):
+            boards = [("tracker", "[tracker] and [intake]")]
+        else:
+            boards.append(("intake", "[intake]"))
+    ok, lines = True, []
+    for kind, label in boards:
+        try:
+            line = trackers.get(kind).test()
+        except SystemExit as e:
+            line = str(e.code if e.code is not None else "error")
+        except Exception as e:
+            line = f"error: {e}"
+        line = util.mask(line)
+        ok = ok and line.startswith("ok")
+        lines.append(f"{label} {line}")
+    return ok, lines
+
+
+CHECKS = [local_models, tracker]
 
 
 def cmd_doctor(a):
