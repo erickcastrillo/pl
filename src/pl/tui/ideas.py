@@ -18,6 +18,7 @@ from textual.widgets.option_list import Option
 
 from pl import config as C
 from pl import harnesses, ideas
+from pl.tui.chrome import NEW_ROW, new_row
 from pl.util import short_id
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
@@ -164,6 +165,7 @@ class IdeasView(Widget):
         self.items = items
         ol = self.query_one("#idea-list", OptionList)
         ol.clear_options()
+        ol.add_option(Option(new_row("idea"), id=NEW_ROW))
         for i in items:
             q = sum(1 for e in i.get("transcript", []) if e.get("role") == "harness")
             line = STATUS.get(i.get("status"), str(i.get("status"))) + (f" · {q} question{'s' * (q != 1)}" if q else "")
@@ -172,8 +174,10 @@ class IdeasView(Widget):
         want = select or (self.current or {}).get("id")
         for n, i in enumerate(items):
             if i["id"] == want:
-                ol.highlighted = n
+                ol.highlighted = n + 1
                 self.current = i
+        if ol.highlighted is None:
+            ol.highlighted = 0
         self._redraw()
 
     def on_option_list_option_highlighted(self, m):
@@ -182,6 +186,10 @@ class IdeasView(Widget):
             if hit is not None and hit is not self.current:
                 self.current = hit
                 self._redraw()
+
+    def on_option_list_option_selected(self, m):
+        if m.option_list.id == "idea-list" and m.option.id == NEW_ROW:
+            self.action_new()
 
     # ---------- rendering ----------
 
@@ -302,7 +310,7 @@ class IdeasView(Widget):
 
     def action_new(self):
         self.current = None
-        self.query_one("#idea-list", OptionList).highlighted = None
+        self.query_one("#idea-list", OptionList).highlighted = 0
         self._redraw()
         self._set_input(True)
 
