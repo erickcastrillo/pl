@@ -148,7 +148,7 @@ async def test_dashboard_renders_tiles_and_panels():
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
                   "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
-                  "tokens", "counting…", "exceeded", "legacy", "dispatcher running"):
+                  "tokens", "counting…", "exceeded", "legacy", "Running, 2 cards waiting"):
             assert s in text, s
 
 
@@ -2504,6 +2504,35 @@ async def test_a_failed_refresh_shows_last_good_time_and_what_failed(monkeypatch
         assert not app.query_one("#cards-table").border_subtitle
 
 
+def _snap(disp="running", working=0, needs=None, summary="", prof="acme: ok (0 running, 0 queued)", parked=False):
+    rows = [{"kind": "working", "card": None}] * working
+    return {"rows": rows, "disp": disp, "needs": needs or {}, "summary": summary, "prof": prof, "parked": parked, "at": "14:30:00"}
+
+
+@pytest.mark.parametrize("snap,stopped,sentence", [
+    (_snap(), None, "Running, no cards waiting"),
+    (_snap(working=2, needs={"review": 1}), None, "Running, 2 agents working, 1 card waiting"),
+    (_snap(working=1, needs={"review": 1, "manual": 1}), None, "Running, 1 agent working, 2 cards waiting"),
+    (_snap(disp="NOT RUNNING (no window)"), "19:16", "Stopped (by you at 19:16)"),
+    (_snap(disp="NOT RUNNING (no window)"), None, "Stopped"),
+    (_snap(summary="PAUSED (draining, 1 working; pl resume)   |   NEEDS YOU: 0"), None, "Paused, draining 1 agent"),
+    (_snap(summary="PAUSED (DRAINED, safe to shut down; pl resume)   |   "), None, "Paused, drained"),
+    (_snap(prof="acme: ok (0 running, 0 queued)  acme2: PARKED until 21:00, checked 20:10 UTC: still limited (0 running, 0 queued)",
+           parked=True), None, "Running, no cards waiting; account acme2 is out of credits until 21:00"),
+])
+def test_status_sentence(snap, stopped, sentence):
+    from pl.tui.chrome import status_sentence
+    assert status_sentence(snap, stopped) == sentence
+
+
+def test_header_never_shows_the_raw_profile_line():
+    from pl.tui.chrome import header_text
+    data = fake_data()
+    plain = header_text(data).plain
+    assert "Running, 2 cards waiting" in plain
+    assert "acme: ok" not in plain and "dispatcher running" not in plain and "not paused" not in plain
+
+
 def _loops_state(next_at, last_run):
     C.STATE_FILE.parent.mkdir(exist_ok=True)
     C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"next_at": next_at, "last_run": last_run}}}))
@@ -2564,3 +2593,89 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
     assert calls == [("enabled", "invoices", False), ("run", "invoices"), ("window", "invoices"), ("remove", "invoices"),
                      ("edit", "invoices", {"every": "daily 09:30"})]
+
+
+def test_dashboard_health_lists_every_harness_account():
+    from pl.tui.dashboard import health
+    data = fake_data()
+    data["snapshot"]["prof"] = "acme: ok (2 running, 1 queued)  acme2: PARKED until 21:00 (0 running, 0 queued)"
+    plain = health(data).plain
+    assert "acme: ok (2 running, 1 queued)" in plain and "acme2: PARKED until 21:00" in plain
+
+
+async def _open_loop_form(app, pilot, monkeypatch):
+    from pl import skills
+    from pl.tui import loops as tui_loops
+    monkeypatch.setattr(skills, "scan", lambda: [{"name": "pl-billing-chase"}])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press("n")
+    await settle(pilot)
+    assert isinstance(app.screen, tui_loops.LoopForm)
+    return app.screen
+
+
+async def test_picking_a_template_fills_every_field_and_each_stays_editable(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-template").value = "overdue-invoices"
+        await settle(pilot)
+        template = loops.TEMPLATES["overdue-invoices"]
+        assert form.query_one("#loop-prompt").value == template["prompt"]
+        assert form.query_one("#loop-every").value == template["every"]
+        assert form.query_one("#loop-hours").value == template["hours"]
+        assert form.query_one("#loop-writes").value is False
+        form.query_one("#loop-every").value = "hourly"
+        form.query_one("#loop-name").value = "invoices"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "hourly", "hours": template["hours"],
+                                   "account": None, "team": None, "writes": False})]
+
+
+async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "Bad Name"
+        form.query_one("#loop-prompt").value = "do it"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm) and "a-z" in str(form.query_one("#loop-problem").render())
+        form.query_one("#loop-name").value = "ok"
+        form.query_one("#loop-every").value = "every tuesday"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        problem = str(form.query_one("#loop-problem").render())
+        assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
+    assert added == []
+
+
+async def test_picking_a_skill_after_a_template_drops_the_template_prompt(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-template").value = "overdue-invoices"
+        await settle(pilot)
+        form.query_one("#loop-skill").value = "pl-billing-chase"
+        form.query_one("#loop-name").value = "invoices"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added[0][1]["skill"] == "pl-billing-chase" and added[0][1]["prompt"] is None

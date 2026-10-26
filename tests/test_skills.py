@@ -1,6 +1,7 @@
 """Skills section: every account's skills, agents and commands, viewed, edited, created, trashed, and shared through
 pl's skills library. Temp HOME with fake accounts; nothing real is touched."""
 import io
+import json
 import os
 import sys
 
@@ -9,7 +10,7 @@ from rich.console import Console
 from textual.app import App
 from textual.widgets import DataTable, Input, Markdown, Select, TextArea
 
-from pl import cli, skills
+from pl import cli, skill_sources, skills
 from pl import config as C
 from pl.tui import skills as tui
 
@@ -247,8 +248,8 @@ class Host(App):
 
 
 def rows(app):
-    t = app.query_one("#skills-table", DataTable)
-    return [(str(t.get_row_at(i)[0]), str(t.get_row_at(i)[1])) for i in range(t.row_count)]
+    view = app.query_one(tui.SkillsView)
+    return [None if r is None else (r["name"], r["account"]) for r in view.rows]
 
 
 async def select(pilot, name, account):
@@ -660,3 +661,77 @@ async def test_the_preview_is_read_off_the_ui_thread(home, monkeypatch):
         await select(pilot, "beta", "b")
         assert seen and not any(seen)
         assert "Body of beta." in app.query_one("#skills-preview", Markdown).source
+
+
+# ---------- grouped list: headings, origin, used by ----------
+
+@pytest.fixture
+def grouped_home(home, monkeypatch, tmp_path):
+    library = tmp_path / "library"
+    library.mkdir()
+    for n in ("pl-plan", "mine"):
+        (library / n).mkdir()
+        (library / n / "SKILL.md").write_text(SKILL.format(n=n, d=f"{n} skill"))
+    monkeypatch.setattr(C, "SKILLS", {"library": str(library)})
+    monkeypatch.setattr(C, "PROMPTS", {}, raising=False)
+    monkeypatch.setattr(C, "SERVICES", {}, raising=False)
+    monkeypatch.setattr(C, "LOOPS_OFF", {}, raising=False)
+    monkeypatch.setattr(C, "PODS", {}, raising=False)
+    monkeypatch.setattr(skills, "builtin_names", lambda: ["pl-plan"])
+    return {**home, "library": library}
+
+
+def by_name(groups):
+    return {r["name"]: r for _, rs in groups for r in rs}
+
+
+def test_grouped_puts_builtins_library_and_accounts_under_their_headings(grouped_home):
+    groups = tui.grouped(skills.scan())
+    assert [h for h, _ in groups] == ["pl's stage skills", "Your library", "a (claude)", "b (claude)"]
+    heads = {h: {r["name"] for r in rs} for h, rs in groups}
+    assert heads["pl's stage skills"] == {"pl-plan"}
+    assert {"mine", "team-wide"} <= heads["Your library"]
+
+
+def test_grouped_origin_labels(grouped_home):
+    (grouped_home["library"] / ".pl-sources.json").write_text(
+        json.dumps({"mine": {"source": "github", "repo": "own/rep", "sha": "abcdef1234" + "0" * 30}}))
+    got = by_name(tui.grouped(skills.scan()))
+    assert got["mine"]["origin_label"] == "GitHub own/rep@abcdef1"
+    assert got["pl-plan"]["origin_label"] == "built in"
+    assert got["plugskill"]["origin_label"] == "plugin"
+    assert got["omc-helper"]["origin_label"] == "oh-my-claude"
+    assert got["alpha"]["origin_label"] == "you"
+
+
+def test_grouped_used_by_names_stages_loops_and_pods(grouped_home, monkeypatch):
+    monkeypatch.setattr(C, "PROMPTS", {"plan": "/pl-plan x"})
+    monkeypatch.setattr(C, "SERVICES", {"nightly": {"prompt": "/loop 1h /alpha"}})
+    got = by_name(tui.grouped(skills.scan()))
+    assert got["pl-plan"]["used_by"] == "stage plan"
+    assert got["alpha"]["used_by"] == "loop nightly"
+    assert got["reviewer"]["used_by"] == ""
+
+
+def test_grouped_survives_a_failing_users_lookup(grouped_home, monkeypatch):
+    def boom(_):
+        raise ValueError("bad pod file")
+    monkeypatch.setattr(skill_sources, "users", boom)
+    got = by_name(tui.grouped(skills.scan()))
+    assert {"alpha", "pl-plan", "reviewer"} <= set(got)
+    assert all(r["used_by"] == "" for r in got.values())
+
+
+async def test_view_shows_headings_and_a_heading_row_selects_nothing(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        text = screen_text(app)
+        assert "Your library" in text and "a (claude)" in text
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await settle(pilot)
+        await pilot.press("e")
+        await settle(pilot)
+        assert len(app.screen_stack) == 1

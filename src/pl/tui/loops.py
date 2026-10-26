@@ -12,9 +12,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Checkbox, DataTable, Input, Label, Static
+from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
 
-from pl import agents, loops, schedule, util
+from pl import agents, loops, schedule, skills, util
 from pl import config as C
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
@@ -38,11 +38,17 @@ def _copy_run(argv, text):
         pass
 
 
+def _fields(e, skip):
+    """The key=value pairs of an event; an action that came through pl mcp serve says so."""
+    return " ".join(f"{k}={'agent session (pl mcp serve)' if (k, v) == ('source', 'mcp') else v}"
+                    for k, v in e.items() if k not in skip)
+
+
 def event_text(e):
     """The plain text of one event: a header line with the full message, then the other fields as key=value."""
     key = next((k for k in ("message", "error", "reason", "text") if e.get(k)), None)
     text = str(e[key]) if key else ""
-    rest = " ".join(f"{k}={v}" for k, v in e.items() if k not in ("ts", "kind", "card", "profile", key))
+    rest = _fields(e, ("ts", "kind", "card", "profile", key))
     head = f"{str(e.get('ts') or '')[11:19]}  {e.get('kind') or ''}  {e.get('card') or ''}  {text}"
     return head + ("\n" + rest if rest else "")
 
@@ -176,13 +182,99 @@ def _auto_merge_row():
             "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
 
 
+class LoopForm(ModalScreen):
+    """The fields of `pl loops add`; a template fills them all, and each can be edited before saving."""
+    DEFAULT_CSS = """
+    LoopForm { align: center middle; }
+    LoopForm > Vertical { width: 90; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
+    TEXT_FIELDS = (("prompt", "prompt (or pick a skill)"), ("every", "every"), ("hours", "hours"), ("account", "account"),
+                   ("team", "team"))
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text("Add a loop", style="bold"))
+            yield Label("name")
+            yield Input(id="loop-name")
+            yield Label("template")
+            yield Select([(t, t) for t in loops.TEMPLATES], prompt="no template", id="loop-template", compact=True)
+            yield Label("skill")
+            yield Select([(i["name"], i["name"]) for i in self._skills()], prompt="no skill", id="loop-skill", compact=True)
+            for key, label in self.TEXT_FIELDS:
+                yield Label(label)
+                yield Input(id=f"loop-{key}")
+            yield Checkbox("writes (off = read-only)", False, id="loop-writes")
+            yield Static(id="loop-problem")
+            yield Static(Text("ctrl+s save · esc cancel", style="dim"))
+
+    @staticmethod
+    def _skills():
+        try:
+            return skills.scan()
+        except SystemExit:
+            return []
+
+    def on_input_changed(self, event):
+        if event.input.id == "loop-name":
+            self._show_problem(self._name_problem(event.value.strip()) if event.value.strip() else "")
+
+    def on_select_changed(self, event):
+        if event.select.id != "loop-template" or event.value is Select.NULL:
+            return
+        template = loops.TEMPLATES[event.value]
+        for key in ("prompt", "every", "hours"):
+            self.query_one(f"#loop-{key}", Input).value = template.get(key, "")
+        self.query_one("#loop-writes", Checkbox).value = template["writes"]
+
+    def _show_problem(self, text):
+        self.query_one("#loop-problem", Static).update(Text(text, style="bold red"))
+
+    @staticmethod
+    def _name_problem(name):
+        if not C.NAME_RE.match(name):
+            return "name: use a-z, 0-9, - and _ (1-32 characters, starting with a letter or digit)"
+        if name in C.SERVICES or name in C.LOOPS_OFF:
+            return f"a loop named {name} exists"
+        return ""
+
+    def _value(self, key):
+        return self.query_one(f"#loop-{key}", Input).value.strip() or None
+
+    def action_save(self):
+        name = (self._value("name") or "")
+        problem = self._name_problem(name)
+        skill = self.query_one("#loop-skill", Select).value
+        skill = None if skill is Select.NULL else skill
+        prompt = self._value("prompt")
+        template = self.query_one("#loop-template", Select).value
+        if skill and template is not Select.NULL and prompt == loops.TEMPLATES[template].get("prompt"):
+            prompt = None   # the loader runs a prompt before a skill, so the template's would hide the chosen skill
+        if not problem and not (skill or prompt):
+            problem = "give a prompt or pick a skill"
+        if not problem and self._value("every"):
+            try:
+                schedule.parse_every(self._value("every"))
+            except ValueError as e:
+                problem = str(e)
+        if problem:
+            self._show_problem(problem)
+            return
+        self.dismiss((name, {"skill": skill, "prompt": prompt, "every": self._value("every"), "hours": self._value("hours"),
+                             "account": self._value("account"), "team": self._value("team"),
+                             "writes": self.query_one("#loop-writes", Checkbox).value}))
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class LoopsView(Widget):
     DEFAULT_CSS = """
     LoopsView { height: 1fr; }
     #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
     #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
-    BINDINGS = [Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
+    BINDINGS = [Binding("n", "new", "new"), Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
                 Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
 
     def __init__(self):
@@ -247,6 +339,13 @@ class LoopsView(Widget):
             problem = _call(fn, *args, **kw)
             self.app.call_from_thread(self.app.notify, problem or done, severity="error" if problem else "information", markup=False)
         self.run_worker(run, thread=True, group="loops-action")
+
+    def action_new(self):
+        def saved(result):
+            if result:
+                name, fields = result
+                self._change(f"added {name}", loops.add, name, **fields)
+        self.app.push_screen(LoopForm(), saved)
 
     def action_edit(self):
         x = self.selected()
@@ -394,7 +493,7 @@ class ActivityView(Widget):
         self._shown = shown
         t.clear()
         for e in shown:
-            detail = " ".join(f"{k}={v}" for k, v in e.items() if k not in ("ts", "kind", "card", "profile"))
+            detail = _fields(e, ("ts", "kind", "card", "profile"))
             t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
                       Text(short_id(e.get("card") or "")), Text(detail))
 

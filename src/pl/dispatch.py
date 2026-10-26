@@ -1,10 +1,12 @@
 """The dispatcher: start the right agent for every waiting card."""
+import contextlib
 import os
 import hashlib
 import json
 import re
 import secrets
 import shlex
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -15,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, alerts, backup, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -879,6 +881,35 @@ def github_board():
     return str((C.TRACKER or {}).get("type") or "").startswith("github")
 
 
+def local_board():
+    return str((C.TRACKER or {}).get("type") or "") == "local"
+
+
+def _sync_pass():
+    """The pass's sync: pull GitHub edits at most every sync.PULL_EVERY s (local board only), then replay.
+    Until a pull has succeeded the replay waits, even on passes inside the window: conflicts were not checked."""
+    if not C.SYNC.get("github"):
+        return
+    if local_board() and sync.pull_due():
+        try:
+            p = sync.pull()
+        except Exception as e:  # noqa: BLE001 - a failed pull never stops the pass
+            p = {"stopped_because": "error", "error": str(e)}
+        if p["stopped_because"] == "error":
+            print(f"sync pull failed: {p['error']}", file=sys.stderr)
+            events.emit("error", message=f"sync pull: {p['error']}")
+    if local_board() and not sync.pull_ok():
+        return
+    try:   # a local board's queued changes go to its GitHub Project (sync.py)
+        if outbox.count():
+            r = sync.replay(limit=SYNC_PER_PASS)
+            if r["stopped_because"] == "error":
+                events.emit("error", message=f"sync: {r['error']}")
+    except Exception as e:  # noqa: BLE001 - a failed replay never stops the pass
+        print(f"sync failed: {e}", file=sys.stderr)
+        events.emit("error", message=f"sync: {e}")
+
+
 SYNC_PER_PASS = 20   # outbox entries a pass sends to GitHub at most: a long queue never holds up the agents
 INTAKE_EVERY = 300   # seconds between the default issue intake's searches (one GraphQL search each; the board is read every pass)
 _INTAKE = {"at": None, "noted": None}   # noted: the search back-off window already logged as an event
@@ -1207,14 +1238,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             accounts.check_parked()
         except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"account check failed: {e}", file=sys.stderr)
-        try:   # a local board's queued changes go to its GitHub Project (sync.py)
-            if C.SYNC.get("github") and outbox.count():
-                r = sync.replay(limit=SYNC_PER_PASS)
-                if r["stopped_because"] == "error":
-                    events.emit("error", message=f"sync: {r['error']}")
-        except Exception as e:  # noqa: BLE001 - a failed replay never stops the pass
-            print(f"sync failed: {e}", file=sys.stderr)
-            events.emit("error", message=f"sync: {e}")
+        _sync_pass()
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
     room = manager.room_for(ms, C.PROFILE_NAME)   # new agents this profile's share of the machine has room for
@@ -1710,7 +1734,25 @@ def cmd_dispatch(a):
         jobs.result(f"{C.PROFILE_NAME} pass done")
 
 
+class _Terminated(BaseException):
+    """SIGTERM; not a SystemExit, which a pass would catch as its own failure."""
+
+
+def _terminate(*_):
+    raise _Terminated
+
+
 def _dispatch(a):
+    try:
+        _passes(a)
+    except _Terminated:
+        pass
+    finally:
+        if not a.dry_run:
+            backup.tick(force=True)
+
+
+def _passes(a):
     if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.manages(C.PROFILE_NAME):
         print(f"this machine is run by pl manager (pid {manager.holder_pid() or '?'}); it starts this profile's dispatcher")
         return   # a restored tmux window just closes; the manager's own dispatcher keeps running
@@ -1733,6 +1775,10 @@ def _dispatch(a):
                 print(line)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - a bad library folder or config never stops the dispatcher
             print(f"built-in skills not installed: {e}", file=sys.stderr)
+    if lock:
+        backup.check()
+        with contextlib.suppress(ValueError):   # only the main thread can install a handler
+            signal.signal(signal.SIGTERM, _terminate)
     from pl import profiles
     for w in profiles.shared_warnings(profiles.list_profiles(), profiles.current_row()):
         print(f"warning: {w}")
@@ -1776,6 +1822,8 @@ def _dispatch(a):
             if not (isinstance(e, RateLimited) and e.until == noted):   # one event per rate-limit window
                 events.emit("error", message=str(e))
             noted = e.until if isinstance(e, RateLimited) else None
+        if lock:
+            backup.tick()
         if a.once:
             return
         if seen is not None:   # plus pl's writes and the idea files: any of them changing is a change
@@ -1786,7 +1834,7 @@ def _dispatch(a):
             wait = min(wait * ghquota.pace(), IDLE_MAX * 3)   # a low shared budget: passes come further apart
         if lock:
             lock = _restart_if_new(lock)
-        _nap(wait, lambda: _fast_guard(a.dry_run))
+        _nap(wait, lambda: (_fast_guard(a.dry_run), lock and backup.tick()))
 
 
 def _restart_if_new(lock):

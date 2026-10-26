@@ -484,4 +484,4 @@ async def test_the_console_names_itself_as_the_source_of_a_stop_and_the_header_s
         assert sources == ["console-D"]
     data = {"snapshot": {"disp": "stopped", "prof": "p", "summary": "", "at": "t"},
             "machine": {"profiles": [{"name": "work", "stopped": True, "stopped_by": "console-D", "stopped_at": 1}]}}
-    assert "stopped by you: console-D " in header_text(data).plain
+    assert "Stopped (by you at " in header_text(data).plain
