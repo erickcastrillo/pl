@@ -14,6 +14,7 @@ from textual.widgets.option_list import Option
 from pl import config as C
 from pl.tui.cards import CardScreen
 from pl.tui.chrome import tabs
+from pl.tui.home import home_rows
 from pl.util import short_id
 
 _run = subprocess.run   # the one subprocess runner here; tests fake it
@@ -192,3 +193,49 @@ class SwitcherScreen(ModalScreen):
                 })
         if remote_cards:
             self.app.call_from_thread(self._add_remote_items, remote_cards)
+
+
+def picker_rows(data):
+    summaries = [s for s in (data or {}).get("home") or [] if s and isinstance(s, dict)]
+    return [{"name": r["name"], "type": s.get("pipeline") or "-", "running": r["running"],
+             "live_agents": r["live_agents"], "needs_you": r["needs_you"], "current": r["name"] == C.PROFILE_NAME}
+            for s, r in zip(summaries, home_rows(summaries))]
+
+
+class PipelinesScreen(ModalScreen):
+    """P: every pipeline on this machine; enter opens the chosen one on the tab you are on."""
+    DEFAULT_CSS = """
+    PipelinesScreen { align: center middle; }
+    PipelinesScreen > Vertical { width: 80; height: auto; max-height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    PipelinesScreen OptionList { height: auto; max-height: 20; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, data=None):
+        super().__init__()
+        self.rows = picker_rows(data)
+
+    def compose(self):
+        with Vertical():
+            yield OptionList(*(Option(self._line(r)) for r in self.rows), id="pipeline-options")
+            yield Static(Text("↑↓ choose · enter switch · esc close", style="dim"))
+
+    @staticmethod
+    def _line(r):
+        state = "running" if r["running"] else "stopped"
+        return (f"{'●' if r['current'] else ' '} {r['name']:<12} {r['type']:<14} {state:<8} "
+                f"{r['live_agents']} working   {r['needs_you']} need you")
+
+    def on_mount(self):
+        ol = self.query_one(OptionList)
+        ol.highlighted = next((i for i, r in enumerate(self.rows) if r["current"]), 0 if self.rows else None)
+        ol.focus()
+
+    def on_option_list_option_selected(self, event):
+        self.dismiss(None)
+        row = self.rows[event.option_index]
+        if not row["current"]:
+            self.app.switch_to(row["name"], tab=self.app.active_tab)
+
+    def action_cancel(self):
+        self.dismiss(None)

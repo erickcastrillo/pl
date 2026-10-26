@@ -1070,8 +1070,8 @@ def test_the_pipeline_keys_do_not_clash_with_the_console_keys():
     assert len(view_keys) == len(set(view_keys))
     assert not ({"d", "h", "f", "F", "z", "u", "e"} & app_keys) and {"d", "h", "f", "F", "z", "u", "e"} <= set(view_keys)
     assert "D" in app_keys and "D" not in view_keys   # D stays the dispatcher's key
-    assert "P" in view_keys and "P" not in app_keys
-    assert {b.key: b.description for b in tui_cards.CardsView.BINDINGS}["P"] == "plan filter"
+    assert "P" in app_keys and "P" not in view_keys   # P opens the pipeline picker everywhere
+    assert {b.key: b.description for b in tui_cards.CardsView.BINDINGS}["L"] == "plan filter"
     assert {"ctrl+k", "exclamation_mark"} <= app_keys and not ({"ctrl+k", "exclamation_mark"} & set(view_keys))
 
 
@@ -2679,7 +2679,7 @@ def _with_plan():
 
 
 async def _filter_plan(pilot, text):
-    await pilot.press("P")
+    await pilot.press("L")
     await pilot.pause()
     await pilot.press(*text, "enter")
     await settle(pilot)
@@ -2735,21 +2735,21 @@ async def test_P_rejects_bad_numbers_and_esc_changes_nothing(monkeypatch, typed)
         await _filter_plan(pilot, typed)
         assert view.plan is None and list(view._rows) == rows
         assert any("whole number from 1" in str(n.message) for n in app._notifications)
-        await pilot.press("P")
+        await pilot.press("L")
         await pilot.pause()
         await pilot.press("escape")
         await settle(pilot)
         assert view.plan is None and list(view._rows) == rows and len(app.screen_stack) == 1
 
 
-async def test_P_again_clears_the_filter(monkeypatch):
+async def test_L_again_clears_the_filter(monkeypatch):
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(_with_plan()))
     async with app.run_test(size=(176, 48)) as pilot:
         view = await _open_cards(pilot, app)
         rows, title = list(view._rows), app.query_one("#cards-table").border_title
         await _filter_plan(pilot, "21")
-        await pilot.press("P")
+        await pilot.press("L")
         await settle(pilot)
         assert view.plan is None and list(view._rows) == rows and app.query_one("#cards-table").border_title == title
 

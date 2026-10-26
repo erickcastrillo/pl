@@ -442,7 +442,7 @@ class CardsView(CardActions, Horizontal):
                 Binding("F", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
                 Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
                 Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold"),
-                Binding("P", "plan_filter", "plan filter")]
+                Binding("L", "plan_filter", "plan filter")]
 
     def __init__(self):
         super().__init__()
@@ -617,7 +617,7 @@ class CardsView(CardActions, Horizontal):
             t.move_cursor(row=t.get_row_index(cid))
 
     def action_plan_filter(self):
-        """P: ask for a plan number and list only that plan's cards by slice; P again shows everything."""
+        """L: ask for a plan number and list only that plan's cards by slice; L again shows everything."""
         if self.plan is not None:
             self.plan = None
         else:
