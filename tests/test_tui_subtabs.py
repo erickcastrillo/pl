@@ -41,21 +41,18 @@ async def test_ac2_a_free_letter_opens_its_sub_tab():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        await pilot.press("3", "b")
-        await settle(pilot)
-        assert app.active_tab == "cards"
         await pilot.press("5", "l")
         await settle(pilot)
         assert app.active_tab == "loops"
-        label = app.query_one("#work-views").get_tab("cards").label
-        assert label.plain.startswith("Board") and label.spans[0].style.underline and label.spans[0].start == 0
+        label = app.query_one("#automate-views").get_tab("loops").label
+        assert label.plain.startswith("Loops") and label.spans[0].style.underline and label.spans[0].start == 0
 
 
 async def test_ac3_sub_tab_letters_never_collide():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        assert app.sub_keys == {"assistant": {"b": "brain"}, "work": {"b": "cards"}, "automate": {"l": "loops"},
+        assert app.sub_keys == {"automate": {"l": "loops"},
                                 "review": {"p": "prs", "w": "waiting"},
                                 "extend": {"c": "connectors", "m": "models", "p": "pods"}}
         for gid, letters in app.sub_keys.items():
@@ -102,7 +99,7 @@ async def test_ac6_last_sub_tabs_come_back_after_a_restart(state_dir):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        await pilot.press("3", "b", "5", "right")
+        await pilot.press("3", "right", "5", "right")
         await settle(pilot)
     saved = json.loads((state_dir / "subtabs.json").read_text())
     assert saved["work"] == "cards" and saved["automate"] == "subagents"
@@ -149,7 +146,7 @@ async def test_ac8_bad_saved_file_falls_back_quietly(state_dir, saved, assistant
         for gid, vid in first.items():
             assert app.query_one(f"#{gid}-views").active == vid
         assert not app._notifications
-        await pilot.press("3", "b")
+        await pilot.press("3", "right")
         await settle(pilot)
     assert json.loads((state_dir / "subtabs.json").read_text())["work"] == "cards"
 
