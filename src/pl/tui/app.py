@@ -103,10 +103,10 @@ def _now(rows):
 
 
 def _alerts():
-    """Open alerts for the Alerts tab; an unreadable file never fails the refresh."""
+    """Open, unacknowledged alerts for the Alerts tab; an unreadable file never fails the refresh."""
     from pl import alerts
     try:
-        return alerts.listing()
+        return alerts.shown()
     except Exception:  # noqa: BLE001
         return []
 
