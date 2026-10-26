@@ -414,7 +414,7 @@ def test_get_started_text_lists_items_with_keys_or_collapses():
     t = {"board": True, "accounts": False, "idea": False, "spec": False, "plan": False, "pr": False}
     full = getstarted.text(t, False).plain
     assert full.splitlines()[0] == "Get started (1/6)"
-    assert "✓ board connected" in full and "press W" in full
+    assert "✓ board connected" in full and "press I" in full
     assert [full.index(i[1]) for i in getstarted.ITEMS] == sorted(full.index(i[1]) for i in getstarted.ITEMS)
     assert "(1/6)" in getstarted.text(t, True).plain and len(getstarted.text(t, True).plain.splitlines()) == 1
 
@@ -433,8 +433,8 @@ async def test_home_shows_get_started_for_a_profile_without_cards(monkeypatch, t
         text = str(box.render())
         assert [text.index(label) for _, label, _, _ in __import__("pl.tui.getstarted", fromlist=["x"]).ITEMS] == sorted(
             text.index(label) for _, label, _, _ in __import__("pl.tui.getstarted", fromlist=["x"]).ITEMS)
-        assert "press W" in text
-        await pilot.press("W")
+        assert "press I" in text
+        await pilot.press("I")
         await pilot.pause()
         assert app.active_tab == "ideas"
 

@@ -11,7 +11,7 @@ from pl.board import _save
 ITEMS = [
     ("board", "board connected", "B", "settings"),
     ("accounts", "an account for each stage", "C", "settings"),
-    ("idea", "a first idea added", "W", "ideas"),
+    ("idea", "a first idea added", "I", "ideas"),
     ("spec", "its spec approved", "V", "cards"),
     ("plan", "its plan approved", "V", "cards"),
     ("pr", "its first PR opened", "Y", "prs"),

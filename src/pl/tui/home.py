@@ -82,7 +82,7 @@ class HomeView(Widget):
         Binding("n", "new", "new pipeline", show=True), Binding("y", "copy", "copy add command"),
         Binding("B", "get_started('settings')", "board"),
         Binding("C", "get_started('settings')", "accounts", show=False),
-        Binding("W", "get_started('idea')", "first idea"),
+        Binding("I", "get_started('idea')", "first idea"),
         Binding("V", "get_started('cards')", "board view", show=False),
         Binding("Y", "get_started('prs')", "pull requests", show=False),
         Binding("G", "collapse_start", "collapse"),
