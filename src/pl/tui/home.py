@@ -6,10 +6,11 @@ from pathlib import Path
 from rich.text import Text
 from textual.binding import Binding
 from textual.widget import Widget
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from pl import config as C
 from pl import util
+from pl.tui import getstarted
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.dashboard import copy_text
 
@@ -76,16 +77,34 @@ def home_rows(summaries) -> list[dict]:
 
 class HomeView(Widget):
     """The Home tab DataTable showing all configured pipelines."""
-    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details"),
-                Binding("n", "new", "new pipeline", show=True), Binding("y", "copy", "copy add command")]
+    BINDINGS = [
+        Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details"),
+        Binding("n", "new", "new pipeline", show=True), Binding("y", "copy", "copy add command"),
+        Binding("B", "get_started('settings')", "board"),
+        Binding("C", "get_started('settings')", "accounts", show=False),
+        Binding("I", "get_started('idea')", "first idea"),
+        Binding("V", "get_started('cards')", "board view", show=False),
+        Binding("Y", "get_started('prs')", "pull requests", show=False),
+        Binding("G", "collapse_start", "collapse"),
+        Binding("Z", "dismiss_start", "dismiss"),
+    ]
+    CHECKLIST_ACTIONS = {"get_started", "collapse_start", "dismiss_start"}
 
     def __init__(self, selected_profile=None):
         super().__init__()
         self.selected_profile = selected_profile
         self.rows = None   # None until the first show, so that draw adds the "+ New" row even with no pipelines
+        self.started = self.collapsed = False
+        self.first = True
 
     def compose(self):
+        box = Static(id="get-started")
+        box.display = False
+        yield box
         yield DataTable(id="home-table")
+
+    def check_action(self, action, parameters):
+        return self.started if action in self.CHECKLIST_ACTIONS else True
 
     def on_mount(self):
         t = self.query_one(DataTable)
@@ -97,7 +116,22 @@ class HomeView(Widget):
         i = t.cursor_row - 1
         return self.rows[i] if self.rows and 0 <= i < len(self.rows) else None
 
+    def show_checklist(self, data):
+        box = self.query_one("#get-started", Static)
+        box.display = self.started
+        if self.started:
+            box.update(getstarted.text(getstarted.ticks(data), self.collapsed))
+
     def show(self, data):
+        try:
+            self.started = getstarted.active(data)
+        except Exception:   # a broken state file only hides the checklist
+            self.started = False
+        self.show_checklist(data)
+        self.app.refresh_bindings()
+        if self.first and self.started and not getattr(self.app, "initial_tab", None):
+            self.app.action_tab("home")
+        self.first = False
         t = self.query_one(DataTable)
         keep, rows = t.cursor_row, home_rows((data or {}).get("home", []))
         if rows != self.rows or not t.row_count:
@@ -142,3 +176,21 @@ class HomeView(Widget):
             return
         r = self.selected()
         self.app.push_screen(DetailsScreen((r or {}).get("name") or self.selected_profile or C.PROFILE_NAME or "default"))
+
+    def action_get_started(self, place):
+        if place == "idea":
+            self.app.action_tab("ideas")
+            if box := next(iter(self.app.query("#idea-input")), None):
+                box.focus()
+        else:
+            self.app.action_tab(place)
+
+    def action_collapse_start(self):
+        self.collapsed = not self.collapsed
+        self.show_checklist(self.app.data)
+
+    def action_dismiss_start(self):
+        getstarted.mark(dismissed=time.time())
+        self.started = False
+        self.show_checklist(self.app.data)
+        self.app.refresh_bindings()
