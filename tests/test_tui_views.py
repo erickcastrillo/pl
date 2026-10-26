@@ -2857,6 +2857,8 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
         assert "Edit loop invoices" in str(app.screen.query_one("Static").render())
+        app.screen.query_one("#loop-kind", Select).value = "daily"
+        await settle(pilot)
         app.screen.query_one("#loop-at").value = "09:30"
         await pilot.press("ctrl+s")
         await settle(pilot)
