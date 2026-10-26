@@ -6,6 +6,7 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
+from pl import pipeline
 
 
 GROUPS = [
@@ -187,7 +188,8 @@ def status_sentence(snap, stopped=None):
     parts = ["Running"]
     if working:
         parts.append(f"{_plural(working, 'agent')} working")
-    parts.append(f"{_plural(waiting, 'card')} waiting" if waiting else "no cards waiting")
+    words = pipeline.ui()
+    parts.append(f"{_plural(waiting, words['item'])} waiting" if waiting else f"no {words['items']} waiting")
     sentence = ", ".join(parts)
     if snap.get("parked") and (out := re.search(r"(\S+): PARKED until (.+?)(?:,| \(\d+ running|$)", snap["prof"])):
         sentence += f"; account {out[1]} is out of credits until {out[2]}"

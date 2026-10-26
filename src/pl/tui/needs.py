@@ -2,6 +2,7 @@
 from rich.text import Text
 
 from pl import config as C
+from pl import pipeline
 from pl.util import cmd_id
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, confirm_and_approve
@@ -68,7 +69,7 @@ def detail(r, now=None):
         return Text("select a row", style="dim")
     c = r["card"]
     m = c.get("metadata") or {}
-    lines = [c.get("title") or "", "", f"card     {c['id']}", f"column   {r.get('col')}",
+    lines = [c.get("title") or "", "", f"{pipeline.ui()['item']:<9}{c['id']}", f"column   {r.get('col')}",
              f"account  {m.get('profile') or '-'}", f"tags     {', '.join(map(str, c.get('tags') or [])) or '-'}",
              f"updated  {str(c.get('updated_at') or '')[:16].replace('T', ' ')}"]
     if m.get("dropped_at"):   # card text: shown as plain text, never markup

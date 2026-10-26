@@ -9,7 +9,7 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Static
 
 from pl import config as C
-from pl import util
+from pl import pipeline, util
 from pl.tui import getstarted
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.dashboard import copy_text
@@ -108,7 +108,7 @@ class HomeView(Widget):
 
     def on_mount(self):
         t = self.query_one(DataTable)
-        t.add_columns("pipeline", "status", "cards", "needs you", "live agents", "wait", "alerts")
+        t.add_columns("pipeline", "status", pipeline.ui()["items"], "needs you", "live agents", "wait", "alerts")
         t.cursor_type = "row"
 
     def selected(self):
