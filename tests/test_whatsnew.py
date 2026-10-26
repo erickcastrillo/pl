@@ -176,3 +176,8 @@ async def test_the_popup_fits_a_narrow_terminal(profile):
         app.action_whatsnew()
         await settle(pilot)
         assert app.screen.query_one(Vertical).outer_size.width == 96
+
+
+def test_whatsnew_lists_empty_states():
+    entry = next(e for e in whatsnew.ENTRIES if "empty" in e["title"])
+    assert entry["key"] == max(e["key"] for e in whatsnew.ENTRIES)

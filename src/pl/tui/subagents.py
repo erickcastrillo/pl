@@ -18,6 +18,7 @@ from textual.widgets import DataTable, Static
 from pl import config as C
 from pl import harnesses
 from pl.trackers import mcp
+from pl.tui.chrome import empty_state
 from pl.tui.loops import COPIERS, _copy_run
 from pl.util import PEM_RE, TOKEN_RE, _nofollow, mask, short_id  # noqa: F401  (shared with pl.usage, which must not load Textual)
 
@@ -283,6 +284,9 @@ class SubagentsView(Widget):
             t.clear()
             for x in shown:
                 t.add_row(*(Text(str(v)) for v in x))
+            if not rows:
+                for line in empty_state("subagents"):
+                    t.add_row(Text(line, style="dim"), *(Text("") for _ in range(4)))
         if pick is not None:
             t.move_cursor(row=next(i for i, r in enumerate(rows) if r["path"] == pick["path"]))
         if lines is not None:   # the file changed: redraw

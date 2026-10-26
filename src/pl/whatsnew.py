@@ -252,6 +252,8 @@ ENTRIES = [
        "pl skills list"),
     _e("2026-10-25.55", "Remove on the Skills screen says which stages, loops and pods use the skill",
        "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
+    _e("2026-10-26.01", "Every console tab says what it is for and how to start when it is empty",
+       "every list tab: ? opens its help", "pl"),
 ]
 
 

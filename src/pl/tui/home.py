@@ -10,7 +10,7 @@ from textual.widgets import DataTable
 
 from pl import config as C
 from pl import util
-from pl.tui.chrome import NEW_ROW, new_row
+from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.dashboard import copy_text
 
 NEW_PIPELINE = "pl pipelines add NAME --template T --board local"
@@ -109,6 +109,9 @@ class HomeView(Widget):
                 t.add_row(Text(r["name"]), Text(r["status"], style="green" if r["running"] else "dim"),
                           Text(r["cards"]), Text(str(r["needs_you"]), style="bold red" if r["needs_you"] > 0 else "bold"),
                           Text(str(r["live_agents"])), Text(r["oldest_wait"]), Text(str(r["alerts"])))
+            if not self.rows:
+                for line in empty_state("home"):
+                    t.add_row(Text(line, style="dim"), *(Text("") for _ in range(6)))
             t.move_cursor(row=min(1, len(rows)) if first else min(max(keep, 0), len(rows)))
 
     def action_select(self):
