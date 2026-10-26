@@ -12,7 +12,7 @@ from textual.worker import get_current_worker
 
 from pl import agent_screen
 from pl import config as C
-from pl import confirm, move_agent, trackers
+from pl import confirm, move_agent, pipeline, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
@@ -49,6 +49,14 @@ class FitTable(DataTable):
             flex.auto_width, flex.width = self.wide is None, self.wide or flex.width
         self._require_update_dimensions = True
         self.refresh(layout=True)
+
+
+def field_value(meta, name) -> str:
+    """A board field's text from the card's metadata: the exact name, else with underscores for spaces."""
+    value = meta.get(name)
+    if value is None:
+        value = meta.get(name.replace(" ", "_"))
+    return "" if value is None else str(value)
 
 
 STATE = {"review": ("your review", "#e0a040"), "manual": ("yours to do", "#5f9fff"), "working": ("working", "green"),
@@ -449,14 +457,14 @@ class CardsView(CardActions, Horizontal):
                 Binding("F", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
                 Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
                 Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold"),
-                Binding("P", "plan_filter", "plan filter")]
+                Binding("L", "plan_filter", "plan filter")]
 
     def __init__(self):
         super().__init__()
         self._rows, self._built, self._now, self._data = {}, [], {}, None
         self.only_mine = False   # f: list only the cards that wait on a person
         self.show_done = False   # z: a Done group from the last refresh's Done cards (no extra board read)
-        self.plan = None   # P: only this plan's cards, ordered by slice
+        self.plan = None   # L: only this plan's cards, ordered by slice
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
         self._last = None   # the cursor row before the last move: which way it travels
@@ -466,6 +474,8 @@ class CardsView(CardActions, Horizontal):
         t = FitTable("title", TITLE_WIDTH, ("now",), id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
         t.add_column("id", key="id")
         t.add_column("title", width=TITLE_WIDTH, key="title")   # a long title ends in … so state and now stay on screen
+        for f in pipeline.ui()["fields"]:
+            t.add_column(f, key=f"field:{f}")
         t.add_column("state", key="state")
         t.add_column("now", key="now")
         yield t
@@ -482,6 +492,8 @@ class CardsView(CardActions, Horizontal):
     def show(self, data):
         self._now, self._data = data.get("now") or {}, data
         groups = card_rows(data)
+        words = pipeline.ui()
+        fields, blank = words["fields"], [Text("")] * len(words["fields"])
         total, mine = sum(len(h) for _, h in groups), needs_you_count(data)
         if self.show_done and (finished := [r for r in data["snapshot"].get("done") or [] if r.get("card")]):
             groups = [*groups, ("Done", finished)]
@@ -493,18 +505,18 @@ class CardsView(CardActions, Horizontal):
                           key=lambda r: plan_order(r["card"]))
             groups = [(f"plan {self.plan}", here)] if here else []
             needs = " · needs you only" if self.only_mine else ""
-            t.border_title = (f"Pipeline · plan {self.plan}{needs} · {len(here)} cards · P clears" if here
-                              else f"Pipeline · no cards in plan {self.plan} · P clears")
+            t.border_title = (f"Pipeline · plan {self.plan}{needs} · {len(here)} {words['items']} · L clears" if here
+                              else f"Pipeline · no cards in plan {self.plan} · L clears")
         elif self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
-            t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} cards · f shows all"
+            t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} {words['items']} · f shows all"
         else:
-            t.border_title = f"Pipeline · {total} cards · {mine} need you (f only those) · " + (
+            t.border_title = f"Pipeline · {total} {words['items']} · {mine} need you (f only those) · " + (
                 "z hides Done" if self.show_done else "Done is hidden (z shows it)")
         keep, keep_key = t.cursor_row, self._current()[0]
         self._rows, built = {}, []
         for col, here in groups:
-            built.append((f"group:{col}", (Text("■", style="dim"), Text(f"{col.upper()} {len(here)}", style="bold"), Text(""), Text(""))))
+            built.append((f"group:{col}", (Text("■", style="dim"), Text(f"{col.upper()} {len(here)}", style="bold"), *blank, Text(""), Text(""))))
             for r in here:
                 cid = r["card"]["id"]
                 if cid in self._rows:   # a duplicate row would raise DuplicateKey
@@ -519,13 +531,14 @@ class CardsView(CardActions, Horizontal):
                 line = str(m.get("drop_reason") or "") if r.get("col") == "Done" else (self._now.get(cid) or {}).get("line") or ""
                 if self.plan is not None:
                     line = f"{r.get('col')} · {line}" if line else str(r.get("col"))
-                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"), state,
+                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"),
+                                    *(Text(field_value(m, f), style="dim", no_wrap=True, overflow="ellipsis") for f in fields), state,
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
         if not built:   # the title column is narrow, so the message takes one short line per row
-            lines = ([f"No cards in plan {self.plan}."] if self.plan is not None else ["Nothing needs you."] if self.only_mine
+            lines = ([f"No {words['items']} in plan {self.plan}."] if self.plan is not None else ["Nothing needs you."] if self.only_mine
                      else empty_state("cards"))
             for i, line in enumerate(lines):
-                built.append((f"group:empty{i}", (Text("■" if i == 0 else "", style="dim"), Text(line, style="dim"), Text(""), Text(""))))
+                built.append((f"group:empty{i}", (Text("■" if i == 0 else "", style="dim"), Text(line, style="dim"), *blank, Text(""), Text(""))))
         rebuilt = [k for k, _ in built] != [k for k, _ in self._built]
         if not rebuilt:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, self._built):
@@ -668,7 +681,7 @@ class CardsView(CardActions, Horizontal):
             t.move_cursor(row=t.get_row_index(cid))
 
     def action_plan_filter(self):
-        """P: ask for a plan number and list only that plan's cards by slice; P again shows everything."""
+        """L: ask for a plan number and list only that plan's cards by slice; L again shows everything."""
         if self.plan is not None:
             self.plan = None
         else:

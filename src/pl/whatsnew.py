@@ -213,7 +213,7 @@ ENTRIES = [
     _e("2026-10-25.35", "pl skills remove: take out a skill installed from GitHub",
        "unlinks it, moves the folder to a trash folder and names the stages and loops that used it",
        "pl skills remove NAME"),
-    _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
+    _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: L, then a plan number; L clears", "pl list --plan 21"),
     _e("2026-10-25.37", "pl help --json lists every command; pl jobs shows the long jobs running",
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
     _e("2026-10-25.38", "Auto-merge loop: pl merges what passes every rule",
@@ -267,6 +267,16 @@ ENTRIES = [
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
     _e("2026-10-26.62", "Alerts for stuck agents: waiting, unmoved or blocked",
        "Alerts tab; pl alerts", "pl alerts"),
+    _e("2026-10-26.63", "Switch pipelines from anywhere with P; the plan filter moved to L",
+       "console header shows the pipeline and who else needs you; P lists every pipeline, Enter switches", "pl"),
+    _e("2026-10-26.64", "An alert when the repository's CI is not running",
+       "Alerts tab", "pl alerts"),
+    _e("2026-10-26.65", "A scheduled loop keeps what each run said: last run, its output and earlier runs",
+       "Loops tab: select a scheduled loop; its last 20 runs are kept under state/loops/<name>/", "pl loops run <name>"),
+    _e("2026-10-26.66", "pl doctor tests the tracker and intake boards; a Vikunja board names the wrong setting",
+       "pl doctor", "pl doctor"),
+    _e("2026-10-26.67", "Every console tab says what it is for and how to start when it is empty",
+       "every list tab: ? opens its help", "pl"),
 ]
 
 

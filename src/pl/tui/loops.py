@@ -16,7 +16,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
 
 from pl import agents, loops, schedule, skills, util
 from pl import config as C
-from pl.tui.chrome import NEW_ROW, new_row
+from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
@@ -99,6 +99,41 @@ def sentence(row):
     return f"{row['does']} {row['schedule']}{nxt}; last run {row['output']}"
 
 
+def _clock(at, fmt="%H:%M"):
+    try:
+        return datetime.fromisoformat(at).astimezone().strftime(fmt)
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _duration(run):
+    try:
+        sec = int((datetime.fromisoformat(run["ended_at"]) - datetime.fromisoformat(run["started_at"])).total_seconds())
+    except (KeyError, TypeError, ValueError):
+        return "?"
+    return f"{sec // 60}m {sec % 60}s" if sec >= 60 else f"{sec}s"
+
+
+def run_detail(x, runs):
+    """The right pane of a scheduled loop: what it does, its last run with its output, and the earlier runs. Runs are newest first."""
+    body = Text(f"{x['name']} loop\n", style="bold")
+    body.append(f"What it does: {x['does']}\n", style="not bold")
+    body.append(f"Account {x['account']} · tokens this week {x['tokens7d']}\n\n")
+    if not runs:
+        body.append(f"No run yet: next run {x['next']}")
+        return body
+    last = runs[0]
+    body.append(f"Last run {_clock(last.get('started_at'))} · {'ok' if last.get('ok') else 'failed'} · {_duration(last)}")
+    if not last.get("ok"):
+        body.append(f" · {last.get('reason') or 'failed'}", style="red")
+    body.append("\n" + "\n".join(last.get("output") or []) + "\n\n")
+    body.append("Earlier runs\n", style="bold")
+    for r in runs[1:]:
+        result = "ok" if r.get("ok") else f"failed: {r.get('reason') or 'failed'}"
+        body.append(f"{_clock(r.get('started_at'), '%m-%d %H:%M')}  {result}\n", style="not bold")
+    return body
+
+
 def _short(sec):
     return f"{sec // 60}m" if sec < 3600 else f"{sec // 3600}h"
 
@@ -149,7 +184,7 @@ def loop_rows(data):
         tok = human(u["tokens_1h"]) if claude and u else "n/a"
         week = human(u["tokens_7d"]) if svc.get("every") and u.get("tokens_7d") is not None else "-"
         words = svc.get("every") or (f"{int(every[1]) * UNIT[every[2]] // 60}m" if every else "")
-        out.append({"name": name, "state": state, "prompt": svc["prompt"], "does": what_it_does(svc),
+        out.append({"name": name, "state": state, "prompt": svc["prompt"], "does": what_it_does(svc), "every": svc.get("every"),
                     "schedule": schedule.in_words(words), "read_only": bool(svc.get("every") or "writes" in svc) and not svc.get("writes"),
                     "account": svc.get("profile") or "-",
                     "context": ctx, "tokens": tok, "tokens7d": week,
@@ -158,7 +193,7 @@ def loop_rows(data):
     for name, v in C.LOOPS_OFF.items():
         run = (runs.get(name) or {}).get("last_run")
         out.append({"name": name, "state": "paused", "prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""),
-                    "does": what_it_does(v), "schedule": schedule.in_words(v.get("every")),
+                    "does": what_it_does(v), "every": v.get("every"), "schedule": schedule.in_words(v.get("every")),
                     "read_only": bool(v.get("every") or "writes" in v) and not v.get("writes"),
                     "account": v.get("account") or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-", "last": "-",
                     "next": "-", "output": last_result(run) if run else "not reported",
@@ -482,7 +517,7 @@ class LoopsView(Widget):
 
     def __init__(self):
         super().__init__()
-        self.loops = []
+        self.loops = None   # None until the first show, so an empty first refresh still draws
 
     def compose(self):
         with Horizontal():
@@ -511,6 +546,9 @@ class LoopsView(Widget):
             t.add_row(new_row("loop"), *[""] * (len(COLUMNS) - 1), key=NEW_ROW)
             for x in self.loops:
                 t.add_row(*(Text(str(x[k])) for _, k in COLUMNS), key=x["name"])
+            if not self.loops:
+                for line in empty_state("loops"):
+                    t.add_row(Text(line, style="dim"), *(Text("") for _ in COLUMNS[1:]))
             t.move_cursor(row=min(max(keep, 0), len(self.loops)))
         self.load_tail()
 
@@ -533,7 +571,10 @@ class LoopsView(Widget):
             return
         name, pane = x["name"], x["pane"]
 
-        def run():   # tmux off the UI thread
+        def run():   # tmux and the run log off the UI thread
+            if x.get("every"):
+                self.app.call_from_thread(self._show_detail, name, run_detail(x, loops.read_runs(name)))
+                return
             try:
                 lines = agents.pane_tail(pane, TAIL_LINES)
             except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
@@ -541,6 +582,12 @@ class LoopsView(Widget):
                 return
             self.app.call_from_thread(self._show_tail, name, pane, lines)
         self.run_worker(run, thread=True, group="loops-tail")
+
+    def _show_detail(self, name, body):
+        x = self.selected()
+        if x is None or x["name"] != name:
+            return
+        self.query_one("#loops-screen", Static).update(body)
 
     def _show_tail(self, name, pane, lines):
         x = self.selected()
@@ -723,6 +770,9 @@ class ActivityView(Widget):
             detail = _fields(e, ("ts", "kind", "card", "profile"))
             t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
                       Text(short_id(e.get("card") or "")), Text(detail))
+        if not shown and self.filter == "all":
+            for line in empty_state("activity"):
+                t.add_row(Text(line, style="dim"), Text(""), Text(""), Text(""))
 
     def action_next_filter(self):
         self.filter = FILTERS[(FILTERS.index(self.filter) + 1) % len(FILTERS)]
