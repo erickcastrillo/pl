@@ -1263,6 +1263,7 @@ def test_a_group_id_resolves_to_its_first_view(monkeypatch):
 def test_hidden_features_stay_hidden(monkeypatch):
     from pl.tui import chrome
     monkeypatch.setattr(C, "ASSISTANT", {"enabled": False})
+    monkeypatch.setattr("pl.tui.getstarted.wanted", lambda: False)
     assert "assistant" not in dict(chrome.tabs())
     assert chrome.resolve("assistant") is None   # the group has no view left, so it is hidden too
     assert chrome.resolve("home") is None   # one profile

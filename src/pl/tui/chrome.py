@@ -44,6 +44,7 @@ MEANING = {
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
     "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
     "sub_tab": "switch view", "sub_letter": "switch view",
+    "get_started": "get started step", "collapse_start": "collapse", "dismiss_start": "dismiss",
 }
 
 # The bound actions a view shows first in the footer, so the console-wide keys are the ones cut at 80x24.
@@ -137,10 +138,11 @@ def show_first_heading(t, is_item):
 
 
 def tabs():
-    """The views this console shows: Home when >= 2 profiles have config.toml, less Assistant when disabled."""
+    """The views this console shows: Home when >= 2 profiles have config.toml or the Get started checklist is wanted, less Assistant when disabled."""
+    from pl.tui import getstarted
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
     return [(vid, name) for vid, name in TABS
-            if (vid != "home" or count >= 2) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
 
 
 def groups():
