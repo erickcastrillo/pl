@@ -59,7 +59,7 @@ def who() -> str:
         return f"agent:{os.environ['PL_STAGE']}"
     if os.environ.get("PL_ASSISTANT"):
         return "assistant"
-    if os.environ.get("PL_MCP_SESSION") or os.environ.get("PL_MCP"):
+    if os.environ.get("PL_MCP_SESSION") or os.environ.get("PL_MCP") or os.environ.get("PL_SOURCE") == "mcp":
         return "mcp-session"
     return getattr(C, "USER_EMAIL", "") or os.environ.get("USER", "unknown")
 
