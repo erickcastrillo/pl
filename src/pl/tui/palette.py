@@ -1,4 +1,5 @@
 """The console's actions as rows: what ? lists, and what Ctrl+P finds and runs."""
+from textual.actions import parse
 from textual.binding import ActiveBinding
 from textual.app import SystemCommand
 from textual.widgets import DataTable, TabPane
@@ -31,10 +32,15 @@ def tab_bindings(app, tid, app_tabs):
         for key, bindings in node._bindings.key_to_bindings.items():
             for b in bindings:
                 if node is not app or app_tabs.get(b.action.partition("(")[0]) == tid:
-                    found.setdefault(key, ActiveBinding(node, b, True, ""))
+                    found.setdefault(key, ActiveBinding(node, b, _allowed(node, b.action), ""))
         if node is app.screen:
             break
     return found.items()
+
+
+def _allowed(node, action):
+    _, name, params = parse(action)
+    return bool(node.check_action(name, params))
 
 
 def _title(description, key, action):

@@ -2485,6 +2485,17 @@ async def test_palette_selection_action_with_nothing_selected_only_switches(monk
         assert notes and notes[-1].endswith("pick a card first")
 
 
+async def test_palette_omits_an_action_disabled_on_another_tab(monkeypatch):
+    from pl.tui.loops import LoopsView
+    _fake_card_read(monkeypatch, [])
+    monkeypatch.setattr(LoopsView, "check_action", lambda self, action, parameters: None if action == "pause" else True, raising=False)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        assert not [c for t, c in _palette(app).items() if t.startswith("pause") and "Loops" in c.help]
+        assert [c for t, c in _palette(app).items() if t.startswith("run now") and "Loops" in c.help]
+
+
 async def test_palette_keeps_existing_entries(monkeypatch):
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider())
