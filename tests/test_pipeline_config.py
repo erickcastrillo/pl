@@ -164,7 +164,7 @@ def test_no_pipeline_ui_keeps_the_engineering_words(fake_home):
     assert pipeline.ui() == words
 
 
-@pytest.mark.parametrize("ui", ['fields = "company"', 'item = ""', 'items = 3', 'fields = ["company", ""]'])
+@pytest.mark.parametrize("ui", ['fields = "company"', 'item = ""', 'items = 3', 'fields = ["company", ""]', 'fields = ["owner", "owner"]'])
 def test_bad_pipeline_ui_is_refused_with_its_key_path(fake_home, capsys, ui):
     _profile(fake_home, PREPARE.format(column="Inbox", gate="owner", extra="") + UI.format(ui=ui))
     with pytest.raises(SystemExit) as e:

@@ -81,6 +81,8 @@ def _ui_errors(u) -> list[str]:
     fields = u.get("fields")
     if not (isinstance(fields, list) and all(isinstance(f, str) and f for f in fields)):
         errs.append("pipeline.ui.fields: must be a list of non-empty strings")
+    elif len(set(fields)) != len(fields):
+        errs.append("pipeline.ui.fields: names must be unique")
     return errs
 
 
