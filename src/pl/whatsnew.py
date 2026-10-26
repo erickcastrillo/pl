@@ -293,6 +293,8 @@ ENTRIES = [
        "Home: n, step 1", "pl pipelines add NAME --template marketing --board local"),
     _e("2026-10-26.75", "All pipelines' waiting items on Dashboard",
        "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
+    _e("2026-10-26.68", "Open a loop run's full log",
+       "Loops tab: select a scheduled loop and press l, or Enter on an earlier run", "l"),
 ]
 
 

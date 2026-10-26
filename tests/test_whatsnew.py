@@ -194,3 +194,4 @@ def test_whatsnew_lists_empty_states():
 
 def test_whatsnew_names_the_marketing_pod():
     assert sum("marketing pod" in e["title"] for e in whatsnew.ENTRIES) == 1
+    assert entry["key"] == "2026-10-26.67"

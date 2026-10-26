@@ -12,12 +12,13 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
+from textual.widgets import Checkbox, DataTable, Input, Label, OptionList, Select, Static
 
 from pl import agents, events, loops, schedule, skills, util
 from pl import config as C
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.review import ConfirmScreen
+from pl.tui.runlog import RunLogScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
 
@@ -114,8 +115,13 @@ def _duration(run):
     return f"{sec // 60}m {sec % 60}s" if sec >= 60 else f"{sec}s"
 
 
+def run_line(run):
+    result = "ok" if run.get("ok") else f"failed: {run.get('reason') or 'failed'}"
+    return f"{_clock(run.get('started_at'), '%m-%d %H:%M')}  {result}"
+
+
 def run_detail(x, runs):
-    """The right pane of a scheduled loop: what it does, its last run with its output, and the earlier runs. Runs are newest first."""
+    """The right pane of a scheduled loop: what it does and its last run with its output. Runs are newest first."""
     body = Text(f"{x['name']} loop\n", style="bold")
     body.append(f"What it does: {x['does']}\n", style="not bold")
     body.append(f"Account {x['account']} · tokens this week {x['tokens7d']}\n\n")
@@ -126,11 +132,7 @@ def run_detail(x, runs):
     body.append(f"Last run {_clock(last.get('started_at'))} · {'ok' if last.get('ok') else 'failed'} · {_duration(last)}")
     if not last.get("ok"):
         body.append(f" · {last.get('reason') or 'failed'}", style="red")
-    body.append("\n" + "\n".join(last.get("output") or []) + "\n\n")
-    body.append("Earlier runs\n", style="bold")
-    for r in runs[1:]:
-        result = "ok" if r.get("ok") else f"failed: {r.get('reason') or 'failed'}"
-        body.append(f"{_clock(r.get('started_at'), '%m-%d %H:%M')}  {result}\n", style="not bold")
+    body.append("\n" + "\n".join(last.get("output") or []))
     return body
 
 
@@ -510,24 +512,33 @@ class LoopsView(Widget):
     DEFAULT_CSS = """
     LoopsView { height: 1fr; }
     #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
-    #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
+    #loops-right { width: 1fr; height: 1fr; }
+    #loops-screen { height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
+    #loops-runs { height: auto; max-height: 12; border: round $panel-lighten-2; }
     """
     BINDINGS = [Binding("n", "new", "new"), Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
-                Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
+                Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop"),
+                Binding("l", "open_log", "full log")]
 
     def __init__(self):
         super().__init__()
+        self._runs, self._run_lines = [], None
         self.loops = None   # None until the first show, so an empty first refresh still draws
 
     def compose(self):
         with Horizontal():
             yield DataTable(id="loops-table", cursor_type="row", zebra_stripes=True)
-            yield Static(Text("select a loop", style="dim"), id="loops-screen")
+            with Vertical(id="loops-right"):
+                yield Static(Text("select a loop", style="dim"), id="loops-screen")
+                yield OptionList(id="loops-runs")
 
     def on_mount(self):
         t = self.query_one(DataTable)
         t.add_columns(*(label for label, _ in COLUMNS))
         t.border_subtitle = HINT
+        runs = self.query_one("#loops-runs", OptionList)
+        runs.border_title = "Earlier runs · enter opens the log"
+        runs.display = False
 
     def selected(self):
         t = self.query_one(DataTable)
@@ -553,7 +564,29 @@ class LoopsView(Widget):
         self.load_tail()
 
     def on_data_table_row_highlighted(self, _):
+        self.refresh_bindings()
         self.load_tail()
+
+    def check_action(self, action, parameters):
+        if action == "open_log":
+            x = self.selected()
+            return bool(x and x.get("every"))
+        return True
+
+    def action_open_log(self):
+        x = self.selected()
+        if x is None or not x.get("every"):
+            return
+        runs = loops.read_runs(x["name"])
+        if not runs:
+            self.app.notify("This loop has not run yet.", markup=False)
+            return
+        self.app.push_screen(RunLogScreen(x["name"], runs[0]))
+
+    def on_option_list_option_selected(self, event):
+        x = self.selected()
+        if event.option_list.id == "loops-runs" and x and x.get("every"):
+            self.app.push_screen(RunLogScreen(x["name"], self._runs[event.option_index + 1]))
 
     def action_new(self):
         def added(name):
@@ -573,7 +606,8 @@ class LoopsView(Widget):
 
         def run():   # tmux and the run log off the UI thread
             if x.get("every"):
-                self.app.call_from_thread(self._show_detail, name, run_detail(x, loops.read_runs(name)))
+                runs = loops.read_runs(name)
+                self.app.call_from_thread(self._show_detail, name, run_detail(x, runs), runs)
                 return
             try:
                 lines = agents.pane_tail(pane, TAIL_LINES)
@@ -583,11 +617,19 @@ class LoopsView(Widget):
             self.app.call_from_thread(self._show_tail, name, pane, lines)
         self.run_worker(run, thread=True, group="loops-tail")
 
-    def _show_detail(self, name, body):
+    def _show_detail(self, name, body, runs):
         x = self.selected()
         if x is None or x["name"] != name:
             return
         self.query_one("#loops-screen", Static).update(body)
+        self._runs = runs
+        earlier = self.query_one("#loops-runs", OptionList)
+        earlier.display = len(runs) > 1
+        lines = [run_line(r) for r in runs[1:]]
+        if lines != self._run_lines:   # an unchanged list is not rebuilt, so the 3 s refresh keeps the highlight
+            self._run_lines = lines
+            earlier.clear_options()
+            earlier.add_options(lines)
 
     def _show_tail(self, name, pane, lines):
         x = self.selected()
@@ -597,6 +639,7 @@ class LoopsView(Widget):
         body.append(f"{name} loop\n" if pane else f"{name} loop is off; showing the dispatcher\n")
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
+        self.query_one("#loops-runs", OptionList).display = False
 
     def on_data_table_row_selected(self, event):
         if event.row_key.value == NEW_ROW:   # "+ New loop" opens the add form; any other row opens its log

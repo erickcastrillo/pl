@@ -4444,7 +4444,8 @@ def test_loop_detail_shows_last_run_output_and_earlier_runs():
     plain = tui_loops.run_detail(row, runs).plain
     assert "What it does: list overdue invoices" in plain and "Account acme" in plain
     assert f"Last run {first:%H:%M} · ok · 2m 5s" in plain
-    assert "3 invoices overdue" in plain and "Earlier runs" in plain and "failed: usage limit" in plain
+    assert "3 invoices overdue" in plain and "Earlier runs" not in plain
+    assert tui_loops.run_line(runs[1]).endswith("failed: usage limit")
 
 
 def test_loop_detail_with_no_runs_says_when_it_runs():
@@ -4476,3 +4477,127 @@ async def test_loops_view_shows_run_detail_for_a_scheduled_loop(monkeypatch):
         await settle(pilot)
         await settle(pilot)
         assert "Last run" in str(app.query_one("#loops-screen").visual)
+
+
+def _kept_runs(*names):
+    """Two kept runs of the scheduled loop `invoices` (newest first on screen), with their log files."""
+    first = datetime(2026, 10, 26, 9, 0).astimezone()
+    folder = C.STATE_DIR / "loops" / "invoices"
+    folder.mkdir(parents=True)
+    runs = [{"started_at": (first - timedelta(days=1)).isoformat(), "ended_at": (first - timedelta(days=1)).isoformat(), "ok": False,
+             "reason": "timeout", "output": ["stopped"], "log": "20261025090000.log"},
+            {"started_at": first.isoformat(), "ended_at": first.isoformat(), "ok": True, "reason": "", "output": ["fine"],
+             "log": "20261026090000.log"}]
+    for r, text in zip(runs, ("OLDER-RUN-TEXT", "NEWEST-RUN-TEXT")):
+        if r["log"] not in names:
+            (folder / r["log"]).write_text(text)
+    (folder / "runs.json").write_text(json.dumps(runs))
+    return first, runs
+
+
+def _scheduled_invoices():
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+
+
+async def _open_loops(pilot, rows=1):
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press(*["down"] * rows)
+    await settle(pilot)
+    await settle(pilot)
+
+
+async def test_l_opens_the_last_runs_log():
+    from pl.tui import runlog
+    _scheduled_invoices()
+    _kept_runs()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        await pilot.press("l")
+        await settle(pilot)
+        assert isinstance(app.screen, runlog.RunLogScreen)
+        body = str(app.screen.query_one("#runlog-body").render())
+        assert "NEWEST-RUN-TEXT" in body and "OLDER-RUN-TEXT" not in body
+
+
+async def test_esc_from_the_log_keeps_the_loop_selected():
+    from pl.tui import loops as tui_loops
+    from pl.tui import runlog
+    C.SERVICES = {"alpha": {"prompt": "a", "profile": "acme", "every": "hourly"},
+                  "invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    _kept_runs()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot, rows=2)
+        view = app.query_one(tui_loops.LoopsView)
+        assert view.selected()["name"] == "invoices"
+        await pilot.press("l")
+        await settle(pilot)
+        assert isinstance(app.screen, runlog.RunLogScreen)
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, runlog.RunLogScreen) and view.selected()["name"] == "invoices"
+
+
+async def test_enter_on_an_earlier_run_opens_that_run():
+    from pl.tui import runlog
+    _scheduled_invoices()
+    first, _ = _kept_runs()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        runs = app.query_one("#loops-runs")
+        assert runs.display and runs.option_count == 1
+        runs.focus()
+        runs.highlighted = 0
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, runlog.RunLogScreen)
+        head = str(app.screen.query_one("#runlog-head").render())
+        assert f"{first - timedelta(days=1):%Y-%m-%d %H:%M}" in head and "failed" in head
+        assert "OLDER-RUN-TEXT" in str(app.screen.query_one("#runlog-body").render())
+
+
+async def test_l_on_a_pruned_run_says_it_is_no_longer_kept():
+    from pl.tui import runlog
+    _scheduled_invoices()
+    _kept_runs("20261026090000.log")
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        await pilot.press("l")
+        await settle(pilot)
+        assert runlog.MISSING in str(app.screen.query_one("#runlog-body").render())
+
+
+async def test_l_on_a_loop_that_never_ran_only_notifies(monkeypatch):
+    from pl.tui import runlog
+    _scheduled_invoices()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    notes = []
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        screen = app.screen
+        await pilot.press("l")
+        await settle(pilot)
+        assert app.screen is screen and not isinstance(app.screen, runlog.RunLogScreen)
+        assert notes == ["This loop has not run yet."]
+
+
+async def test_l_is_hidden_for_a_persistent_loop_and_background_agents():
+    from pl.tui import loops as tui_loops
+    from pl.tui import subagents
+    C.SERVICES = {"watcher": {"prompt": "watch", "profile": "acme"}}
+    C.LOOPS_OFF = {}
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        view = app.query_one(tui_loops.LoopsView)
+        assert view.selected() and not view.selected().get("every")
+        assert view.check_action("open_log", ()) is False
+    assert all(b.key != "l" for b in subagents.SubagentsView.BINDINGS)
