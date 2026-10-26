@@ -43,6 +43,8 @@ MEANING = {
 }
 
 HELP = {
+    "home": "Every pipeline on this machine with what needs you; Enter opens one.",
+    "brain": "Ask questions across every pipeline; read only.",
     "dashboard": "What needs you first, then what the agents did in the chosen window. [ and ] change the window, s writes a standup.",
     "assistant": "Ask the assistant about your cards, pull requests and settings. Type in the box and press Enter.",
     "ideas": "Ideas waiting to become cards. Pick one to read it, edit it or send it into the pipeline.",
