@@ -289,6 +289,8 @@ ENTRIES = [
        "pl pods show marketing"),
     _e("2026-10-26.73", "Notifications for PR opened, merged and done",
        "[notify] events in the profile config; chat connectors routed for alerts", "pl chat route alerts <name>"),
+    _e("2026-10-26.63", "A marketing template for new pipelines: brief, draft, publish, report",
+       "Home: n, step 1", "pl pipelines add NAME --template marketing --board local"),
 ]
 
 
