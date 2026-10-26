@@ -271,6 +271,8 @@ ENTRIES = [
        "console header shows the pipeline and who else needs you; P lists every pipeline, Enter switches", "pl"),
     _e("2026-10-26.64", "An alert when the repository's CI is not running",
        "Alerts tab", "pl alerts"),
+    _e("2026-10-26.65", "A scheduled loop keeps what each run said: last run, its output and earlier runs",
+       "Loops tab: select a scheduled loop; its last 20 runs are kept under state/loops/<name>/", "pl loops run <name>"),
 ]
 
 

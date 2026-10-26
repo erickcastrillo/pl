@@ -1,5 +1,6 @@
 """pl loops: list|add|edit|pause|resume|rm manage [loops.<name>] in the profile's config.toml; run queues a run now."""
 import json
+import os
 import re
 import sys
 import time
@@ -9,9 +10,11 @@ import tomlkit
 
 from pl import config as C
 from pl import schedule
-from pl.util import BadInput, ask, load_state, save_state
+from pl.util import BadInput, ask, load_state, mask, now_iso, save_state
 
 WAIT_POLLS = 150
+RUNS_KEPT = 20
+OUTPUT_LINES = 12
 
 WORK_HOURS = "08:00-18:00 weekdays"
 # Prompts name connector roles (email, payments), never a vendor.
@@ -302,3 +305,55 @@ def dry_run(a):
     print(f"result: {lines[-1] if lines else '(no output)'}")
     if r.returncode:
         raise SystemExit(r.returncode)
+
+
+def run_log_dir(name):
+    return C.STATE_DIR / "loops" / name
+
+
+def _write_private(path, text):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
+def _reason(run, text, h):
+    """Why a run failed, in plain words; empty for a run that exited 0."""
+    from pl import harnesses   # imported here: the CLI and the TUI import this module and must not load harnesses with it
+    code = run.get("exit")
+    if code == 0:
+        return ""
+    if harnesses.limit_hit(h, text):
+        return "usage limit"
+    return "timeout" if code == 124 else f"error (exit {code})"
+
+
+def read_runs(name):
+    """The kept runs of a scheduled loop, newest first; [] when there are none or the file is unreadable."""
+    try:
+        runs = json.loads((run_log_dir(name) / "runs.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return runs[::-1] if isinstance(runs, list) else []
+
+
+def keep_run(name, run, log_path, h):
+    """Keep a finished run: its masked log and a record (with its last output lines) in the loop's run log, the last
+    RUNS_KEPT of them. Returns the record without the output, for state.json."""
+    try:
+        text = mask(open(log_path, errors="replace").read())
+    except OSError:
+        text = ""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    folder = run_log_dir(name)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stamp = re.sub(r"\D", "", run.get("started_at") or now_iso())[:14]
+    _write_private(folder / f"{stamp}.log", text)
+    rec = {**run, "result": mask(run.get("result") or ""), "ok": run.get("exit") == 0,
+           "reason": _reason(run, text, h), "log": f"{stamp}.log"}
+    kept = ([r for r in reversed(read_runs(name)) if r.get("log") != rec["log"]] + [{**rec, "output": lines[-OUTPUT_LINES:]}])[-RUNS_KEPT:]
+    _write_private(folder / "runs.json", json.dumps(kept))
+    for old in folder.glob("*.log"):
+        if old.name not in {r.get("log") for r in kept}:
+            old.unlink()
+    return rec

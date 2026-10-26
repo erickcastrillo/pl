@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -640,6 +640,10 @@ def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
             run = {"result": "unreadable run record", "exit": -1}
         print(f"{name} loop run ended: exit {run.get('exit')}, {run.get('result')}")
         if not dry:
+            try:
+                run = loops.keep_run(name, run, runs_dir / f"{name}.log", harnesses.account_harness(s.get("profile")))
+            except (OSError, SystemExit) as e:
+                events.emit("error", message=f"{name} loop run log: {e}")
             s["last_run"] = run
             s["runs"] = (s.get("runs", []) + [run])[-20:]
             record.unlink()

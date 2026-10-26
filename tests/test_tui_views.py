@@ -3071,6 +3071,7 @@ def test_loops_tab_shows_next_run_last_result_and_week_tokens():
     assert rows["invoices"]["output"] == "ok, 3 invoices overdue"
     assert rows["invoices"]["tokens7d"] == "12.5k"
     assert rows["triage"]["tokens7d"] == "-" and rows["triage"]["next"] == "-"
+    assert rows["invoices"]["every"] == "hourly" and rows["triage"]["every"] is None
     assert rows["stale"]["state"] == "paused" and rows["stale"]["next"] == "-"
 
 
@@ -4017,3 +4018,55 @@ def test_ac8_waiting_states_add_no_capture_pane_calls(monkeypatch):
 def test_ac9_markup_and_secrets_in_wait_text_show_plain_and_masked(monkeypatch):
     row, _, _ = _waiting_card(monkeypatch, worker={"stage": "run", "permission_wait": "echo [red]x[/] ghp_" + "a" * 36})
     assert "[red]x[/]" in row["approved"] and "ghp_" not in row["approved"] and "***" in row["approved"]
+
+
+def _detail_runs():
+    first = datetime(2026, 10, 26, 9, 0, 0).astimezone()
+    newest = {"started_at": first.isoformat(), "ended_at": (first + timedelta(seconds=125)).isoformat(), "ok": True,
+              "reason": "", "output": ["checked 4", "3 invoices overdue"]}
+    older = {"started_at": (first - timedelta(days=1)).isoformat(), "ended_at": (first - timedelta(days=1)).isoformat(),
+             "ok": False, "reason": "usage limit", "output": ["stopped"]}
+    return first, [newest, older]
+
+
+def test_loop_detail_shows_last_run_output_and_earlier_runs():
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    row = tui_loops.loop_rows({"snapshot": {"rows": []}})[0]
+    first, runs = _detail_runs()
+    plain = tui_loops.run_detail(row, runs).plain
+    assert "What it does: list overdue invoices" in plain and "Account acme" in plain
+    assert f"Last run {first:%H:%M} · ok · 2m 5s" in plain
+    assert "3 invoices overdue" in plain and "Earlier runs" in plain and "failed: usage limit" in plain
+
+
+def test_loop_detail_with_no_runs_says_when_it_runs():
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    row = tui_loops.loop_rows({"snapshot": {"rows": []}})[0]
+    plain = tui_loops.run_detail(row, []).plain
+    assert "No run yet" in plain and "Earlier runs" not in plain
+    bad = tui_loops.run_detail(row, [{"started_at": "bad", "ended_at": "worse", "ok": True, "output": []}]).plain
+    assert "Last run ?" in bad
+
+
+async def test_loops_view_shows_run_detail_for_a_scheduled_loop(monkeypatch):
+    from pl import agents
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    folder = C.STATE_DIR / "loops" / "invoices"
+    folder.mkdir(parents=True)
+    _, runs = _detail_runs()
+    (folder / "runs.json").write_text(json.dumps(runs[::-1]))
+    monkeypatch.setattr(agents, "pane_tail", lambda *a, **k: pytest.fail("a scheduled loop reads its run log, not tmux"))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("down")
+        await settle(pilot)
+        await settle(pilot)
+        assert "Last run" in str(app.query_one("#loops-screen").visual)
