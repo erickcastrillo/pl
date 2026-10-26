@@ -228,6 +228,8 @@ ENTRIES = [
        "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)", "pl alerts"),
     _e("2026-10-25.43", "pl pulls people's GitHub edits onto the local board and alerts on conflicts",
        "dispatcher: every 5 min with [sync] github; conflicts in pl alerts", "pl sync now"),
+    _e("2026-10-25.44", "The merge loop asks a model about UI and performance changes",
+       "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs", "pl merges --dry-run"),
 ]
 
 
