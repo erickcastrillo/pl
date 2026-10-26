@@ -89,13 +89,13 @@ async def test_home_shows_one_row_per_pipeline_with_bold_needs_you():
         assert app.query(HomeView)
         home_view = app.query_one(HomeView)
         table = home_view.query_one("DataTable")
-        assert len(table.ordered_rows) == 3
+        assert len(table.ordered_rows) == 4
         assert app.active_tab == "dashboard"
         assert not any("Home" in str(t.label) for t in app.query_one("#tabs").query_one("Tabs").query("Tab") if t.display)
         await pilot.press("H")
         await pilot.pause()
         assert app.active_tab == "home"
-        cell = table.get_cell_at((0, 3))
+        cell = table.get_cell_at((1, 3))
         assert getattr(cell, "style", None) and "bold" in str(cell.style)
 
 
@@ -198,3 +198,55 @@ def test_enter_on_home_opens_the_pipeline(monkeypatch):
         monkeypatch.setattr(view, "selected", lambda name=name: {"name": name})
         view.action_select()
     assert calls == [("switch", "sales"), ("tab", "cards")]
+
+
+async def _home_app():
+    home = Path.home()
+    for n in ("sales", "billing"):
+        (home / f".pl-{n}").mkdir(parents=True, exist_ok=True)
+        (home / f".pl-{n}" / "config.toml").write_text("[tracker]\ntype = 'memory'\n")
+    data = {"snapshot": {"rows": [], "prof": "ok", "parked": False, "at": "12:00:00",
+                         "summary": "ok", "summary2": "", "needs": {}, "disp": "running"},
+            "home": _fake_summaries()}
+    return PlApp(snapshot_provider=lambda: data)
+
+
+async def test_home_first_row_is_new_pipeline_and_y_copies_the_add_command(monkeypatch):
+    from pl.tui import home as home_mod
+    copied = []
+    monkeypatch.setattr(home_mod, "copy_text", lambda app, text: copied.append(text))
+    app = await _home_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        await pilot.press("H")
+        await pilot.pause()
+        view = app.query_one(HomeView)
+        table = view.query_one("DataTable")
+        assert str(table.get_cell_at((0, 0))) == "+ New pipeline"
+        assert str(table.get_cell_at((0, 1))) == home_mod.NEW_PIPELINE
+        assert home_mod.NEW_PIPELINE == "pl pipelines add NAME --template T --board local"
+        assert str(table.get_cell_at((1, 0))) == "sales"
+        assert table.cursor_row == 1 and view.selected()["name"] == "sales"
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.press("y")
+        await pilot.pause()
+        assert copied == [home_mod.NEW_PIPELINE]
+
+
+async def test_enter_and_space_on_new_pipeline_row_do_nothing(monkeypatch):
+    app = await _home_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        await pilot.press("H")
+        await pilot.pause()
+        calls = []
+        monkeypatch.setattr(app, "switch_to", lambda *a, **k: calls.append("switch"))
+        monkeypatch.setattr(app, "action_tab", lambda *a, **k: calls.append("tab"))
+        monkeypatch.setattr(app, "push_screen", lambda *a, **k: calls.append("push"))
+        table = app.query_one(HomeView).query_one("DataTable")
+        table.focus()
+        table.move_cursor(row=0)
+        await pilot.press("enter", "space")
+        await pilot.pause()
+        assert calls == []

@@ -32,6 +32,7 @@ FAKE_PANEL_DATA = {
     "pods": [{"name": "pod-alpha", "rule": "r1", "status": "active"}],
     "models": [{"name": "gemma", "status": "ok"}],
     "chat": [{"channel": "dev", "route": "auto", "status": "listening"}],
+    "triggers": [{"name": "gh-bugs", "pipeline": "eng", "every": "5m", "paused": False}],
     "connectors": [{"name": "github", "status": "connected", "expires": "2026-12-31"}],
     "skills": [{"name": "pl-test", "account": "main", "kind": "skill", "description": "testing"}],
 }
@@ -47,7 +48,7 @@ class Host(App):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("panel_name", ["pods", "models", "chat", "connectors"])
+@pytest.mark.parametrize("panel_name", ["pods", "models", "chat", "connectors", "triggers"])
 async def test_each_panel_lists_its_items(panel_name, monkeypatch):
     runner = FakeRunner(data=FAKE_PANEL_DATA)
     monkeypatch.setattr(panels, "_run", runner)
@@ -57,7 +58,7 @@ async def test_each_panel_lists_its_items(panel_name, monkeypatch):
     async with app.run_test() as pilot:
         await pilot.pause()
         table = panel.query_one(DataTable)
-        assert table.row_count == 1
+        assert table.row_count == (2 if panel_name in ("pods", "triggers") else 1)
         assert len(runner.calls) >= 1
 
     # Test unavailable command exit 2
@@ -112,6 +113,98 @@ async def test_each_panel_action_runs_its_command(monkeypatch):
 
 
 
+def _row(table, i):
+    return [str(table.get_cell_at((i, c))) for c in range(len(table.columns))]
+
+
+async def _press_y_on_new_row(panel, pilot, monkeypatch):
+    copied = []
+    monkeypatch.setattr(panels, "copy_text", lambda app, text: copied.append(text))
+    panel.query_one(DataTable).focus()
+    await pilot.press("y")
+    await pilot.pause()
+    return copied
+
+
+@pytest.mark.asyncio
+async def test_pods_panel_first_row_is_new_pod_and_y_copies_it(monkeypatch):
+    monkeypatch.setattr(panels, "_run", FakeRunner(data=FAKE_PANEL_DATA))
+    panel = PANELS["pods"]()
+    app = Host(panel)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        row = _row(panel.query_one(DataTable), 0)
+        assert row[:2] == ["+ New pod", "add [pods.NAME] to config.toml"]
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+        assert await _press_y_on_new_row(panel, pilot, monkeypatch) == ["add [pods.NAME] to config.toml"]
+        assert "copied" in notes
+
+
+@pytest.mark.asyncio
+async def test_triggers_panel_first_row_is_new_trigger_and_y_copies_it(monkeypatch):
+    monkeypatch.setattr(panels, "_run", FakeRunner(data=FAKE_PANEL_DATA))
+    panel = PANELS["triggers"]()
+    app = Host(panel)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = panel.query_one(DataTable)
+        want = "pl triggers add NAME --connector C --query Q --every E --pipeline P"
+        assert _row(table, 0)[:2] == ["+ New trigger", want]
+        assert _row(table, 1)[:3] == ["gh-bugs", "eng", "5m"]
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+        assert await _press_y_on_new_row(panel, pilot, monkeypatch) == [want]
+        assert "copied" in notes
+
+
+@pytest.mark.asyncio
+async def test_enter_and_r_on_new_pod_row_run_no_command(monkeypatch):
+    runner = FakeRunner(data=FAKE_PANEL_DATA)
+    monkeypatch.setattr(panels, "_run", runner)
+    panel = PANELS["pods"]()
+    app = Host(panel)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel.query_one(DataTable).focus()
+        await pilot.press("enter", "r")
+        await pilot.pause()
+        assert runner.calls == [["pl", "pods", "list", "--json"]]
+        assert not any(isinstance(s, panels.InputModal) for s in app.screen_stack)
+
+
+@pytest.mark.asyncio
+async def test_pods_actions_still_act_on_the_item_below_the_new_row(monkeypatch):
+    monkeypatch.setattr(panels, "_run", FakeRunner(data=FAKE_PANEL_DATA))
+    panel = PANELS["pods"]()
+    app = Host(panel)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel.query_one(DataTable).focus()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert isinstance(app.screen, panels.InputModal)
+        assert app.screen.placeholder == "pod-alpha"
+
+
+@pytest.mark.asyncio
+async def test_triggers_panel_keeps_new_row_when_list_fails_or_is_empty(monkeypatch):
+    monkeypatch.setattr(panels, "_run", FakeRunner(returncode=1, stderr="boom"))
+    panel = PANELS["triggers"]()
+    async with Host(panel).run_test() as pilot:
+        await pilot.pause()
+        table = panel.query_one(DataTable)
+        assert table.row_count == 1 and _row(table, 0)[0] == "+ New trigger"
+        assert "boom" in str(panel.query_one("#panel-message", Static).render())
+
+    monkeypatch.setattr(panels, "_run", FakeRunner(data={"triggers": []}))
+    panel = PANELS["triggers"]()
+    async with Host(panel).run_test() as pilot:
+        await pilot.pause()
+        table = panel.query_one(DataTable)
+        assert table.row_count == 1 and _row(table, 0)[0] == "+ New trigger"
+
+
 @pytest.mark.asyncio
 async def test_skills_install_asks_before_running(monkeypatch):
     from pl.tui import skills as tui_skills
@@ -146,6 +239,7 @@ def test_parity_map_matches_spec():
     assert ("pods", "list") in PARITY_MAP
     assert ("pods", "rule add") in PARITY_MAP
     assert ("pods", "show") in PARITY_MAP
+    assert ("triggers", "list") in PARITY_MAP
     assert ("models", "list") in PARITY_MAP
     assert ("models", "test") in PARITY_MAP
     assert ("models", "set") in PARITY_MAP
