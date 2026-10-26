@@ -267,6 +267,8 @@ ENTRIES = [
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
     _e("2026-10-26.62", "Alerts for stuck agents: waiting, unmoved or blocked",
        "Alerts tab; pl alerts", "pl alerts"),
+    _e("2026-10-26.63", "Chat connectors in the console", "Extend → Connectors: Chat connectors; t tests one",
+       "pl chat list"),
 ]
 
 
