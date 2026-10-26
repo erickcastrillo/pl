@@ -2709,7 +2709,8 @@ def test_no_key_has_two_meanings_across_every_view_and_screen():
         meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]
         meanings.setdefault(b.key, {}).setdefault(meaning, []).append(cls.__name__)
     # H: the Ideas view's own harness key wins while it has focus; elsewhere H opens Home
-    assert {k: m for k, m in meanings.items() if len(m) > 1 and k != "H"} == {}
+    # a: acknowledges while focus is in the Alerts tab; everywhere else it approves
+    assert {k: m for k, m in meanings.items() if len(m) > 1 and k not in ("H", "a")} == {}
 
 
 # ---------- one "needs you" count ----------

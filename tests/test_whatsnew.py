@@ -127,7 +127,7 @@ async def test_alerts_tab_with_no_alerts_says_so():
         await settle(pilot)
         app.action_tab("alerts")
         await settle(pilot)
-        assert "Alerts: none open (pl alerts --all for history)" in screen_text(app)
+        assert "No open alerts. pl watches for:" in screen_text(app)
 
 
 def test_health_says_counting_until_the_first_scan():
