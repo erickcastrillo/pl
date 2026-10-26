@@ -230,6 +230,8 @@ ENTRIES = [
        "dispatcher: every 5 min with [sync] github; conflicts in pl alerts", "pl sync now"),
     _e("2026-10-25.44", "The merge loop asks a model about UI and performance changes",
        "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs", "pl merges --dry-run"),
+    _e("2026-10-25.45", "Skills are grouped: pl's stage skills, your library, each account",
+       "Settings tab, Skills section: origin and used by on every row", "pl skills list"),
 ]
 
 
