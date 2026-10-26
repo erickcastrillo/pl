@@ -15,12 +15,13 @@ GROUPS = [
     ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
     ("review", "Review", [("prs", "Pull requests")]),
     ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
-    ("extend", "Extend", []),
+    ("extend", "Extend", [("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
+                          ("extensions", "Extensions")]),
     ("activity", "Activity", [("activity", "Activity"), ("alerts", "Alerts")]),
     ("settings", "Settings", [("settings", "Settings")]),
     ("home", "Home", [("home", "Home")]),
 ]
-# Keys never shift: Extend keeps 6 while it has no views, the Assistant keeps 2 while it is off.
+# Keys never shift: the Assistant keeps 2 while it is off.
 GROUP_KEYS = {**{gid: str(i + 1) for i, (gid, _, _) in enumerate(g for g in GROUPS if g[0] != "home")}, "home": "H"}
 TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 
@@ -53,7 +54,12 @@ HELP = {
     "loops": "The background loops that keep the pipeline moving, with when each last ran.",
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
-    "settings": "Accounts, models, skills and the other settings of this profile.",
+    "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",
+    "skills": "Every account's skills, agents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
+    "connectors": "The services agents can reach. n adds a connector, t tests it, R revokes it.",
+    "pods": "Pods hold the rules agents follow. r adds a rule to the pod, Enter shows it.",
+    "models": "Local models: t test, s set.",
+    "extensions": "Hooks, plugins and other extensions of every account.",
     "subagents": "Running: agents working in the background and what each is doing.",
     "brain": "One read-only brain session per machine, for questions across your pipelines.",
     "home": "Your pipelines, one row each. Press Enter to open one.",

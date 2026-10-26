@@ -349,7 +349,7 @@ async def test_palette_entry_opens_the_skills_section(home):
         cmd = next(c for c in app.get_system_commands(app.screen) if c.title == "Skills: view, edit, create")
         cmd.callback()
         await settle(pilot)
-        assert app.active_tab == "settings" and app.focused is app.query_one("#skills-table")
+        assert app.active_tab == "skills" and app.focused is app.query_one("#skills-table")
 
 
 # ---------- launches: Claude loads the library as a plugin; other harnesses get the skill inlined ----------

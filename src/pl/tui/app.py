@@ -25,6 +25,8 @@ from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, card_count
+from pl.tui.connectors import ConnectorsPanel
+from pl.tui.extensions import ExtensionsView
 from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, groups, header_text, resolve, tabs
 from pl.tui.needs import needs_you_count, review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
@@ -33,15 +35,32 @@ from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
 from pl.tui.prs import PrsView
 from pl.tui.review import ConfirmScreen
-from pl.tui.settings import SettingsView
+from pl.tui.panels import make_models_panel, make_pods_panel
+from pl.tui.settings import SUBSCRIPTION_LINE, SettingsView
 from pl.tui.skills import SkillsView
 from pl.tui.subagents import SubagentsView
 
 LATER = {}
+
+
+def _titled(title, make):
+    def build():
+        pane = VerticalScroll(make(), classes="panel")
+        pane.border_title = title
+        pane.styles.height = "1fr"
+        return pane
+    return build
+
+
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
-         "brain": BrainView}
+         "brain": BrainView,
+         "skills": _titled("Skills, agents and commands (every account)", SkillsView),
+         "connectors": _titled("Connectors", ConnectorsPanel),
+         "pods": _titled("Pods", make_pods_panel),
+         "models": _titled("Local models", make_models_panel),
+         "extensions": _titled("Extensions", lambda: ExtensionsView(SUBSCRIPTION_LINE))}
 
 _run = subprocess.run   # the one subprocess runner here; tests fake it
 
@@ -397,7 +416,7 @@ class PlApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
                             self.action_whatsnew)
-        yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
+        yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Extend tab)",
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
@@ -409,8 +428,8 @@ class PlApp(App):
         self.action_tab("brain")
 
     def action_skills(self):
-        """Settings tab, the Skills section, its list focused."""
-        self.action_tab("settings")
+        """Extend tab, the Skills sub-tab, its list focused."""
+        self.action_tab("skills")
         self.query_one(SkillsView).focus_table()
 
     @work(thread=True, group="dispatcher")
