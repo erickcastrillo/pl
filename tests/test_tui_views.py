@@ -213,7 +213,7 @@ async def _open_tab(pilot, app, tid):
     await settle(pilot)
 
 
-@pytest.mark.parametrize("tid", ["cards", "prs"])
+@pytest.mark.parametrize("tid", ["cards", "waiting", "prs"])
 async def test_80x24_every_tab_fits_with_no_cut_columns(tid):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(80, 24)) as pilot:
@@ -1212,7 +1212,7 @@ async def test_the_top_tabs_are_the_eight_jobs_in_order():
 @pytest.mark.parametrize("old,place", [
     ("home", ("home", "home")), ("dashboard", ("dashboard", "dashboard")), ("assistant", ("assistant", "assistant")),
     ("ideas", ("work", "ideas")), ("cards", ("work", "cards")), ("prs", ("review", "prs")),
-    ("loops", ("automate", "loops")), ("alerts", ("activity", "alerts")), ("activity", ("activity", "activity")),
+    ("waiting", ("review", "waiting")), ("loops", ("automate", "loops")), ("alerts", ("activity", "alerts")), ("activity", ("activity", "activity")),
     ("settings", ("settings", "settings")), ("subagents", ("automate", "subagents")), ("brain", ("assistant", "brain"))])
 def test_every_old_tab_id_resolves(monkeypatch, old, place):
     from pl.tui import chrome
@@ -1544,10 +1544,36 @@ async def test_the_console_opens_on_dashboard_and_keys_open_the_jobs(monkeypatch
         await settle(pilot)
         assert _labels(app, "#tabs") == ["1 Dashboard", "2 Assistant", "3 Work", "4 Review", "5 Automate", "7 Activity", "8 Settings"]
         assert app.active_tab == "dashboard"
-        for key, view in (("3", "ideas"), ("4", "prs"), ("5", "loops"), ("1", "dashboard")):
+        for key, view in (("3", "ideas"), ("4", "waiting"), ("5", "loops"), ("1", "dashboard")):
             await pilot.press(key)
             await settle(pilot)
             assert app.active_tab == view, key
+
+
+async def test_review_opens_on_waiting_then_pull_requests(monkeypatch):
+    from pl.tui.needs import needs_you_count
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("4")
+        await settle(pilot)
+        assert app.active_tab == "waiting"
+        labels = _labels(app, "#review-views")
+        assert labels[0] == "Waiting" and labels[1].startswith("Pull requests")
+        assert app.query_one("#waiting-table").row_count == needs_you_count(app.data) > 0
+
+
+async def test_footer_shows_the_review_keys(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("4")
+        await settle(pilot)
+        app.query_one("#waiting-table").focus()
+        await settle(pilot)
+        assert {"approve", "send back", "open"} <= _footer_keys(app)
 
 
 async def test_without_the_assistant_the_keys_stay_put(monkeypatch):
