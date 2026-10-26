@@ -116,9 +116,10 @@
   pl chat add|list|remove|test|route
                           messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
   pl brain show CONV [--json] | prune [--dry-run] | end CONV | undo CONV
-                          a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
+                          show, prune, end or undo the Assistant's saved conversations (the ones pl ask and
+                          the Assistant tab write); prune deletes those older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
-                          ask the central read-only brain across every pipeline and connector
+                          ask the Assistant from the command line: same assistant as the console's Assistant tab
   pl manager start|stop [--all]|status [--json]|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
