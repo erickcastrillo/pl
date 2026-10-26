@@ -262,7 +262,7 @@ ENTRIES = [
        "Loops tab: e opens the add form filled in, with the skill list and schedule check", "pl loops edit"),
     _e("2026-10-26.59", "Every agent window of this profile in one list",
        "Automate > Running: top table; Enter opens the live screen", "pl"),
-    _e("2026-10-26.59", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
+    _e("2026-10-26.60", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
 ]
 
 
