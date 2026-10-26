@@ -175,6 +175,16 @@ def test_add_with_accounts_writes_only_those_accounts(fake_home):
     assert {s.get("account") for s in C.PIPELINE["stages"].values()} == {"alt"}
 
 
+def test_add_with_an_accounts_dict_writes_those_settings_even_if_not_in_this_profile(fake_home):
+    _profile(fake_home, "dev", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    C.load("dev")
+    codex = {"harness": "codex", "config_dir": "~/.codex-x", "model": "gpt-x", "effort": "high"}
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "accounts": {"codex1": codex}}))
+    C.load("sales")
+    assert C.ACCOUNTS == {"codex1": codex}
+    assert {s.get("account") for s in C.PIPELINE["stages"].values()} == {"codex1"}
+
+
 def test_add_with_an_unknown_account_in_accounts_exits_2(fake_home):
     _profile(fake_home, "dev", '[accounts.main]\nconfig_dir = "~/.claude"\n')
     C.load("dev")
