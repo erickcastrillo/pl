@@ -181,3 +181,7 @@ async def test_the_popup_fits_a_narrow_terminal(profile):
 def test_brain_tab_removal_has_an_entry():
     entry = next(e for e in whatsnew.ENTRIES if "Brain tab" in e["title"])
     assert "Assistant" in entry["title"] and "b " in entry["where"] + " " and "press b" in entry["try"]
+
+
+def test_whatsnew_names_the_marketing_pod():
+    assert sum("marketing pod" in e["title"] for e in whatsnew.ENTRIES) == 1
