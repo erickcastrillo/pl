@@ -240,10 +240,17 @@ def ask_first(h, acct=None):
 def ensure():
     """Show the running assistant, or start one: resume the saved conversation when the harness can. A status line."""
     with _locked(LOCK_WAIT):
-        return _ensure()
+        tried = {}
+        try:
+            return _ensure(tried)
+        except SystemExit as e:   # no free account, no interactive template, a tmux error: logged, then shown as before
+            events.failure("harness_start_failed", "error", str(e), account=tried.get("account"),
+                           harness=tried.get("harness"), stage="assistant")
+            raise
 
 
-def _ensure():
+def _ensure(tried=None):
+    tried = {} if tried is None else tried
     st = load()
     pane_ = pane(st)
     if pane_:
@@ -253,7 +260,9 @@ def _ensure():
     acct = account()
     if acct is None:
         raise SystemExit("pl: no harness account is free for the assistant (pl accounts)")
+    tried["account"] = acct
     h = harnesses.account_harness(acct)
+    tried["harness"] = h.name
     if not h.interactive:
         raise SystemExit(f"pl: harness {h.name} has no interactive template for the assistant")
     h = ask_first(h, acct)

@@ -56,6 +56,13 @@ def emit(kind, card_id=None, **detail):
         pass
 
 
+def failure(kind, level, message, card_id=None, **detail):
+    """A failure pl detected, as an entry with a level (error: the work stopped; warning: skipped or retried).
+    The message is masked and cut to ERROR_CHARS: it may quote an exception that holds a ${VAR} value."""
+    from pl import util   # imported here, like trackers in emit
+    emit(kind, card_id, level=level, message=util.mask(message)[:ERROR_CHARS], **detail)
+
+
 def _read():
     out = []
     try:
