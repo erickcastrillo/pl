@@ -133,6 +133,26 @@ def test_create_writes_the_template_and_never_overwrites(home):
     assert "Deploy it" in (home["a"] / "commands/deploy.md").read_text()
 
 
+def _description(path):
+    import yaml
+    return yaml.safe_load(path.read_text().split("---\n")[1])["description"]
+
+
+def test_create_writes_the_description_entered(home):
+    p = skills.create("b", "skill", "say-hi", "Use when greeting")
+    assert "\ndescription: Use when greeting\n" in p.read_text()
+
+
+def test_create_with_blank_description_keeps_the_placeholder(home):
+    p = skills.create("b", "skill", "blank-one", "  ")
+    assert _description(p) == "Say in one sentence when to use this skill."
+
+
+def test_create_quotes_a_description_yaml_would_misread(home):
+    p = skills.create("b", "skill", "colon-one", "Use when: x")
+    assert _description(p) == "Use when: x"
+
+
 # ---------- delete ----------
 
 def test_delete_moves_the_folder_to_trash(home):
