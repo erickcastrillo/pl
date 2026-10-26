@@ -238,6 +238,45 @@ def _auto_merge_row():
             "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
 
 
+def gallery_rows() -> list[tuple[str, str, str, str]]:
+    """(name, what it does, what it needs, schedule) for each template, then the blank loop."""
+    rows = []
+    for name, t in loops.TEMPLATES.items():
+        does = t["prompt"].split(". ", 1)[0] + ("." if ". " in t["prompt"] else "")
+        needs = ", ".join([*([t["needs"]] if t.get("needs") else []), *(["write access"] if t["writes"] else [])]) or "nothing extra"
+        rows.append((name, does, needs, f"every {t['every']}, {t['hours']}"))
+    return [*rows, ("Blank loop", "start from empty fields", "", "")]
+
+
+class TemplateGallery(ModalScreen):
+    """What each template does and needs; the row chosen is the template the add form starts from."""
+    DEFAULT_CSS = """
+    TemplateGallery { align: center middle; }
+    TemplateGallery > Vertical { width: 150; height: auto; max-height: 100%; border: round $accent; padding: 1 2; background: $surface; }
+    TemplateGallery DataTable { height: auto; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text("New loop: pick a template", style="bold"))
+            yield DataTable(id="gallery-table", cursor_type="row")
+            yield Static(Text("enter choose · esc cancel", style="dim"))
+
+    def on_mount(self):
+        table = self.query_one("#gallery-table", DataTable)
+        table.add_columns("template", "what it does", "needs", "schedule")
+        for row in gallery_rows():
+            table.add_row(*(Text(cell) for cell in row))
+        table.focus()
+
+    def on_data_table_row_selected(self, event):
+        self.dismiss([*loops.TEMPLATES, ""][event.cursor_row])
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class LoopForm(ModalScreen):
     """The fields of `pl loops add`; a template fills them all, and each can be edited before saving."""
     DEFAULT_CSS = """
@@ -251,6 +290,14 @@ class LoopForm(ModalScreen):
     DEFAULTS = {"every": "hourly"}
     # a refusal goes under the first field whose name it mentions; anything else goes under the form's own problem line
     ERROR_FIELDS = ("every", "hours", "account", "team")
+
+    def __init__(self, template=None):
+        super().__init__()
+        self.template = template
+
+    def on_mount(self):
+        if self.template:
+            self.query_one("#loop-template", Select).value = self.template
 
     def compose(self):
         with Vertical():
@@ -425,7 +472,11 @@ class LoopsView(Widget):
         def added(name):
             if name:
                 self.app.notify(f"added loop {name}", markup=False)
-        self.app.push_screen(LoopForm(), added)
+
+        def chosen(template):
+            if template is not None:
+                self.app.push_screen(LoopForm(template or None), added)
+        self.app.push_screen(TemplateGallery(), chosen)
 
     def load_tail(self):
         x = self.selected()
