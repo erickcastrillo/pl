@@ -328,6 +328,10 @@ def _gs_profile(monkeypatch, tmp_path, tracker=None, accounts=None, stages=None,
     monkeypatch.setattr(C, "ACCOUNTS", accounts or {})
     monkeypatch.setattr(C, "STAGES", stages or {})
     monkeypatch.setattr(C, "PIPELINE", pipeline)
+    # the engineering board, whatever an earlier test loaded (a sales or support pipeline changes both)
+    monkeypatch.setattr(C, "COLUMNS", ["Inbox", "Spec ready", "Plan for review", "Manual", "Approved", "In progress",
+                                       "PR open", "Done"])
+    monkeypatch.setattr(C, "STAGE_DONE_AT", {"spec": "Spec ready", "plan": "Plan for review", "run": "PR open"})
 
 
 def _gs_data(*cols, done=(), pr=None):
