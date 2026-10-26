@@ -15,11 +15,18 @@ _CACHE = {}
 _clock = time.time
 
 
+def _in_pr_open(card):
+    try:
+        return board.col_name(card["list_id"]) == C.STAGE_DONE_AT["run"]
+    except SystemExit:   # no usable tracker: the board's columns are unknown
+        return False
+
+
 def _open_prs(all_cards):
     """[(card, repo, number, url)] of the PR open cards, the most recently updated card first."""
     out = []
     for c in sorted(all_cards, key=lambda c: parse_iso(c.get("updated_at") or ""), reverse=True):
-        if board.col_name(c["list_id"]) == C.STAGE_DONE_AT["run"] and (prs := rework._prs(c)):
+        if (prs := rework._prs(c)) and _in_pr_open(c):
             out.append((c, *prs[-1]))
     return out
 
