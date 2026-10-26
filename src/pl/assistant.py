@@ -30,7 +30,10 @@ LOG_CHARS = 200
 # claude also gets permission rules through --settings (an inline JSON string, per its --help). Claude Code checks deny,
 # then ask, then allow, so an ask rule beats every allow rule, the account's own included; a deny rule beats both.
 # Reads and the read-only commands below run without a prompt; any other pl command, gh or git push asks.
+# Brain's tools are reads too, except pl_file_card, whose ask rule beats the allow rule on the whole server.
 READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
+BRAIN_TOOLS = "mcp__pl-brain__*"
+BRAIN_ASK = ["mcp__pl-brain__pl_file_card"]
 READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)",
              "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl help*)", "Bash(pl jobs*)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl sync*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
@@ -48,10 +51,10 @@ ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), "Bash(pl ale
              "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl titles set*)", "Bash(pl titles *--fix*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
              "Bash(pl manager *run*)", "Bash(pl manager -*)", "Bash(gh -*)", *(f"Bash(gh {c}*)" for c in GH_TOP), "Bash(gh pr -*)",
              *(f"Bash(gh pr {c}*)" for c in GH_PR_WRITES), "Bash(git push*)", "Bash(git push:*)", "Bash(git -*)",
-             "Bash(git diff *--output*)", "Bash(git log *--output*)", "Bash(git difftool*)"]
+             "Bash(git diff *--output*)", "Bash(git log *--output*)", "Bash(git difftool*)", *BRAIN_ASK]
 DENY_RULES = [*(f"Read(**/{f})" for f in (".credentials*", "auth.json", ".env*", "*.pem", "id_rsa*", "id_ed25519*",
                                          ".netrc", "hosts.yml")), "Bash(security *)"]
-CLAUDE_RULES = {"permissions": {"allow": READ_TOOLS + READ_ONLY, "ask": ASK_RULES, "deny": DENY_RULES}}
+CLAUDE_RULES = {"permissions": {"allow": READ_TOOLS + READ_ONLY + [BRAIN_TOOLS], "ask": ASK_RULES, "deny": DENY_RULES}}
 ASK_FIRST = {"claude": ["--permission-mode", "manual", "--settings", json.dumps(CLAUDE_RULES)],
              "codex": ["--ask-for-approval", "on-request", "--sandbox", "read-only"]}
 PERMISSION_FLAG_RE = harnesses.PERMISSION_FLAG_RE
@@ -217,13 +220,19 @@ def ask_first(h, acct=None):
     claude's --add-dir takes several values, so it goes first and the next flag ends its list."""
     flags = ASK_FIRST.get(h.name)
     dirs = add_dirs(acct) if h.name == "claude" and flags else []
-    flags = ["--add-dir", *dirs, *flags] if dirs else flags
     if not flags:
         raise SystemExit(f"pl: harness {h.name} cannot be started in a mode that asks you before each action, "
                          "so the assistant does not start on it (pick a claude or codex account: [assistant] account)")
     if any(PERMISSION_FLAG_RE.search(t) for t in (*h.interactive, *h.resume)):
         raise SystemExit(f"pl: the [harnesses.{h.name}] template sets its own permission flag; the assistant must ask "
                          "you before each action, so it does not start")
+    from pl import brain   # pl.brain imports this module at load
+    if h.name == "claude":
+        flags = ["--mcp-config", str(brain.mcp_config_path()), *flags]
+    else:
+        server = json.dumps({"command": "pl", "args": ["mcp", "serve", "--brain"]})
+        flags = [*flags, "-c", f"mcp_servers.pl-brain={server}"]
+    flags = ["--add-dir", *dirs, *flags] if dirs else flags
     return dataclasses.replace(h, interactive=[*h.interactive[:1], *flags, *h.interactive[1:]],
                                resume=[*h.resume[:1], *flags, *h.resume[1:]] if h.resume else [])
 
