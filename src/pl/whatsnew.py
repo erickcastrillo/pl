@@ -287,7 +287,7 @@ ENTRIES = [
        "pl chat list"),
     _e("2026-10-26.72", "A built-in marketing pod: writer, editor and analyst rules", "Extend: pods",
        "pl pods show marketing"),
-    _e("2026-10-26.63", "Notifications for PR opened, merged and done",
+    _e("2026-10-26.73", "Notifications for PR opened, merged and done",
        "[notify] events in the profile config; chat connectors routed for alerts", "pl chat route alerts <name>"),
 ]
 
