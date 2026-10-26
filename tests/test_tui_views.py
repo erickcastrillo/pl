@@ -148,7 +148,7 @@ async def test_dashboard_renders_tiles_and_panels():
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
                   "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
-                  "tokens", "counting…", "exceeded", "legacy", "dispatcher running"):
+                  "tokens", "counting…", "exceeded", "legacy", "Running, 2 cards waiting"):
             assert s in text, s
 
 
@@ -2441,6 +2441,35 @@ async def test_a_failed_refresh_shows_last_good_time_and_what_failed(monkeypatch
         assert not app.query_one("#cards-table").border_subtitle
 
 
+def _snap(disp="running", working=0, needs=None, summary="", prof="acme: ok (0 running, 0 queued)", parked=False):
+    rows = [{"kind": "working", "card": None}] * working
+    return {"rows": rows, "disp": disp, "needs": needs or {}, "summary": summary, "prof": prof, "parked": parked, "at": "14:30:00"}
+
+
+@pytest.mark.parametrize("snap,stopped,sentence", [
+    (_snap(), None, "Running, no cards waiting"),
+    (_snap(working=2, needs={"review": 1}), None, "Running, 2 agents working, 1 card waiting"),
+    (_snap(working=1, needs={"review": 1, "manual": 1}), None, "Running, 1 agent working, 2 cards waiting"),
+    (_snap(disp="NOT RUNNING (no window)"), "19:16", "Stopped (by you at 19:16)"),
+    (_snap(disp="NOT RUNNING (no window)"), None, "Stopped"),
+    (_snap(summary="PAUSED (draining, 1 working; pl resume)   |   NEEDS YOU: 0"), None, "Paused, draining 1 agent"),
+    (_snap(summary="PAUSED (DRAINED, safe to shut down; pl resume)   |   "), None, "Paused, drained"),
+    (_snap(prof="acme: ok (0 running, 0 queued)  acme2: PARKED until 21:00, checked 20:10 UTC: still limited (0 running, 0 queued)",
+           parked=True), None, "Running, no cards waiting; account acme2 is out of credits until 21:00"),
+])
+def test_status_sentence(snap, stopped, sentence):
+    from pl.tui.chrome import status_sentence
+    assert status_sentence(snap, stopped) == sentence
+
+
+def test_header_never_shows_the_raw_profile_line():
+    from pl.tui.chrome import header_text
+    data = fake_data()
+    plain = header_text(data).plain
+    assert "Running, 2 cards waiting" in plain
+    assert "acme: ok" not in plain and "dispatcher running" not in plain and "not paused" not in plain
+
+
 def _loops_state(next_at, last_run):
     C.STATE_FILE.parent.mkdir(exist_ok=True)
     C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"next_at": next_at, "last_run": last_run}}}))
@@ -2501,3 +2530,11 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
     assert calls == [("enabled", "invoices", False), ("run", "invoices"), ("window", "invoices"), ("remove", "invoices"),
                      ("edit", "invoices", {"every": "daily 09:30"})]
+
+
+def test_dashboard_health_lists_every_harness_account():
+    from pl.tui.dashboard import health
+    data = fake_data()
+    data["snapshot"]["prof"] = "acme: ok (2 running, 1 queued)  acme2: PARKED until 21:00 (0 running, 0 queued)"
+    plain = health(data).plain
+    assert "acme: ok (2 running, 1 queued)" in plain and "acme2: PARKED until 21:00" in plain
