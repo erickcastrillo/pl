@@ -214,6 +214,7 @@ WATCHES = {
     "send_spike": "connector send spikes",
     "stage_failed": "stages whose agent died",
     "stage_unsafe": "unsafe stage settings",
+    "stalled": "run agents idle or released while their card has not moved",
     "tmp_full": "temp folder space or inodes",
     "trigger_cap": "triggers at their cap",
     "trust": "folders an account does not trust",
