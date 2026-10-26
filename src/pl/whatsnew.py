@@ -245,6 +245,8 @@ ENTRIES = [
     _e("2026-10-25.51", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
     _e("2026-10-25.52", "Skills pane: labelled buttons, where a skill is linked and why an action is off",
        "Settings → Skills: select a skill", "pl"),
+    _e("2026-10-25.53", "Loop schedules are picked, with the next three run times shown",
+       "Loops tab, n: schedule kind, time or cron; bad schedules can't be saved", "pl loops list"),
 ]
 
 

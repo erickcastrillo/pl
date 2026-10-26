@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from rich.console import Console
-from textual.widgets import DataTable, Tabs, TabbedContent
+from textual.widgets import DataTable, Select, Tabs, TabbedContent
 
 from pl import cli, trackers, watch
 from pl import config as C
@@ -2767,14 +2767,17 @@ async def test_picking_a_template_fills_every_field_and_each_stays_editable(monk
         await settle(pilot)
         template = loops.TEMPLATES["overdue-invoices"]
         assert form.query_one("#loop-prompt").value == template["prompt"]
-        assert form.query_one("#loop-every").value == template["every"]
+        assert form.query_one("#loop-kind").value == "weekdays"
+        assert form.query_one("#loop-at").value == "09:00"
         assert form.query_one("#loop-hours").value == template["hours"]
         assert form.query_one("#loop-writes").value is False
-        form.query_one("#loop-every").value = "hourly"
+        form.query_one("#loop-kind").value = "minutes"
+        form.query_one("#loop-number").value = "1"
+        form.query_one("#loop-unit").value = "hours"
         form.query_one("#loop-name").value = "invoices"
         await pilot.press("ctrl+s")
         await settle(pilot)
-    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "hourly", "hours": template["hours"],
+    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "60m", "hours": template["hours"],
                                    "account": None, "team": None, "writes": False})]
 
 
@@ -2793,12 +2796,89 @@ async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm) and "a-z" in str(form.query_one("#loop-problem").render())
         form.query_one("#loop-name").value = "ok"
-        form.query_one("#loop-every").value = "every tuesday"
+        form.query_one("#loop-kind").value = "cron"
+        form.query_one("#loop-cron").value = "every tuesday"
         await pilot.press("ctrl+s")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
-        problem = str(form.query_one("#loop-every-error").render())
+        problem = str(form.query_one("#loop-problem").render())
         assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
+    assert added == []
+
+
+async def test_add_form_offers_four_schedule_kinds(monkeypatch):
+    from pl import schedule
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        labels = [label for label, _ in form.query_one("#loop-kind", Select)._options if str(label)]
+        assert labels == [label for _, label in schedule.KINDS] and len(labels) == 4
+        assert "no schedule is set" in str(form.query_one("#loop-preview").render())
+
+
+async def test_weekdays_preview_updates_as_you_type(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    monkeypatch.setattr(tui_loops.LoopForm, "_now", staticmethod(lambda: datetime(2026, 10, 30, 10, 0)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-kind").value = "weekdays"
+        await settle(pilot)
+        form.query_one("#loop-at").focus()
+        await pilot.press(*"09:00")
+        await settle(pilot)
+        preview = str(form.query_one("#loop-preview").render())
+    assert all(t in preview for t in ("Mon 02 Nov 09:00", "Tue 03 Nov 09:00", "Wed 04 Nov 09:00"))
+
+
+async def test_picker_saves_the_every_loops_add_accepts(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw["every"])))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "first"
+        form.query_one("#loop-prompt").value = "do it"
+        form.query_one("#loop-kind").value = "minutes"
+        form.query_one("#loop-number").value = "2"
+        form.query_one("#loop-unit").value = "hours"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "second"
+        form.query_one("#loop-prompt").value = "do it"
+        form.query_one("#loop-kind").value = "cron"
+        form.query_one("#loop-cron").value = "0 9 * * 1"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added == [("first", "120m"), ("second", "cron:0 9 * * 1")]
+
+
+async def test_bad_or_never_firing_schedule_blocks_save(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form = await _open_loop_form(app, pilot, monkeypatch)
+        form.query_one("#loop-name").value = "ok"
+        form.query_one("#loop-prompt").value = "do it"
+        form.query_one("#loop-kind").value = "cron"
+        for cron, words in (("61 * * * *", "not valid"), ("0 0 31 2 *", "never fires")):
+            form.query_one("#loop-cron").value = cron
+            await settle(pilot)
+            preview = form.query_one("#loop-preview").render()
+            assert words in str(preview) and "red" in str(preview.spans)
+            await pilot.press("ctrl+s")
+            await settle(pilot)
+            assert isinstance(app.screen, tui_loops.LoopForm)
+            assert words in str(form.query_one("#loop-problem").render())
     assert added == []
 
 
@@ -2951,7 +3031,7 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         await pilot.press("enter")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
-        assert app.screen.query_one("#loop-every").value == "hourly"
+        assert app.screen.query_one("#loop-kind").value is Select.NULL
         await pilot.press("escape")
         await settle(pilot)
         assert not isinstance(app.screen, tui_loops.LoopForm)
