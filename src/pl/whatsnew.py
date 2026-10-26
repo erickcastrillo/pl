@@ -242,6 +242,9 @@ ENTRIES = [
        "pl board restore --from ~/pl-board-backup"),
     _e("2026-10-25.50", "+ New skill: install from GitHub after reviewing every file, or write one",
        "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
+    _e("2026-10-25.51", "Skills moved to its own place: Extend → Skills",
+       "Extend tab, Skills (ctrl+p \"Skills\"); Settings keeps a link line until the next minor release",
+       "pl skills list"),
 ]
 
 

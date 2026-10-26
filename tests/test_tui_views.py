@@ -3086,3 +3086,86 @@ async def test_tab_flag_opens_extend_views(monkeypatch, vid):
         await settle(pilot)
         assert app.active_tab == vid
         assert app.query_one("#tabs", TabbedContent).active == "g-extend"
+
+
+# ---------- plan 36 slice 6: Skills under Extend ----------
+
+SKILLS_KEYS = [("n", "new"), ("I", "install"), ("e", "edit"), ("E", "external_edit"),
+               ("d", "delete"), ("S", "share"), ("l", "link"), ("u", "update")]
+
+
+async def test_settings_shows_one_skills_moved_line(monkeypatch):
+    from pl.tui.skills import SkillsView
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        line = app.query_one("#skills-moved")
+        assert str(line.label) == "Skills moved to Extend → Skills"
+        assert line.size.height == 1
+        assert not list(app.query_one("#settings-scroll").query(SkillsView))
+
+
+@pytest.mark.parametrize("how", ["enter", "click"])
+async def test_skills_moved_line_opens_extend_skills(monkeypatch, how):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        if how == "enter":
+            app.query_one("#skills-moved").focus()
+            await pilot.pause()
+            await pilot.press("enter")
+        else:
+            app.query_one("#skills-moved").scroll_visible(animate=False)
+            await pilot.pause()
+            await pilot.click("#skills-moved")
+        await settle(pilot)
+        assert app.active_tab == "skills"
+        assert app.focused is not None and app.focused.id == "skills-table"
+
+
+async def test_create_project_button_still_asks(monkeypatch, tmp_path):
+    from pl.tui.settings import ProjectScreen
+    _fake_extend_cli(monkeypatch)
+    monkeypatch.setattr(C, "TRACKER", {"type": "github-project", "owner": "octo"})
+    monkeypatch.setattr(C, "path", lambda: tmp_path / "pl.toml")
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("settings")
+        await settle(pilot)
+        app.query_one("#create-project").press()
+        await settle(pilot)
+        assert isinstance(app.screen, ProjectScreen)
+
+
+@pytest.mark.parametrize("key,name", SKILLS_KEYS)
+async def test_every_skills_key_runs_its_action_on_extend(monkeypatch, key, name):
+    from pl.tui.skills import SkillsView
+    _fake_extend_cli(monkeypatch)
+    ran = []
+    monkeypatch.setattr(SkillsView, f"action_{name}", lambda self: ran.append(name))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_skills()
+        await settle(pilot)
+        await pilot.press(key)
+        await settle(pilot)
+        assert ran == [name]
+
+
+async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_skills()
+        await settle(pilot)
+        assert {"new", "install", "edit", "$EDITOR", "delete", "share to library", "link to account",
+                "update check"} <= _footer_keys(app)
