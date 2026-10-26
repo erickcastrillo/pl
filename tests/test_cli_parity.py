@@ -191,3 +191,29 @@ def test_every_loops_tab_key_has_a_pl_loops_command(monkeypatch, tmp_path):
         with pytest.raises(SystemExit) as exc:
             cli.main()
         assert exc.value.code in (0, None), f"{key}: {cmd}"
+
+
+def test_command_for_finds_class_then_plain_then_card_parity():
+    from pl.tui.parity import command_for
+
+    assert command_for("PlApp", "standup") == "pl standup"
+    assert command_for("CardsView", "drop") == "pl drop <id>"
+    assert command_for("CardScreen", "approve") == "pl approve <id>"
+    assert command_for("PlApp", "review('approve')") == "pl approve <id>"
+    assert command_for("LoopsView", "pause", key="p") == "pl loops pause"
+
+
+def test_command_for_navigation_is_none():
+    from pl.tui.parity import command_for
+
+    assert command_for("PlApp", "tab('cards')") is None
+    assert command_for("X", "app.focus_next") is None
+
+
+def test_group_of_puts_each_kind_in_its_group():
+    from pl.tui.parity import group_of
+
+    assert group_of("tab('cards')", None) == "navigate"
+    assert group_of("new", "pl idea") == "add"
+    assert group_of("drop", "pl drop <id>") == "act on the selection"
+    assert group_of("standup", "pl standup") == "other"

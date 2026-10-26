@@ -10,16 +10,16 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 
-def _pl(argv: list[str]) -> subprocess.CompletedProcess:
+def _pl(argv: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
     """The one subprocess seam of this module; tests fake it."""
     env = dict(os.environ)
     env.setdefault("PL_SOURCE", "mcp")
-    return subprocess.run([sys.executable, "-m", "pl", *argv], capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, "-m", "pl", *argv], capture_output=True, text=True, env=env, input=stdin)
 
 
-def run_pl(argv: list[str]) -> Any:
+def run_pl(argv: list[str], stdin: str | None = None) -> Any:
     """Run a pl command and return parsed JSON or text, raising ToolError on failure."""
-    res = _pl(argv)
+    res = _pl(argv) if stdin is None else _pl(argv, stdin)
     if res.returncode != 0:
         err = res.stderr.strip() if res.stderr else f"command failed with exit {res.returncode}"
         raise ToolError(err)
@@ -37,8 +37,15 @@ def memory_search(query: str, limit: int = 10, pod: str | None = None, card: str
     return recall.search(query, limit=limit, pod=pod, card=card)
 
 
+WRITABLE_SECTIONS = ("SPEC", "DESIGN", "PLAN")
+
+
+def _profile_args(profile: str | None) -> tuple[str, ...]:
+    return ("--profile", profile) if profile else ()
+
+
 def _read(profile: str | None, *argv: str) -> Any:
-    return run_pl([*(("--profile", profile) if profile else ()), *argv, "--json"])
+    return run_pl([*_profile_args(profile), *argv, "--json"])
 
 
 def build(profile: str | None = None) -> FastMCP:
@@ -72,6 +79,22 @@ def build(profile: str | None = None) -> FastMCP:
     @server.tool(description="Token usage since 24h (default), 90m, 7d or a date, grouped by card, account, model or loop.")
     def pl_usage(profile: str | None = profile, since: str | None = None, by: str = "account") -> Any:
         return _read(profile, "usage", *(["--since", since] if since else []), "--by", by)
+
+    @server.tool(description="File an idea on the board. Returns what pl printed.")
+    def pl_idea(text: str, title: str | None = None, repo: str | None = None, profile: str | None = profile) -> Any:
+        return run_pl([*_profile_args(profile), "idea", text, *(["--title", title] if title else []),
+                       *(["--repo", repo] if repo else [])])
+
+    @server.tool(description="Replace a card's SPEC, DESIGN or PLAN with text.")
+    def pl_section_write(id: str, name: str, text: str, profile: str | None = profile) -> Any:
+        name = " ".join(name.split()).upper()
+        if name not in WRITABLE_SECTIONS:
+            raise ToolError(f"pl_section_write: only {', '.join(WRITABLE_SECTIONS)} can be written")
+        return run_pl([*_profile_args(profile), "section", id, name, "--from", "-"], text)
+
+    @server.tool(description="Approve a card's gate. An outward action stays pending until the owner confirms.")
+    def pl_approve(id: str, profile: str | None = profile) -> Any:
+        return run_pl([*_profile_args(profile), "approve", id])
 
     return server
 
