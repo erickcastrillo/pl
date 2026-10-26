@@ -246,6 +246,8 @@ class SettingsView(Widget):
                     if hname in harnesses.EFFORT_LEVELS:
                         yield from self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
                                                options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
+            # for one release (0.5.x): the Skills panel moved; remove in the next minor (see what's new)
+            yield Button("Skills moved to Extend → Skills", id="skills-moved", compact=True)
             with self._panel("Chat"):
                 yield make_chat_panel()
             with self._panel("Triggers"):
@@ -428,6 +430,9 @@ class SettingsView(Widget):
             self.app.notify(w, severity="warning", markup=False)
 
     def on_button_pressed(self, m):
+        if m.button.id == "skills-moved":
+            self.app.action_skills()
+            return
         if m.button.id != "create-project":
             return
 
