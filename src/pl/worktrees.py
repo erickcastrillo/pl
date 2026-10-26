@@ -132,15 +132,38 @@ def _list_worktrees(work_dir: Path) -> list[dict]:
     return worktrees
 
 
+def _settled_path() -> Path:
+    return Path(C.STATE_DIR) / "pr-settled.json"
+
+
+def _settled() -> dict:
+    """Merged and closed PRs already looked up: their state never changes, so they are asked about once."""
+    try:
+        return json.loads(_settled_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def _pr_info(url: str) -> dict | None:
+    known = _settled()
+    if url in known:
+        return known[url]
     r = _run(["gh", "pr", "view", url, "--json", "state,mergedAt,headRefName"],
              capture_output=True, text=True, env=C.gh_env())
     if r.returncode != 0:
         return None
     try:
-        return json.loads(r.stdout)
+        info = json.loads(r.stdout)
     except Exception:
         return None
+    if isinstance(info, dict) and (info.get("state") in ("MERGED", "CLOSED") or info.get("mergedAt")):
+        try:
+            known[url] = info
+            _settled_path().parent.mkdir(parents=True, exist_ok=True)
+            _settled_path().write_text(json.dumps(known))
+        except OSError:
+            pass
+    return info
 
 
 def _is_dirty(path: Path) -> bool:
@@ -188,19 +211,12 @@ def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
     branch_short = branch.removeprefix("pl/")
     repo_name = Path(C.WORK_DIR).name if C.WORK_DIR else ""
 
-    for c in all_cards:
+    for c in all_cards:   # the free matches first, over every card: a PR lookup costs a GitHub call
         m = c.get("metadata") or {}
         if m.get("worktree") and Path(m["worktree"]).resolve() == wt_path:
             return c
         if m.get("branch") and m["branch"] in (branch, branch_short):
             return c
-
-        for url in m.get("pr_urls") or []:
-            if url not in pr_cache:
-                pr_cache[url] = _pr_info(url)
-            pr = pr_cache.get(url)
-            if pr and pr.get("headRefName") in (branch, branch_short):
-                return c
 
         slug = slug_of(c)
         clean_dir = wt_path.name
@@ -215,6 +231,14 @@ def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
         if cid:
             parts = {branch_short, clean_dir, *branch_short.split("-"), *clean_dir.split("-")}
             if cid in parts or f"card-{cid}" in parts or f"pl-{cid}" in parts:
+                return c
+
+    for c in all_cards:
+        for url in (c.get("metadata") or {}).get("pr_urls") or []:
+            if url not in pr_cache:
+                pr_cache[url] = _pr_info(url)
+            pr = pr_cache.get(url)
+            if pr and pr.get("headRefName") in (branch, branch_short):
                 return c
 
     return None
