@@ -1,4 +1,5 @@
 """The console chrome: tab list and the header line (canvas row 0)."""
+import re
 import time
 from pathlib import Path
 
@@ -96,12 +97,37 @@ def tabs():
     return res + [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]
 
 
-def stopped_by(data):
-    """"console-D 19:16:02" or "cli 19:16:02" when the manager marks this profile's dispatcher stopped by a request."""
+def stopped_at(data):
+    """"19:16" when the manager marks this profile's dispatcher stopped by a request."""
     row = next((p for p in ((data or {}).get("machine") or {}).get("profiles") or [] if p.get("name") == C.PROFILE_NAME), {})
     if not (row.get("stopped") and row.get("stopped_by") and row.get("stopped_at")):
         return None
-    return f"{row['stopped_by']} {time.strftime('%H:%M:%S', time.localtime(row['stopped_at']))}"
+    return time.strftime("%H:%M", time.localtime(row["stopped_at"]))
+
+
+def _plural(n, noun):
+    return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
+def status_sentence(snap, stopped=None):
+    """The dispatcher status as a sentence: "Running, 2 agents working, 1 card waiting". `stopped` is the HH:MM a
+    person stopped it."""
+    if snap["disp"] != "running":
+        return "Stopped" + (f" (by you at {stopped})" if stopped else "")
+    summary = snap["summary"]
+    if summary.startswith("PAUSED"):
+        draining = re.search(r"draining, (\d+) working", summary)
+        return f"Paused, draining {_plural(int(draining[1]), 'agent')}" if draining else "Paused, drained"
+    working = sum(1 for r in snap.get("rows", []) if r.get("kind") == "working")
+    waiting = sum((snap.get("needs") or {}).values())
+    parts = ["Running"]
+    if working:
+        parts.append(f"{_plural(working, 'agent')} working")
+    parts.append(f"{_plural(waiting, 'card')} waiting" if waiting else "no cards waiting")
+    sentence = ", ".join(parts)
+    if snap.get("parked") and (out := re.search(r"(\S+): PARKED until (.+?)(?:,| \(\d+ running|$)", snap["prof"])):
+        sentence += f"; account {out[1]} is out of credits until {out[2]}"
+    return sentence
 
 
 def header_text(data, error=None, note=None, last_good=None):
@@ -114,13 +140,10 @@ def header_text(data, error=None, note=None, last_good=None):
     snap = (data or {}).get("snapshot")
     if snap:
         up = snap["disp"] == "running"
+        paused = snap["summary"].startswith("PAUSED")
         t.append("   ● " if up else "   ✕ ", style="green" if up else "red")
-        t.append(f"dispatcher {snap['disp']}")
-        if not up and (by := stopped_by(data)):
-            t.append(f" (stopped by you: {by})", style="bold red")
-        t.append(f"   {snap['prof']}", style="red" if snap.get("parked") else "dim")
-        t.append("   PAUSED" if snap["summary"].startswith("PAUSED") else "   not paused",
-                 style="bold #e0a040" if snap["summary"].startswith("PAUSED") else "dim")
+        t.append(status_sentence(snap, stopped_at(data)),
+                 style="bold #e0a040" if paused else "red" if snap.get("parked") or not up else "")
         t.append(f"   {snap['at']}", style="dim")
     else:
         t.append("   loading…", style="dim")

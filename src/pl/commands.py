@@ -1169,10 +1169,17 @@ def _sync_now(p, r, as_json):
 def cmd_sync(a):
     from pl import ghquota, outbox, sync
     target = C.SYNC.get("github")
+    if a.action == "resolve" and not (a.id and a.keep):
+        raise SystemExit("usage: pl sync resolve <id> --keep remote|local")
     if not target:
         raise SystemExit("pl sync: set [sync] github in config.toml")
     if a.action == "init":
         return sync.cmd_init(a)
+    if a.action == "resolve":
+        c = find_card(a.id)
+        fields = ", ".join(sync.resolve(c["id"], a.keep))
+        print(f"{short_id(c['id'])}: kept {a.keep} for {fields}" + ("; queued, the next sync sends it" if a.keep == "local" else ""))
+        return
     if a.action == "now":
         p = sync.pull()
         if p["stopped_because"] == "error":   # conflicts could not be checked: replaying could overwrite a person's edit

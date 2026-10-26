@@ -209,7 +209,7 @@ def test_dry_run_json_is_one_document(host, capsys):
     doc = json.loads(capsys.readouterr().out)
     (cand,) = doc["candidates"]
     assert cand["card"] == "c1" and cand["pr"] == URL.format(1)
-    assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "conflicts", "tests"]
+    assert [r["rule"] for r in cand["rules"]] == ["size", "sensitive", "dependencies", "conflicts", "tests", "judgment"]
     assert all(r["ok"] in (True, False, None) and r["why"] for r in cand["rules"])
     assert cand["action"] == "would merge this pass"
 
@@ -379,7 +379,7 @@ def passing(host, monkeypatch):
     host.needs = []
     host.on_judge = lambda cid: None
 
-    def judge(card, pr, all_cards, base):
+    def judge(card, pr, all_cards, base, write=False):
         host.calls.append(["judge", card["id"]])
         host.on_judge(card["id"])
         ok = not host.failing(card["id"])
