@@ -240,6 +240,8 @@ ENTRIES = [
     _e("2026-10-25.49", "Restore the local board from its git backup, keeping card ids",
        "pl board restore --from <clone> --yes (stop the dispatcher first; the old board is kept next to board.db)",
        "pl board restore --from ~/pl-board-backup"),
+    _e("2026-10-25.50", "+ New skill: install from GitHub after reviewing every file, or write one",
+       "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
 ]
 
 

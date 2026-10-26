@@ -3,12 +3,14 @@ pl's skills library. Temp HOME with fake accounts; nothing real is touched."""
 import io
 import json
 import os
+import subprocess
 import sys
 
 import pytest
 from rich.console import Console
 from textual.app import App
-from textual.widgets import DataTable, Input, Markdown, Select, TextArea
+from textual.screen import Screen
+from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
 from pl import cli, skill_sources, skills
 from pl import config as C
@@ -131,6 +133,26 @@ def test_create_writes_the_template_and_never_overwrites(home):
     with pytest.raises(SystemExit, match="already exists"):
         skills.create("a", "command", "deploy")
     assert "Deploy it" in (home["a"] / "commands/deploy.md").read_text()
+
+
+def _description(path):
+    import yaml
+    return yaml.safe_load(path.read_text().split("---\n")[1])["description"]
+
+
+def test_create_writes_the_description_entered(home):
+    p = skills.create("b", "skill", "say-hi", "Use when greeting")
+    assert "\ndescription: Use when greeting\n" in p.read_text()
+
+
+def test_create_with_blank_description_keeps_the_placeholder(home):
+    p = skills.create("b", "skill", "blank-one", "  ")
+    assert _description(p) == "Say in one sentence when to use this skill."
+
+
+def test_create_quotes_a_description_yaml_would_misread(home):
+    p = skills.create("b", "skill", "colon-one", "Use when: x")
+    assert _description(p) == "Use when: x"
 
 
 # ---------- delete ----------
@@ -302,28 +324,206 @@ async def test_e_on_a_plugin_skill_is_refused(home):
         assert "plugin" in screen_text(app)
 
 
-async def test_n_creates_from_the_template_and_opens_the_editor(home):
+SHA = "a" * 40
+DRY = (f"Source: github:o/r/x@{SHA}\nRuns code:\n  script  run.sh\nFiles:\n  SKILL.md  120 B\n  run.sh  40 B\n")
+PLUGIN_DRY = (f"Source: github:o/r@{SHA}\nPlugin p\nSkills (installed):\n  a\n  b\n  c\nFiles:\n  plugin.json  9 B\n")
+
+
+class FakeRun:
+    def __init__(self, home, dry=DRY, code=0, err=""):
+        self.calls, self.dry, self.code, self.err, self.home = [], dry, code, err, home
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        if "--dry-run" in argv:
+            return subprocess.CompletedProcess(argv, self.code, stdout=self.dry, stderr=self.err)
+        lib = skills.library() / "x"
+        lib.mkdir(parents=True)
+        (lib / "SKILL.md").write_text("---\nname: x\ndescription: X\n---\nBody\n")
+        (skills.library() / ".pl-sources.json").write_text(json.dumps({"x": {
+            "source": f"github:o/r/x@{SHA}", "repo": "o/r", "path": "x", "ref": SHA, "sha": SHA, "files": []}}))
+        return subprocess.CompletedProcess(argv, 0, stdout="installed x\n", stderr="")
+
+
+def toasts(app):
+    return " ".join(n.message for n in app._notifications)
+
+
+def buttons(app):
+    return [str(b.label) for b in app.screen.query(Button)]
+
+
+async def choose(pilot, which):
+    pilot.app.query_one("#skills-table").focus()
+    await pilot.press("n")
+    await settle(pilot)
+    await pilot.click(f"#skills-choose-{which}")
+    await settle(pilot)
+
+
+async def start_install(pilot, source="github:o/r/x"):
+    await choose(pilot, "install")
+    pilot.app.screen.query_one(Input).value = source
+    await pilot.press("enter")
+    await settle(pilot)
+
+
+async def test_n_opens_a_chooser_with_exactly_two_choices_and_esc_changes_nothing(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        before = rows(app)
+        app.query_one("#skills-table").focus()
+        await pilot.press("n")
+        await settle(pilot)
+        assert buttons(app) == ["Install from GitHub", "Write a new one"]
+        await pilot.press("escape")
+        await settle(pilot)
+        assert isinstance(app.screen, Screen) and not app.screen.query(Button)
+        assert fake.calls == [] and rows(app) == before and not skills.library().exists()
+
+
+async def test_install_shows_the_dry_run_with_cancel_focused(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await start_install(pilot)
+        assert fake.calls == [["pl", "skills", "install", "github:o/r/x", "--dry-run"]]
+        text = screen_text(app)
+        assert text.index("Runs code:") < text.index("Files:") and "Install from o/r@aaaaaaa?" in text
+        assert app.focused.id == "skills-review-cancel"
+
+
+async def test_install_runs_the_pinned_source_with_yes_and_refreshes(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await start_install(pilot)
+        await pilot.click("#skills-review-install")
+        await settle(pilot)
+        assert fake.calls[1] == ["pl", "skills", "install", f"github:o/r/x@{SHA}", "--yes"]
+        assert ("x", "library") in rows(app)
+        assert "installed x" in toasts(app)
+
+
+@pytest.mark.parametrize("dismiss", ["cancel", "escape"])
+async def test_cancel_or_esc_installs_nothing(home, monkeypatch, dismiss):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await start_install(pilot)
+        if dismiss == "cancel":
+            await pilot.click("#skills-review-cancel")
+        else:
+            await pilot.press("escape")
+        await settle(pilot)
+        assert len(fake.calls) == 1 and not skills.library().exists()
+        assert "nothing installed" in toasts(app)
+
+
+@pytest.mark.parametrize("dry,code,err,shown", [
+    ("", 2, "pl skills install: /l/x already exists; pl never overwrites", "pl never overwrites"),
+    ("Files:\n  SKILL.md  1 B\n", 0, "", "named no commit"),
+])
+async def test_a_failed_dry_run_shows_the_error_and_no_install_button(home, monkeypatch, dry, code, err, shown):
+    fake = FakeRun(home, dry=dry, code=code, err=err)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await start_install(pilot)
+        assert shown in toasts(app)
+        assert not app.screen.query("#skills-review-install") and len(fake.calls) == 1
+
+
+def test_review_title_names_the_plugin_and_skill_count():
+    assert tui.review_title(PLUGIN_DRY, f"github:o/r@{SHA}") == "Install plugin p (3 skills) from o/r@aaaaaaa?"
+    assert tui.review_title(DRY, f"github:o/r/x@{SHA}") == "Install from o/r@aaaaaaa?"
+    assert tui.pinned_source(DRY) == f"github:o/r/x@{SHA}" and tui.pinned_source("Files:\n") is None
+
+
+async def test_a_plugin_installs_with_one_pinned_yes_call(home, monkeypatch):
+    fake = FakeRun(home, dry=PLUGIN_DRY)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await start_install(pilot, "github:o/r")
+        assert "Install plugin p (3 skills) from o/r@aaaaaaa?" in screen_text(app)
+        await pilot.click("#skills-review-install")
+        await settle(pilot)
+        assert fake.calls[1] == ["pl", "skills", "install", f"github:o/r@{SHA}", "--yes"]
+
+
+async def test_write_a_new_one_creates_in_the_library_with_the_description_and_opens_the_editor(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await choose(pilot, "write")
+        app.screen.query_one("#skills-new-name", Input).value = "made-here"
+        app.screen.query_one("#skills-new-description", Input).value = "Use when testing"
+        app.screen.query_one("#skills-new-description", Input).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        path = skills.library() / "made-here/SKILL.md"
+        assert "\ndescription: Use when testing\n" in path.read_text()
+        assert "description: Use when testing" in app.screen.query_one(TextArea).text
+        assert ("made-here", "library") in rows(app)
+
+
+async def test_write_a_new_one_shows_name_errors_in_the_form(home):
+    (skills.library() / "taken").mkdir(parents=True)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await choose(pilot, "write")
+        for name, shown in (("Bad Name", "is not a valid name"), ("taken", "pl never overwrites")):
+            app.screen.query_one("#skills-new-name", Input).value = name
+            app.screen.query_one("#skills-new-description", Input).value = "d"
+            app.screen.query_one("#skills-new-description", Input).focus()
+            await pilot.press("enter")
+            await settle(pilot)
+            assert shown in str(app.screen.query_one("#skills-new-error", Static).content)
+            assert app.screen.query("#skills-new-name")
+        assert not (skills.library() / "Bad Name").exists()
+
+
+async def test_enter_on_the_name_moves_to_the_description(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await choose(pilot, "write")
+        app.screen.query_one("#skills-new-name", Input).value = "next-one"
+        app.screen.query_one("#skills-new-name", Input).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.focused.id == "skills-new-description" and not (skills.library() / "next-one").exists()
+
+
+async def test_I_skips_the_chooser(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         app.query_one("#skills-table").focus()
-        await pilot.press("n")
+        await pilot.press("I")
         await settle(pilot)
-        app.screen.query_one("#skills-new-account", Select).value = "b"
-        app.screen.query_one("#skills-new-name", Input).value = "Bad Name"
-        app.screen.query_one("#skills-new-name", Input).focus()
+        assert isinstance(app.screen, tui.PromptScreen) and not app.screen.query("#skills-choose-install")
+        app.screen.query_one(Input).value = "github:o/r/x"
         await pilot.press("enter")
         await settle(pilot)
-        assert not (home["b"] / "skills/Bad Name").exists() and app.is_running
-        await pilot.press("n")
+        await pilot.click("#skills-review-install")
         await settle(pilot)
-        app.screen.query_one("#skills-new-account", Select).value = "b"
-        app.screen.query_one("#skills-new-name", Input).value = "made-here"
-        app.screen.query_one("#skills-new-name", Input).focus()
-        await pilot.press("enter")
-        await settle(pilot)
-        assert (home["b"] / "skills/made-here/SKILL.md").read_text().startswith("---\nname: made-here\n")
-        assert "name: made-here" in app.screen.query_one(TextArea).text
+        assert [c[-1] for c in fake.calls] == ["--dry-run", "--yes"]
 
 
 async def test_d_asks_then_moves_to_trash(home):

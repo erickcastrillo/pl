@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 from pl import config as C
 from pl import harnesses, jsonout, pods
 from pl.util import ask
@@ -25,7 +27,7 @@ SHARED, LIBRARY = "shared", "library"
 # How a library skill reaches an account, by harness. Claude Code, Codex and Antigravity follow a symlinked skill folder
 # (Codex keeps its skills in $CODEX_HOME/skills, Antigravity in ~/.gemini/skills).
 LINKABLE = {"claude", "codex", "antigravity"}
-TEMPLATE = ("---\nname: {name}\ndescription: Say in one sentence when to use this {kind}.\n---\n\n# {name}\n\n"
+TEMPLATE = ("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n"
             "## When to use\n\n- \n\n## Steps\n\n1. \n")
 
 
@@ -258,11 +260,18 @@ def _base(account, kind):
     return base
 
 
-def create(account, kind, name):
+def create(account, kind, name, description=""):
     """Write a new SKILL.md (in its own folder) or agent/command .md from the template; returns its path."""
     _check_name(name)
     if kind not in KINDS:
         raise SystemExit(f"pl: unknown kind {kind!r}")
+    desc = " ".join(description.split()) or f"Say in one sentence when to use this {kind}."
+    try:
+        plain = yaml.safe_load(f"d: {desc}") == {"d": desc}
+    except yaml.YAMLError:
+        plain = False
+    if not plain:
+        desc = json.dumps(desc)
     base = _base(account, kind)
     dest = base / name if kind == "skill" else base / f"{name}.md"
     if os.path.lexists(dest):
@@ -271,7 +280,7 @@ def create(account, kind, name):
         dest.mkdir()
         dest /= "SKILL.md"
     with open(dest, "x", encoding="utf-8") as f:
-        f.write(TEMPLATE.format(name=name, kind=kind))
+        f.write(TEMPLATE.format(name=name, description=desc))
     return dest
 
 

@@ -78,6 +78,23 @@ def test_flags_come_first_by_kind(env):
     assert not env["lib"].exists()
 
 
+def test_dry_run_first_line_is_the_pinned_source(env):
+    code, out = run("github:acme/kit/skills/review@main", dry_run=True)
+    assert code == 0
+    assert out.splitlines()[0] == f"Source: github:acme/kit/skills/review@{SHA}"
+    assert not env["lib"].exists()
+
+
+def test_installing_the_pinned_source_installs_that_commit_without_ls_remote(env):
+    _, out = run(dry_run=True)
+    pinned = out.splitlines()[0].removeprefix("Source: ")
+    env["calls"].clear()
+    code, _ = run(pinned, yes=True)
+    assert code == 0
+    assert not any(c[:2] == ["git", "ls-remote"] for c in env["calls"])
+    assert json.loads((env["lib"] / ".pl-sources.json").read_text())["review"]["sha"] == SHA
+
+
 def test_no_terminal_and_no_yes_exits_2_and_installs_nothing(env, monkeypatch, capsys):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     code, out = run()
