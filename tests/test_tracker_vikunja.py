@@ -25,6 +25,13 @@ class Fake:
         self.clock = 0
         self.next_id = 100
         self.writes = []
+        self.labels = []
+        self.me = {"id": 1, "username": "me", "email": "me@x"}
+        self.users = [self.me, {"id": 2, "username": "ann", "email": "ann@x"},
+                      {"id": 3, "username": "bob", "email": "bob@x"}]
+
+    def writes_to(self, path):
+        return [w for w in self.writes if w == ("PUT", path)]
 
     def stamp(self):
         self.clock += 1
@@ -65,8 +72,6 @@ def _handler(fake):
             if method != "GET":
                 fake.writes.append((method, parts.path))
             path = parts.path
-            if method == "GET" and path == "/api/v1/user":
-                return self._send(200, {"id": 1, "username": "pl"})
             if method == "GET" and path == f"/api/v1/projects/{P}/views/{V}":
                 return self._send(200, {"id": V, "view_kind": "kanban"})
             if method == "GET" and path == f"/api/v1/projects/{P}/views/4":
@@ -94,6 +99,27 @@ def _handler(fake):
             if path == f"/api/v1/projects/{P}/tasks" and method == "PUT":
                 t = fake.add_task(10, title=body["title"], description=body.get("description", ""))
                 return self._send(201, t)
+            if path == "/api/v1/user":
+                return self._send(200, fake.me)
+            if path == "/api/v1/users":
+                s = q.get("s", [""])[0].lower()
+                return self._send(200, [{k: u[k] for k in ("id", "username")} for u in fake.users if u["email"] == s])
+            if path == "/api/v1/labels":
+                if method == "PUT":
+                    label = {"id": 50 + len(fake.labels), "title": body["title"]}
+                    fake.labels.append(label)
+                    return self._send(201, label)
+                s = q.get("s", [""])[0]
+                return self._send(200, [x for x in fake.labels if s in x["title"]])
+            if m := re.fullmatch(r"/api/v1/tasks/(\d+)/(labels|assignees)/bulk", path):
+                task = fake.tasks[int(m.group(1))]
+                if m.group(2) == "labels":
+                    task["labels"] = [x for i in body["labels"] for x in fake.labels if x["id"] == i["id"]]
+                else:
+                    task["assignees"] = [{k: u[k] for k in ("id", "username")}
+                                         for i in body["assignees"] for u in fake.users if u["id"] == i["id"]]
+                task["updated"] = fake.stamp()
+                return self._send(200, {})
             if m := re.fullmatch(r"/api/v1/tasks/(\d+)", path):
                 tid = int(m.group(1))
                 if tid not in fake.tasks:
@@ -155,7 +181,7 @@ def test_cards_list_tasks_by_bucket_and_page(fake, monkeypatch):
 
 
 def test_create_puts_task_in_column_and_reads_back(fake):
-    c = fake.tracker.create("Spec ready", title="T", description="text", metadata={"k": 1}, tags=["x"], assigned_to="me")
+    c = fake.tracker.create("Spec ready", title="T", description="text", metadata={"k": 1}, tags=["x"], assigned_to="me@x")
     assert c["list_id"] == "11" and c["title"] == "T"
     assert c["description"] == "text" and c["metadata"] == {"k": 1}
     assert fake.in_bucket[int(c["id"].split("#")[1])] == 11
@@ -185,6 +211,7 @@ def test_update_title_keeps_assignee_description_labels_priority(fake):
     got = fake.tasks[t["id"]]
     assert got["title"] == "new" and got["priority"] == 4
     assert got["assignees"] == t["assignees"] and got["labels"] == t["labels"]
+    assert not [w for w in fake.writes if w[1].endswith("/bulk")]
     assert metablock.split(got["description"])[:2] == ("body", {"a": 1})
 
 
@@ -274,6 +301,8 @@ def test_test_names_wrong_token_without_showing_it(fake, monkeypatch):
     monkeypatch.setenv("VIKUNJA_TOKEN", "wrong_token_value_999")
     line = fake.tracker.test()
     assert "token is wrong or expired" in line and "wrong_token_value_999" not in line
+    assert "(401)" in line or "(403)" in line
+    assert "permission" in line
 
 
 def test_test_names_wrong_view_id(fake):
@@ -318,6 +347,9 @@ def test_dry_run_sends_no_write(fake):
     tr.update(f"vikunja#{t['id']}", title="y")
     tr.delete(f"vikunja#{t['id']}")
     assert fake.writes == []
+    tr.create("Inbox", title="x", tags=["a"], assigned_to="me@x")
+    tr.update(f"vikunja#{t['id']}", tags=["b"], assigned_to="ann@x")
+    assert fake.writes == []
 
 
 def test_board_commands_create_move_update(fake):
@@ -328,3 +360,54 @@ def test_board_commands_create_move_update(fake):
     board.update(c["id"], title="T2")
     got = tr.card(c["id"])
     assert got["list_id"] == "11" and got["title"] == "T2" and got["description"] == "d"
+
+
+def _titles(task):
+    return sorted(x["title"] for x in task["labels"])
+
+
+def test_create_sets_tags_as_labels(fake):
+    c = fake.tracker.create("Inbox", title="T", tags=["idea", "from-pl-idea"])
+    assert _titles(fake.tasks[int(c["id"].split("#")[1])]) == ["from-pl-idea", "idea"]
+    assert sorted(c["tags"]) == ["from-pl-idea", "idea"]
+
+
+def test_missing_label_created_once_and_reused(fake):
+    fake.labels.append({"id": 40, "title": "xy"})
+    fake.tracker.create("Inbox", title="A", tags=["x"])
+    fake.tracker.create("Inbox", title="B", tags=["x"])
+    assert sorted(x["title"] for x in fake.labels) == ["x", "xy"]
+    assert len(fake.writes_to("/api/v1/labels")) == 1
+    assert fake.tracker.cards()[0]["tags"] == ["x"]
+
+
+def test_update_tags_replaces_labels_keeps_label_records(fake):
+    c = fake.tracker.create("Inbox", title="T", tags=["a", "b"])
+    got = fake.tracker.update(c["id"], title="T2", tags=["b", "c"])
+    assert sorted(got["tags"]) == ["b", "c"] and got["title"] == "T2"
+    assert "a" in [x["title"] for x in fake.labels]
+
+
+def test_create_assigns_me_by_email(fake):
+    c = fake.tracker.create("Inbox", title="T", assigned_to="ME@x")
+    assert [a["id"] for a in fake.tasks[int(c["id"].split("#")[1])]["assignees"]] == [1]
+    assert c["assigned_to"] == "me@x"
+
+
+def test_update_assigns_other_user_by_email_and_replaces(fake):
+    t = fake.add_task(10, assignees=[{"id": 2, "username": "ann"}])
+    got = fake.tracker.update(f"vikunja#{t['id']}", assigned_to="bob@x")
+    assert [a["id"] for a in fake.tasks[t["id"]]["assignees"]] == [3]
+    assert got["assigned_to"] == "bob@x"
+
+
+def test_unknown_email_fails_plainly_task_kept(fake):
+    with pytest.raises(SystemExit) as e:
+        fake.tracker.create("Inbox", title="T", assigned_to="nobody@x")
+    assert "nobody@x" in str(e.value) and "no Vikunja user" in str(e.value) and "TOKEN" not in str(e.value)
+    assert [t["assignees"] for t in fake.tasks.values()] == [None]
+
+
+def test_unmapped_assignee_reads_username(fake):
+    t = fake.add_task(10, assignees=[{"id": 2, "username": "ann"}])
+    assert fake.tracker.card(f"vikunja#{t['id']}")["assigned_to"] == "ann"
