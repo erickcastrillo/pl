@@ -247,6 +247,9 @@ ENTRIES = [
        "Settings → Skills: select a skill", "pl"),
     _e("2026-10-25.53", "Loop schedules are picked, with the next three run times shown",
        "Loops tab, n: schedule kind, time or cron; bad schedules can't be saved", "pl loops list"),
+    _e("2026-10-25.54", "Skills moved to its own place: Extend → Skills",
+       "Extend tab, Skills (ctrl+p \"Skills\"); Settings keeps a link line until the next minor release",
+       "pl skills list"),
 ]
 
 
