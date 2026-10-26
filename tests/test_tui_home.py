@@ -89,7 +89,7 @@ async def test_home_shows_one_row_per_pipeline_with_bold_needs_you():
         assert app.query(HomeView)
         home_view = app.query_one(HomeView)
         table = home_view.query_one("DataTable")
-        assert len(table.ordered_rows) == 3
+        assert len(table.ordered_rows) == 4   # three pipelines and the + New pipeline row
         assert app.active_tab == "dashboard"
         assert not any("Home" in str(t.label) for t in app.query_one("#tabs").query_one("Tabs").query("Tab") if t.display)
         await pilot.press("H")
@@ -198,3 +198,60 @@ def test_enter_on_home_opens_the_pipeline(monkeypatch):
         monkeypatch.setattr(view, "selected", lambda name=name: {"name": name})
         view.action_select()
     assert calls == [("switch", "sales"), ("tab", "cards")]
+
+
+async def test_home_has_a_new_pipeline_row_after_the_pipelines():
+    data = {"home": _fake_summaries()}
+    from textual.app import App
+
+    class _Host(App):
+        def compose(self):
+            yield HomeView()
+
+    async with _Host().run_test(size=(176, 48)) as pilot:
+        view = pilot.app.query_one(HomeView)
+        view.show(data)
+        await pilot.pause()
+        table = view.query_one("DataTable")
+        assert str(table.get_cell_at((3, 0))) == "+ New pipeline"
+        table.move_cursor(row=3)
+        assert view.selected() is None
+
+
+async def test_enter_on_the_new_pipeline_row_opens_the_wizard():
+    from textual.app import App
+    from pl.tui.newpipeline import NewPipelineScreen
+
+    class _Host(App):
+        def compose(self):
+            yield HomeView()
+
+    async with _Host().run_test(size=(176, 48)) as pilot:
+        view = pilot.app.query_one(HomeView)
+        view.show({"home": _fake_summaries()})
+        await pilot.pause()
+        view.query_one("DataTable").move_cursor(row=3)
+        view.action_select()
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, NewPipelineScreen)
+
+
+async def test_n_opens_the_wizard_once_home_is_reached_with_h():
+    from pl.tui.newpipeline import NewPipelineScreen
+
+    for name in ("sales", "billing"):
+        (Path.home() / f".pl-{name}").mkdir(parents=True, exist_ok=True)
+        (Path.home() / f".pl-{name}" / "config.toml").write_text("[tracker]\ntype = 'memory'\n")
+    data = {
+        "snapshot": {"rows": [], "prof": "ok", "parked": False, "at": "12:00:00",
+                     "summary": "ok", "summary2": "", "needs": {}, "disp": "running"},
+        "home": _fake_summaries(),
+    }
+    app = PlApp(snapshot_provider=lambda: data)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        await pilot.press("H")
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, NewPipelineScreen)
