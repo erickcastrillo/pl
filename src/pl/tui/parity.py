@@ -159,7 +159,7 @@ NAV = {
     "show_overlay",
 }
 
-LOOPS_KEYS = {"e": "pl loops edit", "p": "pl loops pause", "g": "pl loops run", "d": "pl loops rm"}   # w and R are navigation (NAV)
+LOOPS_KEYS = {"n": "pl loops add", "e": "pl loops edit", "p": "pl loops pause", "g": "pl loops run", "d": "pl loops rm"}   # w and R are navigation (NAV)
 
 PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
     "details": "pl pipelines show NAME --json",

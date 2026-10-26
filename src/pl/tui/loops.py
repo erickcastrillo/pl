@@ -1,4 +1,5 @@
 """Loops tab (each service loop and its live screen) and Activity tab (the event feed, newest first)."""
+import argparse
 import io
 import json
 import re
@@ -16,6 +17,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, Static
 
 from pl import agents, loops, schedule, util
 from pl import config as C
+from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
@@ -165,6 +167,69 @@ class EditLoopScreen(ModalScreen):
         self.dismiss(None)
 
 
+class NewLoopScreen(ModalScreen):
+    """The fields of `pl loops add`; saving runs the function the command runs and keeps the form open on a refusal."""
+    DEFAULT_CSS = """
+    NewLoopScreen { align: center middle; }
+    NewLoopScreen > Vertical { width: 90; height: auto; max-height: 100%; overflow-y: auto; border: round $accent; padding: 1 2; background: $surface; }
+    NewLoopScreen .hint { color: $text-muted; }
+    NewLoopScreen .error { color: $error; }
+    """
+    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
+    FIELDS = (("name", "a short name, letters, digits and -"),
+              ("skill", "a skill to run, or leave empty and give a prompt"),
+              ("prompt", "what the loop does, when there is no skill"),
+              ("every", "30m, hourly, daily HH:MM, weekdays HH:MM or cron:<expr>"),
+              ("hours", "HH:MM-HH:MM [weekdays], empty = any time"),
+              ("account", "the account the loop runs on"))
+    DEFAULTS = {"every": "hourly"}
+    # a refusal goes under the first field whose name it mentions; skill, prompt and template all show on prompt
+    ERROR_FIELDS = (("every", "every"), ("hours", "hours"), ("account", "account"),
+                    ("skill", "prompt"), ("prompt", "prompt"), ("template", "prompt"))
+
+    def compose(self):
+        defaults = {**self.DEFAULTS, "account": next(iter(C.ACCOUNTS), "")}
+        with Vertical():
+            yield Static(Text("New loop", style="bold"))
+            for key, hint in self.FIELDS:
+                yield Label(key)
+                yield Input(value=defaults.get(key, ""), id=f"new-loop-{key}")
+                yield Static(hint, classes="hint")
+                yield Static("", id=f"new-loop-{key}-error", classes="error")
+            yield Checkbox("writes (off = read-only)", False, id="new-loop-writes")
+            yield Static(Text("ctrl+s save · esc cancel", style="dim"))
+
+    def on_input_submitted(self, _):
+        self.action_save()
+
+    def _show_error(self, key, message):
+        self.query_one(f"#new-loop-{key}-error", Static).update(Text(message))
+
+    def action_save(self):
+        for key, _ in self.FIELDS:
+            self._show_error(key, "")
+        value = {key: self.query_one(f"#new-loop-{key}", Input).value.strip() or None for key, _ in self.FIELDS}
+        name = value["name"]
+        if not name:
+            self._show_error("name", "give the loop a name")
+            return
+        if name in C.SERVICES or name in C.LOOPS_OFF:
+            self._show_error("name", f"a loop named {name} exists")
+            return
+        writes = self.query_one("#new-loop-writes", Checkbox).value
+        args = argparse.Namespace(**value, template=None, team=None, writes=writes, yes=True, dry_run=False)
+        problem = _call(loops._cmd_add, args)
+        if problem:
+            problem = problem.removeprefix("pl loops: ")
+            field = next((f for word, f in self.ERROR_FIELDS if word in problem), "name")
+            self._show_error(field, problem)
+            return
+        self.dismiss(name)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 def _auto_merge_row():
     from pl import merges   # merges -> merge_check -> tui.prs would loop back into this package
     s = util.load_state().get("services", {}).get("auto-merge", {})
@@ -182,7 +247,7 @@ class LoopsView(Widget):
     #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
     #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
-    BINDINGS = [Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
+    BINDINGS = [Binding("n", "new", "new loop"), Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
                 Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
 
     def __init__(self):
@@ -201,7 +266,10 @@ class LoopsView(Widget):
 
     def selected(self):
         t = self.query_one(DataTable)
-        return self.loops[t.cursor_row] if self.loops and 0 <= t.cursor_row < len(self.loops) else None
+        if not t.row_count:
+            return None
+        key = t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
+        return next((x for x in self.loops if x["name"] == key), None)
 
     def show(self, data):
         t = self.query_one(DataTable)
@@ -210,14 +278,24 @@ class LoopsView(Widget):
         if loops != self.loops:   # an unchanged table is not rebuilt
             self.loops = loops
             t.clear()
+            t.add_row(new_row("loop"), *[""] * (len(COLUMNS) - 1), key=NEW_ROW)
             for x in self.loops:
-                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS))
-            if self.loops:
-                t.move_cursor(row=min(max(keep, 0), len(self.loops) - 1))
+                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS), key=x["name"])
+            t.move_cursor(row=min(max(keep, 0), len(self.loops)))
         self.load_tail()
 
     def on_data_table_row_highlighted(self, _):
         self.load_tail()
+
+    def on_data_table_row_selected(self, event):
+        if event.row_key.value == NEW_ROW:
+            self.action_new()
+
+    def action_new(self):
+        def added(name):
+            if name:
+                self.app.notify(f"added loop {name}", markup=False)
+        self.app.push_screen(NewLoopScreen(), added)
 
     def load_tail(self):
         x = self.selected()
