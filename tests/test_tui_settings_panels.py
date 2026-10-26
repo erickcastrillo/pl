@@ -241,7 +241,7 @@ async def test_settings_view_has_no_extend_panels():
         from pl.tui.panels import CommandPanel
         from pl.tui.skills import SkillsView
         assert not view.query(SkillsView) and not view.query(ExtensionsView)
-        assert len(view.query(CommandPanel)) == 1   # the Chat panel
+        assert len(view.query(CommandPanel)) == 2   # the Chat and Triggers panels
         titles = [p.border_title for p in view.query(".panel")]
-        assert titles == ["General", "Connections", "Stages and harnesses", titles[3], "Chat", "Loops", "Dispatcher", "Notifications"]
+        assert titles == ["General", "Connections", "Stages and harnesses", titles[3], "Chat", "Triggers", "Loops", "Dispatcher", "Notifications"]
         assert titles[3].startswith("Models and effort")
