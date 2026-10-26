@@ -3016,7 +3016,7 @@ def test_loops_tab_shows_next_run_last_result_and_week_tokens():
 
 
 async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
-    from pl import agents, loops
+    from pl import agents, loops, skills
     from pl.tui import loops as tui_loops
     C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
     C.LOOPS_OFF = {}
@@ -3027,6 +3027,7 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
     monkeypatch.setattr(loops, "remove", lambda name: calls.append(("remove", name)))
     monkeypatch.setattr(agents, "jump_to_window", lambda name: calls.append(("window", name)) or "ok")
     monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    monkeypatch.setattr(skills, "scan", lambda: [])
     data = fake_data()
     data["snapshot"]["rows"].append({"loop": "invoices", "kind": "loop_idle", "worker": {"pane": "%1", "window": "@7"}})
     app = PlApp(snapshot_provider=Provider(data))
@@ -3053,8 +3054,11 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
         await pilot.press("e")
         await settle(pilot)
-        assert isinstance(app.screen, tui_loops.EditLoopScreen)
-        app.screen.query_one("#loop-every").value = "daily 09:30"
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert "Edit loop invoices" in str(app.screen.query_one("Static").render())
+        app.screen.query_one("#loop-kind", Select).value = "daily"
+        await settle(pilot)
+        app.screen.query_one("#loop-at").value = "09:30"
         await pilot.press("ctrl+s")
         await settle(pilot)
     assert calls == [("enabled", "invoices", False), ("run", "invoices"), ("window", "invoices"), ("remove", "invoices"),
@@ -3070,7 +3074,7 @@ def test_dashboard_health_lists_every_harness_account():
 
 
 async def _open_loop_form(app, pilot, monkeypatch):
-    from pl import skills
+    from pl import loops, skills
     from pl.tui import loops as tui_loops
     monkeypatch.setattr(skills, "scan", lambda: [{"name": "pl-billing-chase"}])
     monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
@@ -3079,8 +3083,270 @@ async def _open_loop_form(app, pilot, monkeypatch):
     await settle(pilot)
     await pilot.press("n")
     await settle(pilot)
+    assert isinstance(app.screen, tui_loops.TemplateGallery)
+    app.screen.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
+    await pilot.press("enter")
+    await settle(pilot)
     assert isinstance(app.screen, tui_loops.LoopForm)
     return app.screen
+
+
+async def _open_gallery(app, pilot, monkeypatch):
+    from pl import skills
+    from pl.tui import loops as tui_loops
+    monkeypatch.setattr(skills, "scan", lambda: [])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press("n")
+    await settle(pilot)
+    assert isinstance(app.screen, tui_loops.TemplateGallery)
+    return app.screen
+
+
+def test_gallery_rows_say_what_each_template_does_and_needs():
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    rows = {r[0]: r for r in tui_loops.gallery_rows()}
+    assert [r[0] for r in tui_loops.gallery_rows()] == [*loops.TEMPLATES, "Blank loop"]
+    needs = {"auto-review": "write access", "inbox-triage": "email connector", "overdue-invoices": "payments connector",
+             "daily-standup": "nothing extra", "dependency-updates": "nothing extra", "stale-cards": "nothing extra"}
+    assert {n: rows[n][2] for n in needs} == needs
+    assert rows["inbox-triage"][1] == "Read the new mail through the email connector and group it as urgent, reply-needed or FYI."
+    assert rows["auto-review"][3] == "every 30m, 08:00-20:00"
+
+
+async def test_n_opens_the_template_gallery_first(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        gallery = await _open_gallery(app, pilot, monkeypatch)
+        table = gallery.query_one("#gallery-table")
+        assert table.row_count == len(loops.TEMPLATES) + 1
+        names = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+        assert names == [*loops.TEMPLATES, "Blank loop"]
+
+
+async def test_choosing_a_template_in_the_gallery_prefills_the_form(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        gallery = await _open_gallery(app, pilot, monkeypatch)
+        gallery.query_one("#gallery-table").move_cursor(row=list(loops.TEMPLATES).index("overdue-invoices"))
+        await pilot.press("enter")
+        await settle(pilot)
+        form = app.screen
+        assert isinstance(form, tui_loops.LoopForm)
+        template = loops.TEMPLATES["overdue-invoices"]
+        assert form.query_one("#loop-template").value == "overdue-invoices"
+        assert form.query_one("#loop-prompt").value == template["prompt"]
+        assert form._every() == template["every"]
+        assert form.query_one("#loop-hours").value == template["hours"]
+        assert form.query_one("#loop-writes").value is False
+        assert all(form.query_one(f"#loop-{k}").value == "" for k in ("name", "account", "team"))
+        form.query_one("#loop-kind").value = "minutes"
+        form.query_one("#loop-number").value = "60"
+        form.query_one("#loop-name").value = "invoices"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "60m", "hours": template["hours"],
+                                   "account": None, "team": None, "writes": False})]
+
+
+async def test_blank_loop_opens_an_empty_form(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    from textual.widgets import Input, Select
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        gallery = await _open_gallery(app, pilot, monkeypatch)
+        gallery.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
+        await pilot.press("enter")
+        await settle(pilot)
+        form = app.screen
+        assert isinstance(form, tui_loops.LoopForm)
+        assert all(i.value == "" for i in form.query(Input))
+        assert form._every() == ""
+        assert form.query_one("#loop-template").value is Select.NULL
+        assert form.query_one("#loop-writes").value is False
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LoopForm)
+    assert added == []
+
+
+async def test_esc_in_the_gallery_opens_no_form(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_gallery(app, pilot, monkeypatch)
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, (tui_loops.TemplateGallery, tui_loops.LoopForm))
+    assert added == []
+
+
+NIGHTLY = {"skill": "pl-billing-chase", "prompt": "/pl-billing-chase", "every": "daily 09:00", "hours": "09-18",
+           "profile": "acme", "writes": True}
+
+
+async def _open_edit_form(app, pilot, monkeypatch, edit=None):
+    from pl import loops, skills
+    from pl.tui import loops as tui_loops
+    edits = []
+    monkeypatch.setattr(loops, "edit", edit or (lambda name, **kw: edits.append((name, kw))))
+    monkeypatch.setattr(loops, "add", lambda name, **kw: edits.append(("add", name, kw)))
+    monkeypatch.setattr(skills, "scan", lambda: [{"name": "pl-billing-chase"}])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press("down")
+    await pilot.press("e")
+    await settle(pilot)
+    assert isinstance(app.screen, tui_loops.LoopForm)
+    return app.screen, edits
+
+
+def _pick_every(form, kind, number="", cron=""):
+    from textual.widgets import Select
+    form.query_one("#loop-kind", Select).value = kind
+    form.query_one("#loop-number").value = number
+    form.query_one("#loop-cron").value = cron
+
+
+def _edit_app():
+    C.SERVICES = {"nightly": dict(NIGHTLY)}
+    C.LOOPS_OFF = {}
+    return PlApp(snapshot_provider=Provider(fake_data()))
+
+
+async def test_edit_opens_the_loop_form_filled_with_the_loops_values(monkeypatch):
+    from textual.widgets import Checkbox, Select
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, _ = await _open_edit_form(app, pilot, monkeypatch)
+        assert "Edit loop nightly" in str(form.query_one("Static").render())
+        assert form.query_one("#loop-kind", Select).value == "daily"
+        assert form.query_one("#loop-at").value == "09:00"
+        assert form.query_one("#loop-hours").value == "09-18"
+        assert form.query_one("#loop-account").value == "acme"
+        assert form.query_one("#loop-skill", Select).value == "pl-billing-chase"
+        assert form.query_one("#loop-writes", Checkbox).value is True
+        assert not form.query("#loop-template")
+
+
+async def test_edit_form_locks_the_name_and_never_adds(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        name = form.query_one("#loop-name")
+        assert name.disabled and name.value == "nightly"
+        assert "exists" not in str(form.query_one("#loop-problem").render())
+        _pick_every(form, "minutes", "30")
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert edits == [("nightly", {"every": "30m"})]
+
+
+async def test_edit_saves_only_the_changed_field(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        _pick_every(form, "minutes", "30")
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert not isinstance(app.screen, type(form))
+    assert edits == [("nightly", {"every": "30m"})]
+
+
+async def test_edit_with_no_change_writes_nothing(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert app.screen is not form
+        form, edits2 = await _open_edit_form(app, pilot, monkeypatch)
+        form.query_one("#loop-hours").value = ""
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert app.screen is not form
+    assert edits == [] and edits2 == []
+
+
+async def test_edit_refuses_a_bad_every_on_the_problem_line(monkeypatch):
+    from pl.tui import loops as tui_loops
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        _pick_every(form, "cron", cron="soon")
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert str(form.query_one("#loop-problem").render()).strip()
+    assert edits == []
+
+
+async def test_edit_refusal_shows_the_cli_message(monkeypatch):
+    from pl.tui import loops as tui_loops
+
+    def refuse(name, **kw):
+        print("pl: invalid account", file=sys.stderr)
+        raise SystemExit(1)
+    app = _edit_app()
+    notes = []
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((str(msg), kw.get("severity"))))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, _ = await _open_edit_form(app, pilot, monkeypatch, edit=refuse)
+        form.query_one("#loop-account").value = "nope"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LoopForm)
+    assert notes == [("pl: invalid account", "error")]
+
+
+async def test_saved_edit_shows_on_the_next_refresh(monkeypatch):
+    from pl.tui import loops as tui_loops
+
+    def edit(name, **kw):
+        C.SERVICES[name].update(kw)
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, _ = await _open_edit_form(app, pilot, monkeypatch, edit=edit)
+        view = app.query_one(tui_loops.LoopsView)
+        before = view.loops[0]["schedule"]
+        _pick_every(form, "minutes", "30")
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        await settle(pilot)
+        view.show(fake_data())
+        assert view.loops[0]["schedule"] != before and "30" in view.loops[0]["schedule"]
+
+
+async def test_escape_closes_the_edit_form_without_writing(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        _pick_every(form, "minutes", "30")
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.screen is not form
+    assert edits == []
 
 
 async def test_picking_a_template_fills_every_field_and_each_stays_editable(monkeypatch):
@@ -3345,6 +3611,7 @@ def test_new_row_reads_plus_new_thing_and_is_dim():
 
 
 async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(monkeypatch):
+    from pl import loops
     from pl.tui import loops as tui_loops
     C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
     C.LOOPS_OFF = {}
@@ -3358,6 +3625,14 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         assert t.get_row_at(0)[0].plain == "+ New loop" and t.row_count == 2
         await pilot.press("enter")
         await settle(pilot)
+        assert isinstance(app.screen, tui_loops.TemplateGallery)
+        await pilot.press("escape")
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        app.screen.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
+        await pilot.press("enter")
+        await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
         assert app.screen.query_one("#loop-kind").value is Select.NULL
         await pilot.press("escape")
@@ -3366,7 +3641,7 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         await pilot.press("down")
         await pilot.press("n")
         await settle(pilot)
-        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert isinstance(app.screen, tui_loops.TemplateGallery)
 
 
 async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stays_open(monkeypatch, tmp_path):
@@ -3382,6 +3657,8 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
         await pilot.press("5")
         await settle(pilot)
         await pilot.press("n")
+        await settle(pilot)
+        await pilot.press("end", "enter")
         await settle(pilot)
         form = app.screen
         form.query_one("#loop-name").value = "chase"
@@ -3451,7 +3728,9 @@ async def test_each_extend_sub_tab_shows_its_panel(monkeypatch, vid, panel):
         assert app.active_tab == vid
         assert [type(w).__name__ for w in app.query(f"#{vid} > VerticalScroll > *")] == [panel]
         if vid == "connectors":
-            app.query_one("#connectors").query_one(DataTable).focus()
+            table = app.query_one("#connectors").query_one(DataTable)
+            table.focus()
+            table.move_cursor(row=1)
             await pilot.press("t")
             await settle(pilot)
             assert ["pl", "connectors", "test", "conn1"] in calls
@@ -3575,7 +3854,7 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
         await settle(pilot)
         app.action_skills()
         await settle(pilot)
-        assert {"new", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
+        assert {"new skill", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
                 "update check"} <= _footer_keys(app)
 
 
@@ -3886,3 +4165,105 @@ async def test_the_first_brain_line_replaces_the_empty_state(monkeypatch):
         await settle(pilot)
         text = str(app.query_one("#brain-screen").render())
     assert "hello" in text and "? learn more" not in text
+
+
+# ---------- waiting for you (plan 40, slice 4) ----------
+
+def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None, blocked=None,
+                  tmux_calls=None, **meta):
+    from pl import agents
+    from pl.tui import needs
+    c = {"id": cid, "title": "A waiting card", "list_id": col, "tags": [], "updated_at": _iso(1), "description": desc,
+         "metadata": {"pipeline_mode": "auto", "profile": "acme", **meta}}
+    calls = tmux_calls if tmux_calls is not None else []
+    def fake_run(argv, *a, **k):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(watch, "cards", lambda: [c])
+    monkeypatch.setattr(watch, "col_name", lambda lid: lid)
+    monkeypatch.setattr(agents, "col_name", lambda lid: lid)
+    monkeypatch.setattr(watch, "registry", lambda: reg or {})
+    monkeypatch.setattr(watch, "worker_status", lambda w, r: (status, None))
+    monkeypatch.setattr(agents, "worker_status", lambda w, r: (status, None))
+    monkeypatch.setattr(watch, "run_blocked", lambda card: blocked)
+    monkeypatch.setattr(agents, "pane_exists", lambda pane: False)
+    monkeypatch.setattr(watch.subprocess, "run", fake_run)
+    monkeypatch.setattr(agents.harnesses, "_run", fake_run)
+    monkeypatch.setattr(watch, "pr_counts", lambda: None)
+    monkeypatch.setattr(watch, "paused", lambda: None)
+    snap = watch.watch_snapshot()
+    row = next(r for r in snap["rows"] if r.get("card"))
+    return row, needs.needs_you({"snapshot": snap}), snap
+
+
+def test_ac1_an_open_question_reads_waiting_for_you_with_its_text(monkeypatch):
+    desc = "# PIPELINE: QUESTIONS\nQ: first thing?\nA: yes\n\nQ: Which database?\nsecond line"
+    row, _, _ = _waiting_card(monkeypatch, desc=desc, question="h1")
+    assert row["approved"] == "waiting for you: Which database?"
+    long = "Q: " + "x" * 80
+    row, _, _ = _waiting_card(monkeypatch, desc=f"# PIPELINE: QUESTIONS\n{long}", question="h1")
+    assert len(row["approved"]) == len("waiting for you: ") + 48 and row["approved"].endswith("…")
+    row, _, _ = _waiting_card(monkeypatch, desc="# PIPELINE: QUESTIONS\nno entry here", question="h1")
+    assert row["approved"] == "waiting for you: open question"
+
+
+def test_ac2_a_permission_wait_reads_waiting_for_you_permission(monkeypatch):
+    row, _, _ = _waiting_card(monkeypatch, worker={"stage": "run", "permission_wait": "Bash(rm -rf build)"})
+    assert row["approved"] == "waiting for you: permission Bash(rm -rf build)"
+    row, _, _ = _waiting_card(monkeypatch, worker={"stage": "run", "permission_wait": "waiting: permission"})
+    assert row["approved"] == "waiting for you: permission"
+
+
+def test_ac3_a_trust_wait_reads_waiting_for_you_trust_folder(monkeypatch):
+    row, _, _ = _waiting_card(monkeypatch, worker={"stage": "plan", "trust_wait": "/work/app"})
+    assert row["approved"] == "waiting for you: trust /work/app"
+
+
+def test_ac4_a_live_run_agent_at_a_gate_reads_the_gate_line(monkeypatch):
+    w = {"stage": "run", "run_waiting": "GATE: before-push"}
+    row, _, _ = _waiting_card(monkeypatch, worker=w)
+    assert row["approved"] == "waiting for you: GATE: before-push"
+    row, _, _ = _waiting_card(monkeypatch, worker=w, status="dead")
+    assert not (row["approved"] or "").startswith("waiting for you")
+
+
+def test_ac5_a_waiting_card_counts_once_in_needs_you(monkeypatch):
+    from pl.tui.needs import needs_me
+    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?", blocked="nothing-runnable")
+    assert row["kind"] == "needs" and needs_me(row)
+    assert [r["card"]["id"] for r in out] == ["wait0001aaaa"]
+
+
+def test_ac6_question_wins_over_trust_permission_and_gate(monkeypatch):
+    w = {"stage": "run", "trust_wait": "/work", "permission_wait": "Bash(ls)", "run_waiting": "GATE: before-push"}
+    row, _, _ = _waiting_card(monkeypatch, desc="# PIPELINE: QUESTIONS\nQ: Which?", question="h1", worker=w)
+    assert row["approved"] == "waiting for you: Which?"
+    row, _, _ = _waiting_card(monkeypatch, worker=w)
+    assert row["approved"] == "waiting for you: trust /work"
+    row, _, _ = _waiting_card(monkeypatch, worker={**w, "trust_wait": None})
+    assert row["approved"] == "waiting for you: permission Bash(ls)"
+    row, _, _ = _waiting_card(monkeypatch, worker={**w, "trust_wait": None, "permission_wait": None})
+    assert row["approved"] == "waiting for you: GATE: before-push"
+
+
+def test_ac7_a_cleared_wait_returns_the_previous_state(monkeypatch):
+    w = {"stage": "run", "permission_wait": "Bash(ls)"}
+    row, out, _ = _waiting_card(monkeypatch, worker=w)
+    assert row["kind"] == "needs" and len(out) == 1
+    row, out, _ = _waiting_card(monkeypatch, worker={"stage": "run"})
+    assert row["kind"] != "needs" and not (row["approved"] or "").startswith("waiting for you") and out == []
+
+
+def test_ac8_waiting_states_add_no_capture_pane_calls(monkeypatch):
+    without, with_wait = [], []
+    _waiting_card(monkeypatch, worker={"stage": "run"}, tmux_calls=without)
+    _waiting_card(monkeypatch, worker={"stage": "run", "permission_wait": "Bash(ls)", "run_waiting": "GATE: before-push"},
+                  tmux_calls=with_wait)
+    def captures(calls):
+        return sum("capture-pane" in a for a in calls)
+    assert captures(with_wait) == captures(without)
+
+
+def test_ac9_markup_and_secrets_in_wait_text_show_plain_and_masked(monkeypatch):
+    row, _, _ = _waiting_card(monkeypatch, worker={"stage": "run", "permission_wait": "echo [red]x[/] ghp_" + "a" * 36})
+    assert "[red]x[/]" in row["approved"] and "ghp_" not in row["approved"] and "***" in row["approved"]

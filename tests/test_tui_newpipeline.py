@@ -115,13 +115,139 @@ async def test_step_3_offers_a_local_board():
         assert "Local board" in text(pilot.app) or any("Local board" in str(b.label) for b in screen.query_one("#np-board", RadioSet).query(RadioButton))
 
 
-async def test_step_4_lists_the_current_accounts_checked():
+def two_profiles(monkeypatch, a_extra="", b_extra=""):
+    home = Path.home()
+    for name, text in (("a", '[accounts.main]\nconfig_dir = "~/.claude"\n' + a_extra),
+                       ("b", '[accounts.codex1]\nharness = "codex"\nconfig_dir = "~/.codex"\nmodel = "gpt-x"\neffort = "high"\n' + b_extra)):
+        (home / f".pl-{name}").mkdir()
+        (home / f".pl-{name}" / "config.toml").write_text(text)
+    monkeypatch.setattr(C, "PROFILE_NAME", "a")
+    monkeypatch.setattr(C, "ACCOUNTS", {"main": {"config_dir": "~/.claude"}})
+
+
+def pinned_template(monkeypatch, stages):
+    t = {"name": "pinned", "template": None, "columns": ["Todo", "Done"], "stages": stages}
+    monkeypatch.setattr(pipeline, "templates", lambda: {"pinned": t})
+
+
+async def at_step_4(pilot):
+    screen = await open_wizard(pilot)
+    await next_step(pilot)
+    screen.query_one("#np-name", Input).value = "sales"
+    await pilot.pause()
+    await next_step(pilot)
+    await next_step(pilot)
+    assert "Step 4 of 5" in text(pilot.app)
+    return screen
+
+
+def labels(screen):
+    return [str(screen.query_one("#np-accounts", SelectionList).get_option_at_index(i).prompt)
+            for i in range(screen.query_one("#np-accounts", SelectionList).option_count)]
+
+
+def checked(screen):
+    sel = screen.query_one("#np-accounts", SelectionList)
+    return [str(sel.get_option_at_index(i).prompt).split()[0] for i in sel.selected]
+
+
+async def test_step_4_lists_accounts_from_every_profile_with_harness_folder_and_source(monkeypatch):
+    two_profiles(monkeypatch)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        main, codex = sorted(labels(screen))
+        assert main.startswith("codex1 (codex) ~/.codex from b:") and codex.startswith("main (claude) ~/.claude from a:")
+
+
+async def test_step_4_checks_only_the_current_profiles_accounts_at_first(monkeypatch):
+    two_profiles(monkeypatch)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        assert checked(screen) == ["main"]
+        await pilot.press("escape")
+
+
+async def test_step_4_shows_the_stages_each_account_runs_or_not_used(monkeypatch):
+    two_profiles(monkeypatch)
+    pinned_template(monkeypatch, {"plan": {"account": "main"}, "build": {}})
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        by_name = {l.split()[0]: l for l in labels(screen)}
+        assert by_name["main"].endswith("plan, build") and by_name["codex1"].endswith(": build")
+    pinned_template(monkeypatch, {"plan": {"account": "main"}, "build": {"account": "main"}})
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        assert {l.split()[0]: l for l in labels(screen)}["codex1"].endswith("not used by this pipeline")
+
+
+async def test_checking_two_accounts_with_the_same_name_is_refused(monkeypatch):
+    two_profiles(monkeypatch)
+    (Path.home() / ".pl-b" / "config.toml").write_text('[accounts.main]\nconfig_dir = "~/.claude-b"\n')
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        screen.query_one("#np-accounts", SelectionList).select_all()
+        await pilot.pause()
+        assert "two accounts named main; uncheck one" in text(pilot.app)
+        assert screen.query_one("#np-next", Button).disabled
+
+
+async def test_unchecking_every_account_keeps_step_4_and_says_one_is_needed(monkeypatch):
+    two_profiles(monkeypatch)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        screen.query_one("#np-accounts", SelectionList).deselect_all()
+        await pilot.pause()
+        assert "pick at least one account" in text(pilot.app) and screen.query_one("#np-next", Button).disabled
+        await next_step(pilot)
+        assert "Step 4 of 5" in text(pilot.app)
+
+
+async def test_unchecking_a_pinned_stages_account_blocks_next(monkeypatch):
+    two_profiles(monkeypatch)
+    pinned_template(monkeypatch, {"plan": {"account": "main"}})
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        sel = screen.query_one("#np-accounts", SelectionList)
+        sel.select(1)
+        sel.deselect(0)
+        await pilot.pause()
+        assert "stage plan uses main, which is unchecked" in text(pilot.app)
+        assert screen.query_one("#np-next", Button).disabled
+
+
+async def test_going_back_and_forward_keeps_the_picks(monkeypatch):
+    two_profiles(monkeypatch)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        screen.query_one("#np-accounts", SelectionList).select_all()
+        await pilot.pause()
+        screen.query_one("#np-back", Button).press()
+        await pilot.pause()
+        await next_step(pilot)
+        assert sorted(checked(screen)) == ["codex1", "main"]
+
+
+async def test_create_writes_exactly_the_checked_accounts_with_their_settings(monkeypatch):
+    two_profiles(monkeypatch)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await at_step_4(pilot)
+        screen.query_one("#np-accounts", SelectionList).select_all()
+        await pilot.pause()
+        await next_step(pilot)
+        pilot.app.screen.query_one("#np-create", Button).press()
+        await pilot.pause()
+    import tomllib
+    written = tomllib.loads((Path.home() / ".pl-sales" / "config.toml").read_text())["accounts"]
+    assert written == {"main": {"config_dir": "~/.claude"},
+                       "codex1": {"harness": "codex", "config_dir": "~/.codex", "model": "gpt-x", "effort": "high"}}
+
+
+async def test_step_4_lists_accounts_from_every_profile():
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await to_review(pilot)
         screen.query_one("#np-switcher").current = "np-step-4"
-        sel = screen.query_one("#np-accounts", SelectionList)
-        assert list(sel.selected) == ["main", "alt"]
-        sel.deselect_all()
+        assert checked(screen) == ["main", "alt"]
+        screen.query_one("#np-accounts", SelectionList).deselect_all()
         await pilot.pause()
         assert screen.query_one("#np-next", Button).disabled
 
