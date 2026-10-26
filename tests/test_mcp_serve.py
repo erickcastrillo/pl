@@ -8,8 +8,15 @@ import sys
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from pl import cli, commands, events, mcp_serve
+from pl import cli, commands, events, mcp_serve, trackers
 from pl.tui.loops import event_text
+
+
+@pytest.fixture(autouse=True)
+def _no_dry_run_after():
+    """A test that runs `pl ... --dry-run` in process turns on the module-wide dry-run flag; later tests would write nothing."""
+    yield
+    trackers.set_dry_run(False)
 
 ALLOWED = {"pl_inbox", "pl_list", "pl_card", "pl_section", "pl_alerts", "pl_standup", "pl_usage"}
 CARD = {"id": "acme/app#7", "title": "A card", "list_id": "L1", "tags": [], "updated_at": "2026-10-25T10:00:00+00:00",
