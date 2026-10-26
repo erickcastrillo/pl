@@ -156,7 +156,7 @@ async def test_pull_requests_groups():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("4")
+        app.action_tab("prs")
         await pilot.pause()
         text = screen_text(app)
         for s in ("NEED YOUR DECISION 1", "READY TO MERGE 2", "NEED REWORK 1", "AWAITING MERGE CHECK 1",
@@ -285,7 +285,7 @@ async def test_card_markup_is_shown_as_plain_text(monkeypatch):
         table_line = next(l for l in screen_text(app).splitlines() if "4a000001 " in l)
         assert "[bold]x[/bold]" in table_line.split("││")[0]      # the list, not only the detail pane
         assert "[bold]x[/bold]" in str(app.query_one("#cards-detail").render())        # card detail pane
-        await pilot.press("4")
+        app.action_tab("prs")
         await pilot.pause()
         assert "[red]pr[/red] [link=https://evil.example]z[/link]" in screen_text(app)
 
@@ -476,7 +476,7 @@ async def test_decide_next_row_with_zero_count_still_navigates(monkeypatch):
 
 async def _open_pr(pilot, app, url="https://github.com/o/frontend/pull/1200"):
     await settle(pilot)
-    await pilot.press("4")
+    app.action_tab("prs")
     await settle(pilot)
     t = app.query_one("#prs-table")
     t.move_cursor(row=t.get_row_index(url))
@@ -1285,7 +1285,7 @@ async def test_pull_requests_down_skips_headings_and_none_rows(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("4")
+        app.action_tab("prs")
         await settle(pilot)
         t = app.query_one("#prs-table")
         first = _cursor(app, "#prs-table")
@@ -2365,7 +2365,7 @@ async def test_three_prs_and_two_gates_give_5_everywhere(monkeypatch):
         assert "needs you 5" in text
         assert str(app.query_one("#work-views", TabbedContent).get_tab("cards").label) == "Board 3 · 5 need you"
         assert tile(app, "waiting") == "5"
-        await pilot.press("4")
+        app.action_tab("prs")
         await settle(pilot)
         assert "5 need you" in app.query_one("#prs-table").border_title
 
