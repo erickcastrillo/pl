@@ -242,6 +242,8 @@ ENTRIES = [
        "pl board restore --from ~/pl-board-backup"),
     _e("2026-10-25.50", "+ New skill: install from GitHub after reviewing every file, or write one",
        "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
+    _e("2026-10-26.51", "Ctrl+P finds and runs any console action or tab",
+       "ctrl+p, type an action like retry", "pl --help"),
 ]
 
 

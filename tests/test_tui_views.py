@@ -2395,6 +2395,125 @@ async def test_help_on_a_pushed_card_screen_shows_its_own_description(monkeypatc
         assert ("approve", "pl approve <id>") in [(what, command) for _, _, what, command in app.screen.rows]
 
 
+async def test_palette_rows_match_help_rows_on_the_current_tab(monkeypatch):
+    from pl.tui import palette
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        await pilot.press("3")
+        await settle(pilot)
+        expected = [r[:4] for r in palette.rows(app.screen.active_bindings.items())]
+        await pilot.press("question_mark")
+        await settle(pilot)
+        assert app.screen.rows == expected
+
+
+def _palette(app):
+    return {c.title: c for c in app.get_system_commands(app.screen)}
+
+
+def _find(commands, *words):
+    return [c for t, c in commands.items() if all(w in t.lower() for w in words)]
+
+
+async def test_palette_finds_a_tab_by_name(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        commands = _palette(app)
+        assert "Loops tab (5)" in commands
+        commands["Loops tab (5)"].callback()
+        await settle(pilot)
+        assert app.active_tab == "loops"
+
+
+async def test_palette_finds_an_action_by_name_or_meaning(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        commands = _palette(app)
+        retry = _find(commands, "retry")
+        assert retry and _find(commands, "try again")
+        assert any("on Board" in c.help and "pl retry <id>" in c.help for c in retry)
+
+
+async def test_palette_runs_an_action_on_the_current_tab(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    provider = Provider()
+    app = PlApp(snapshot_provider=provider)
+    async with app.run_test(size=(176, 80)) as pilot:
+        await pilot.press("3")
+        await settle(pilot)
+        before = len(provider.threads)
+        _find(_palette(app), "refresh (r)")[0].callback()
+        await settle(pilot)
+        assert len(provider.threads) > before
+
+
+async def test_palette_switches_tab_then_runs_the_action(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        ran = []
+        monkeypatch.setattr(PlApp, "run_action", lambda self, action, node: ran.append((self.active_tab, action)) or _done())
+        row = next(c for t, c in _palette(app).items() if t.startswith("pause") and "Loops" in c.help)
+        row.callback()
+        await settle(pilot)
+        assert app.active_tab == "loops" and ran and ran[0][0] == "loops"
+
+
+async def _done():
+    return None
+
+
+async def test_palette_selection_action_with_nothing_selected_only_switches(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    data = fake_data()
+    data["snapshot"]["rows"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda message, **kw: notes.append(message))
+        _find(_palette(app), "drop")[0].callback()
+        await settle(pilot)
+        assert app.active_tab == "cards" and len(app.screen_stack) == 1
+        assert notes and notes[-1].endswith("pick a card first")
+
+
+async def test_palette_keeps_existing_entries(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await settle(pilot)
+        commands = _palette(app)
+        old = ["What's new", "Skills: view, edit, create", "Kill switch", "Brain: ask questions across pipelines",
+               "Quit"]
+        assert all(t in commands and commands[t].discover for t in old)
+        new = [c for t, c in commands.items() if t not in old and t != "Health"]
+        assert len(new) > 10 and not any(c.discover for c in new if c.help.startswith(("on ", "go to tab")))
+
+
+@pytest.mark.parametrize("data", [None, "full"])
+@pytest.mark.parametrize("key", ["1", "3", "5", "8", "2", "H"])
+async def test_every_help_row_is_in_the_palette(key, data, monkeypatch, tmp_path):
+    _two_profiles(monkeypatch, tmp_path)
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(fake_data() if data else None))
+    async with app.run_test(size=(176, 80)) as pilot:
+        await _press_help(pilot, app, key)
+        rows = [r for r in app.screen.rows if r[2] not in {"views", "switch view"} and r[0] != "navigate"]
+        await pilot.press("escape")
+        await settle(pilot)
+        titles = " | ".join(_palette(app))
+        for _, _, what, _ in rows:
+            assert what in titles, what
+
+
 async def test_whatsnew_opens_from_the_palette():
     from pl.tui.app import WhatsNewScreen
     app = PlApp(snapshot_provider=Provider())
