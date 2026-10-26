@@ -93,7 +93,6 @@ EMPTY = {
     "subagents": ("An agent's background task.", None, None),
     "dashboard": ('n on Ideas, or pl idea "..."', "n", "ideas"),
     "home": ("pl setup adds a pipeline.", None, None),
-    "brain": ("Type a question and press Enter.", None, None),
 }
 
 

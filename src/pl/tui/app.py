@@ -267,7 +267,7 @@ class PlApp(App):
         Binding(f"{mod}+{GROUP_KEYS[gid]}", f"tab('{gid}')", name, show=False)   # work even while the Assistant box has focus
         for mod in ("ctrl", "alt") for gid, name, _ in GROUPS if gid != "home"] + [
         Binding("H", "tab('home')", "pipelines", show=False),
-        Binding("b", "brain", "Brain is now Assistant", show=False),
+        Binding("b", "brain", show=False),
         Binding("left_square_bracket", "cycle_window(-1)", "earlier window", key_display="["),
         Binding("right_square_bracket", "cycle_window(1)", "later window", key_display="]"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),

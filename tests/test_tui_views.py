@@ -2573,8 +2573,7 @@ async def test_palette_keeps_existing_entries(monkeypatch):
     async with app.run_test(size=(176, 80)) as pilot:
         await settle(pilot)
         commands = _palette(app)
-        old = ["What's new", "Skills: view, edit, create", "Kill switch", "Brain: ask questions across pipelines",
-               "Quit"]
+        old = ["What's new", "Skills: view, edit, create", "Kill switch", "Quit"]
         assert all(t in commands and commands[t].discover for t in old)
         new = [c for t, c in commands.items() if t not in old and t != "Health"]
         assert len(new) > 10 and not any(c.discover for c in new if c.help.startswith(("on ", "go to tab")))
@@ -2877,7 +2876,7 @@ async def test_an_empty_board_says_no_cards_and_how_to_add_one():
 def test_empty_state_is_three_lines_for_every_list_tab():
     from pl.tui.chrome import EMPTY, HELP, TABS, empty_state
     assert set(EMPTY) <= {t for t, _ in TABS} and {"ideas", "cards", "prs", "alerts", "loops", "activity", "subagents",
-                                                   "dashboard", "home", "brain"} == set(EMPTY)
+                                                   "dashboard", "home"} == set(EMPTY)
     for tid in EMPTY:
         lines = empty_state(tid)
         assert len(lines) == 3 and all(lines), tid
