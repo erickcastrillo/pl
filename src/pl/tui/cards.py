@@ -14,7 +14,7 @@ from pl import confirm, move_agent, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
-from pl.tui.chrome import show_first_heading, skip_headings
+from pl.tui.chrome import empty_state, show_first_heading, skip_headings
 from pl.tui.live import LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
@@ -510,7 +510,7 @@ class CardsView(CardActions, Horizontal):
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
         if not built:   # the title column is narrow, so the message takes one short line per row
             lines = ([f"No cards in plan {self.plan}."] if self.plan is not None else ["Nothing needs you."] if self.only_mine
-                     else ["No cards yet.", "Add one with n on the Ideas tab,", 'or pl idea "..."'])
+                     else empty_state("cards"))
             for i, line in enumerate(lines):
                 built.append((f"group:empty{i}", (Text("■" if i == 0 else "", style="dim"), Text(line, style="dim"), Text(""), Text(""))))
         rebuilt = [k for k, _ in built] != [k for k, _ in self._built]
