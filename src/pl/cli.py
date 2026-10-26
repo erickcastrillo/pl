@@ -159,6 +159,9 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
+  pl tests affected [--base REF] [--json]
+                          the test files a change can affect (import graph for Python) and whether it needs the
+                          full suite. No profile needed
   pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -238,7 +241,7 @@ PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFI
 ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
                      "restart", "hold", "unhold", "depends")
 # commands parsed before the profile loads, each by its own module
-PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "manager", "mcp", "ask")
+PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "tests", "manager", "mcp", "ask")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -291,6 +294,9 @@ def _main():
     if pre_a.rest[:1] == ["e2e"]:              # repo-driven: reads .pl/e2e.yaml, needs no tracker
         from pl import e2e
         return e2e.cmd_e2e(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["tests"]:            # repo-driven: reads only the repository, needs no profile
+        from pl import tests_affected
+        return tests_affected.cmd_tests(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])
