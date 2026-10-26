@@ -1,15 +1,17 @@
 """Settings section "Skills": every account's skills, agents and commands, a read-only Markdown preview, an in-app
 editor (backup + diff confirm before saving), new from a template, delete to .pl-trash, and the shared library."""
 import os
+import re
 import shlex
 import subprocess
+from itertools import takewhile
 
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Markdown, Select, Static, TextArea
+from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
 from pl import config as C
 from pl import skill_sources, skills
@@ -17,9 +19,27 @@ from pl.tui.extensions import TargetScreen
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
-HINT = ("e edit · E $EDITOR · n new · d delete (to .pl-trash) · S share to the library · l link a library skill "
-        "to an account · I install · u update check · plugin files are read-only")
+HINT = ("e edit · E $EDITOR · n new (install or write) · d delete (to .pl-trash) · S share to the library · l link a library skill "
+        "to an account · I install from GitHub · u update check · plugin files are read-only")
 DIFF_LINES = 30
+PINNED_RE = re.compile(r"^Source: (github:\S+@[0-9a-f]{40})$", re.M)
+INSTALL_PROMPT = "Install from GitHub: github:owner/repo[/path][@ref] or a github.com URL"
+
+
+def pinned_source(stdout):
+    m = PINNED_RE.search(stdout)
+    return m.group(1) if m else None
+
+
+def review_title(stdout, pinned):
+    repo, sha = pinned.removeprefix("github:").rsplit("@", 1)
+    where = f"{'/'.join(repo.split('/')[:2])}@{sha[:7]}"
+    plugin = re.search(r"^Plugin (\S+)", stdout, re.M)
+    if not plugin:
+        return f"Install from {where}?"
+    listed = stdout.split("Skills (installed):", 1)[-1].split("\n")[1:]
+    count = len(list(takewhile(lambda ln: ln.startswith(" "), listed)))
+    return f"Install plugin {plugin.group(1)} ({count} skills) from {where}?"
 
 
 def _origin_label(it, builtin, recs):
@@ -146,30 +166,96 @@ class EditorScreen(ModalScreen):
         self.app.push_screen(ConfirmScreen("Discard your unsaved edits?"), lambda yes: yes and self.dismiss(False))
 
 
+class NewChoiceScreen(ModalScreen):
+    """Install a skill from GitHub or write a new one."""
+    DEFAULT_CSS = """
+    NewChoiceScreen { align: center middle; }
+    NewChoiceScreen > Vertical { width: 50; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    NewChoiceScreen Button { width: 100%; margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self):
+        with Vertical():
+            yield Static("New skill")
+            yield Button("Install from GitHub", id="skills-choose-install")
+            yield Button("Write a new one", id="skills-choose-write")
+            yield Static(Text("esc cancel", style="dim"))
+
+    def on_mount(self):
+        self.query_one("#skills-choose-install").focus()
+
+    def on_button_pressed(self, event):
+        self.dismiss("install" if event.button.id == "skills-choose-install" else "write")
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class InstallReviewScreen(ModalScreen):
+    """The dry run of an install, shown in full; Install runs the pinned commit, Cancel is focused."""
+    DEFAULT_CSS = """
+    InstallReviewScreen { align: center middle; }
+    InstallReviewScreen > Vertical { width: 90; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    InstallReviewScreen VerticalScroll { height: 1fr; }
+    InstallReviewScreen Horizontal { height: auto; margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, title, listing):
+        super().__init__()
+        self.title_text, self.listing = title, listing
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(self.title_text, style="bold"))
+            with VerticalScroll():
+                yield Static(Text(self.listing))
+            with Horizontal():
+                yield Button("Install", id="skills-review-install", variant="warning")
+                yield Button("Cancel", id="skills-review-cancel")
+
+    def on_mount(self):
+        self.query_one("#skills-review-cancel").focus()
+
+    def on_button_pressed(self, event):
+        self.dismiss(event.button.id == "skills-review-install")
+
+    def action_cancel(self):
+        self.dismiss(False)
+
+
 class NewScreen(ModalScreen):
-    """Name, account and kind of a new skill, agent or command."""
+    """Name and one-line description of a new skill in the library."""
     DEFAULT_CSS = """
     NewScreen { align: center middle; }
     NewScreen > Vertical { width: 70; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     """
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, accounts, account):
-        super().__init__()
-        self.accounts, self.account = accounts, account
-
     def compose(self):
         with Vertical():
-            yield Static(Text("New skill, agent or command: name (lowercase letters, digits, dashes), account, kind"))
+            yield Static(Text("New skill in your library: name (lowercase letters, digits, dashes) and when to use it"))
             yield Input(placeholder="my-skill", id="skills-new-name")
-            yield Select([(a, a) for a in self.accounts], value=self.account, allow_blank=False, compact=True,
-                         id="skills-new-account")
-            yield Select([(k, k) for k in skills.KINDS], value="skill", allow_blank=False, compact=True, id="skills-new-kind")
+            yield Input(placeholder="Say in one sentence when to use this skill.", id="skills-new-description")
+            yield Static("", id="skills-new-error")
             yield Static(Text("enter create · esc cancel", style="dim"))
 
+    def on_mount(self):
+        self.query_one("#skills-new-name").focus()
+
     def on_input_submitted(self, m):
-        self.dismiss((m.value.strip(), self.query_one("#skills-new-account", Select).value,
-                      self.query_one("#skills-new-kind", Select).value))
+        name = self.query_one("#skills-new-name", Input).value.strip()
+        description = self.query_one("#skills-new-description", Input).value
+        if m.input.id == "skills-new-name" and not description.strip():
+            self.query_one("#skills-new-description").focus()
+            return
+        try:
+            path = skills.create(skills.LIBRARY, "skill", name, description)
+        except SystemExit as e:
+            self.query_one("#skills-new-error", Static).update(Text(str(e).removeprefix("pl: "), style="red"))
+            return
+        self.dismiss((name, path))
 
     def action_cancel(self):
         self.dismiss(None)
@@ -300,23 +386,20 @@ class SkillsView(Widget):
         self.rescan()
 
     def action_new(self):
-        accounts = [a for a, _ in skills.sources()] + [skills.LIBRARY]
-        cur = self._item()
-        account = cur["account"] if cur and cur["account"] in accounts else accounts[0]
+        def picked(choice):
+            if choice == "install":
+                self.action_install()
+            elif choice == "write":
+                self.app.push_screen(NewScreen(), written)
 
-        def asked(answer):
-            if not answer:
+        def written(made):
+            if not made:
                 return
-            name, acct, kind = answer
-            try:
-                path = skills.create(acct, kind, name)
-            except (SystemExit, Exception) as e:  # noqa: BLE001
-                self._say(e)
-                return
-            root = str(skills._root(acct))
+            name, path = made
             self.rescan()
-            self.open_editor({"name": name, "account": acct, "kind": kind, "path": str(path), "root": root, "origin": ""})
-        self.app.push_screen(NewScreen(accounts, account), asked)
+            self.open_editor({"name": name, "account": skills.LIBRARY, "kind": "skill", "path": str(path),
+                              "root": str(skills._root(skills.LIBRARY)), "origin": ""})
+        self.app.push_screen(NewChoiceScreen(), picked)
 
     def action_delete(self):
         it, _ = self._editable()
@@ -377,23 +460,43 @@ class SkillsView(Widget):
             self.rescan()
         self.app.push_screen(TargetScreen(it["name"], targets, verb="Link"), chosen)
 
+    def _notify_from(self, msg, severity="information"):
+        self.app.call_from_thread(self.app.notify, msg, severity=severity, markup=False)
+
     def action_install(self):
         def asked(source):
-            if not source:
+            if source:
+                self.run_worker(lambda: dry_run(source), thread=True, group="skills-install")
+
+        def dry_run(source):
+            try:
+                r = _run(["pl", "skills", "install", source, "--dry-run"], capture_output=True, text=True)
+            except Exception as e:  # noqa: BLE001
+                return self._notify_from(str(e), "error")
+            pinned = pinned_source(r.stdout)
+            if r.returncode != 0 or not pinned:
+                msg = r.stderr.strip() if r.returncode != 0 and r.stderr.strip() else "the dry run named no commit; nothing installed"
+                return self._notify_from(msg, "error")
+            review = InstallReviewScreen(review_title(r.stdout, pinned), r.stdout)
+            self.app.call_from_thread(self.app.push_screen, review, lambda yes: reviewed(yes, pinned))
+
+        def reviewed(yes, pinned):
+            if not yes:
+                self.app.notify("nothing installed", markup=False)
                 return
+            self.run_worker(lambda: install(pinned), thread=True, group="skills-install")
 
-            def run():
-                try:
-                    r = _run(["pl", "skills", "install", source], capture_output=True, text=True)
-                    msg = (r.stdout.strip() or r.stderr.strip() or "installed").splitlines()[-1]
-                except Exception as e:
-                    msg = str(e)
-                self.app.call_from_thread(self.app.notify, msg, markup=False)
-                self.app.call_from_thread(self.rescan)
+        def install(pinned):
+            try:
+                r = _run(["pl", "skills", "install", pinned, "--yes"], capture_output=True, text=True)
+                msg = (r.stdout.strip() or r.stderr.strip() or "installed").splitlines()[-1]
+                severity = "error" if r.returncode != 0 else "information"
+            except Exception as e:  # noqa: BLE001
+                msg, severity = str(e), "error"
+            self._notify_from(msg, severity)
+            self.app.call_from_thread(self.rescan)
 
-            self.run_worker(run, thread=True, group="skills-install")
-
-        self.app.push_screen(PromptScreen("Install skill: <github:...> or owner/repo", placeholder="github:owner/repo"), asked)
+        self.app.push_screen(PromptScreen(INSTALL_PROMPT, placeholder="github:owner/repo"), asked)
 
     def action_update(self):
         def run():
