@@ -287,6 +287,8 @@ ENTRIES = [
        "pl chat list"),
     _e("2026-10-26.72", "A built-in marketing pod: writer, editor and analyst rules", "Extend: pods",
        "pl pods show marketing"),
+    _e("2026-10-26.73", "Stalled work raises an alert and a notification",
+       "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
 ]
 
 

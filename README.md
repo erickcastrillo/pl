@@ -137,6 +137,7 @@ interval = 120
 autostart = true                # the console starts this dispatcher in tmux; D starts or stops it by hand
 account_checks = [10, 30, 60]   # minutes between health checks of a parked account; the last repeats; [] turns them off
 release_waiting_after = 30      # minutes a run agent may wait before pl stops it (see Run slots below); 0 turns it off
+stall_minutes = 20              # minutes a run agent may sit idle while its card has not moved on before pl opens a "stalled" alert and notifies; 0 turns it off
 rework_rounds = 3               # times a PR the review labeled rework goes back to a run agent (docs/github.md); 0 turns it off
 
 [code_host]                     # PR labels pl reads (set by your review tools)
