@@ -39,6 +39,8 @@
   pl depends --from-plans [--dry-run]
                           record the Depends on line of every PLAN for cards with no dependencies yet
   pl board init           create the Inbox column if the board lacks it
+  pl board restore --from DIR [--yes]
+                          replace this profile's local board with DIR/board.json (a git backup clone); keeps card ids
   pl board migrate --to local|URL|SERVER [--yes] [--dry-run] [--skip-check] [--json]
                           copy every column and card to another board, check the copy, then point [tracker] at it
   pl card <id> [--delete|--json]
@@ -396,7 +398,7 @@ def build_parser():
     p.add_argument("--relation", default="related"); p.add_argument("--one-side", action="store_true", help="write only this card, not the other")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("board")
-    p.add_argument("action", choices=["init", "serve", "check", "migrate"])
+    p.add_argument("action", choices=["init", "restore", "serve", "check", "migrate"])
     p.add_argument("server", nargs="?", help="server for check: local, url, or mcp-config server name")
     p.add_argument("--board", help="board id on the server")
     p.add_argument("--mcp-config", help="path to the harness's MCP config file")
@@ -406,7 +408,8 @@ def build_parser():
     p.add_argument("--token-env", metavar="VAR")
     p.add_argument("--json", action="store_true", help="output JSON")
     p.add_argument("--to", metavar="TARGET", help="migrate: local, a URL, or a server name in the MCP config")
-    p.add_argument("--yes", action="store_true", help="migrate: do not ask before copying and switching")
+    p.add_argument("--yes", action="store_true", help="migrate, restore: do not ask before copying or replacing")
+    p.add_argument("--from", dest="from_", metavar="DIR", help="restore: the backup clone holding board.json")
     p.add_argument("--dry-run", action="store_true", help="migrate: print what would be copied and write nothing")
     p.add_argument("--skip-check", action="store_true", help="migrate: do not run pl board check on the target first (for a board you already checked)")
     p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
