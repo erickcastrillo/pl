@@ -1,7 +1,7 @@
 """The Assistant: one live, interactive harness session in the profile's tmux window `assistant` that runs pl for the
 person. pl starts it, resumes it, types into it and reads its screen; the harness asks the person before each tool call.
 
-<profile>/state/assistant.json (0600) holds only the KEYS below: never conversation text."""
+<profile>/state/assistant.json (0600) holds only the KEYS below: ids and timestamps, never conversation text."""
 import contextlib
 import dataclasses
 import fcntl
@@ -21,7 +21,7 @@ from pl.util import mask, now_iso
 WINDOW = "assistant"
 GUIDE = Path(__file__).with_name("assistant.md")
 KEYS = ("session_id", "account", "harness", "window", "pane", "started_at", "mode", "pending", "last_offer_at", "build",
-        "updated_at")
+        "updated_at", "conversation", "stored_at")
 DIGIT_RE = re.compile(r"[1-9]")
 PANE_RE, WINDOW_RE = re.compile(r"%\d+"), re.compile(r"@\d+")
 LOG_CHARS = 200
@@ -269,8 +269,10 @@ def _ensure():
     pane_ = _tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
     dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
                                                            resume=resume, plugin=False, worktrees=False))
+    from pl import brain   # pl.brain imports this module at load time
     _save({"session_id": sid, "account": acct, "harness": h.name, "window": win, "pane": pane_,
-           "started_at": now_iso(), "mode": st.get("mode") if resume else "chat", "build": update.build_id()})
+           "started_at": now_iso(), "mode": st.get("mode") if resume else "chat", "build": update.build_id(),
+           "conversation": st.get("conversation") or brain.conv_new(), "stored_at": st.get("stored_at")})
     events.emit("assistant_started", None, account=acct, harness=h.name, resumed=resume)
     return f"assistant {'resumed' if resume else 'started'} in {C.TMUX_SESSION}:{WINDOW} ({acct})"
 
@@ -370,8 +372,54 @@ def reset():
     st = load()
     if pane(st):
         _run(["tmux", "kill-window", "-t", st["window"]])
-    _save({k: v for k, v in st.items() if k in ("account", "harness")} | {"mode": "chat"})
+    _save({k: v for k, v in st.items() if k in ("account", "harness", "conversation")} | {"mode": "chat"})
     events.emit("assistant_reset", None)
+
+
+def store_turns(items):
+    """Copy the you/assistant turns of chat_items newer than the last one stored into the brain conversation, once.
+    Skipped (0), never an error, while another console holds the lock. Returns how many turns were stored."""
+    from pl import brain
+    try:
+        with _locked(LOCK_WAIT):
+            st = load()
+            if not st.get("conversation"):
+                return 0
+            newest, n = st.get("stored_at") or "", 0
+            for ts, kind, text in items:
+                if kind in ("you", "assistant") and ts > (st.get("stored_at") or ""):
+                    brain.conv_append(st["conversation"], "user" if kind == "you" else "assistant", text)
+                    newest, n = max(newest, ts), n + 1
+            if n:
+                _save({**st, "stored_at": newest})
+            return n
+    except SystemExit as e:
+        if str(e) != BUSY:
+            raise
+        return 0
+
+
+def stored_items():
+    """The stored conversation as chat_items tuples; [] with no conversation."""
+    from pl import brain
+    conv = load().get("conversation")
+    return [(str(t.get("ts"))[:19], "you" if t["role"] == "user" else "assistant", str(t.get("text") or ""))
+            for t in brain.conv_show(conv) if t.get("role") in ("user", "assistant")] if conv else []
+
+
+def end_conversation():
+    """Save the decisions of the current brain conversation and start a new one. (conversation id, items saved);
+    (None, 0) with no conversation. brain.end runs outside the lock: it may call the local model."""
+    from pl import brain
+    conv = load().get("conversation")
+    if not conv:
+        return None, 0
+    found = re.search(r"saved\s+(\d+)", brain.end(conv))
+    with _locked(LOCK_WAIT):
+        cur = load()
+        if cur.get("conversation") == conv:
+            _save({**cur, "conversation": brain.conv_new(), "stored_at": None})
+    return conv, int(found.group(1)) if found else 0
 
 
 def _record(st):

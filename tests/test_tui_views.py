@@ -1354,6 +1354,10 @@ class FakeAssistant:
         monkeypatch.setattr(assistant, "reset", self.reset)
         monkeypatch.setattr(assistant, "load", lambda: dict(self.state))
         monkeypatch.setattr(assistant, "set_mode", self.set_mode)
+        self.ended, self.stored = ("conv-1", 2), []
+        monkeypatch.setattr(assistant, "end_conversation", lambda: self.ended)
+        monkeypatch.setattr(assistant, "store_turns", lambda items: 0)
+        monkeypatch.setattr(assistant, "stored_items", lambda: self.stored)
 
     def ensure(self):
         self.ensured += 1
@@ -1477,6 +1481,71 @@ async def test_ctrl_r_asks_then_starts_a_new_conversation(monkeypatch):
         app.screen.dismiss(True)
         await settle(pilot)
         assert fa.resets == 1 and fa.ensured == 2
+
+
+async def _ctrl_r_confirmed(app, pilot):
+    await pilot.press("ctrl+r")
+    await pilot.pause()
+    app.screen.dismiss(True)
+    await settle(pilot)
+
+
+def _notices(app):
+    return [str(n.message) for n in app._notifications]
+
+
+async def test_ctrl_r_confirmed_notifies_saved_n_and_u_undoes_it(monkeypatch):
+    from pl import brain
+    FakeAssistant(monkeypatch)
+    undone = []
+    replies = iter(["undone 2", "undone 0"])
+    monkeypatch.setattr(brain, "undo", lambda conv: undone.append(conv) or next(replies))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await _ctrl_r_confirmed(app, pilot)
+        assert "saved 2 · u undo" in _notices(app)
+        await pilot.press("escape", "u")
+        await settle(pilot)
+        assert undone == ["conv-1"] and "undone 2" in _notices(app)
+        await pilot.press("u")
+        await settle(pilot)
+        assert "undone 0" in _notices(app)
+
+
+async def test_u_with_nothing_ended_says_nothing_to_undo(monkeypatch):
+    from pl import brain
+    FakeAssistant(monkeypatch)
+    monkeypatch.setattr(brain, "undo", lambda conv: pytest.fail("undo must not run"))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await pilot.press("escape", "u")
+        await settle(pilot)
+        assert "nothing to undo" in _notices(app)
+
+
+async def test_saved_0_leaves_nothing_to_undo(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.ended = ("conv-1", 0)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        await _ctrl_r_confirmed(app, pilot)
+        assert "saved 0" in _notices(app)
+        await pilot.press("escape", "u")
+        await settle(pilot)
+        assert "nothing to undo" in _notices(app)
+
+
+async def test_a_fresh_session_shows_the_stored_conversation_first(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.stored = [("2026-01-01T10:00:00", "you", "earlier question"), ("2026-01-01T10:00:01", "assistant", "earlier answer")]
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        text = str(app.query_one("#assistant-screen").render())
+        assert text.index("earlier question") < text.index("earlier answer") < text.index("waits for your review")
 
 
 async def test_an_empty_submit_sends_nothing(monkeypatch):
