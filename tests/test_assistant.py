@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pl import accounts, agents, assistant, cli, dispatch, ideas
+from pl import accounts, agents, assistant, brain, cli, dispatch, ideas
 from pl import config as C
 
 SID = "11111111-2222-3333-4444-555555555555"
@@ -259,7 +259,7 @@ def test_the_state_file_is_private_and_holds_only_its_keys(tmux):
     assistant.ensure()
     p = C.STATE_DIR / "assistant.json"
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert set(json.loads(p.read_text())) <= {"session_id", "account", "harness", "window", "pane", "started_at", "mode", "build"}
+    assert set(json.loads(p.read_text())) <= {"session_id", "account", "harness", "window", "pane", "started_at", "mode", "build", "conversation", "stored_at"}
 
 
 # ---------- CLI: assistant_action and pl assistant log ----------
@@ -801,3 +801,47 @@ def test_codex_assistant_gets_the_brain_server(tmux):
 def test_assistant_guide_has_brains_answer_rules():
     text = GUIDE.read_text()
     assert "pl_memory_search" in text and "Sources:" in text and "I don't know" in text
+
+
+# ---------- the brain conversation store ----------
+
+def _conv_id():
+    return json.loads((C.STATE_DIR / "assistant.json").read_text())["conversation"]
+
+
+def test_a_first_ensure_gives_the_assistant_a_private_brain_conversation(tmux):
+    assistant.ensure()
+    f = brain._conv_dir() / f"{_conv_id()}.jsonl"
+    assert f.exists() and stat.S_IMODE(f.stat().st_mode) == 0o600
+
+
+def test_a_resumed_assistant_keeps_its_conversation_id(tmux):
+    assistant.ensure()
+    first = _conv_id()
+    st = assistant.load()
+    assistant._save({**st, "pane": "%99"})
+    assistant.ensure()
+    assert _conv_id() == first
+
+
+def test_store_turns_appends_you_and_assistant_turns_once_in_order(tmux):
+    assistant.ensure()
+    items = [("2026-01-01T10:00:00", "you", "we decided to use sqlite"),
+             ("2026-01-01T10:00:01", "tool", "↳ Bash: pl list"),
+             ("2026-01-01T10:00:02", "assistant", "noted, token ghp_" + "a" * 36)]
+    assert assistant.store_turns(items) == 2
+    assert assistant.store_turns(items) == 0
+    turns = brain.conv_show(_conv_id())
+    assert [t["role"] for t in turns] == ["user", "assistant"]
+    assert "ghp_" + "a" * 36 not in turns[1]["text"]
+
+
+def test_store_turns_with_another_console_holding_the_lock_stores_nothing(tmux, monkeypatch):
+    assistant.ensure()
+    monkeypatch.setattr(assistant, "LOCK_WAIT", 0.1)
+    held = _hold(C.STATE_DIR / "assistant.lock")
+    try:
+        assert assistant.store_turns([("2026-01-01T10:00:00", "you", "hello")]) == 0
+    finally:
+        held.close()
+    assert brain.conv_show(_conv_id()) == []

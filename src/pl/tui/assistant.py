@@ -257,7 +257,10 @@ class AssistantView(Widget):
                 key = (str(p), s.st_size, s.st_mtime_ns, st.get("updated_at"))
                 if key != last:
                     entries = subagents.read_tail(p, ident=(s.st_dev, s.st_ino))
-                    chat = render_chat(chat_items(entries), st.get("updated_at"))
+                    items = chat_items(entries)
+                    if hasattr(self.backend, "store_turns"):
+                        self.backend.store_turns(items)
+                    chat = render_chat(items, st.get("updated_at"))
             else:             # no transcript yet (or not claude): the screen itself
                 key = ("screen", tuple(lines))
                 if key != last:
