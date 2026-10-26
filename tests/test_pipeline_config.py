@@ -139,3 +139,35 @@ def test_other_templates_use_the_generic_stage_skill():
     assert stages == {"existing-client": {"check-in", "renewal", "issue-triage"}, "team": {"hiring", "onboarding"}}
     for name in ("existing-client", "billing", "team"):
         assert {s["skill"] for s in pipeline.templates()[name]["stages"].values()} == {"pl-stage"}
+
+
+UI = '''
+[pipeline.ui]
+{ui}
+'''
+
+
+def test_pipeline_ui_words_and_fields_are_read_from_the_template(fake_home):
+    ui = 'item = "lead"\nitems = "leads"\nfields = ["company", "value", "next step"]'
+    _profile(fake_home, PREPARE.format(column="Inbox", gate="owner", extra="") + UI.format(ui=ui))
+    C.load("sales")
+    assert pipeline.ui() == {"item": "lead", "items": "leads", "fields": ["company", "value", "next step"]}
+
+
+def test_no_pipeline_ui_keeps_the_engineering_words(fake_home):
+    words = {"item": "card", "items": "cards", "fields": []}
+    _profile(fake_home, "")
+    C.load("sales")
+    assert pipeline.ui() == words
+    (fake_home / ".pl-sales" / "config.toml").write_text(PREPARE.format(column="Inbox", gate="owner", extra=""))
+    C.load("sales")
+    assert pipeline.ui() == words
+
+
+@pytest.mark.parametrize("ui", ['fields = "company"', 'item = ""', 'items = 3', 'fields = ["company", ""]'])
+def test_bad_pipeline_ui_is_refused_with_its_key_path(fake_home, capsys, ui):
+    _profile(fake_home, PREPARE.format(column="Inbox", gate="owner", extra="") + UI.format(ui=ui))
+    with pytest.raises(SystemExit) as e:
+        C.load("sales")
+    assert e.value.code == 2
+    assert "pipeline.ui." in capsys.readouterr().err

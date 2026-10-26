@@ -913,6 +913,50 @@ async def test_pipeline_lists_every_card_by_column_with_its_text(monkeypatch):
         assert view._current()[0] == "4a000001aaaa"
 
 
+def _sales_ui(fields=("company", "next step")):
+    C.PIPELINE = {**(C.PIPELINE or {}), "ui": {"item": "lead", "items": "leads", "fields": list(fields)}}
+
+
+def _column_keys(view):
+    return [c.key.value for c in view.query_one(DataTable).ordered_columns]
+
+
+async def test_pipeline_tab_uses_the_pipelines_words_and_field_columns(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    _sales_ui()
+    data = fake_data()
+    meta = next(r for r in data["snapshot"]["rows"] if r.get("card") and r["card"]["id"] == "4a000001aaaa")["card"]["metadata"]
+    meta.update({"company": "Acme", "next_step": "call"})
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app, "4a000001aaaa")
+        table = view.query_one(DataTable)
+        assert "leads" in table.border_title and "cards" not in table.border_title
+        assert _column_keys(view) == ["id", "title", "field:company", "field:next step", "state", "now"]
+        row = [str(c) for c in table.get_row("4a000001aaaa")]
+        assert "Acme" in row and "call" in row
+
+
+async def test_pipeline_tab_without_ui_looks_as_today(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        assert "cards" in view.query_one(DataTable).border_title
+        assert _column_keys(view) == ["id", "title", "state", "now"]
+
+
+async def test_a_missing_field_shows_blank_not_an_error(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    _sales_ui()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app, "4a000001aaaa")
+        row = [str(c) for c in view.query_one(DataTable).get_row("4a000001aaaa")]
+        assert row[2:4] == ["", ""]
+        assert app.is_running
+
+
 async def test_pipeline_a_and_x_review_only_specs_and_plans(monkeypatch):
     from pl.tui import needs as tui_needs
     from pl.tui.review import ConfirmScreen, ReviewScreen

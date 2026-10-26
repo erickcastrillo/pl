@@ -15,13 +15,24 @@ GATES = ("owner", "none", "auto-merge")
 SECTION_RE = re.compile(r"^[A-Z][A-Z ]*$")
 RESERVED_SECTIONS = ("INPUT", "REVIEW NOTES")
 OUTWARD_REFUSAL = "a stage that writes or sends outward needs a gate"
+UI_DEFAULT = {"item": "card", "items": "cards", "fields": []}
+
+
+def _ui(t) -> dict:
+    ui = {**UI_DEFAULT, **{k: v for k, v in (t or {}).items() if k in UI_DEFAULT}}
+    return {**ui, "fields": list(ui["fields"]) if isinstance(ui["fields"], (list, tuple)) else ui["fields"]}
+
+
+def ui() -> dict:
+    """The words and board fields of the current pipeline."""
+    return (C.PIPELINE or {}).get("ui") or {**UI_DEFAULT, "fields": []}
 
 
 def engineering() -> dict:
     """The built-in engineering pipeline, built from today's constants."""
     skill = {s: p.split()[0].lstrip("/") for s, p in C.BUILTIN_PROMPTS.items()}
     done = C.STAGE_DONE_AT
-    return {"name": "engineering", "template": "engineering", "columns": list(C.COLUMNS), "stages": {
+    return {"name": "engineering", "template": "engineering", "columns": list(C.COLUMNS), "ui": _ui(None), "stages": {
         "spec": {"column": "Inbox", "done": done["spec"], "skill": skill["spec"], "section": "SPEC",
                  "gate": "owner" if C.GATES.get("spec") else "none"},
         "design": {"column": "Spec ready", "done": "Spec ready", "skill": skill["design"], "section": "DESIGN",
@@ -37,12 +48,13 @@ def from_toml(t) -> dict:
         return engineering()
     stages = {n: dict(s) for n, s in (t.get("stages") or {}).items() if isinstance(s, dict)}
     return {"name": t.get("name", "pipeline"), "template": t.get("template"), "columns": list(t.get("columns") or []),
-            "stages": stages}
+            "ui": _ui(t.get("ui")), "stages": stages}
 
 
 def errors(p, connectors=None) -> list[str]:
     """Problems in a pipeline, each starting with its key path."""
     cols, errs, owner = p["columns"], [], {}
+    errs += _ui_errors(p.get("ui", UI_DEFAULT))
     for name, s in p["stages"].items():
         at = f"pipeline.stages.{name}"
         for key in ("column", "done", "next"):
@@ -60,6 +72,15 @@ def errors(p, connectors=None) -> list[str]:
             owner[col] = name
         if s.get("gate") == "none" and _outward(s, connectors):
             errs.append(f"{at}.gate: {OUTWARD_REFUSAL}")
+    return errs
+
+
+def _ui_errors(u) -> list[str]:
+    errs = [f"pipeline.ui.{k}: must be a non-empty string" for k in ("item", "items")
+            if not (isinstance(u.get(k), str) and u[k])]
+    fields = u.get("fields")
+    if not (isinstance(fields, list) and all(isinstance(f, str) and f for f in fields)):
+        errs.append("pipeline.ui.fields: must be a list of non-empty strings")
     return errs
 
 
