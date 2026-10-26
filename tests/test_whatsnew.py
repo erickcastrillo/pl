@@ -185,4 +185,4 @@ def test_brain_tab_removal_has_an_entry():
 
 def test_whatsnew_lists_empty_states():
     entry = next(e for e in whatsnew.ENTRIES if "empty" in e["title"])
-    assert entry["key"] == max(e["key"] for e in whatsnew.ENTRIES)
+    assert entry["key"] == "2026-10-26.67"

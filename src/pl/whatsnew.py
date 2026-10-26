@@ -277,6 +277,8 @@ ENTRIES = [
        "pl doctor", "pl doctor"),
     _e("2026-10-26.67", "Every console tab says what it is for and how to start when it is empty",
        "every list tab: ? opens its help", "pl"),
+    _e("2026-10-26.68", "Loops read as sentences, with a row to start one from a template",
+       "Automate → Loops: Enter on + New loop from a template", "pl loops add --help"),
 ]
 
 

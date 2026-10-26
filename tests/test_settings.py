@@ -246,8 +246,6 @@ async def test_loops_tab_shows_the_selected_loops_screen(monkeypatch):
         await settle(pilot)
         app.action_tab("loops")
         await settle(pilot)
-        await pilot.press("down")   # row 0 is "+ New loop"
-        await settle(pilot)
         text = screen_text(app)
         assert "SCREEN OF %1 (40 lines)" in text and "every 30 minutes" in text
         await pilot.press("down")
