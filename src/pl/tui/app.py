@@ -37,12 +37,13 @@ from pl.tui.review import ConfirmScreen
 from pl.tui.settings import SettingsView
 from pl.tui.skills import SkillsView
 from pl.tui.subagents import SubagentsView
+from pl.tui.waiting import WaitingView
 
 LATER = {}
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
-         "brain": BrainView}
+         "brain": BrainView, "waiting": WaitingView}
 
 _run = subprocess.run   # the one subprocess runner here; tests fake it
 
@@ -551,6 +552,7 @@ class PlApp(App):
         if self.query(HomeView):
             self.query_one(HomeView).show(self.data)
         self.query_one(DashboardView).show(self.data, self.window)
+        self.query_one(WaitingView).show(self.data)
         self.query_one(PrsView).show(self.data)
         self.query_one(LoopsView).show(self.data)
         self.query_one(ActivityView).show(self.data)
