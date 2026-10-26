@@ -97,6 +97,7 @@ def record_finished_run(c, stage, worker):
         recall.record_run(c, stage, worker)
     except Exception as e:   # a store problem prints and goes on, like rework.sweep
         print(f"memory: run summary for {short_id(c['id'])} not saved: {e}", file=sys.stderr)
+        events.failure("memory_not_saved", "warning", f"run summary not saved: {e}", c["id"])
 
 
 def _gh_env_args():
@@ -394,6 +395,14 @@ def untrusted_folder(h, account):
     return None if harnesses.folder_trust(account, str(C.WORK_DIR))[0] else C.WORK_DIR
 
 
+def _start_who(stage, c):
+    try:
+        h, profile = harnesses.harness_for(stage, c)
+    except (SystemExit, Exception):   # the start failed because of this very lookup: log without it
+        return {}
+    return {"account": profile, "harness": h.name}
+
+
 def start_worker(c, stage, attempts, dry):
     if C.is_local_account((C.STAGES.get(stage) or {}).get("account")):
         if why := C.local_stage_problem(stage, C.STAGES[stage]):
@@ -509,6 +518,7 @@ def _check_auto_merge(name, svc):
     key, allowed = f"auto_merge_off:{repo}", github.auto_merge_allowed(repo)
     if allowed is None:
         print(f"auto-review: could not read allow_auto_merge for {repo}; check skipped", file=sys.stderr)
+        events.failure("auto_review_check_skipped", "warning", f"could not read allow_auto_merge for {repo}")
     elif allowed:
         alerts.resolve(key)
     elif why := alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
@@ -639,6 +649,9 @@ def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
         except ValueError:
             run = {"result": "unreadable run record", "exit": -1}
         print(f"{name} loop run ended: exit {run.get('exit')}, {run.get('result')}")
+        if not dry and run.get("exit") not in (0, None):
+            events.failure("loop_failed", "error", f"{name} loop run exited {run.get('exit')}: {run.get('result')}",
+                           loop=name, exit=run.get("exit"))
         if not dry:
             try:
                 run = loops.keep_run(name, run, runs_dir / f"{name}.log", harnesses.account_harness(s.get("profile")))
@@ -968,20 +981,28 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rework.sweep(all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
             print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"auto-rework skipped this pass: {e}", step="rework")
         try:
             _auto_merge(st, all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:
             print(f"auto-merge skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"auto-merge skipped this pass: {e}", step="auto-merge")
         try:
             from pl import triggers
             triggers.run_due(dry=dry)
         except Exception as e:
             print(f"triggers skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"triggers skipped this pass: {e}", step="triggers")
         try:
             from pl import outbound
             outbound.send_due(dry=dry)
         except Exception as e:
             print(f"outbound send skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"outbound send skipped this pass: {e}", step="outbound")
         try:   # daily retention pass for cards created from email (retention.py)
             from pl import retention
             retention.sweep(all_cards, dry)
@@ -992,6 +1013,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             worktrees.sweep(all_cards, dry)
         except Exception as e:
             print(f"worktrees cleanup skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"worktrees cleanup skipped this pass: {e}", step="worktrees")
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
@@ -1040,6 +1063,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             wh = harnesses.get(w.get("harness") or "claude") if w else None
         except SystemExit as e:   # one card's bad harness must not stop the pass
             print(f"{short_id(c['id'])}  skipped: {e}", file=sys.stderr)
+            events.failure("card_skipped", "warning", str(e), c["id"])
             continue
         status, sid = ("none", None) if not w else worker_status(w, reg)
         if w and status == "alive" and sid and sid != w.get("session_id") and not dry:
@@ -1280,6 +1304,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             accounts.check_parked()
         except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"account check failed: {e}", file=sys.stderr)
+            events.failure("account_check_failed", "warning", f"account check failed: {e}")
         _sync_pass()
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
@@ -1371,7 +1396,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 update(c["id"], metadata={"profile": prof})
             c["metadata"] = {**(c.get("metadata") or {}), "profile": prof}
         print(f"{short_id(c['id'])}  {col} -> {stage} agent (attempt {attempts}): {c['title'][:50]}")
-        start_worker(c, stage, attempts, dry)
+        try:
+            start_worker(c, stage, attempts, dry)
+        except (SystemExit, Exception) as e:   # logged, then the pass fails as before
+            if not dry:
+                events.failure("harness_start_failed", "error", str(e), c["id"], stage=stage, **_start_who(stage, c))
+            raise
         if attempts <= 1 and room is not None:
             room -= 1
         prev = ((c.get("metadata") or {}).get("worker") or {})
@@ -1905,6 +1935,7 @@ def _passes(a):
                 print(line)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - a bad library folder or config never stops the dispatcher
             print(f"built-in skills not installed: {e}", file=sys.stderr)
+            events.failure("skills_not_installed", "warning", str(e))
     if lock:
         backup.check()
         with contextlib.suppress(ValueError):   # only the main thread can install a handler
