@@ -326,6 +326,20 @@ def pr_limit_args():
             f" target_lines={lim['pr_auto_merge_lines']} target_files={lim['pr_auto_merge_files']}")
 
 
+def _memory_dir():
+    """Where a stage's memory file goes: inside work_dir, where the agent starts, so reading it needs no
+    permission outside its working directories; git-ignored through .git/info/exclude. No work_dir: the state folder."""
+    if not C.WORK_DIR:
+        return C.STATE_DIR / "launch"
+    exclude = Path(C.WORK_DIR) / ".git" / "info" / "exclude"
+    if exclude.parent.is_dir():
+        lines = exclude.read_text().splitlines() if exclude.exists() else []
+        if ".pl/launch/" not in lines:
+            with exclude.open("a") as fh:
+                fh.write(("\n" if lines and lines[-1] else "") + ".pl/launch/\n")
+    return Path(C.WORK_DIR) / ".pl" / "launch"
+
+
 def memory_arg(c, stage, dry):
     """" memory=<file>" with the entries a built-in stage may see, or "" when there are none or the store fails."""
     if stage not in ("spec", "design", "plan", "run"):
@@ -336,7 +350,7 @@ def memory_arg(c, stage, dry):
             return ""
         if dry:
             return " memory=<file>"
-        d = C.STATE_DIR / "launch"
+        d = _memory_dir()
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
         skills._clean_inlined(d)
         key = hashlib.sha1(f"{c['id']}:{stage}".encode()).hexdigest()[:12]
