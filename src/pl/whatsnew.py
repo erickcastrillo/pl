@@ -220,6 +220,8 @@ ENTRIES = [
        "Loops tab: auto-merge; [loops.auto-merge] enabled, every, merge_method, max_per_pass", "pl merges --dry-run"),
     _e("2026-10-25.39", "pl mcp serve --stdio: pl's read commands as MCP tools for an agent session",
        "Activity tab marks what an agent session did as \"agent session (pl mcp serve)\"", "pl mcp serve --stdio"),
+    _e("2026-10-25.40", "Custom loops on any harness, on a schedule", "Loops tab: n add, e p g d w",
+       "pl loops add --template stale-cards"),
 ]
 
 

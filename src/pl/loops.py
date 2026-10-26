@@ -105,44 +105,49 @@ def _warn_if_skill_is_unknown(skill: str):
         print(f"pl loops: warning: skill {skill} is not in the library or any account", file=sys.stderr)
 
 
-def _cmd_add(a) -> int:
+def add(name, skill=None, prompt=None, template=None, every=None, hours=None, account=None, team=None, writes=None,
+        yes=True, dry_run=False):
     doc = _document()
-    if a.name in doc.get("loops", {}):
-        print(f"loop {a.name} exists, nothing changed")
-        return 0
-    template = {}
-    if a.template:
-        if a.template not in TEMPLATES:
-            _fail(f"no template {a.template}; choose one of: {', '.join(TEMPLATES)}")
-        template = dict(TEMPLATES[a.template])
-        if a.skill:
-            del template["prompt"]
+    if name in doc.get("loops", {}):
+        print(f"loop {name} exists, nothing changed")
+        return
+    base = {}
+    if template:
+        if template not in TEMPLATES:
+            _fail(f"no template {template}; choose one of: {', '.join(TEMPLATES)}")
+        base = dict(TEMPLATES[template])
+        if skill:
+            del base["prompt"]
     entry = tomlkit.table()
-    for key, value in (("skill", a.skill), ("prompt", a.prompt or template.get("prompt")), ("every", a.every or template.get("every")),
-                       ("hours", a.hours or template.get("hours")), ("account", a.account), ("team", a.team)):
+    for key, value in (("skill", skill), ("prompt", prompt or base.get("prompt")), ("every", every or base.get("every")),
+                       ("hours", hours or base.get("hours")), ("account", account), ("team", team)):
         if value:
             entry[key] = value
     if "skill" not in entry and "prompt" not in entry:
         _fail("give --skill, --prompt or --template")
-    entry["writes"] = template.get("writes", False) if a.writes is None else a.writes
+    entry["writes"] = base.get("writes", False) if writes is None else writes
     if "every" in entry:
         try:
             schedule.parse_every(entry["every"])
         except ValueError as e:
             _fail(str(e))
-    if a.skill:
-        _warn_if_skill_is_unknown(a.skill)
+    if skill:
+        _warn_if_skill_is_unknown(skill)
     checked = tomlkit.parse(tomlkit.dumps(doc))
-    checked.setdefault("loops", tomlkit.table())[a.name] = entry
+    checked.setdefault("loops", tomlkit.table())[name] = entry
     if errors := C.validate(checked):
         _fail("; ".join(errors))
-    _confirm(f"Add loop {a.name}?", a.yes)
-    if a.dry_run:
-        print(f"would add loop {a.name}")
-        return 0
-    doc.setdefault("loops", tomlkit.table())[a.name] = entry
+    _confirm(f"Add loop {name}?", yes)
+    if dry_run:
+        print(f"would add loop {name}")
+        return
+    doc.setdefault("loops", tomlkit.table())[name] = entry
     _save(doc)
-    print(f"added loop {a.name}")
+    print(f"added loop {name}")
+
+
+def _cmd_add(a) -> int:
+    add(a.name, a.skill, a.prompt, a.template, a.every, a.hours, a.account, a.team, a.writes, a.yes, a.dry_run)
     return 0
 
 
