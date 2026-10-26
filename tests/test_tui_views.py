@@ -496,7 +496,7 @@ async def test_health_opens_in_a_details_panel():
         await settle(pilot)
         assert isinstance(app.screen, HealthScreen)
         text = screen_text(app)
-        for s in ("tokens", "counting…", "exceeded", "legacy"):
+        for s in ("tokens", "counting…", "exceeded", "harness accounts"):
             assert s in text, s
         await pilot.press("escape")
         await settle(pilot)
