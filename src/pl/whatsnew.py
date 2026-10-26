@@ -273,6 +273,8 @@ ENTRIES = [
        "Alerts tab", "pl alerts"),
     _e("2026-10-26.65", "A scheduled loop keeps what each run said: last run, its output and earlier runs",
        "Loops tab: select a scheduled loop; its last 20 runs are kept under state/loops/<name>/", "pl loops run <name>"),
+    _e("2026-10-26.66", "pl doctor tests the tracker and intake boards; a Vikunja board names the wrong setting",
+       "pl doctor", "pl doctor"),
 ]
 
 

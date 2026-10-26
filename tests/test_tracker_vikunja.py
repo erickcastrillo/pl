@@ -1,6 +1,8 @@
 """Vikunja connector against an in-memory fake server on loopback: no network, no real Vikunja."""
+import argparse
 import json
 import re
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -59,6 +61,8 @@ def _handler(fake):
             self.wfile.write(raw)
 
         def _run(self, method):
+            if method == "GET" and self.path == "/api/v1/info":
+                return self._send(200, {"version": "v0.24.0"})
             if self.headers.get("Authorization") != f"Bearer {TOKEN}":
                 return self._send(401, {"message": "missing, malformed, expired or otherwise invalid token"})
             parts = urlsplit(self.path)
@@ -68,6 +72,10 @@ def _handler(fake):
             if method != "GET":
                 fake.writes.append((method, parts.path))
             path = parts.path
+            if method == "GET" and path == f"/api/v1/projects/{P}/views/{V}":
+                return self._send(200, {"id": V, "view_kind": "kanban"})
+            if method == "GET" and path == f"/api/v1/projects/{P}/views/4":
+                return self._send(200, {"id": 4, "view_kind": "list"})
             if path == f"{base}/buckets":
                 if method == "PUT":
                     b = {"id": 20 + len(fake.buckets), "title": body["title"]}
@@ -249,6 +257,86 @@ def test_bad_token_error_is_masked(fake, monkeypatch):
 
 def test_test_reports_columns(fake):
     assert fake.tracker.test() == f"ok: vikunja {fake.tracker.url_base} project {P}, 3 columns"
+
+
+def _tester(fake, **over):
+    return vikunja.Vikunja({**C.TRACKER, **over})
+
+
+def _closed_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_test_names_wrong_url_when_info_fails(fake):
+    for url in (f"{fake.tracker.url_base}/nope", f"http://127.0.0.1:{_closed_port()}"):
+        line = _tester(fake, url=url).test()
+        assert not line.startswith("ok") and "url is wrong" in line and url in line
+
+
+def test_test_names_wrong_url_for_non_vikunja_reply(fake):
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            raw = b"<html>hello</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        line = _tester(fake, url=f"http://127.0.0.1:{server.server_port}").test()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert "url is wrong" in line and "not a Vikunja reply" in line
+
+
+def test_test_names_wrong_token_without_showing_it(fake, monkeypatch):
+    monkeypatch.setenv("VIKUNJA_TOKEN", "wrong_token_value_999")
+    line = fake.tracker.test()
+    assert "token is wrong or expired" in line and "wrong_token_value_999" not in line
+    assert "(401)" in line or "(403)" in line
+    assert "permission" in line
+
+
+def test_test_names_wrong_view_id(fake):
+    for view in (99, 4):
+        line = _tester(fake, view_id=view).test()
+        assert "view_id is wrong" in line and f"project {P}" in line and str(view) in line
+
+
+def test_test_reports_first_failing_check(fake, monkeypatch):
+    monkeypatch.setenv("VIKUNJA_TOKEN", "wrong_token_value_999")
+    assert "token is wrong" in _tester(fake, view_id=99).test()
+    assert "url is wrong" in _tester(fake, url=f"http://127.0.0.1:{_closed_port()}").test()
+
+
+@pytest.mark.parametrize("case", ["ok", "url", "token", "view"])
+def test_no_output_or_file_holds_the_token(fake, monkeypatch, tmp_path, capsys, case):
+    from pl import doctor, local_model
+    secret = TOKEN
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(local_model, "_request", lambda *a: json.dumps({"models": []}))
+    monkeypatch.setattr(C, "INTAKE", {})
+    if case == "url":
+        monkeypatch.setitem(C.TRACKER, "url", f"http://127.0.0.1:{_closed_port()}")
+    elif case == "token":
+        secret = "wrong_token_value_999"
+        monkeypatch.setenv("VIKUNJA_TOKEN", secret)
+    elif case == "view":
+        monkeypatch.setitem(C.TRACKER, "view_id", 99)
+    trackers.reset()
+    with pytest.raises(SystemExit):
+        doctor.cmd_doctor(argparse.Namespace(json=False))
+    out, err = capsys.readouterr()
+    assert secret not in out + err
+    assert not any(secret in f.read_text(errors="ignore") for f in tmp_path.rglob("*") if f.is_file())
 
 
 def test_dry_run_sends_no_write(fake):
