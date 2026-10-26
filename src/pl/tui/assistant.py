@@ -12,7 +12,7 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, Static
 
-from pl import agents, assistant, ideas
+from pl import agents, assistant, brain, ideas
 from pl import config as C
 from pl.trackers import mcp
 from pl.tui import subagents
@@ -27,7 +27,7 @@ SLOW = 5           # seconds: a screen read running this long shows "still readi
 CHANGED = "the question changed; look again"
 KEYS = ("enter send · a number answers the card · ctrl+t chat/idea mode · "
         "ctrl+o open its window (arrows, Esc) · ctrl+r start over · ctrl+f file a ready idea · "
-        "esc then 0-9 · switch tab")
+        "esc then 0-9 · switch tab · esc then u undo a save")
 HINT = {"chat": "chat mode: ask pl to do things (it asks before acting)",
         "idea": "idea mode: drafting an idea brief with you; it files the card only after your yes"}
 
@@ -137,7 +137,8 @@ class AssistantView(Widget):
     """
     BINDINGS = [Binding("ctrl+t", "mode", "chat/idea"), Binding("ctrl+o", "open_window", "open window"),
                 Binding("ctrl+r", "restart", "start over"), Binding("ctrl+f", "file_idea", "file idea"),
-                Binding("escape", "leave_box", "leave box", show=False)]
+                Binding("u", "undo", "undo saved"), Binding("escape", "leave_box", "leave box", show=False)]
+    can_focus = True
     backend = assistant
     prefix = "assistant"
     title = "Assistant"
@@ -146,6 +147,7 @@ class AssistantView(Widget):
     def __init__(self):
         super().__init__(id=f"{self.prefix}-view")
         self.started, self.mode, self.status = False, "chat", f"opening the tab starts the {self.prefix}"
+        self.last_ended = None   # the conversation ctrl+r last saved decisions from, for u
         self.ready = None     # the idea the assistant marked ready to file, shown until it is filed
         self.activity, self.redraws = None, 0
         self._read_started, self._seq, self._shown = None, 0, 0   # the newest read: when it began, its number; shown
@@ -251,20 +253,24 @@ class AssistantView(Widget):
                 self.backend.restart_if_updated()        # reads the screen again itself, under the lock
             lines = self.backend.screen(SCREEN_LINES)
             st = self.backend.load()
+            earlier = self.backend.stored_items() if hasattr(self.backend, "stored_items") else []
             found, chat = _transcript(st), None
             if found:         # read again only when the file's size or mtime changed
                 p, s = found
-                key = (str(p), s.st_size, s.st_mtime_ns, st.get("updated_at"))
+                key = (str(p), s.st_size, s.st_mtime_ns, st.get("updated_at"), len(earlier))
                 if key != last:
                     entries = subagents.read_tail(p, ident=(s.st_dev, s.st_ino))
                     items = chat_items(entries)
                     if hasattr(self.backend, "store_turns"):
                         self.backend.store_turns(items)
-                    chat = render_chat(items, st.get("updated_at"))
+                    chat = render_chat([i for i in earlier if not items or i[0] < items[0][0]] + items,
+                                       st.get("updated_at"))
             else:             # no transcript yet (or not claude): the screen itself
-                key = ("screen", tuple(lines))
+                key = ("screen", tuple(lines), len(earlier))
                 if key != last:
                     chat = Text("\n".join(lines)) if lines else Text(f"the {self.prefix}'s screen is empty", style="dim")
+                    if earlier:
+                        chat = Text.assemble(render_chat(earlier), "\n", chat)
             menu = getattr(self.backend, "menu", assistant.menu)(lines)
             busy = getattr(self.backend, "busy", assistant.busy)(st)
             ready = getattr(self.backend, "ready_idea", lambda: None)()
@@ -330,7 +336,7 @@ class AssistantView(Widget):
         self._bg(lambda: ans(m.digit, m.options), f"{self.prefix}-send", done)
 
     def action_leave_box(self):
-        self.app.set_focus(None)   # plain digits then switch tabs again
+        self.focus()   # plain digits then switch tabs again; u undoes a save
 
     def action_mode(self):
         new = "idea" if self.mode == "chat" else "chat"
@@ -350,13 +356,27 @@ class AssistantView(Widget):
 
     def action_restart(self):
         def fn():
+            ended = self.backend.end_conversation() if hasattr(self.backend, "end_conversation") else (None, 0)
             self.backend.reset()
-            return self.backend.ensure(), "chat", getattr(self.backend, "warning", lambda: None)()
+            return self.backend.ensure(), "chat", getattr(self.backend, "warning", lambda: None)(), ended
+
+        def restarted(out):
+            *started, (conv, n) = out
+            self.last_ended = conv if n else None
+            self.app.notify(f"saved {n} · u undo" if n else "saved 0", markup=False)
+            self._started(tuple(started))
 
         def answered(yes):
             if yes:
-                self._bg(fn, f"{self.prefix}-start", self._started)
+                self._bg(fn, f"{self.prefix}-start", restarted)
         self.app.push_screen(ConfirmScreen(f"Start a new {self.prefix} conversation? The current one ends."), answered)
+
+    def action_undo(self):
+        conv = self.last_ended
+        if not conv:
+            self.app.notify("nothing to undo", markup=False)
+            return
+        self._bg(lambda: brain.undo(conv), "assistant-undo", lambda msg: self.app.notify(msg, markup=False))
 
     def action_file_idea(self):
         """File the idea the assistant marked ready: a pl-side confirm, outside the harness, then one Inbox card."""

@@ -845,3 +845,16 @@ def test_store_turns_with_another_console_holding_the_lock_stores_nothing(tmux, 
     finally:
         held.close()
     assert brain.conv_show(_conv_id()) == []
+
+
+def test_end_conversation_saves_with_a_link_back_and_starts_a_new_id(tmux, monkeypatch):
+    assistant.ensure()
+    old = _conv_id()
+    assistant.store_turns([("2026-01-01T10:00:00", "you", "we will deploy only on Tuesdays")])
+    monkeypatch.setattr(brain, "_distil_model", lambda text: [{"kind": "decision", "text": "Deploy only on Tuesdays"}])
+    added = []
+    monkeypatch.setattr(brain.recall, "add", lambda **kw: added.append(kw) or "m-1")
+    assert assistant.end_conversation() == (old, 1)
+    assert added[0]["link"] == f"pl brain show {old}"
+    new = _conv_id()
+    assert new != old and assistant.load()["stored_at"] is None

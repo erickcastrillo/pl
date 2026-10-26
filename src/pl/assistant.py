@@ -407,6 +407,21 @@ def stored_items():
             for t in brain.conv_show(conv) if t.get("role") in ("user", "assistant")] if conv else []
 
 
+def end_conversation():
+    """Save the decisions of the current brain conversation and start a new one. (conversation id, items saved);
+    (None, 0) with no conversation. brain.end runs outside the lock: it may call the local model."""
+    from pl import brain
+    conv = load().get("conversation")
+    if not conv:
+        return None, 0
+    found = re.search(r"saved\s+(\d+)", brain.end(conv))
+    with _locked(LOCK_WAIT):
+        cur = load()
+        if cur.get("conversation") == conv:
+            _save({**cur, "conversation": brain.conv_new(), "stored_at": None})
+    return conv, int(found.group(1)) if found else 0
+
+
 def _record(st):
     """The session registry's entry for the harness running in the assistant's pane, else for the saved session id."""
     reg = agents.registry()
