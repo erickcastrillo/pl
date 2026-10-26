@@ -127,13 +127,13 @@ class AssistantInput(Input):
 
 class AssistantView(Widget):
     DEFAULT_CSS = """
-    AssistantView, BrainView { height: 1fr; }
-    #assistant-center, #brain-center { height: 1fr; border: round $warning; padding: 0 1; }
-    #assistant-scroll, #brain-scroll { height: 1fr; }
-    #assistant-menu, #brain-menu { height: auto; border: round $warning; background: $warning 15%; padding: 0 1; }
-    #assistant-status, #brain-status, #assistant-keys, #brain-keys { height: 1; color: $text-muted; }
-    #assistant-warning, #brain-warning { height: auto; color: $warning; }
-    #assistant-input, #brain-input { border: round $warning; }
+    AssistantView { height: 1fr; }
+    #assistant-center { height: 1fr; border: round $warning; padding: 0 1; }
+    #assistant-scroll { height: 1fr; }
+    #assistant-menu { height: auto; border: round $warning; background: $warning 15%; padding: 0 1; }
+    #assistant-status, #assistant-keys { height: 1; color: $text-muted; }
+    #assistant-warning { height: auto; color: $warning; }
+    #assistant-input { border: round $warning; }
     """
     BINDINGS = [Binding("ctrl+t", "mode", "chat/idea"), Binding("ctrl+o", "open_window", "open window"),
                 Binding("ctrl+r", "restart", "start over"), Binding("ctrl+f", "file_idea", "file idea"),

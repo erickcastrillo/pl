@@ -176,3 +176,8 @@ async def test_the_popup_fits_a_narrow_terminal(profile):
         app.action_whatsnew()
         await settle(pilot)
         assert app.screen.query_one(Vertical).outer_size.width == 96
+
+
+def test_brain_tab_removal_has_an_entry():
+    entry = next(e for e in whatsnew.ENTRIES if "Brain tab" in e["title"])
+    assert "Assistant" in entry["title"] and "b " in entry["where"] + " " and "press b" in entry["try"]

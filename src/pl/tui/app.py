@@ -25,7 +25,6 @@ from pl.trackers.github import RateLimited
 from pl.tui import parity
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
-from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.connectors import ConnectorsPanel
 from pl.tui.extensions import ExtensionsView
@@ -58,7 +57,7 @@ def _titled(title, make):
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
-         "brain": BrainView, "waiting": WaitingView,
+         "waiting": WaitingView,
          "skills": _titled("Skills, agents and commands (every account)", SkillsView),
          "connectors": _titled("Connectors", ConnectorsPanel),
          "pods": _titled("Pods", make_pods_panel),
@@ -70,7 +69,7 @@ _run = subprocess.run   # the one subprocess runner here; tests fake it
 
 REFRESH, GITHUB_REFRESH = 15, 60   # seconds between board refreshes; GitHub's GraphQL budget needs the slower one
 BUILD_CHECK = 30   # seconds between checks for a newly installed pl build
-DRAFTS = ("#assistant-input", "#idea-input", "#brain-input")   # boxes whose text is lost on a restart, focused or not
+DRAFTS = ("#assistant-input", "#idea-input")   # boxes whose text is lost on a restart, focused or not
 
 
 def default_interval():
@@ -265,6 +264,7 @@ class PlApp(App):
         Binding(f"{mod}+{GROUP_KEYS[gid]}", f"tab('{gid}')", name, show=False)   # work even while the Assistant box has focus
         for mod in ("ctrl", "alt") for gid, name, _ in GROUPS if gid != "home"] + [
         Binding("H", "tab('home')", "pipelines", show=False),
+        Binding("b", "brain", "Brain is now Assistant", show=False),
         Binding("left_square_bracket", "cycle_window(-1)", "earlier window", key_display="["),
         Binding("right_square_bracket", "cycle_window(1)", "later window", key_display="]"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
@@ -510,16 +510,18 @@ class PlApp(App):
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
-        yield SystemCommand("Brain: ask questions across pipelines", "one read-only brain session per machine",
-                            self.action_brain)
 
     def action_health(self):
         if self.data is not None:
             self.push_screen(HealthScreen(self.data, self.window))
 
     def action_brain(self):
-        """Brain tab, one machine-wide brain session."""
-        self.action_tab("brain")
+        """b, kept for one release: the Brain tab is now the Assistant."""
+        if resolve("assistant") is None:
+            self.notify("Brain is now part of Assistant (the Assistant is off for this profile)", markup=False)
+            return
+        self.action_tab("assistant")
+        self.notify("Brain is now part of Assistant", markup=False)
 
     def action_skills(self):
         """Extend tab, the Skills sub-tab, its list focused."""
@@ -708,17 +710,14 @@ class PlApp(App):
         if self.active_tab == "assistant":
             self.query_one(AssistantView).opened()
             self.call_after_refresh(self.query_one(AssistantView).focus_box)
-        if self.active_tab == "brain":
-            self.query_one(BrainView).opened()
-            self.call_after_refresh(self.query_one(BrainView).focus_box)
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
 
     def on_descendant_focus(self, event):
         """A click on a tab leaves the focus on the tab bar, where typed letters run console commands (D, s, q, r ...)
         instead of reaching the Assistant's box: on the Assistant tab the box takes the focus back."""
-        if isinstance(event.widget, Tabs) and self.active_tab in ("assistant", "brain") and len(self.screen_stack) == 1:
-            view = self.query_one(BrainView if self.active_tab == "brain" else AssistantView)
+        if isinstance(event.widget, Tabs) and self.active_tab == "assistant" and len(self.screen_stack) == 1:
+            view = self.query_one(AssistantView)
             self.call_after_refresh(view.focus_box)
 
     def check_action(self, action, parameters):

@@ -41,7 +41,6 @@ COMMANDS = {
     "SkillsView.share": "pl skills share NAME",
     "SkillsView.link": "pl skills link NAME ACCOUNT",
     "AssistantView.file_idea": "pl assistant idea file <id>",
-    "BrainView.file_idea": "pl assistant idea file <id>",
     # Direct action aliases
     "drop": "pl drop <id>",
     "undrop": "pl undrop <id>",
@@ -57,6 +56,7 @@ COMMANDS = {
 }
 
 NAV = {
+    "brain",
     # Dialog and modal controls
     "close",
     "cancel",
