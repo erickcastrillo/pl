@@ -232,6 +232,8 @@ ENTRIES = [
        "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs", "pl merges --dry-run"),
     _e("2026-10-25.45", "Skills are grouped: pl's stage skills, your library, each account",
        "Settings tab, Skills section: origin and used by on every row", "pl skills list"),
+    _e("2026-10-25.46", "Skills pane: labelled buttons, where a skill is linked and why an action is off",
+       "Settings → Skills: select a skill", "pl"),
 ]
 
 
