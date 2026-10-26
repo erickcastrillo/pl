@@ -18,7 +18,7 @@ from textual.widgets.option_list import Option
 
 from pl import config as C
 from pl import harnesses, ideas
-from pl.tui.chrome import NEW_ROW, new_row
+from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.util import short_id
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
@@ -170,6 +170,8 @@ class IdeasView(Widget):
             q = sum(1 for e in i.get("transcript", []) if e.get("role") == "harness")
             line = STATUS.get(i.get("status"), str(i.get("status"))) + (f" · {q} question{'s' * (q != 1)}" if q else "")
             ol.add_option(Option(Text(f"{str(i.get('title'))[:60]}\n{line}"), id=i["id"]))
+        if not items:
+            ol.add_option(Option(Text("\n".join(empty_state("ideas")), style="dim"), disabled=True))
         ol.border_title = f"Ideas · {len(items)}"
         want = select or (self.current or {}).get("id")
         for n, i in enumerate(items):
