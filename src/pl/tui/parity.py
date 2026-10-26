@@ -217,8 +217,8 @@ def _action_name(action):
 def command_for(owner, action, key=None):
     """The pl command a bound action runs, or None for navigation and local UI actions."""
     name = _action_name(action)
-    for found in (COMMANDS.get(f"{owner}.{name}"), COMMANDS.get(name), PARITY.get(name),
-                  LOOPS_KEYS.get(key) if owner == "LoopsView" else None):
+    for found in (LOOPS_KEYS.get(key) if owner == "LoopsView" else None,   # the key names the exact command (pause or resume)
+                  COMMANDS.get(f"{owner}.{name}"), COMMANDS.get(name), PARITY.get(name)):
         if found:
             return found
     return None
