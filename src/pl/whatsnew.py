@@ -291,7 +291,7 @@ ENTRIES = [
        "[notify] events in the profile config; chat connectors routed for alerts", "pl chat route alerts <name>"),
     _e("2026-10-26.74", "A marketing template for new pipelines: brief, draft, publish, report",
        "Home: n, step 1", "pl pipelines add NAME --template marketing --board local"),
-    _e("2026-10-26.63", "All pipelines' waiting items on Dashboard",
+    _e("2026-10-26.75", "All pipelines' waiting items on Dashboard",
        "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
 ]
 
