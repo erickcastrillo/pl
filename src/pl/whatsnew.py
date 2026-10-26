@@ -275,7 +275,7 @@ ENTRIES = [
        "Loops tab: select a scheduled loop; its last 20 runs are kept under state/loops/<name>/", "pl loops run <name>"),
     _e("2026-10-26.66", "pl doctor tests the tracker and intake boards; a Vikunja board names the wrong setting",
        "pl doctor", "pl doctor"),
-    _e("2026-10-26.63", "Every console tab says what it is for and how to start when it is empty",
+    _e("2026-10-26.67", "Every console tab says what it is for and how to start when it is empty",
        "every list tab: ? opens its help", "pl"),
 ]
 
