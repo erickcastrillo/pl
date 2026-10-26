@@ -242,6 +242,9 @@ ENTRIES = [
        "pl board restore --from ~/pl-board-backup"),
     _e("2026-10-25.50", "+ New skill: install from GitHub after reviewing every file, or write one",
        "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
+    _e("2026-10-25.51", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
+    _e("2026-10-25.52", "Skills pane: labelled buttons, where a skill is linked and why an action is off",
+       "Settings → Skills: select a skill", "pl"),
 ]
 
 
