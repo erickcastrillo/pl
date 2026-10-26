@@ -24,10 +24,10 @@ TEMPLATES = {
                       "every": "weekdays 09:00", "hours": WORK_HOURS, "writes": False},
     "inbox-triage": {"prompt": "Read the new mail through the email connector and group it as urgent, reply-needed or FYI. "
                                "List the first two groups with a one-line reason each. Do not send, move or delete anything.",
-                     "every": "30m", "hours": WORK_HOURS, "writes": False},
+                     "every": "30m", "hours": WORK_HOURS, "writes": False, "needs": "email connector"},
     "overdue-invoices": {"prompt": "Through the payments connector, list the invoices past their due date, oldest first, with the customer, "
                                    "the amount and the days late. Propose a reminder for each one; do not send it.",
-                         "every": "weekdays 09:00", "hours": WORK_HOURS, "writes": False},
+                         "every": "weekdays 09:00", "hours": WORK_HOURS, "writes": False, "needs": "payments connector"},
     "dependency-updates": {"prompt": "List the project's outdated dependencies and the ones with security advisories. Propose one update "
                                      "at a time with the risk of each; do not change any file.",
                            "every": "weekdays 07:00", "hours": "06:00-12:00 weekdays", "writes": False},

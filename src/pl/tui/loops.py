@@ -185,47 +185,6 @@ def _call(fn, *args, **kw):
     return None
 
 
-class EditLoopScreen(ModalScreen):
-    """The fields of `pl loops edit`, filled with the loop's current values; dismisses with the fields that changed."""
-    DEFAULT_CSS = """
-    EditLoopScreen { align: center middle; }
-    EditLoopScreen > Vertical { width: 90; height: auto; border: round $accent; padding: 1 2; background: $surface; }
-    """
-    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
-    FIELDS = (("skill", "skill"), ("prompt", "prompt"), ("every", "every"), ("hours", "hours"), ("account", "account"))
-
-    def __init__(self, name, current):
-        super().__init__()
-        self.loop_name = name
-        self.current = current
-
-    def compose(self):
-        with Vertical():
-            yield Static(Text(f"Edit loop {self.loop_name}", style="bold"))
-            for key, label in self.FIELDS:
-                yield Label(label)
-                yield Input(value=str(self.current.get(key) or ""), id=f"loop-{key}")
-            yield Checkbox("writes (off = read-only)", bool(self.current.get("writes")), id="loop-writes")
-            yield Static(Text("ctrl+s save · esc cancel · a cleared field stays as it was", style="dim"))
-
-    def on_input_submitted(self, _):
-        self.action_save()
-
-    def action_save(self):
-        changes = {}
-        for key, _ in self.FIELDS:
-            value = self.query_one(f"#loop-{key}", Input).value.strip()
-            if value and value != str(self.current.get(key) or ""):
-                changes[key] = value
-        writes = self.query_one("#loop-writes", Checkbox).value
-        if writes != bool(self.current.get("writes")):
-            changes["writes"] = writes
-        self.dismiss(changes)
-
-    def action_cancel(self):
-        self.dismiss(None)
-
-
 def _auto_merge_row():
     from pl import merges   # merges -> merge_check -> tui.prs would loop back into this package
     s = util.load_state().get("services", {}).get("auto-merge", {})
@@ -236,6 +195,45 @@ def _auto_merge_row():
             "schedule": schedule.in_words(C.AUTO_MERGE.get("every", "15m")), "read_only": False, "account": merges.account() or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-",
             "last": util.ago(last.get("at")), "next": nxt[11:16] if nxt else "-",
             "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
+
+
+def gallery_rows() -> list[tuple[str, str, str, str]]:
+    """(name, what it does, what it needs, schedule) for each template, then the blank loop."""
+    rows = []
+    for name, t in loops.TEMPLATES.items():
+        does = t["prompt"].split(". ", 1)[0] + ("." if ". " in t["prompt"] else "")
+        needs = ", ".join([*([t["needs"]] if t.get("needs") else []), *(["write access"] if t["writes"] else [])]) or "nothing extra"
+        rows.append((name, does, needs, f"every {t['every']}, {t['hours']}"))
+    return [*rows, ("Blank loop", "start from empty fields", "", "")]
+
+
+class TemplateGallery(ModalScreen):
+    """What each template does and needs; the row chosen is the template the add form starts from."""
+    DEFAULT_CSS = """
+    TemplateGallery { align: center middle; }
+    TemplateGallery > Vertical { width: 150; height: auto; max-height: 100%; border: round $accent; padding: 1 2; background: $surface; }
+    TemplateGallery DataTable { height: auto; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text("New loop: pick a template", style="bold"))
+            yield DataTable(id="gallery-table", cursor_type="row")
+            yield Static(Text("enter choose · esc cancel", style="dim"))
+
+    def on_mount(self):
+        table = self.query_one("#gallery-table", DataTable)
+        table.add_columns("template", "what it does", "needs", "schedule")
+        for row in gallery_rows():
+            table.add_row(*(Text(cell) for cell in row))
+        table.focus()
+
+    def on_data_table_row_selected(self, event):
+        self.dismiss([*loops.TEMPLATES, ""][event.cursor_row])
+
+    def action_cancel(self):
+        self.dismiss(None)
 
 
 class LoopForm(ModalScreen):
@@ -252,26 +250,43 @@ class LoopForm(ModalScreen):
     SCHEDULE_IDS = ("loop-kind", "loop-number", "loop-unit", "loop-at", "loop-cron")
     # a refusal goes under the first field whose name it mentions; anything else goes under the form's own problem line
     ERROR_FIELDS = ("hours", "account", "team")
+    EDIT_FIELDS = ("prompt", "hours", "account")
     _now = staticmethod(datetime.now)
 
+    def __init__(self, name=None, current=None, template=None):
+        super().__init__()
+        self.loop_name = name
+        self.current = current or {}
+        self.template = template
+
+    @property
+    def editing(self):
+        return self.loop_name is not None
+
     def compose(self):
+        skill_names = [i["name"] for i in self._skills()]
+        if self.current.get("skill") and self.current["skill"] not in skill_names:
+            skill_names.append(self.current["skill"])   # a Select refuses a value it has no option for
         with Vertical():
-            yield Static(Text("Add a loop", style="bold"))
+            yield Static(Text(f"Edit loop {self.loop_name}" if self.editing else "Add a loop", style="bold"))
             yield Label("name")
-            yield Input(id="loop-name")
-            yield Label("template")
-            yield Select([(t, t) for t in loops.TEMPLATES], prompt="no template", id="loop-template", compact=True)
+            yield Input(value=self.loop_name or "", id="loop-name", disabled=self.editing)
+            if not self.editing:
+                yield Label("template")
+                yield Select([(t, t) for t in loops.TEMPLATES], prompt="no template", id="loop-template", compact=True)
             yield Label("skill")
-            yield Select([(i["name"], i["name"]) for i in self._skills()], prompt="no skill", id="loop-skill", compact=True)
+            yield Select([(n, n) for n in skill_names], prompt="no skill", id="loop-skill", compact=True,
+                         value=self.current.get("skill") or Select.NULL)
             for key, label in self.TEXT_FIELDS:
                 yield Label(label)
-                yield Input(value=self.DEFAULTS.get(key, ""), id=f"loop-{key}")
+                value = str(self.current.get(key) or "") if self.editing else self.DEFAULTS.get(key, "")
+                yield Input(value=value, id=f"loop-{key}", disabled=self.editing and key == "team")   # `pl loops edit` has no team option
                 yield Static(id=f"loop-{key}-error", classes="error")
                 if key == "prompt":
                     yield from self._schedule_widgets()
-            yield Checkbox("writes (off = read-only)", False, id="loop-writes")
+            yield Checkbox("writes (off = read-only)", bool(self.current.get("writes")), id="loop-writes")
             yield Static(id="loop-problem")
-            yield Static(Text("ctrl+s save · esc cancel", style="dim"))
+            yield Static(Text("ctrl+s save · esc cancel" + (" · a cleared field stays as it was" if self.editing else ""), style="dim"))
 
     @staticmethod
     def _schedule_widgets():
@@ -293,10 +308,17 @@ class LoopForm(ModalScreen):
             return []
 
     def on_mount(self):
+        parts = schedule.split(self.current.get("every") or "")
+        self.query_one("#loop-kind", Select).value = parts["kind"] or Select.NULL
+        self.query_one("#loop-unit", Select).value = parts["unit"]
+        for key in ("number", "at", "cron"):
+            self.query_one(f"#loop-{key}", Input).value = parts[key]
         self._show_preview()
+        if self.template:
+            self.query_one("#loop-template", Select).value = self.template
 
     def on_input_changed(self, event):
-        if event.input.id == "loop-name":
+        if event.input.id == "loop-name" and not self.editing:
             self._show_problem(self._name_problem(event.value.strip()) if event.value.strip() else "")
         elif event.input.id in self.SCHEDULE_IDS:
             self._show_preview()
@@ -358,7 +380,29 @@ class LoopForm(ModalScreen):
     def _value(self, key):
         return self.query_one(f"#loop-{key}", Input).value.strip() or None
 
+    def _changes(self):
+        changes = {key: self._value(key) for key in self.EDIT_FIELDS
+                   if self._value(key) and self._value(key) != str(self.current.get(key) or "")}
+        every = self._every()
+        if every and every != str(self.current.get("every") or ""):
+            changes["every"] = every
+        skill = self.query_one("#loop-skill", Select).value
+        if skill is not Select.NULL and skill != self.current.get("skill"):
+            changes["skill"] = skill
+        writes = self.query_one("#loop-writes", Checkbox).value
+        if writes != bool(self.current.get("writes")):
+            changes["writes"] = writes
+        if "every" in changes:
+            try:
+                schedule.preview(changes["every"], self._now(), 1)
+            except ValueError as e:
+                self._show_problem(str(e))
+                return
+        self.dismiss(changes)
+
     def action_save(self):
+        if self.editing:
+            return self._changes()
         name = (self._value("name") or "")
         problem = self._name_problem(name)
         skill = self.query_one("#loop-skill", Select).value
@@ -477,7 +521,11 @@ class LoopsView(Widget):
         def added(name):
             if name:
                 self.app.notify(f"added loop {name}", markup=False)
-        self.app.push_screen(LoopForm(), added)
+
+        def chosen(template):
+            if template is not None:
+                self.app.push_screen(LoopForm(template=template or None), added)
+        self.app.push_screen(TemplateGallery(), chosen)
 
     def load_tail(self):
         x = self.selected()
@@ -534,12 +582,12 @@ class LoopsView(Widget):
         svc = C.SERVICES.get(name) or C.LOOPS_OFF.get(name) or {}
         current = {"skill": svc.get("skill"), "prompt": None if svc.get("skill") else svc.get("prompt"),
                    "every": svc.get("every"), "hours": svc.get("hours"), "account": svc.get("profile") or svc.get("account"),
-                   "writes": svc.get("writes")}
+                   "writes": svc.get("writes"), "team": svc.get("team")}
 
         def saved(changes):
             if changes:
                 self._change(f"edited {name}", loops.edit, name, **changes)
-        self.app.push_screen(EditLoopScreen(name, current), saved)
+        self.app.push_screen(LoopForm(name, current), saved)
 
     def action_pause(self):
         x = self.selected()

@@ -153,6 +153,12 @@ def test_edit_changes_fields_and_refuses_a_bad_every(table, monkeypatch, capsys)
 NAMES = ("auto-review", "daily-standup", "inbox-triage", "overdue-invoices", "dependency-updates", "stale-cards")
 
 
+def test_a_templates_needs_is_named_in_its_prompt():
+    for name, template in loops.TEMPLATES.items():
+        if "needs" in template:
+            assert template["needs"] in template["prompt"], name
+
+
 def test_every_template_fills_every_field(table, monkeypatch):
     assert tuple(loops.TEMPLATES) == NAMES
     for name in NAMES:
