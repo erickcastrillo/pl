@@ -220,6 +220,8 @@ def no_live_agent_window(monkeypatch):
     monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda *a, **k: None)   # it reads the agent's screen: tests fake it
     monkeypatch.setattr(dispatch, "death_line", lambda *a, **k: None)
+    from pl import agent_alerts
+    monkeypatch.setattr(agent_alerts, "check", lambda *a, **k: None)   # it reads each agent pane: test_agent_alerts turns it on
 
 
 @pytest.fixture(autouse=True)

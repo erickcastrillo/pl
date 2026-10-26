@@ -20,6 +20,14 @@ from pl.util import now_iso, short_id
 REWORK_EVERY = 600   # seconds between two looks at the rework label (one REST call per repo)
 PR_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
 _LAST = {"at": None}
+SEEN = {}   # PR url -> frozenset of its label names, as the last rework or merge look saw it (closed PRs dropped)
+
+
+def saw(url, state, names):
+    if str(state).upper() == "OPEN":
+        SEEN[url] = frozenset(names)
+    else:
+        SEEN.pop(url, None)
 
 
 def labels():
@@ -48,6 +56,8 @@ def flagged(repos, lab):
         q = urllib.parse.urlencode({"state": "open", "labels": lab["rework"], "per_page": 100})
         for it in json.loads(github._gh(["api", f"repos/{repo}/issues?{q}"]) or "[]"):
             names = {x.get("name") for x in it.get("labels") or []}
+            if it.get("pull_request"):
+                saw(it.get("html_url") or "", "open", names)
             if it.get("pull_request") and lab["failed"] not in names:
                 out.add((repo, int(it["number"])))
     return out
