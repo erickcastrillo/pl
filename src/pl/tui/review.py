@@ -247,7 +247,7 @@ def run_command(app, fn, after=None, kind=None, says=None, failed="", done=None,
     app.run_worker(run, thread=True, group="review")
 
 
-def confirm_and_approve(app, card_id, title, kind, after=None, busy=None, done=None):
+def confirm_and_approve(app, card_id, title, kind, after=None, busy=None, done=None, agent_pending=False):
     def answered(yes):
         if yes:
             if busy:
@@ -255,7 +255,8 @@ def confirm_and_approve(app, card_id, title, kind, after=None, busy=None, done=N
             run_command(app, commands.cmd_approve, after, kind=kind, id=card_id, force=False,
                         says=lambda c: f"Approved: {title} → {col_name(c['list_id'])}", failed="Not approved: ",
                         done=done)
-    app.push_screen(ConfirmScreen(f"Approve the {kind} for {short_id(card_id)}  {title}?"), answered)
+    question = "Confirm the agent's approval?" if agent_pending else f"Approve the {kind} for {short_id(card_id)}  {title}?"
+    app.push_screen(ConfirmScreen(question), answered)
 
 
 class ConfirmScreen(ModalScreen):

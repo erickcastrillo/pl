@@ -10,7 +10,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Markdown, OptionList, Static
 
 from pl import config as C
-from pl import move_agent, trackers
+from pl import confirm, move_agent, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
@@ -230,7 +230,8 @@ class CardScreen(Screen):
     def action_approve(self):
         if self.card:
             kind = "spec" if self.col == "Spec ready" else "plan"
-            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close)
+            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close,
+                                agent_pending=bool(confirm.pending(self.card)))
 
     def action_send_back(self):
         if self.card:
