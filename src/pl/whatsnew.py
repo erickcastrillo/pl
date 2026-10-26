@@ -258,6 +258,8 @@ ENTRIES = [
        "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
     _e("2026-10-26.58", "Editing a loop uses the same form as adding one",
        "Loops tab: e opens the add form filled in, with the skill list and schedule check", "pl loops edit"),
+    _e("2026-10-26.59", "All pipelines' waiting items on Dashboard",
+       "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
 ]
 
 
