@@ -252,7 +252,9 @@ ENTRIES = [
        "pl skills list"),
     _e("2026-10-25.55", "Remove on the Skills screen says which stages, loops and pods use the skill",
        "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
-    _e("2026-10-26.51", "A Get started checklist on Home for a new profile",
+    _e("2026-10-26.56", "Ctrl+P finds and runs any console action or tab",
+       "ctrl+p, type an action like retry", "pl --help"),
+    _e("2026-10-26.57", "A Get started checklist on Home for a new profile",
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
 ]
 

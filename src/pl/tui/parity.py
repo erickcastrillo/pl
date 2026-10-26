@@ -41,6 +41,7 @@ COMMANDS = {
     "ReviewScreen.send_back": "pl reject <id> <notes>",
     "SkillsView.share": "pl skills share NAME",
     "SkillsView.link": "pl skills link NAME ACCOUNT",
+    "AssistantView.undo": "pl brain undo CONV",
     "AssistantView.file_idea": "pl assistant idea file <id>",
     "BrainView.file_idea": "pl assistant idea file <id>",
     # Direct action aliases
