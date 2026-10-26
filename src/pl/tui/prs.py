@@ -13,7 +13,7 @@ from pl.commands import PR_URL, intent_text
 from pl.setup import LABELS
 from pl.trackers import github
 from pl.tui.cards import FitTable
-from pl.tui.chrome import skip_headings
+from pl.tui.chrome import empty_state, skip_headings
 from pl.tui.needs import needs_you_count
 from pl.tui.review import ConfirmScreen
 
@@ -194,7 +194,7 @@ class PrsView(Horizontal):
         g = pr_groups(data["snapshot"]["rows"])
         self.query_one("#prs-table").border_title = f"Pull requests · {needs_you_count(data)} need you"
         built, self._prs = [], {}
-        for key, title, colour in GROUPS:
+        for key, title, colour in (GROUPS if any(g.values()) else ()):
             built.append((f"group:{key}", Text(f"■ {title} {len(g[key])}", style=f"bold {colour}")))
             for pr in g[key]:
                 rid = pr.get("url") or f"{pr['repo']}#{pr['number']}"
@@ -208,6 +208,8 @@ class PrsView(Horizontal):
                 built.append((rid, row))
             if not g[key]:
                 built.append((f"none:{key}", Text("  none", style="dim")))
+        if not built:
+            built = [(f"empty:{i}", Text(line, style="dim")) for i, line in enumerate(empty_state("prs"))]
         t = self.query_one(FitTable)
         if [k for k, _ in built] == [k for k, _ in self._built]:
             col = next(iter(t.columns))

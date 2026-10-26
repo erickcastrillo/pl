@@ -5,6 +5,7 @@ from textual.containers import Horizontal
 from textual.widgets import DataTable, Static
 
 from pl import alerts
+from pl.tui.chrome import empty_state
 from pl.util import age, short_id
 
 EMPTY = "Alerts: none open (pl alerts --all for history)"
@@ -57,6 +58,8 @@ class AlertsView(Horizontal):
         keep_key = self._current()[0]
         self._rows = {a["key"]: a for a in al}
         built = [(a["key"], cells(a)) for a in self._rows.values()]
+        if not built:
+            built = [(f"empty:{i}", (Text(line, style="dim"), Text(""), Text(""))) for i, line in enumerate(empty_state("alerts"))]
         if [k for k, _ in built] == [k for k, _ in self._built]:   # same rows: change only the cells that differ
             for (key, new), (_, was) in zip(built, self._built):
                 for col, n, w in zip(t.columns, new, was):
