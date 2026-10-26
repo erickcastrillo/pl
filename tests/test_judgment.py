@@ -135,6 +135,7 @@ def test_each_area_gets_only_its_files_and_the_acceptance_criteria(jh, monkeypat
 
 @pytest.mark.parametrize("answer, cause", [
     (subprocess.TimeoutExpired(["x"], 300), "timed out"),
+    (FileNotFoundError("fake-harness"), "OSError fake-harness"),
     (types.SimpleNamespace(returncode=1, stdout="", stderr="boom"), "exit 1"),
     (types.SimpleNamespace(returncode=0, stdout="I think it is fine", stderr=""), "no JSON"),
     (_ok("maybe"), "answer was maybe"),
@@ -232,3 +233,17 @@ def test_dry_run_posts_nothing(jh):
     merges.cmd_merges(types.SimpleNamespace(dry_run=True, json=False))
     assert jh.run_calls and not jh.posted
     assert not [c for c in jh.calls if "-X" in c or c[:2] in (["pr", "edit"], ["pr", "merge"])]
+
+
+def test_a_pr_diff_that_gh_cannot_fetch_needs_a_person_and_does_not_end_the_pass(jh, monkeypatch):
+    plain = merges.github._gh
+
+    def gh(args):
+        if args[:2] == ["pr", "diff"]:
+            raise SystemExit("gh: diff too large")
+        return plain(args)
+
+    monkeypatch.setattr(merges.github, "_gh", gh)
+    card, pr = _setup(jh)
+    r = _line(_judge(jh, card, pr), "judgment (ui)")
+    assert r["ok"] is False and r["why"].startswith("needs a person: no usable verdict: diff unavailable") and not jh.run_calls

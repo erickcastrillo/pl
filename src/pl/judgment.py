@@ -60,6 +60,8 @@ def ask(area, patch, acs):
         res = harnesses._run(argv, env=env, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         return PERSON, "no usable verdict: timed out"
+    except OSError as e:
+        return PERSON, f"no usable verdict: OSError {_reason(e)[:60]}"
     if res.returncode != 0:
         return PERSON, f"no usable verdict: exit {res.returncode}"
     answer = ideas.last_json(res.stdout or "")
@@ -132,7 +134,10 @@ def rules(card, pr, write=False, asked=True):
     repo, num, head = C.TRACKER["repo"], pr["number"], pr["headRefOid"]
     found = _stored(repo, num, head)
     if found is None or not set(hit) <= set(found):
-        found = verdicts(card, pr, hit)
+        try:
+            found = verdicts(card, pr, hit)
+        except SystemExit as e:
+            found = {a: (PERSON, f"no usable verdict: diff unavailable ({_reason(e)[:60]})") for a in hit}
         if write:
             github._gh(["api", "-X", "POST", f"repos/{repo}/issues/{num}/comments", "-f", f"body={_comment(found, head)}"])
     return [{"rule": f"judgment ({a})", "ok": found[a][0] == LOW, "why": f"{found[a][0]}: {found[a][1]}"} for a in hit]
