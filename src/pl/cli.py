@@ -77,6 +77,8 @@
   pl activity [--level info|warning|error] [--kind KIND] [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--json]
                           the activity feed, newest first: time, level, kind, card, detail; --json prints one
                           object per line. demo writes one sample entry per level (tagged demo); demo --clear removes them
+  pl activity thresholds [--json]
+                          the slow-work warning limits ([activity]) the dispatcher uses; exits 2 when one is invalid
   pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack] [--summary]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
@@ -459,7 +461,7 @@ def build_parser():
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
     for verb in ("pause", "resume"):
         sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("activity"); p.add_argument("action", nargs="?", choices=["demo"]); p.add_argument("--clear", action="store_true", help="with demo: remove the demo entries")
+    p = sub.add_parser("activity"); p.add_argument("action", nargs="?", choices=["demo", "thresholds"]); p.add_argument("--clear", action="store_true", help="with demo: remove the demo entries")
     p.add_argument("--level", help="info, warning or error"); p.add_argument("--kind"); p.add_argument("--since", help="90m, 24h, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM"); p.add_argument("--json", action="store_true", help="one JSON object per line")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")

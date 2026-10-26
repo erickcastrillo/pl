@@ -48,6 +48,9 @@ def _demo(clear):
 def cmd_activity(a):
     if a.action == "demo":
         return _demo(a.clear)
+    if a.action == "thresholds":
+        from pl import slowwork
+        return slowwork.cmd_activity(a)
     if a.level and a.level not in events.LEVELS:
         raise BadInput(f"pl activity: --level takes info, warning or error, not {a.level!r}")
     since = _since(a.since) if a.since else None
