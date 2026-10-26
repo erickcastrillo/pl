@@ -163,3 +163,29 @@ def test_token_absent_from_logs_events_and_json(tmp_path, monkeypatch):
         if p.is_file():
             assert secret not in p.read_text(errors="ignore"), f"secret leaked in {p}"
 
+
+
+def _two_connectors(monkeypatch):
+    from pl import manager
+    conns = {
+        "s": {"role": "messaging", "adapter": "slack", "token": "${SL_TOKEN}", "allow": ["U1"]},
+        "d": {"role": "messaging", "adapter": "discord", "token": "${DC_TOKEN}", "allow": ["1"]},
+        "i": {"role": "messaging", "adapter": "irc", "token": "${IRC_TOKEN}", "allow": ["1"]},
+    }
+    monkeypatch.setattr(manager, "_machine_toml", lambda: {"connectors": conns})
+
+
+def test_adapter_builds_slack_and_discord_connectors(monkeypatch):
+    from pl import chat
+    from pl.chat.discord import Discord
+    from pl.chat.slack import Slack
+    _two_connectors(monkeypatch)
+    assert isinstance(chat.adapter("s"), Slack)
+    assert isinstance(chat.adapter("d"), Discord)
+
+
+def test_adapter_unknown_type_still_raises(monkeypatch):
+    from pl import chat
+    _two_connectors(monkeypatch)
+    with pytest.raises(KeyError, match="unknown adapter"):
+        chat.adapter("i")

@@ -283,6 +283,8 @@ ENTRIES = [
        "Alerts tab; header: alerts N", "pl alerts"),
     _e("2026-10-26.63", "Activity levels: errors and warnings with counts",
        "Activity tab: f cycles all, errors, warnings, needs you, dispatcher, loops", "pl activity --level warning"),
+    _e("2026-10-26.63", "Chat connectors in the console", "Extend → Connectors: Chat connectors; t tests one",
+       "pl chat list"),
 ]
 
 
