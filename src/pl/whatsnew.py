@@ -224,6 +224,8 @@ ENTRIES = [
        "pl loops add --template stale-cards"),
     _e("2026-10-25.41", "Settle a sync conflict in one command", "pl alerts: the sync-conflict alert names it",
        "pl sync resolve <card> --keep remote"),
+    _e("2026-10-25.42", "Board backup to git: board.json every 5 minutes",
+       "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)", "pl alerts"),
 ]
 
 

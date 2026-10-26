@@ -1,10 +1,12 @@
 """The dispatcher: start the right agent for every waiting card."""
+import contextlib
 import os
 import hashlib
 import json
 import re
 import secrets
 import shlex
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -15,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, alerts, backup, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1710,7 +1712,25 @@ def cmd_dispatch(a):
         jobs.result(f"{C.PROFILE_NAME} pass done")
 
 
+class _Terminated(BaseException):
+    """SIGTERM; not a SystemExit, which a pass would catch as its own failure."""
+
+
+def _terminate(*_):
+    raise _Terminated
+
+
 def _dispatch(a):
+    try:
+        _passes(a)
+    except _Terminated:
+        pass
+    finally:
+        if not a.dry_run:
+            backup.tick(force=True)
+
+
+def _passes(a):
     if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.manages(C.PROFILE_NAME):
         print(f"this machine is run by pl manager (pid {manager.holder_pid() or '?'}); it starts this profile's dispatcher")
         return   # a restored tmux window just closes; the manager's own dispatcher keeps running
@@ -1733,6 +1753,10 @@ def _dispatch(a):
                 print(line)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - a bad library folder or config never stops the dispatcher
             print(f"built-in skills not installed: {e}", file=sys.stderr)
+    if lock:
+        backup.check()
+        with contextlib.suppress(ValueError):   # only the main thread can install a handler
+            signal.signal(signal.SIGTERM, _terminate)
     from pl import profiles
     for w in profiles.shared_warnings(profiles.list_profiles(), profiles.current_row()):
         print(f"warning: {w}")
@@ -1776,6 +1800,8 @@ def _dispatch(a):
             if not (isinstance(e, RateLimited) and e.until == noted):   # one event per rate-limit window
                 events.emit("error", message=str(e))
             noted = e.until if isinstance(e, RateLimited) else None
+        if lock:
+            backup.tick()
         if a.once:
             return
         if seen is not None:   # plus pl's writes and the idea files: any of them changing is a change
@@ -1786,7 +1812,7 @@ def _dispatch(a):
             wait = min(wait * ghquota.pace(), IDLE_MAX * 3)   # a low shared budget: passes come further apart
         if lock:
             lock = _restart_if_new(lock)
-        _nap(wait, lambda: _fast_guard(a.dry_run))
+        _nap(wait, lambda: (_fast_guard(a.dry_run), lock and backup.tick()))
 
 
 def _restart_if_new(lock):
