@@ -223,8 +223,11 @@ def header_text(data, error=None, note=None, last_good=None):
         hhmm = since.split("T")[1][:5] if "T" in since else since[:5]
         since_str = f" since {hhmm}" if hhmm else ""
         t.append(f"   KILL SWITCH ON{since_str}", style="bold red")
-    if snap and (n := needs_you_count(data)):
+    al = (data or {}).get("alerts") or []
+    if snap and (n := needs_you_count(data) + sum(a.get("severity") == "high" for a in al)):
         t.append(f"   needs you {n}", style="bold red")
+    if al:
+        t.append(f"   alerts {len(al)}", style="bold #e0a040")
     if note:
         t.append(f"   {note}", style="bold red" if "fail" in note or "still running" in note else "#e0a040")
     if error:

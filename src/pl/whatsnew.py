@@ -256,6 +256,8 @@ ENTRIES = [
        "ctrl+p, type an action like retry", "pl --help"),
     _e("2026-10-26.57", "New loop starts from a template gallery: what each does and needs",
        "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
+    _e("2026-10-26.58", "Alerts tab: newest first with cards; a hides one until it changes",
+       "Alerts tab; header: alerts N", "pl alerts"),
 ]
 
 

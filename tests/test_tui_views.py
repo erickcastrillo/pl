@@ -883,7 +883,7 @@ async def test_alerts_empty_lists_watches():
 
 async def test_a_still_approves_outside_alerts(monkeypatch):
     from pl.tui import needs as tui_needs
-    from pl.tui.review import ConfirmScreen, ReviewScreen
+    from pl.tui.review import ConfirmScreen
     _fake_card_read(monkeypatch, [])
     monkeypatch.setattr(tui_needs, "ReviewScreen", lambda *a, **kw: ConfirmScreen("review"))
     data = fake_data()
@@ -3049,6 +3049,27 @@ def _snap(disp="running", working=0, needs=None, summary="", prof="acme: ok (0 r
 def test_status_sentence(snap, stopped, sentence):
     from pl.tui.chrome import status_sentence
     assert status_sentence(snap, stopped) == sentence
+
+
+def _one_manual_card_data(alerts):
+    from pl.tui.needs import needs_you_count
+    data = fake_data()
+    data["snapshot"]["rows"] = [_card("c0000003aaaa", "Host DB proxy", "Manual", auto=False, hours=30)]
+    data["alerts"] = alerts
+    assert needs_you_count(data) == 1
+    return data
+
+
+def test_header_counts_alerts_and_high_needs_you():
+    from pl.tui.chrome import header_text
+    plain = header_text(_one_manual_card_data([_alert("k1", "high"), _alert("k2")])).plain
+    assert "alerts 2" in plain and "needs you 2" in plain
+
+
+def test_header_without_alerts_is_unchanged():
+    from pl.tui.chrome import header_text
+    plain = header_text(_one_manual_card_data([])).plain
+    assert "alerts" not in plain and "needs you 1" in plain
 
 
 def test_header_never_shows_the_raw_profile_line():
