@@ -9,6 +9,7 @@ COMMANDS = {
     "PlApp.update": "pl update",
     "HomeView.select": "pl profiles",
     "HomeView.details": "pl profiles",
+    "HomeView.get_started": "pl setup",
     "PlApp.switcher": "pl list --json",
     "PlApp.oldest": "pl inbox --json",
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
@@ -58,6 +59,8 @@ COMMANDS = {
 
 NAV = {
     "brain",
+    "collapse_start",
+    "dismiss_start",
     # Dialog and modal controls
     "close",
     "cancel",

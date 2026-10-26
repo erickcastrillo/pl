@@ -8,6 +8,12 @@ from pl.tui.app import PlApp
 from pl.tui.home import home_rows, HomeView
 
 
+def _dismissed(monkeypatch, tmp_path):
+    """A profile past its Get started checklist."""
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path)
+    (tmp_path / "getstarted.json").write_text(json.dumps({"dismissed": 1}))
+
+
 def _fake_summaries(now=None):
     now = now or time.time()
     return [
@@ -59,7 +65,8 @@ def _fake_summaries(now=None):
     ]
 
 
-async def test_home_shows_one_row_per_pipeline_with_bold_needs_you():
+async def test_home_shows_one_row_per_pipeline_with_bold_needs_you(monkeypatch, tmp_path):
+    _dismissed(monkeypatch, tmp_path)
     home = Path.home()
     # Setup 2 profiles so Home tab is available
     (home / ".pl-sales").mkdir(parents=True, exist_ok=True)
@@ -128,7 +135,8 @@ def test_home_refresh_reads_only_summary_files(monkeypatch):
     assert "alpha" in names and "beta" in names
 
 
-async def test_one_profile_skips_home_and_opens_as_today():
+async def test_one_profile_skips_home_and_opens_as_today(monkeypatch, tmp_path):
+    _dismissed(monkeypatch, tmp_path)
     home = Path.home()
     # Only 1 profile in home
     (home / ".pl-only").mkdir(parents=True, exist_ok=True)
@@ -200,7 +208,8 @@ def test_enter_on_home_opens_the_pipeline(monkeypatch):
     assert calls == [("switch", "sales"), ("tab", "cards")]
 
 
-async def test_home_has_a_new_pipeline_row_above_the_pipelines():
+async def test_home_has_a_new_pipeline_row_above_the_pipelines(monkeypatch, tmp_path):
+    _dismissed(monkeypatch, tmp_path)
     data = {"home": _fake_summaries()}
     from textual.app import App
 
@@ -218,7 +227,8 @@ async def test_home_has_a_new_pipeline_row_above_the_pipelines():
         assert view.selected() is None
 
 
-async def test_enter_on_the_new_pipeline_row_opens_the_wizard():
+async def test_enter_on_the_new_pipeline_row_opens_the_wizard(monkeypatch, tmp_path):
+    _dismissed(monkeypatch, tmp_path)
     from textual.app import App
     from pl.tui.newpipeline import NewPipelineScreen
 
@@ -310,3 +320,162 @@ async def test_on_the_new_pipeline_row_enter_opens_the_wizard_and_space_does_not
         await pilot.press("enter")
         await pilot.pause()
         assert calls == ["push"]
+
+
+def _gs_profile(monkeypatch, tmp_path, tracker=None, accounts=None, stages=None, pipeline=None):
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(C, "TRACKER", tracker or {})
+    monkeypatch.setattr(C, "ACCOUNTS", accounts or {})
+    monkeypatch.setattr(C, "STAGES", stages or {})
+    monkeypatch.setattr(C, "PIPELINE", pipeline)
+
+
+def _gs_data(*cols, done=(), pr=None):
+    rows = [{"kind": "row", "card": {"id": f"x#{i}"}, "col": c, "pr": pr} for i, c in enumerate(cols)]
+    rows.append({"kind": "loop_idle", "card": None, "col": "Loops"})
+    return {"snapshot": {"rows": rows, "done": [{"kind": "row", "card": {"id": "d#1"}, "col": c} for c in done],
+                         "prof": "", "parked": False, "at": "", "summary": "", "disp": "running"}}
+
+
+def test_get_started_ticks_follow_profile_state(monkeypatch, tmp_path):
+    from pl.tui import getstarted
+    _gs_profile(monkeypatch, tmp_path)
+    assert [i[0] for i in getstarted.ITEMS] == ["board", "accounts", "idea", "spec", "plan", "pr"]
+    assert not any(getstarted.ticks(_gs_data()).values())
+    _gs_profile(monkeypatch, tmp_path, tracker={"type": "memory"}, accounts={"a": {}})
+    t = getstarted.ticks(_gs_data("Inbox"))
+    assert t == {"board": True, "accounts": True, "idea": True, "spec": False, "plan": False, "pr": False}
+    t = getstarted.ticks(_gs_data("Approved"))
+    assert t["spec"] and t["plan"] and not t["pr"]
+    assert all(getstarted.ticks(_gs_data("PR open")).values())
+    assert all(getstarted.ticks(_gs_data("Approved", pr="https://x/pull/1")).values())
+    t = getstarted.ticks(_gs_data(done=["Done"]))
+    assert t["spec"] and t["plan"] and t["pr"]
+
+
+def test_get_started_accounts_unticked_when_a_stage_names_an_unknown_account(monkeypatch, tmp_path):
+    from pl.tui import getstarted
+    _gs_profile(monkeypatch, tmp_path, accounts={"a": {}}, stages={"run": {"account": "ghost"}})
+    assert getstarted.ticks(_gs_data())["accounts"] is False
+    _gs_profile(monkeypatch, tmp_path, accounts={"a": {}}, stages={"run": {"account": "a"}})
+    assert getstarted.ticks(_gs_data())["accounts"] is True
+
+
+def test_get_started_custom_columns_never_crash(monkeypatch, tmp_path):
+    from pl.tui import getstarted
+    _gs_profile(monkeypatch, tmp_path)
+    monkeypatch.setattr(C, "STAGE_DONE_AT", {"spec": "Nope", "plan": "Nada", "run": "Never"})
+    t = getstarted.ticks(_gs_data("Inbox"))
+    assert t["idea"] and not (t["spec"] or t["plan"] or t["pr"])
+
+
+def test_get_started_starts_only_without_cards_and_dismiss_persists(monkeypatch, tmp_path):
+    from pl.tui import getstarted
+    first = tmp_path / "first"
+    first.mkdir()
+    _gs_profile(monkeypatch, first)
+    assert getstarted.active(_gs_data("Inbox")) is False
+    assert not (first / "getstarted.json").exists()
+    assert getstarted.active(_gs_data()) is True
+    assert "started" in json.loads((first / "getstarted.json").read_text())
+    assert getstarted.active(_gs_data("Inbox")) is True
+    getstarted.mark(dismissed=time.time())
+    assert "dismissed" in getstarted.marks()
+    assert getstarted.active(_gs_data()) is False
+    other = tmp_path / "other"
+    other.mkdir()
+    _gs_profile(monkeypatch, other)
+    assert getstarted.active(_gs_data()) is True
+
+
+def test_get_started_hides_for_good_when_all_ticked(monkeypatch, tmp_path):
+    from pl.tui import getstarted
+    _gs_profile(monkeypatch, tmp_path, tracker={"type": "memory"}, accounts={"a": {}})
+    assert getstarted.active(_gs_data()) is True
+    assert getstarted.active(_gs_data("PR open")) is False
+    assert "done" in getstarted.marks()
+    assert getstarted.active(_gs_data()) is False
+
+
+def test_get_started_wanted_before_the_first_refresh(monkeypatch, tmp_path):
+    from pl.tui import getstarted
+    _gs_profile(monkeypatch, tmp_path)
+    assert getstarted.wanted() is True
+    (tmp_path / "summary.json").write_text(json.dumps({"columns": [{"title": "Inbox", "cards": 2}]}))
+    assert getstarted.wanted() is False
+    getstarted.mark(started=1)
+    assert getstarted.wanted() is True
+    getstarted.mark(dismissed=1)
+    assert getstarted.wanted() is False
+
+
+def test_get_started_text_lists_items_with_keys_or_collapses():
+    from pl.tui import getstarted
+    t = {"board": True, "accounts": False, "idea": False, "spec": False, "plan": False, "pr": False}
+    full = getstarted.text(t, False).plain
+    assert full.splitlines()[0] == "Get started (1/6)"
+    assert "✓ board connected" in full and "press I" in full
+    assert [full.index(i[1]) for i in getstarted.ITEMS] == sorted(full.index(i[1]) for i in getstarted.ITEMS)
+    assert "(1/6)" in getstarted.text(t, True).plain and len(getstarted.text(t, True).plain.splitlines()) == 1
+
+
+def _gs_app(monkeypatch, tmp_path, provider):
+    _gs_profile(monkeypatch, tmp_path, tracker={"type": "memory"}, accounts={"a": {}})
+    return PlApp(snapshot_provider=provider)
+
+
+async def test_home_shows_get_started_for_a_profile_without_cards(monkeypatch, tmp_path):
+    app = _gs_app(monkeypatch, tmp_path, lambda: _gs_data())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        box = app.query_one("#get-started")
+        assert app.active_tab == "home" and box.display
+        text = str(box.render())
+        assert [text.index(label) for _, label, _, _ in __import__("pl.tui.getstarted", fromlist=["x"]).ITEMS] == sorted(
+            text.index(label) for _, label, _, _ in __import__("pl.tui.getstarted", fromlist=["x"]).ITEMS)
+        assert "press I" in text
+        await pilot.press("I")
+        await pilot.pause()
+        assert app.active_tab == "ideas"
+
+
+async def test_get_started_ticks_on_refresh(monkeypatch, tmp_path):
+    state = {"cols": []}
+    app = _gs_app(monkeypatch, tmp_path, lambda: _gs_data(*state["cols"]))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        assert "✓ its plan approved" not in str(app.query_one("#get-started").render())
+        state["cols"] = ["Approved"]
+        app.refresh_data()
+        await pilot.pause()
+        assert "✓ its plan approved" in str(app.query_one("#get-started").render())
+
+
+async def test_get_started_collapses_and_dismisses(monkeypatch, tmp_path):
+    app = _gs_app(monkeypatch, tmp_path, lambda: _gs_data())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        await pilot.press("G")
+        await pilot.pause()
+        assert str(app.query_one("#get-started").render()).startswith("Get started (2/6)")
+        assert "\n" not in str(app.query_one("#get-started").render()).strip()
+        await pilot.press("G")
+        await pilot.pause()
+        assert "its first PR opened" in str(app.query_one("#get-started").render())
+        await pilot.press("Z")
+        await pilot.pause()
+        assert not app.query_one("#get-started").display
+    assert "dismissed" in json.loads((tmp_path / "getstarted.json").read_text())
+    again = PlApp(snapshot_provider=lambda: _gs_data())
+    async with again.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        assert not again.query(HomeView) or not again.query_one("#get-started").display
+
+
+async def test_home_unchanged_for_a_profile_with_cards(monkeypatch, tmp_path):
+    app = _gs_app(monkeypatch, tmp_path, lambda: _gs_data("Inbox"))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.pause()
+        assert app.active_tab == "dashboard"
+        assert not app.query(HomeView) or not app.query_one("#get-started").display
+        assert not (tmp_path / "getstarted.json").exists()
