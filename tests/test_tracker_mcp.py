@@ -663,7 +663,7 @@ def test_flat_write_arguments_and_paged_cards(script):
 def test_get_unknown_type_names_the_valid_types(monkeypatch):
     monkeypatch.setattr(C, "TRACKER", {"type": "nope"})
     trackers.reset()
-    with pytest.raises(SystemExit, match=r"unknown tracker type 'nope' \(valid: github-issues, github-project, local, mcp\)"):
+    with pytest.raises(SystemExit, match=r"unknown tracker type 'nope' \(valid: github-issues, github-project, local, mcp, vikunja\)"):
         trackers.get("tracker")
 
 

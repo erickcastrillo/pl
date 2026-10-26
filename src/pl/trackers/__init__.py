@@ -10,7 +10,8 @@ from pl import config as C
 
 # type -> "module:Class".
 TYPES = {"github-project": "pl.trackers.github:GitHubProject", "github-issues": "pl.trackers.github:GitHubIssues",
-         "mcp": "pl.trackers.mcp:Mcp", "local": "pl.trackers.local:Local"}
+         "mcp": "pl.trackers.mcp:Mcp", "local": "pl.trackers.local:Local",
+         "vikunja": "pl.trackers.vikunja:Vikunja"}
 
 
 class Tracker(Protocol):

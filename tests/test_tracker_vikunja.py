@@ -1,0 +1,242 @@
+"""Vikunja connector against an in-memory fake server on loopback: no network, no real Vikunja."""
+import json
+import re
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+
+from pl import board, trackers
+from pl import config as C
+from pl.trackers import metablock, vikunja
+
+TOKEN = "tk_secret_value_123"
+P, V = 7, 3
+
+
+class Fake:
+    def __init__(self):
+        self.buckets = [{"id": 10, "title": "Inbox"}, {"id": 11, "title": "Spec ready"}, {"id": 12, "title": "Done"}]
+        self.tasks = {}
+        self.in_bucket = {}
+        self.clock = 0
+        self.next_id = 100
+        self.writes = []
+
+    def stamp(self):
+        self.clock += 1
+        return f"2026-01-01T00:00:{self.clock:02d}Z"
+
+    def add_task(self, bucket, **fields):
+        self.next_id += 1
+        task = {"id": self.next_id, "title": "t", "description": "", "priority": 0, "labels": None,
+                "assignees": None, "done": False, "updated": self.stamp(), **fields}
+        self.tasks[task["id"]] = task
+        self.in_bucket[task["id"]] = bucket
+        return task
+
+
+def _handler(fake):
+    base = f"/api/v1/projects/{P}/views/{V}"
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, obj=None):
+            raw = b"" if obj is None else json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _run(self, method):
+            if self.headers.get("Authorization") != f"Bearer {TOKEN}":
+                return self._send(401, {"message": "missing, malformed, expired or otherwise invalid token"})
+            parts = urlsplit(self.path)
+            q = parse_qs(parts.query)
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n)) if n else None
+            if method != "GET":
+                fake.writes.append((method, parts.path))
+            path = parts.path
+            if path == f"{base}/buckets":
+                if method == "PUT":
+                    b = {"id": 20 + len(fake.buckets), "title": body["title"]}
+                    fake.buckets.append(b)
+                    return self._send(201, b)
+                return self._send(200, fake.buckets)
+            if path == f"{base}/tasks":
+                per, page = int(q.get("per_page", ["50"])[0]), int(q.get("page", ["1"])[0])
+                only = re.search(r"bucket_id=(\d+)", q.get("filter", [""])[0])
+                out = []
+                for b in fake.buckets:
+                    if only and int(only.group(1)) != b["id"]:
+                        continue
+                    mine = [t for i, t in fake.tasks.items() if fake.in_bucket[i] == b["id"]]
+                    out.append({**b, "tasks": mine[(page - 1) * per:page * per] or None})
+                return self._send(200, out)
+            if m := re.fullmatch(rf"{base}/buckets/(\d+)/tasks", path):
+                fake.in_bucket[body["task_id"]] = int(m.group(1))
+                fake.tasks[body["task_id"]]["updated"] = fake.stamp()
+                return self._send(200, {})
+            if path == f"/api/v1/projects/{P}/tasks" and method == "PUT":
+                t = fake.add_task(10, title=body["title"], description=body.get("description", ""))
+                return self._send(201, t)
+            if m := re.fullmatch(r"/api/v1/tasks/(\d+)", path):
+                tid = int(m.group(1))
+                if tid not in fake.tasks:
+                    return self._send(404, {"message": "not found"})
+                if method == "GET":
+                    t = dict(fake.tasks[tid])
+                    if q.get("expand") == ["buckets"]:
+                        t["buckets"] = [{"id": fake.in_bucket[tid], "project_view_id": V}]
+                    return self._send(200, t)
+                if method == "POST":
+                    fake.tasks[tid] = {**body, "id": tid, "updated": fake.stamp()}
+                    return self._send(200, fake.tasks[tid])
+                if method == "DELETE":
+                    del fake.tasks[tid]
+                    return self._send(200, {"message": "ok"})
+            return self._send(404, {"message": "no route"})
+
+        do_GET = lambda self: self._run("GET")      # noqa: E731
+        do_PUT = lambda self: self._run("PUT")      # noqa: E731
+        do_POST = lambda self: self._run("POST")    # noqa: E731
+        do_DELETE = lambda self: self._run("DELETE")  # noqa: E731
+
+    return H
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    f = Fake()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(f))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("VIKUNJA_TOKEN", TOKEN)
+    monkeypatch.setattr(C, "TRACKER", {"type": "vikunja", "url": f"http://127.0.0.1:{server.server_port}/",
+                                       "token": "${VIKUNJA_TOKEN}", "project_id": P, "view_id": V})
+    trackers.reset()
+    f.tracker = vikunja.Vikunja(C.TRACKER)
+    yield f
+    server.shutdown()
+    server.server_close()
+    trackers.reset()
+    trackers.set_dry_run(False)
+
+
+def test_columns_are_the_view_buckets(fake):
+    assert fake.tracker.columns() == {"Inbox": "10", "Spec ready": "11", "Done": "12"}
+
+
+def test_cards_list_tasks_by_bucket_and_page(fake, monkeypatch):
+    monkeypatch.setattr(vikunja, "PAGE", 2)
+    for i in range(5):
+        fake.add_task(10, title=f"a{i}")
+    fake.add_task(11, title="b", labels=[{"title": "bug"}], assignees=[{"username": "ann"}])
+    cards = fake.tracker.cards()
+    assert sorted(c["title"] for c in cards) == ["a0", "a1", "a2", "a3", "a4", "b"]
+    b = next(c for c in cards if c["title"] == "b")
+    assert b["id"] == f"vikunja#{b['id'].split('#')[1]}" and b["list_id"] == "11"
+    assert b["tags"] == ["bug"] and b["assigned_to"] == "ann"
+    assert {"id", "title", "description", "tags", "metadata", "list_id", "updated_at", "assigned_to"} <= set(b)
+    assert next(c for c in cards if c["title"] == "a0")["assigned_to"] is None
+
+
+def test_create_puts_task_in_column_and_reads_back(fake):
+    c = fake.tracker.create("Spec ready", title="T", description="text", metadata={"k": 1}, tags=["x"], assigned_to="me")
+    assert c["list_id"] == "11" and c["title"] == "T"
+    assert c["description"] == "text" and c["metadata"] == {"k": 1}
+    assert fake.in_bucket[int(c["id"].split("#")[1])] == 11
+
+
+def test_ensure_column_creates_missing_inbox(fake):
+    assert fake.tracker.ensure_column("Inbox") == "10"
+    new = fake.tracker.ensure_column("Review")
+    assert new == str(fake.buckets[-1]["id"]) and fake.tracker.columns()["Review"] == new
+
+
+def test_update_list_id_moves_task(fake):
+    c = fake.tracker.create("Inbox", title="T")
+    r = fake.tracker.update(c["id"], list_id="12")
+    assert r["list_id"] == "12" and fake.in_bucket[int(c["id"].split("#")[1])] == 12
+    assert fake.tracker.update(c["id"], column="Spec ready")["list_id"] == "11"
+
+
+def _rich(fake):
+    return fake.add_task(10, title="old", description=metablock.join("body", {"a": 1}), priority=4,
+                         labels=[{"id": 1, "title": "bug"}], assignees=[{"id": 9, "username": "ann"}])
+
+
+def test_update_title_keeps_assignee_description_labels_priority(fake):
+    t = _rich(fake)
+    fake.tracker.update(f"vikunja#{t['id']}", title="new")
+    got = fake.tasks[t["id"]]
+    assert got["title"] == "new" and got["priority"] == 4
+    assert got["assignees"] == t["assignees"] and got["labels"] == t["labels"]
+    assert metablock.split(got["description"])[:2] == ("body", {"a": 1})
+
+
+def test_update_metadata_only_keeps_fields(fake):
+    t = _rich(fake)
+    fake.tracker.update(f"vikunja#{t['id']}", metadata={"b": 2})
+    got = fake.tasks[t["id"]]
+    assert got["title"] == "old" and got["priority"] == 4 and got["assignees"] == t["assignees"]
+    assert metablock.split(got["description"])[:2] == ("body", {"a": 1, "b": 2})
+
+
+def test_description_keeps_metablock_and_text_readable(fake):
+    c = fake.tracker.create("Inbox", title="T", description="hello", metadata={"k": "v"})
+    raw = fake.tasks[int(c["id"].split("#")[1])]["description"]
+    assert raw.startswith("hello\n\n") and metablock.MARK in raw
+    c = fake.tracker.update(c["id"], description="changed")
+    assert c["description"] == "changed" and c["metadata"] == {"k": "v"}
+
+
+def test_updated_at_follows_task_updated(fake):
+    c = fake.tracker.create("Inbox", title="T")
+    before = fake.tracker.card(c["id"])["updated_at"]
+    fake.tracker.update(c["id"], title="U")
+    assert fake.tracker.card(c["id"])["updated_at"] > before
+
+
+def test_delete_removes_task(fake):
+    c = fake.tracker.create("Inbox", title="T")
+    fake.tracker.delete(c["id"])
+    assert fake.tasks == {}
+
+
+def test_url_points_at_task_page(fake):
+    assert fake.tracker.url("vikunja#12") == f"{C.TRACKER['url'].rstrip('/')}/tasks/12"
+
+
+def test_bad_token_error_is_masked(fake, monkeypatch):
+    monkeypatch.setenv("VIKUNJA_TOKEN", "wrong_token_value_999")
+    with pytest.raises(SystemExit) as e:
+        vikunja.Vikunja(C.TRACKER).columns()
+    assert "401" in str(e.value) and "wrong_token_value_999" not in str(e.value)
+
+
+def test_test_reports_columns(fake):
+    assert fake.tracker.test() == f"ok: vikunja {fake.tracker.url_base} project {P}, 3 columns"
+
+
+def test_dry_run_sends_no_write(fake):
+    t = _rich(fake)
+    trackers.set_dry_run()
+    tr = trackers.get("tracker")
+    tr.create("Inbox", title="x")
+    tr.update(f"vikunja#{t['id']}", title="y")
+    tr.delete(f"vikunja#{t['id']}")
+    assert fake.writes == []
+
+
+def test_board_commands_create_move_update(fake):
+    tr = trackers.get("tracker")
+    c = tr.create("Inbox", title="T", description="d")
+    assert board.matches(c["id"], tr.cards()) and board.matches("#" + c["id"].split("#")[1], tr.cards())
+    board.update(c["id"], list_id=tr.columns()["Spec ready"])
+    board.update(c["id"], title="T2")
+    got = tr.card(c["id"])
+    assert got["list_id"] == "11" and got["title"] == "T2" and got["description"] == "d"
