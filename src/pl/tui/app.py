@@ -28,7 +28,7 @@ from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, groups, header_text, resolve, tabs
 from pl.tui.needs import needs_you_count, review_kind
-from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
+from pl.tui.dashboard import WINDOWS, DashboardView, HealthScreen, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
@@ -414,12 +414,17 @@ class PlApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
                             self.action_whatsnew)
+        yield SystemCommand("Health", "agents, loops, last error and tokens", self.action_health)
         yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
         yield SystemCommand("Brain: ask questions across pipelines", "one read-only brain session per machine",
                             self.action_brain)
+
+    def action_health(self):
+        if self.data is not None:
+            self.push_screen(HealthScreen(self.data, self.window))
 
     def action_brain(self):
         """Brain tab, one machine-wide brain session."""

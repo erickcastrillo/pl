@@ -147,9 +147,9 @@ async def test_dashboard_renders_tiles_and_panels():
             ["12", "11", "2", "1", "2", "6"]
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
-                  "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
-                  "tokens", "counting…", "exceeded", "legacy", "Running, 2 cards waiting"):
+                  "Plan for review", "Needs you", "2 PRs pass the merge check", "Health", "Running, 2 cards waiting"):
             assert s in text, s
+        assert "counting…" not in text
 
 
 async def test_pull_requests_groups():
@@ -199,11 +199,11 @@ async def test_brackets_cycle_the_window():
 
 
 @pytest.mark.parametrize("size", [(120, 40), (80, 24)])
-async def test_dashboard_bottom_row_three_equal_columns(size):
+async def test_dashboard_bottom_row_two_equal_columns(size):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=size) as pilot:
         await settle(pilot)
-        widths = [app.query_one(i).size.width for i in ("#decide", "#health", "#standup-panel")]
+        widths = [app.query_one(i).size.width for i in ("#decide", "#standup-panel")]
         assert min(widths) > 0 and max(widths) - min(widths) <= 1, widths
 
 
@@ -442,8 +442,8 @@ async def test_other_views_skip_the_redraw_when_their_data_is_unchanged(monkeypa
         assert {k: len(v) for k, v in clears.items()} == {k: 0 for k in clears}
 
 
-@pytest.mark.parametrize("row,tab,selected", [(0, "prs", None), (1, "cards", "spec0001aaaa"), (2, "cards", "4a000001aaaa"),
-                                              (3, "prs", None), (4, "prs", None), (5, "cards", "c0000003aaaa")])
+@pytest.mark.parametrize("row,tab,selected", [(1, "prs", None), (2, "cards", "spec0001aaaa"), (3, "cards", "4a000001aaaa"),
+                                              (4, "prs", None), (5, "prs", None), (6, "cards", "c0000003aaaa")])
 async def test_decide_next_rows_are_selectable(monkeypatch, row, tab, selected):
     """Card groups open the Pipeline with only the cards that need you, on the group's first card; PR groups open
     Pull requests."""
@@ -463,15 +463,47 @@ async def test_decide_next_rows_are_selectable(monkeypatch, row, tab, selected):
             assert "d0000004aaaa" not in view._rows   # PR open needs nobody: filtered out
 
 
-async def test_decide_next_row_with_zero_count_still_navigates(monkeypatch):
-    _fake_card_read(monkeypatch, [])
+async def test_zero_count_rows_are_hidden(monkeypatch):
     app = PlApp(snapshot_provider=Provider())   # spec gate off: no specs waiting
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        app.query_one("#decide").focus()
-        await pilot.press("down", "enter")
+        keys = [r.key.value for r in app.query_one("#decide").ordered_rows]
+        assert "specs" not in keys and keys[0] == "needs" and keys[-1] == "health"
+
+
+async def test_dashboard_leads_with_needs_you_and_hides_empty_rows():
+    from pl.tui.dashboard import decide_rows
+    from pl.tui.needs import needs_you_count
+    data = fake_data()
+    rows = decide_rows(data)
+    assert rows[0][0] == "needs" and rows[0][1] == needs_you_count(data) and rows[-1][0] == "health"
+    assert all(n for key, n, *_ in rows[1:-1])
+    data["snapshot"]["rows"] = []
+    rows = decide_rows(data)
+    assert [r[0] for r in rows] == ["needs", "health"] and "Nothing needs you" in rows[0][2]
+
+
+async def test_health_opens_in_a_details_panel():
+    from pl.tui.dashboard import HealthScreen
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert app.active_tab == "cards" and app.query_one(tui_cards.CardsView).only_mine
+        assert "counting…" not in screen_text(app)
+        table = app.query_one("#decide")
+        table.focus()
+        table.move_cursor(row=table.row_count - 1)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, HealthScreen)
+        text = screen_text(app)
+        for s in ("tokens", "counting…", "exceeded", "harness accounts"):
+            assert s in text, s
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, HealthScreen)
+        app.action_health()
+        await settle(pilot)
+        assert isinstance(app.screen, HealthScreen)
 
 
 async def _open_pr(pilot, app, url="https://github.com/o/frontend/pull/1200"):

@@ -233,6 +233,8 @@ ENTRIES = [
     _e("2026-10-25.45", "Skills are grouped: pl's stage skills, your library, each account",
        "Settings tab, Skills section: origin and used by on every row", "pl skills list"),
     _e("2026-10-25.46", "? lists every action on a screen with its pl command", "any screen: press ?", "pl --help"),
+    _e("2026-10-25.47", "The Dashboard leads with what needs you; Health moved to a panel",
+       "Dashboard: the first row, Enter on Health or palette: Health", "pl"),
 ]
 
 
