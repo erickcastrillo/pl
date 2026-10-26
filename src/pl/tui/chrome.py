@@ -33,6 +33,7 @@ MEANING = {
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
+    "inbox_approve": "approve", "inbox_send_back": "send back", "all_pipelines": "all pipelines",
     "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
     "open_window": "open window", "jump": "open window", "live_view": "open window",
     "page_up": "page up", "page_down": "page down", "drop": "remove", "discard": "remove", "delete": "remove",
