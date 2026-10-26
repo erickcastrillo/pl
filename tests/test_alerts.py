@@ -537,3 +537,52 @@ def test_sweep_resolve_logs_alert_resolved(clock):
 def test_open_without_cards_still_works(clock):
     assert alerts.open("k1", "warn", "t", "f") == "open"
     assert alerts.get("k1")["cards"] == []
+
+
+# ---------- the Alerts tab: listing, reopen on change, what pl watches ----------
+
+def test_shown_is_newest_first_and_hides_acked(clock):
+    alerts.open("a", "warn", "ta", "fa")
+    clock["now"] += 100
+    alerts.open("b", "high", "tb", "fb")
+    clock["now"] += 100
+    alerts.open("c", "warn", "tc", "fc")
+    alerts.ack("b")
+    assert [a["key"] for a in alerts.shown()] == ["c", "a"]
+    assert {a["key"] for a in alerts.listing()} == {"a", "b", "c"}
+
+
+def test_ack_survives_an_unchanged_repeat(clock):
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1", "o/r#2"])
+    alerts.ack("k1")
+    alerts.open("k1", "warn", "t again", "f", cards=["o/r#2", "o/r#1"])
+    assert alerts.get("k1")["acked"] and alerts.shown() == []
+
+
+@pytest.mark.parametrize("severity,cards", [("warn", ["o/r#2"]), ("high", ["o/r#1"])])
+def test_ack_clears_when_cards_or_severity_change(clock, severity, cards):
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    clock["now"] += 50
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    alerts.ack("k1")
+    alerts.open("k1", severity, "t", "f", cards=cards)
+    a = alerts.get("k1")
+    assert not a.get("acked") and a["level"] == 0 and a["first_seen"] == 1_000_000.0 and a["count"] == 3
+    assert [x["key"] for x in alerts.shown()] == ["k1"]
+
+
+def test_resolved_then_reopened_is_unacked(clock):
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    alerts.ack("k1")
+    alerts.resolve("k1")
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    assert not alerts.get("k1").get("acked") and len(alerts.shown()) == 1
+
+
+def test_every_swept_prefix_is_watched():
+    import re
+    from pathlib import Path
+    src = Path(dispatch.__file__).read_text()
+    prefixes = {re.split(r"[:{]", p)[0] for p in re.findall(r'alerts\.(?:sweep|open)\(f?"([a-z_]+)', src)}
+    assert prefixes and not prefixes - set(alerts.WATCHES), prefixes - set(alerts.WATCHES)
+    assert alerts.watching()
