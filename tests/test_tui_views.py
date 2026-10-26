@@ -2688,7 +2688,7 @@ def test_loops_tab_shows_next_run_last_result_and_week_tokens():
 
 
 async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
-    from pl import agents, loops
+    from pl import agents, loops, skills
     from pl.tui import loops as tui_loops
     C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
     C.LOOPS_OFF = {}
@@ -2699,6 +2699,7 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
     monkeypatch.setattr(loops, "remove", lambda name: calls.append(("remove", name)))
     monkeypatch.setattr(agents, "jump_to_window", lambda name: calls.append(("window", name)) or "ok")
     monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    monkeypatch.setattr(skills, "scan", lambda: [])
     data = fake_data()
     data["snapshot"]["rows"].append({"loop": "invoices", "kind": "loop_idle", "worker": {"pane": "%1", "window": "@7"}})
     app = PlApp(snapshot_provider=Provider(data))
@@ -2725,7 +2726,8 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
         await pilot.press("e")
         await settle(pilot)
-        assert isinstance(app.screen, tui_loops.EditLoopScreen)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert "Edit loop invoices" in str(app.screen.query_one("Static").render())
         app.screen.query_one("#loop-every").value = "daily 09:30"
         await pilot.press("ctrl+s")
         await settle(pilot)
@@ -2753,6 +2755,149 @@ async def _open_loop_form(app, pilot, monkeypatch):
     await settle(pilot)
     assert isinstance(app.screen, tui_loops.LoopForm)
     return app.screen
+
+
+NIGHTLY = {"skill": "pl-billing-chase", "prompt": "/pl-billing-chase", "every": "daily 09:00", "hours": "09-18",
+           "profile": "acme", "writes": True}
+
+
+async def _open_edit_form(app, pilot, monkeypatch, edit=None):
+    from pl import loops, skills
+    from pl.tui import loops as tui_loops
+    edits = []
+    monkeypatch.setattr(loops, "edit", edit or (lambda name, **kw: edits.append((name, kw))))
+    monkeypatch.setattr(loops, "add", lambda name, **kw: edits.append(("add", name, kw)))
+    monkeypatch.setattr(skills, "scan", lambda: [{"name": "pl-billing-chase"}])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press("down")
+    await pilot.press("e")
+    await settle(pilot)
+    assert isinstance(app.screen, tui_loops.LoopForm)
+    return app.screen, edits
+
+
+def _edit_app():
+    C.SERVICES = {"nightly": dict(NIGHTLY)}
+    C.LOOPS_OFF = {}
+    return PlApp(snapshot_provider=Provider(fake_data()))
+
+
+async def test_edit_opens_the_loop_form_filled_with_the_loops_values(monkeypatch):
+    from textual.widgets import Checkbox, Select
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, _ = await _open_edit_form(app, pilot, monkeypatch)
+        assert "Edit loop nightly" in str(form.query_one("Static").render())
+        assert form.query_one("#loop-every").value == "daily 09:00"
+        assert form.query_one("#loop-hours").value == "09-18"
+        assert form.query_one("#loop-account").value == "acme"
+        assert form.query_one("#loop-skill", Select).value == "pl-billing-chase"
+        assert form.query_one("#loop-writes", Checkbox).value is True
+        assert not form.query("#loop-template")
+
+
+async def test_edit_form_locks_the_name_and_never_adds(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        name = form.query_one("#loop-name")
+        assert name.disabled and name.value == "nightly"
+        assert "exists" not in str(form.query_one("#loop-problem").render())
+        form.query_one("#loop-every").value = "30m"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert edits == [("nightly", {"every": "30m"})]
+
+
+async def test_edit_saves_only_the_changed_field(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        form.query_one("#loop-every").value = "30m"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert not isinstance(app.screen, type(form))
+    assert edits == [("nightly", {"every": "30m"})]
+
+
+async def test_edit_with_no_change_writes_nothing(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert app.screen is not form
+        form, edits2 = await _open_edit_form(app, pilot, monkeypatch)
+        form.query_one("#loop-hours").value = ""
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert app.screen is not form
+    assert edits == [] and edits2 == []
+
+
+async def test_edit_refuses_a_bad_every_on_the_problem_line(monkeypatch):
+    from pl.tui import loops as tui_loops
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        form.query_one("#loop-every").value = "soon"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        shown = str(form.query_one("#loop-every-error").render())
+        assert "30m" in shown and "hourly" in shown
+    assert edits == []
+
+
+async def test_edit_refusal_shows_the_cli_message(monkeypatch):
+    from pl.tui import loops as tui_loops
+
+    def refuse(name, **kw):
+        print("pl: invalid account", file=sys.stderr)
+        raise SystemExit(1)
+    app = _edit_app()
+    notes = []
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((str(msg), kw.get("severity"))))
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, _ = await _open_edit_form(app, pilot, monkeypatch, edit=refuse)
+        form.query_one("#loop-account").value = "nope"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LoopForm)
+    assert notes == [("pl: invalid account", "error")]
+
+
+async def test_saved_edit_shows_on_the_next_refresh(monkeypatch):
+    from pl.tui import loops as tui_loops
+
+    def edit(name, **kw):
+        C.SERVICES[name].update(kw)
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, _ = await _open_edit_form(app, pilot, monkeypatch, edit=edit)
+        view = app.query_one(tui_loops.LoopsView)
+        before = view.loops[0]["schedule"]
+        form.query_one("#loop-every").value = "30m"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        await settle(pilot)
+        view.show(fake_data())
+        assert view.loops[0]["schedule"] != before and "30" in view.loops[0]["schedule"]
+
+
+async def test_escape_closes_the_edit_form_without_writing(monkeypatch):
+    app = _edit_app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        form, edits = await _open_edit_form(app, pilot, monkeypatch)
+        form.query_one("#loop-every").value = "30m"
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.screen is not form
+    assert edits == []
 
 
 async def test_picking_a_template_fills_every_field_and_each_stays_editable(monkeypatch):
