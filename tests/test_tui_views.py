@@ -2753,7 +2753,7 @@ async def test_P_shows_one_plan_ordered_by_slice_with_done_and_columns(monkeypat
         await _filter_plan(pilot, "21")
         t = app.query_one("#cards-table")
         assert list(view._rows) == ["c0000003aaaa", "f0000001aaaa", "spec0001aaaa"]
-        assert "plan 21 · 3 cards · P clears" in t.border_title
+        assert "plan 21 · 3 cards · L clears" in t.border_title
         for k in view._rows:
             cells = [c.plain for c in t.get_row(k)]
             assert cells[:3] == before[k][:3] if k in before else True

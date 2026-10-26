@@ -213,7 +213,7 @@ ENTRIES = [
     _e("2026-10-25.35", "pl skills remove: take out a skill installed from GitHub",
        "unlinks it, moves the folder to a trash folder and names the stages and loops that used it",
        "pl skills remove NAME"),
-    _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: P, then a plan number; P clears", "pl list --plan 21"),
+    _e("2026-10-25.36", "Plan filter on the Pipeline tab", "Pipeline tab: L, then a plan number; L clears", "pl list --plan 21"),
     _e("2026-10-25.37", "pl help --json lists every command; pl jobs shows the long jobs running",
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
     _e("2026-10-25.38", "Auto-merge loop: pl merges what passes every rule",
@@ -267,6 +267,8 @@ ENTRIES = [
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
     _e("2026-10-26.62", "Alerts for stuck agents: waiting, unmoved or blocked",
        "Alerts tab; pl alerts", "pl alerts"),
+    _e("2026-10-26.63", "Switch pipelines from anywhere with P; the plan filter moved to L",
+       "console header shows the pipeline and who else needs you; P lists every pipeline, Enter switches", "pl"),
 ]
 
 

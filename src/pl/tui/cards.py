@@ -456,7 +456,7 @@ class CardsView(CardActions, Horizontal):
         self._rows, self._built, self._now, self._data = {}, [], {}, None
         self.only_mine = False   # f: list only the cards that wait on a person
         self.show_done = False   # z: a Done group from the last refresh's Done cards (no extra board read)
-        self.plan = None   # P: only this plan's cards, ordered by slice
+        self.plan = None   # L: only this plan's cards, ordered by slice
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
         self._last = None   # the cursor row before the last move: which way it travels
@@ -493,8 +493,8 @@ class CardsView(CardActions, Horizontal):
                           key=lambda r: plan_order(r["card"]))
             groups = [(f"plan {self.plan}", here)] if here else []
             needs = " · needs you only" if self.only_mine else ""
-            t.border_title = (f"Pipeline · plan {self.plan}{needs} · {len(here)} cards · P clears" if here
-                              else f"Pipeline · no cards in plan {self.plan} · P clears")
+            t.border_title = (f"Pipeline · plan {self.plan}{needs} · {len(here)} cards · L clears" if here
+                              else f"Pipeline · no cards in plan {self.plan} · L clears")
         elif self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
             t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} cards · f shows all"
