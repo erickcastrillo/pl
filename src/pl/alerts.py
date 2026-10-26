@@ -209,6 +209,7 @@ WATCHES = {
     "loop_stale": "loops that stopped firing",
     "near_cap": "cards near their token or time cap",
     "permission_wait": "waiting agents",
+    "pr_person": "PRs that need a person",
     "pr_waiting": "PRs waiting over 24 h",
     "send_spike": "connector send spikes",
     "stage_failed": "stages whose agent died",
