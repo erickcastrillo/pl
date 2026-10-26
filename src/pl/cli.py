@@ -74,6 +74,8 @@
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
                           --plain prints a refreshing text frame instead; --once prints one frame and exits
+  pl activity thresholds [--json]
+                          the slow-work warning limits ([activity]) the dispatcher uses; exits 2 when one is invalid
   pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack] [--summary]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
@@ -218,7 +220,7 @@ import os
 import sys
 
 from pl import stage_models
-from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles, trackers
+from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, slowwork, titles, trackers
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -334,7 +336,7 @@ def _main():
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
+     "standup": cmd_standup, "activity": slowwork.cmd_activity, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
@@ -449,6 +451,7 @@ def build_parser():
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
     for verb in ("pause", "resume"):
         sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("activity"); p.add_argument("action", choices=["thresholds"]); p.add_argument("--json", action="store_true")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")

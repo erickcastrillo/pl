@@ -24,6 +24,14 @@ def no_real_memory_readers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_screen_reads(monkeypatch):
+    """The dispatcher pass reads each live agent's screen once: tests see a working agent, never a real pane."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "agent_screen", types.SimpleNamespace(read=lambda pane, lines=20: ("", "working", "")))
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
