@@ -269,6 +269,8 @@ ENTRIES = [
        "Alerts tab; pl alerts", "pl alerts"),
     _e("2026-10-26.63", "Switch pipelines from anywhere with P; the plan filter moved to L",
        "console header shows the pipeline and who else needs you; P lists every pipeline, Enter switches", "pl"),
+    _e("2026-10-26.64", "An alert when the repository's CI is not running",
+       "Alerts tab", "pl alerts"),
 ]
 
 
