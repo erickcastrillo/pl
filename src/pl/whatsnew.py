@@ -242,7 +242,17 @@ ENTRIES = [
        "pl board restore --from ~/pl-board-backup"),
     _e("2026-10-25.50", "+ New skill: install from GitHub after reviewing every file, or write one",
        "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
-    _e("2026-10-25.51", "New loop starts from a template gallery: what each does and needs",
+    _e("2026-10-25.51", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
+    _e("2026-10-25.52", "Skills pane: labelled buttons, where a skill is linked and why an action is off",
+       "Settings → Skills: select a skill", "pl"),
+    _e("2026-10-25.53", "Loop schedules are picked, with the next three run times shown",
+       "Loops tab, n: schedule kind, time or cron; bad schedules can't be saved", "pl loops list"),
+    _e("2026-10-25.54", "Skills moved to its own place: Extend → Skills",
+       "Extend tab, Skills (ctrl+p \"Skills\"); Settings keeps a link line until the next minor release",
+       "pl skills list"),
+    _e("2026-10-25.55", "Remove on the Skills screen says which stages, loops and pods use the skill",
+       "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
+    _e("2026-10-25.56", "New loop starts from a template gallery: what each does and needs",
        "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
 ]
 

@@ -9,7 +9,7 @@ import sys
 import pytest
 from rich.console import Console
 from textual.app import App
-from textual.screen import Screen
+from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
 from pl import cli, skill_sources, skills
@@ -381,7 +381,7 @@ async def test_n_opens_a_chooser_with_exactly_two_choices_and_esc_changes_nothin
         assert buttons(app) == ["Install from GitHub", "Write a new one"]
         await pilot.press("escape")
         await settle(pilot)
-        assert isinstance(app.screen, Screen) and not app.screen.query(Button)
+        assert not isinstance(app.screen, ModalScreen)   # the chooser closed; the right pane keeps its own buttons
         assert fake.calls == [] and rows(app) == before and not skills.library().exists()
 
 
@@ -743,7 +743,123 @@ async def test_d_warns_that_links_and_pl_prompts_will_break(home):
         await pilot.press("d")
         await settle(pilot)
         text = screen_text(app)
-        assert "other profiles" in text and "/pl:beta" in text
+        assert "other profiles" in text and "Not used by any stage, loop or pod" in text
+
+
+@pytest.fixture
+def gh(home, monkeypatch):
+    """Library skill foo installed from GitHub, linked into account a, run by stage plan and loop nightly."""
+    from pl import pods
+    lib = skills.library()
+    (lib / "foo").mkdir(parents=True)
+    (lib / "foo/SKILL.md").write_text(SKILL.format(n="foo", d="Does a thing"))
+    os.symlink(lib / "foo", home["a"] / "skills/foo")
+    (lib / skill_sources.SOURCES_FILE).write_text(json.dumps({"foo": {"source": "github", "repo": "o/r", "sha": SHA}}))
+    monkeypatch.setattr(C, "PROMPTS", {"plan": "/pl:foo {id}"})
+    monkeypatch.setattr(C, "SERVICES", {"nightly": {"prompt": "/loop 1h /foo"}})
+    monkeypatch.setattr(C, "LOOPS_OFF", {})
+    monkeypatch.setattr(C, "PODS", {})
+    monkeypatch.setattr(pods, "find", lambda n: {})
+    return lib
+
+
+async def press_d(pilot, name, account):
+    await settle(pilot)
+    await select(pilot, name, account)
+    await pilot.press("d")
+    await settle(pilot)
+
+
+async def test_d_on_a_github_skill_names_its_stages_and_loops_and_keeps_it(gh):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        text = screen_text(app)
+        assert "stage plan" in text and "loop nightly" in text
+        assert (gh / "foo").is_dir()
+
+
+async def test_d_yes_on_a_github_skill_removes_it_everywhere(gh, home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        await pilot.press("y")
+        await settle(pilot)
+        assert not os.path.lexists(home["a"] / "skills/foo") and not (gh / "foo").exists()
+        assert len(list((gh / ".pl-trash").glob("foo-*"))) == 1
+        assert "foo" not in skill_sources.records()
+        assert ("foo", "library") not in rows(app)
+        assert "removed foo" in toasts(app)
+
+
+@pytest.mark.parametrize("key", ["n", "escape"])
+async def test_d_no_or_escape_on_a_github_skill_changes_nothing(gh, home, key):
+    before = (gh / skill_sources.SOURCES_FILE).read_bytes()
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        await pilot.press(key)
+        await settle(pilot)
+        assert (gh / "foo").is_dir() and (home["a"] / "skills/foo").is_symlink()
+        assert (gh / skill_sources.SOURCES_FILE).read_bytes() == before
+
+
+async def test_d_on_an_own_skill_names_its_pod_and_trashes_on_yes(home, monkeypatch):
+    from pl import pods
+    monkeypatch.setattr(C, "PODS", {"review": {}})
+    monkeypatch.setattr(pods, "find", lambda n: {"skills": ["beta"]})
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        text = screen_text(app)
+        assert "pod review" in text and ".pl-trash" in text
+        assert (home["b"] / "skills/beta").is_dir()
+        await pilot.press("y")
+        await settle(pilot)
+        assert not (home["b"] / "skills/beta").exists() and (home["b"] / ".pl-trash/skills").is_dir()
+
+
+async def test_d_on_an_unused_skill_says_no_stage_loop_or_pod_uses_it(home, monkeypatch):
+    monkeypatch.setattr(C, "PODS", {})
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        assert "not used by any stage, loop or pod" in screen_text(app).lower()
+
+
+@pytest.mark.parametrize("case, word", [("builtin", "reset"), ("plugin", "plugin"), ("linked", "a")])
+async def test_d_refuses_builtins_plugins_and_linked_library_skills(home, case, word):
+    if case == "builtin":
+        name, account = skills.builtin_names()[0], "library"
+        (skills.library() / name).mkdir(parents=True)
+        (skills.library() / name / "SKILL.md").write_text(SKILL.format(n=name, d="Built in"))
+    elif case == "plugin":
+        name, account = "plugskill", "a"
+    else:
+        skills.share("a", "alpha")
+        name, account = "alpha", "library"
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, name, account)
+        assert not isinstance(app.screen, tui.ConfirmScreen)
+        assert word in toasts(app)
+        assert item(name, account)["path"] and os.path.lexists(item(name, account)["path"])
+
+
+async def test_d_when_a_pod_fails_to_load_still_asks_and_says_users_could_not_be_checked(home, monkeypatch):
+    from pl import pods
+
+    def boom(n):
+        raise ValueError("bad pod file")
+    monkeypatch.setattr(C, "PODS", {"review": {}})
+    monkeypatch.setattr(pods, "find", boom)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        assert "could not check" in screen_text(app).lower()
+        await pilot.press("y")
+        await settle(pilot)
+        assert not (home["b"] / "skills/beta").exists()
 
 
 @pytest.mark.parametrize("bad, why", [("relative/lib", "absolute"), ("HOME", "home"), ("ACCOUNT", "account")])
@@ -935,3 +1051,149 @@ async def test_view_shows_headings_and_a_heading_row_selects_nothing(grouped_hom
         await pilot.press("e")
         await settle(pilot)
         assert len(app.screen_stack) == 1
+
+
+# ---------- right pane: actions(), buttons, reasons ----------
+
+LABELS = ["Edit", "Update", "Link to account", "Share to library", "Remove"]
+
+
+def acts(name, account=None, checks=None):
+    row = next(r for _, rs in tui.grouped(skills.scan()) for r in rs
+               if r["name"] == name and account in (None, r["account"]))
+    return {label: (enabled, reason) for label, enabled, reason in tui.actions(row, checks)}
+
+
+def test_actions_for_an_accounts_own_skill(grouped_home):
+    got = acts("alpha")
+    assert list(got) == LABELS[:1] + ["Update"] + LABELS[2:]
+    assert got["Edit"] == got["Remove"] == got["Share to library"] == (True, "")
+    assert got["Link to account"] == (False, "only library skills can be linked")
+    assert got["Update"] == (False, "not installed from GitHub")
+
+
+def test_actions_for_a_plugin_file_are_read_only(grouped_home):
+    got = acts("plugskill")
+    assert got["Edit"] == got["Remove"] == got["Share to library"] == (False, "plugin files are read-only")
+
+
+def test_actions_for_a_library_skill_link_and_every_account_linked(grouped_home):
+    assert acts("mine")["Link to account"] == (True, "")
+    for account, _ in skills.sources():
+        skills.link("mine", account)
+    got = acts("mine", skills.LIBRARY)
+    assert got["Link to account"] == (False, "every account links it already")
+    assert got["Share to library"] == (False, "it is in the library already")
+
+
+def test_actions_for_an_accounts_link_to_the_library(grouped_home):
+    skills.link("mine", "a")
+    assert acts("mine", "a")["Share to library"] == (False, "it is a link to the library")
+
+
+def test_actions_for_agents_and_commands_cannot_be_shared(grouped_home):
+    for name in ("reviewer", "deploy"):
+        assert acts(name)["Share to library"] == (False, "only skills can be shared")
+
+
+def test_actions_for_a_builtin_offers_reset_last(grouped_home):
+    got = acts("pl-plan")
+    assert list(got) == [*LABELS[:1], "Update", *LABELS[2:], "Reset to shipped version"]
+    assert got["Reset to shipped version"] == (True, "")
+    assert "Reset to shipped version" not in acts("mine")
+
+
+def test_update_label_follows_the_last_check(grouped_home):
+    (grouped_home["library"] / ".pl-sources.json").write_text(
+        json.dumps({"mine": {"source": "github", "repo": "own/rep", "sha": "abcdef1234" + "0" * 30}}))
+    assert acts("mine")["Check for update"] == (True, "")
+    assert acts("mine", checks={"mine": True})["Update available"] == (True, "")
+    assert acts("mine", checks={"mine": False})["Up to date"] == (True, "")
+
+
+def pane_buttons(app):
+    return {b.id: b for b in app.query("#skills-buttons Button")}
+
+
+async def test_pane_shows_buttons_linked_and_used_by_above_the_text(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await select(pilot, "mine", skills.LIBRARY)
+        ids = [b.id for b in app.query("#skills-buttons Button") if b.display]
+        assert ids == [f"skills-btn-{k}" for k in ("edit", "update", "link", "share", "remove")]
+        order = [w.id for w in app.query_one("#skills-preview-box").children]
+        assert order == ["skills-buttons", "skills-reasons", "skills-meta", "skills-preview"]
+        meta = str(app.query_one("#skills-meta").render())
+        assert "Linked: no account links it" in meta and "Used by: nothing" in meta
+        assert "Body of mine" in screen_text(app)
+
+
+async def test_heading_row_shows_nothing_selected_and_no_buttons(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await settle(pilot)
+        assert not app.query_one("#skills-buttons").display and not app.query_one("#skills-meta").display
+        assert "nothing selected" in screen_text(app)
+
+
+async def test_disabled_button_shows_its_reason_without_pressing(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await select(pilot, "alpha", "a")
+        link = pane_buttons(app)["skills-btn-link"]
+        assert link.disabled and link.tooltip == "only library skills can be linked"
+        assert "Link to account: only library skills can be linked" in str(app.query_one("#skills-reasons").render())
+
+
+async def test_pressing_remove_opens_the_same_confirm_as_d(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await select(pilot, "beta", "b")
+        pane_buttons(app)["skills-btn-remove"].press()
+        await settle(pilot)
+        assert ".pl-trash" in screen_text(app)
+        assert (grouped_home["b"] / "skills/beta").is_dir()
+
+
+@pytest.mark.parametrize("answer, calls", [("n", []), ("y", ["pl-plan"])])
+async def test_reset_asks_and_only_resets_after_yes(grouped_home, monkeypatch, answer, calls):
+    called = []
+    monkeypatch.setattr(skills, "reset_builtin", lambda name: called.append(name))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await select(pilot, "pl-plan", skills.LIBRARY)
+        pane_buttons(app)["skills-btn-reset"].press()
+        await settle(pilot)
+        assert "with the shipped version? A backup is kept." in screen_text(app)
+        assert called == []
+        await pilot.press(answer)
+        await settle(pilot)
+        assert called == calls
+
+
+async def test_update_button_runs_the_check_then_labels_update_available(grouped_home, monkeypatch):
+    (grouped_home["library"] / ".pl-sources.json").write_text(
+        json.dumps({"mine": {"source": "github", "repo": "own/rep", "sha": "abcdef1234" + "0" * 30}}))
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        return type("R", (), {"stdout": "mine  own/rep@abcdef1 -> bbbbbbb\n", "stderr": "", "returncode": 1})()
+    monkeypatch.setattr(tui, "_run", fake_run)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await select(pilot, "mine", skills.LIBRARY)
+        assert str(pane_buttons(app)["skills-btn-update"].label) == "Check for update"
+        pane_buttons(app)["skills-btn-update"].press()
+        await settle(pilot)
+        assert ran == [["pl", "skills", "update", "--check"]]
+        assert str(pane_buttons(app)["skills-btn-update"].label) == "Update available"
