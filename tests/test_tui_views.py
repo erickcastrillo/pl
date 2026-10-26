@@ -3149,7 +3149,7 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await settle(pilot)
         await pilot.press("g")
         await settle(pilot)
-        await pilot.press("w")
+        await pilot.press("W")
         await settle(pilot)
         await pilot.press("d")
         await settle(pilot)
@@ -4016,7 +4016,7 @@ async def test_empty_loops_row_keys_do_nothing(monkeypatch):
         depth = len(app.screen_stack)
         told = []
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
-        await pilot.press("e", "p", "g", "d", "enter", "w", "R")
+        await pilot.press("e", "p", "g", "d", "enter", "W", "R")
         await settle(pilot)
         assert len(app.screen_stack) == depth and app.query_one(LoopsView).selected() is None
         assert told == ["this loop has no window: the dispatcher restarts stopped loops",

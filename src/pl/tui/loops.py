@@ -17,6 +17,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
 from pl import agents, loops, schedule, skills, util
 from pl import config as C
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
+from pl.tui.live import LiveScreen
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
@@ -513,7 +514,8 @@ class LoopsView(Widget):
     #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
     BINDINGS = [Binding("n", "new", "new"), Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
-                Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
+                Binding("d", "delete", "delete"), Binding("w", "live_view", "live view"),
+                Binding("W", "open_window", "tmux window"), Binding("R", "restart", "restart loop")]
 
     def __init__(self):
         super().__init__()
@@ -657,6 +659,15 @@ class LoopsView(Widget):
             if yes:
                 self._change(f"deleted {name}", loops.remove, name)
         self.app.push_screen(ConfirmScreen(f"Delete the {name} loop? pl removes [loops.{name}] from config.toml."), answered)
+
+    def action_live_view(self):
+        x = self.selected()
+        if x is None:
+            return
+        if not x.get("pane"):
+            self.app.notify(x.get("no_pane") or "this loop is not running: the dispatcher starts it on its next pass", markup=False)
+            return
+        self.app.push_screen(LiveScreen(x["pane"], x.get("heading") or f"{x['name']} loop"))
 
     def action_open_window(self):
         x = self.selected()
