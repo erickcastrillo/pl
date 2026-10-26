@@ -2248,13 +2248,14 @@ async def test_footer_on_a_running_card_hides_approve_and_send_back(monkeypatch)
 
 
 @pytest.mark.parametrize("tab,key", [("dashboard", "1"), ("cards", "3"), ("prs", "4"), ("loops", "5"),
-                                     ("alerts", "7"), ("ideas", "3"), ("settings", "8")])
-async def test_question_mark_opens_this_screens_help(tab, key, monkeypatch):
+                                     ("alerts", "7"), ("ideas", "3"), ("settings", "8"), ("home", "H")])
+async def test_question_mark_opens_this_screens_help(tab, key, monkeypatch, tmp_path):
     from pl.tui.app import HelpScreen
     from pl.tui.chrome import HELP
+    _two_profiles(monkeypatch, tmp_path)
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
+    async with app.run_test(size=(176, 120)) as pilot:
         await settle(pilot)
         await pilot.press(key)
         await settle(pilot)
@@ -2268,6 +2269,71 @@ async def test_question_mark_opens_this_screens_help(tab, key, monkeypatch):
         await pilot.press("escape")
         await settle(pilot)
         assert not isinstance(app.screen, HelpScreen)
+
+
+def _two_profiles(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("a", "b"):
+        (tmp_path / f".pl-{name}").mkdir()
+        (tmp_path / f".pl-{name}" / "config.toml").write_text("")
+
+
+async def _press_help(pilot, app, key, tab=None):
+    await settle(pilot)
+    await pilot.press(key)
+    await settle(pilot)
+    if tab:   # a grouped tab key (3 Work) can land on another of its views; open the one under test
+        app.action_tab(tab)
+        await settle(pilot)
+    await pilot.press("question_mark")
+    await settle(pilot)
+
+
+@pytest.mark.parametrize("tab,key", [("dashboard", "1"), ("cards", "3"), ("loops", "5"), ("settings", "8"),
+                                     ("ideas", "3"), ("home", "H")])
+async def test_help_panel_lists_every_bound_action_with_a_command(tab, key, monkeypatch, tmp_path):
+    from pl.tui.app import HelpScreen
+    _two_profiles(monkeypatch, tmp_path)
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await _press_help(pilot, app, key, tab)
+        assert isinstance(app.screen, HelpScreen)
+        text = " ".join(app.screen.body().plain.split())
+        under = app.screen_stack[-2]
+        for b_key, active in under.active_bindings.items():
+            if active.enabled and active.binding.description:
+                assert active.binding.description in text, b_key
+        assert app.screen.rows and all(command for _, _, _, command in app.screen.rows)
+        if tab == "cards":
+            assert any(what == "drop" and command == "pl drop <id>" for _, _, what, command in app.screen.rows)
+
+
+async def test_help_panel_groups_actions_in_order(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 80)) as pilot:
+        await _press_help(pilot, app, "3")
+        text = app.screen.body().plain
+        assert 0 <= text.index("navigate") < text.index("act on the selection")
+        navigate = text[text.index("navigate"):text.index("act on the selection")]
+        assert "1-8            Work" in navigate
+
+
+async def test_help_on_a_pushed_card_screen_shows_its_own_description(monkeypatch):
+    from pl.tui.cards import CardScreen
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 80)) as pilot:
+        await _open_cards(pilot, app, "4a000001aaaa")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, CardScreen)
+        await pilot.press("question_mark")
+        await settle(pilot)
+        text = " ".join(app.screen.body().plain.split())
+        assert CardScreen.__doc__.splitlines()[0] in text
+        assert ("approve", "pl approve <id>") in [(what, command) for _, _, what, command in app.screen.rows]
 
 
 async def test_whatsnew_opens_from_the_palette():
