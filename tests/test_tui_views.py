@@ -3378,5 +3378,5 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
         await settle(pilot)
         app.action_skills()
         await settle(pilot)
-        assert {"new", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
+        assert {"new skill", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
                 "update check"} <= _footer_keys(app)
