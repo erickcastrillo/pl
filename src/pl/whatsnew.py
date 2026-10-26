@@ -265,6 +265,8 @@ ENTRIES = [
     _e("2026-10-26.60", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
     _e("2026-10-26.61", "A Get started checklist on Home for a new profile",
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
+    _e("2026-10-26.59", "Alerts for stuck agents: waiting, unmoved or blocked",
+       "Alerts tab; pl alerts", "pl alerts"),
 ]
 
 
