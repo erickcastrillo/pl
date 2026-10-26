@@ -482,7 +482,7 @@ def _unlink_from_accounts(lib, name):
             link.unlink()
 
 
-def remove(name, yes, out):
+def remove(name, yes, out, used=None):
     """Unlink an installed skill from every account, move its folder to the library's trash, drop its record and
     say which stages and loops used it. Returns the exit code: 0 done (or declined), 2 refused."""
     lib = skills.library()
@@ -493,7 +493,7 @@ def remove(name, yes, out):
     if not yes and not sys.stdin.isatty():
         print("pl skills remove: no terminal to confirm on; add --yes", file=sys.stderr)
         return 2
-    used = users(name)
+    used = users(name) if used is None else used
     if not yes:
         try:
             ok = ask("skills remove", f"Remove {name} from {lib}?" + (f" Used by: {', '.join(used)}." if used else "") + " [y/N]: ")

@@ -242,6 +242,8 @@ ENTRIES = [
        "pl board restore --from ~/pl-board-backup"),
     _e("2026-10-25.50", "+ New skill: install from GitHub after reviewing every file, or write one",
        "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
+    _e("2026-10-25.51", "Remove on the Skills screen says which stages, loops and pods use the skill",
+       "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
 ]
 
 

@@ -743,7 +743,123 @@ async def test_d_warns_that_links_and_pl_prompts_will_break(home):
         await pilot.press("d")
         await settle(pilot)
         text = screen_text(app)
-        assert "other profiles" in text and "/pl:beta" in text
+        assert "other profiles" in text and "Not used by any stage, loop or pod" in text
+
+
+@pytest.fixture
+def gh(home, monkeypatch):
+    """Library skill foo installed from GitHub, linked into account a, run by stage plan and loop nightly."""
+    from pl import pods
+    lib = skills.library()
+    (lib / "foo").mkdir(parents=True)
+    (lib / "foo/SKILL.md").write_text(SKILL.format(n="foo", d="Does a thing"))
+    os.symlink(lib / "foo", home["a"] / "skills/foo")
+    (lib / skill_sources.SOURCES_FILE).write_text(json.dumps({"foo": {"source": "github", "repo": "o/r", "sha": SHA}}))
+    monkeypatch.setattr(C, "PROMPTS", {"plan": "/pl:foo {id}"})
+    monkeypatch.setattr(C, "SERVICES", {"nightly": {"prompt": "/loop 1h /foo"}})
+    monkeypatch.setattr(C, "LOOPS_OFF", {})
+    monkeypatch.setattr(C, "PODS", {})
+    monkeypatch.setattr(pods, "find", lambda n: {})
+    return lib
+
+
+async def press_d(pilot, name, account):
+    await settle(pilot)
+    await select(pilot, name, account)
+    await pilot.press("d")
+    await settle(pilot)
+
+
+async def test_d_on_a_github_skill_names_its_stages_and_loops_and_keeps_it(gh):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        text = screen_text(app)
+        assert "stage plan" in text and "loop nightly" in text
+        assert (gh / "foo").is_dir()
+
+
+async def test_d_yes_on_a_github_skill_removes_it_everywhere(gh, home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        await pilot.press("y")
+        await settle(pilot)
+        assert not os.path.lexists(home["a"] / "skills/foo") and not (gh / "foo").exists()
+        assert len(list((gh / ".pl-trash").glob("foo-*"))) == 1
+        assert "foo" not in skill_sources.records()
+        assert ("foo", "library") not in rows(app)
+        assert "removed foo" in toasts(app)
+
+
+@pytest.mark.parametrize("key", ["n", "escape"])
+async def test_d_no_or_escape_on_a_github_skill_changes_nothing(gh, home, key):
+    before = (gh / skill_sources.SOURCES_FILE).read_bytes()
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        await pilot.press(key)
+        await settle(pilot)
+        assert (gh / "foo").is_dir() and (home["a"] / "skills/foo").is_symlink()
+        assert (gh / skill_sources.SOURCES_FILE).read_bytes() == before
+
+
+async def test_d_on_an_own_skill_names_its_pod_and_trashes_on_yes(home, monkeypatch):
+    from pl import pods
+    monkeypatch.setattr(C, "PODS", {"review": {}})
+    monkeypatch.setattr(pods, "find", lambda n: {"skills": ["beta"]})
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        text = screen_text(app)
+        assert "pod review" in text and ".pl-trash" in text
+        assert (home["b"] / "skills/beta").is_dir()
+        await pilot.press("y")
+        await settle(pilot)
+        assert not (home["b"] / "skills/beta").exists() and (home["b"] / ".pl-trash/skills").is_dir()
+
+
+async def test_d_on_an_unused_skill_says_no_stage_loop_or_pod_uses_it(home, monkeypatch):
+    monkeypatch.setattr(C, "PODS", {})
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        assert "not used by any stage, loop or pod" in screen_text(app).lower()
+
+
+@pytest.mark.parametrize("case, word", [("builtin", "reset"), ("plugin", "plugin"), ("linked", "a")])
+async def test_d_refuses_builtins_plugins_and_linked_library_skills(home, case, word):
+    if case == "builtin":
+        name, account = skills.builtin_names()[0], "library"
+        (skills.library() / name).mkdir(parents=True)
+        (skills.library() / name / "SKILL.md").write_text(SKILL.format(n=name, d="Built in"))
+    elif case == "plugin":
+        name, account = "plugskill", "a"
+    else:
+        skills.share("a", "alpha")
+        name, account = "alpha", "library"
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, name, account)
+        assert not isinstance(app.screen, tui.ConfirmScreen)
+        assert word in toasts(app)
+        assert item(name, account)["path"] and os.path.lexists(item(name, account)["path"])
+
+
+async def test_d_when_a_pod_fails_to_load_still_asks_and_says_users_could_not_be_checked(home, monkeypatch):
+    from pl import pods
+
+    def boom(n):
+        raise ValueError("bad pod file")
+    monkeypatch.setattr(C, "PODS", {"review": {}})
+    monkeypatch.setattr(pods, "find", boom)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        assert "could not check" in screen_text(app).lower()
+        await pilot.press("y")
+        await settle(pilot)
+        assert not (home["b"] / "skills/beta").exists()
 
 
 @pytest.mark.parametrize("bad, why", [("relative/lib", "absolute"), ("HOME", "home"), ("ACCOUNT", "account")])
