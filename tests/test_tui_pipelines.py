@@ -25,6 +25,7 @@ def _data():
 @pytest.fixture(autouse=True)
 def current_profile(monkeypatch):
     monkeypatch.setattr(C, "PROFILE_NAME", "eng")
+    monkeypatch.setattr(C, "PIPELINE", None)
 
 
 def _app():

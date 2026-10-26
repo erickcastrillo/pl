@@ -10,6 +10,7 @@ COMMANDS = {
     "HomeView.select": "pl profiles",
     "HomeView.details": "pl profiles",
     "PlApp.switcher": "pl list --json",
+    "PlApp.pipelines": "pl pipelines list --json",
     "PlApp.oldest": "pl inbox --json",
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
