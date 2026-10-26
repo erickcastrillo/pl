@@ -73,7 +73,7 @@ def home_rows(summaries) -> list[dict]:
 class HomeView(Widget):
     """The Home tab DataTable showing all configured pipelines."""
     BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details"),
-                Binding("n", "new_pipeline", "new pipeline", show=True)]
+                Binding("n", "new", "new pipeline", show=True)]
 
     def __init__(self, selected_profile=None):
         super().__init__()
@@ -114,9 +114,9 @@ class HomeView(Widget):
             else:
                 self.app.switch_to(r["name"])
         elif self.query_one(DataTable).cursor_row == len(self.rows):
-            self.action_new_pipeline()
+            self.action_new()
 
-    def action_new_pipeline(self):
+    def action_new(self):
         from pl.tui.newpipeline import NewPipelineScreen
         self.app.push_screen(NewPipelineScreen(), lambda name: name and self.app.switch_to(name, tab="cards"))
 
