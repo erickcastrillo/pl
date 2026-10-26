@@ -205,12 +205,14 @@ class LoopForm(ModalScreen):
     LoopForm .error { color: $error; height: auto; }
     """
     BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
-    TEXT_FIELDS = (("prompt", "prompt (or pick a skill)"), ("every", "every"), ("hours", "hours"), ("account", "account"),
+    TEXT_FIELDS = (("prompt", "prompt (or pick a skill)"), ("hours", "hours"), ("account", "account"),
                    ("team", "team"))
-    DEFAULTS = {"every": "hourly"}
+    DEFAULTS = {}
+    SCHEDULE_IDS = ("loop-kind", "loop-number", "loop-unit", "loop-at", "loop-cron")
     # a refusal goes under the first field whose name it mentions; anything else goes under the form's own problem line
-    ERROR_FIELDS = ("every", "hours", "account", "team")
-    EDIT_FIELDS = ("prompt", "every", "hours", "account")
+    ERROR_FIELDS = ("hours", "account", "team")
+    EDIT_FIELDS = ("prompt", "hours", "account")
+    _now = staticmethod(datetime.now)
 
     def __init__(self, name=None, current=None):
         super().__init__()
@@ -240,9 +242,23 @@ class LoopForm(ModalScreen):
                 value = str(self.current.get(key) or "") if self.editing else self.DEFAULTS.get(key, "")
                 yield Input(value=value, id=f"loop-{key}", disabled=self.editing and key == "team")   # `pl loops edit` has no team option
                 yield Static(id=f"loop-{key}-error", classes="error")
+                if key == "prompt":
+                    yield from self._schedule_widgets()
             yield Checkbox("writes (off = read-only)", bool(self.current.get("writes")), id="loop-writes")
             yield Static(id="loop-problem")
             yield Static(Text("ctrl+s save · esc cancel" + (" · a cleared field stays as it was" if self.editing else ""), style="dim"))
+
+    @staticmethod
+    def _schedule_widgets():
+        yield Label("schedule")
+        yield Select([(label, kind) for kind, label in schedule.KINDS], prompt="no schedule", id="loop-kind", compact=True)
+        with Horizontal(id="loop-schedule"):
+            yield Input(id="loop-number", placeholder="N")
+            yield Select([("minutes", "minutes"), ("hours", "hours")], value="minutes", allow_blank=False, id="loop-unit",
+                         compact=True)
+            yield Input(id="loop-at", placeholder="HH:MM")
+            yield Input(id="loop-cron", placeholder="m h dom mon dow")
+        yield Static(id="loop-preview")
 
     @staticmethod
     def _skills():
@@ -251,16 +267,56 @@ class LoopForm(ModalScreen):
         except SystemExit:
             return []
 
+    def on_mount(self):
+        parts = schedule.split(self.current.get("every") or "")
+        self.query_one("#loop-kind", Select).value = parts["kind"] or Select.NULL
+        self.query_one("#loop-unit", Select).value = parts["unit"]
+        for key in ("number", "at", "cron"):
+            self.query_one(f"#loop-{key}", Input).value = parts[key]
+        self._show_preview()
+
     def on_input_changed(self, event):
         if event.input.id == "loop-name" and not self.editing:
             self._show_problem(self._name_problem(event.value.strip()) if event.value.strip() else "")
+        elif event.input.id in self.SCHEDULE_IDS:
+            self._show_preview()
+
+    def _every(self):
+        kind = self.query_one("#loop-kind", Select).value
+        return schedule.join(None if kind is Select.NULL else kind, self.query_one("#loop-number", Input).value,
+                             self.query_one("#loop-unit", Select).value, self.query_one("#loop-at", Input).value,
+                             self.query_one("#loop-cron", Input).value)
+
+    def _show_preview(self):
+        kind = self.query_one("#loop-kind", Select).value
+        shown = {"loop-number": kind == "minutes", "loop-unit": kind == "minutes",
+                 "loop-at": kind in ("daily", "weekdays"), "loop-cron": kind == "cron"}
+        for widget_id, show in shown.items():
+            self.query_one(f"#{widget_id}").display = show
+        every = self._every()
+        if not every:
+            text = Text("no schedule is set: runs as today", style="dim")
+        else:
+            try:
+                runs = schedule.preview(every, self._now())
+                text = Text("next: " + " · ".join(r.strftime("%a %d %b %H:%M") for r in runs))
+            except ValueError as e:
+                text = Text(str(e), style="bold red")
+        self.query_one("#loop-preview", Static).update(text)
 
     def on_select_changed(self, event):
+        if event.select.id in self.SCHEDULE_IDS:
+            self._show_preview()
         if event.select.id != "loop-template" or event.value is Select.NULL:
             return
         template = loops.TEMPLATES[event.value]
-        for key in ("prompt", "every", "hours"):
+        for key in ("prompt", "hours"):
             self.query_one(f"#loop-{key}", Input).value = template.get(key, "")
+        parts = schedule.split(template.get("every", ""))
+        self.query_one("#loop-kind", Select).value = parts["kind"] or Select.NULL
+        self.query_one("#loop-unit", Select).value = parts["unit"]
+        for key in ("number", "at", "cron"):
+            self.query_one(f"#loop-{key}", Input).value = parts[key]
         self.query_one("#loop-writes", Checkbox).value = template["writes"]
 
     def _show_problem(self, text):
@@ -285,6 +341,9 @@ class LoopForm(ModalScreen):
     def _changes(self):
         changes = {key: self._value(key) for key in self.EDIT_FIELDS
                    if self._value(key) and self._value(key) != str(self.current.get(key) or "")}
+        every = self._every()
+        if every and every != str(self.current.get("every") or ""):
+            changes["every"] = every
         skill = self.query_one("#loop-skill", Select).value
         if skill is not Select.NULL and skill != self.current.get("skill"):
             changes["skill"] = skill
@@ -293,7 +352,7 @@ class LoopForm(ModalScreen):
             changes["writes"] = writes
         if "every" in changes:
             try:
-                schedule.parse_every(changes["every"])
+                schedule.preview(changes["every"], self._now(), 1)
             except ValueError as e:
                 self._show_problem(str(e))
                 return
@@ -312,12 +371,13 @@ class LoopForm(ModalScreen):
             prompt = None   # the loader runs a prompt before a skill, so the template's would hide the chosen skill
         if not problem and not (skill or prompt):
             problem = "give a prompt or pick a skill"
-        if not problem and self._value("every"):
+        every = self._every()
+        if not problem and every:
             try:
-                schedule.parse_every(self._value("every"))
+                schedule.preview(every, self._now(), 1)
             except ValueError as e:
                 problem = str(e)
-        fields = {"skill": skill, "prompt": prompt, "every": self._value("every"), "hours": self._value("hours"),
+        fields = {"skill": skill, "prompt": prompt, "every": every or None, "hours": self._value("hours"),
                   "account": self._value("account"), "team": self._value("team"),
                   "writes": self.query_one("#loop-writes", Checkbox).value}
         problem = problem or _call(loops.add, name, **fields)
