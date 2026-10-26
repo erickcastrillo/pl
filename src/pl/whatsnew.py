@@ -250,6 +250,8 @@ ENTRIES = [
     _e("2026-10-25.54", "Skills moved to its own place: Extend → Skills",
        "Extend tab, Skills (ctrl+p \"Skills\"); Settings keeps a link line until the next minor release",
        "pl skills list"),
+    _e("2026-10-25.55", "Remove on the Skills screen says which stages, loops and pods use the skill",
+       "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
 ]
 
 
