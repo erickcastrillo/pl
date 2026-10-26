@@ -13,8 +13,11 @@ from pl.util import ask, now_iso, parse_iso, short_id
 BUILTIN_DIR = Path(__file__).parent / "pods_builtin"
 BUDGETS = {"knowledge": 2000, "pod": 1500, "client": 1500}   # tokens; the role and card layers are uncut
 ENGINEERING_SKILLS = ["pl-spec", "pl-design", "pl-plan", "pl-run", "pl-review"]
-BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"]}
+SALES_SKILLS = ["pl-sales-proposal", "pl-sales-follow-up"]
+BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"], "sales": SALES_SKILLS}
+BUILTIN_ROLES = {"sales": ["contacts", "email"]}   # connector roles a built-in pod works with
 OWN_SKILLS_ONLY = ("marketing",)   # built-in pods that limit a launch to their own skills
+PIPELINE_POD_ONLY = ("sales",)     # built-in pods only an explicit [pipeline] pod picks, never the profile's name
 
 
 def _resolve(path):
@@ -25,18 +28,28 @@ def _resolve(path):
 def _builtin(name="engineering"):
     own = pod_file(name) if C.CONFIG_DIR else None
     return {"name": name, "file": own if own and own.is_file() else BUILTIN_DIR / name / "pod.md", "knowledge": [],
-            "skills": list(BUILTIN_SKILLS[name]), "plugins": [], "budgets": dict(BUDGETS)}
+            "skills": list(BUILTIN_SKILLS[name]), "roles": list(BUILTIN_ROLES.get(name, [])), "plugins": [],
+            "budgets": dict(BUDGETS)}
+
+
+def skill_dir(name):
+    """The folder of a skill a built-in pod ships in its own folder, else None."""
+    return next((d for d in BUILTIN_DIR.glob(f"*/skills/{name}") if (d / "SKILL.md").is_file()), None)
 
 
 def _configured(name):
     v = C.PODS[name]
     return {"name": name, "file": _resolve(v["file"]) if v.get("file") else None,
             "knowledge": [_resolve(k) for k in v.get("knowledge", [])], "skills": list(v.get("skills", [])),
+            "roles": list(v.get("roles", [])),
             "plugins": [{**p, "hooks": p.get("hooks", True)} for p in v.get("plugins", [])],
             "budgets": {**BUDGETS, **v.get("budgets", {})}}
 
 
 def find(name):
+    if name in C.PODS and name in PIPELINE_POD_ONLY:
+        table = _configured(name)
+        return {**_builtin(name), **{k: table[k] for k in C.PODS[name] if k in table}}
     if name in C.PODS:
         return _configured(name)
     return _builtin(name) if name in BUILTIN_SKILLS else None
@@ -56,7 +69,7 @@ def launch_pod():
     if name:
         return find(name) if "skills" in C.PODS[name] else None
     own = C.POD or C.PROFILE_NAME
-    return find(own) if own in OWN_SKILLS_ONLY else None
+    return find(own) if own in OWN_SKILLS_ONLY or C.POD in PIPELINE_POD_ONLY else None
 
 
 def names():
@@ -77,7 +90,8 @@ def _version(name):
 
 
 def describe(pod):
-    return {"name": pod["name"], "file": str(pod["file"]) if pod["file"] else None, "rules": rules(pod),
+    return {"name": pod["name"], "file": str(pod["file"]) if pod["file"] and pod["file"].is_file() else None,
+            "rules": rules(pod), "roles": pod["roles"],
             "knowledge": [str(k) for k in pod["knowledge"]], "skills": pod["skills"], "plugins": pod["plugins"],
             "budgets": pod["budgets"], "version": _version(pod["name"])}
 
@@ -140,7 +154,7 @@ def _cmd_list_show(a):
         return 0
     print(f"{d['name']}  (version {d['version']})  {d['file'] or 'no pod.md'}")
     print("rules:\n" + "\n".join(f"  - {r}" for r in d["rules"]))
-    for k in ("knowledge", "skills", "plugins"):
+    for k in ("knowledge", "skills", "roles", "plugins"):
         print(f"{k}: " + (", ".join(x["name"] if isinstance(x, dict) else x for x in d[k]) or "none"))
     print("budgets: " + ", ".join(f"{k} {v}" for k, v in d["budgets"].items()))
     return 0

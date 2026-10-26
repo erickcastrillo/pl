@@ -7,7 +7,7 @@ import sys
 import pytest
 import tomlkit
 
-from pl import cli, harnesses, pods, skills
+from pl import cli, connectors, harnesses, pods, skills
 from pl import config as C
 from pl.util import BadInput
 
@@ -81,7 +81,7 @@ def test_show_engineering_json_lists_its_coding_rules_and_the_stage_skills(fake_
 def test_list_names_every_pod_and_an_unknown_pod_exits_2(fake_home, capsys):
     _profile(fake_home, "work")
     pods.cmd_pods(argparse.Namespace(pods_cmd="list", json=False))
-    assert capsys.readouterr().out.split() == ["engineering", "marketing"]
+    assert capsys.readouterr().out.split() == ["engineering", "marketing", "sales"]
     with pytest.raises(SystemExit) as e:
         pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="nope", json=False))
     assert e.value.code == 2
@@ -91,7 +91,7 @@ def test_list_names_every_pod_and_an_unknown_pod_exits_2(fake_home, capsys):
 def test_list_json_includes_marketing_next_to_engineering(fake_home, capsys):
     _profile(fake_home, "work")
     pods.cmd_pods(argparse.Namespace(pods_cmd="list", json=True))
-    assert json.loads(capsys.readouterr().out) == ["engineering", "marketing"]
+    assert json.loads(capsys.readouterr().out) == ["engineering", "marketing", "sales"]
 
 
 def _marketing_sections():
@@ -119,6 +119,40 @@ def test_show_marketing_json_lists_only_pl_stage(fake_home, capsys):
     pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="marketing", json=True))
     skills_ = json.loads(capsys.readouterr().out)["skills"]
     assert skills_ == ["pl-stage"] and not set(skills_) & set(pods.ENGINEERING_SKILLS)
+
+
+def _show_sales(capsys):
+    pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="sales", json=True))
+    return json.loads(capsys.readouterr().out)
+
+
+def test_show_sales_has_a_package_pod_md_three_rules_its_skills_and_roles(fake_home, capsys):
+    _profile(fake_home, "work")
+    out = _show_sales(capsys)
+    assert out["file"].startswith(str(pods.BUILTIN_DIR)) and len(out["rules"]) >= 3
+    assert {"pl-sales-proposal", "pl-sales-follow-up"} <= set(out["skills"])
+    assert out["roles"] == ["contacts", "email"]
+
+
+def test_every_sales_skill_ships_and_every_role_is_a_connector_role(fake_home):
+    pod = pods.find("sales")
+    assert all((pods.skill_dir(s) / "SKILL.md").is_file() for s in pod["skills"])
+    assert set(pod["roles"]) <= set(connectors.ROLES)
+
+
+def test_a_pods_sales_table_overrides_file_and_skills(fake_home):
+    _profile(fake_home, "work", '[pods.sales]\nskills = ["x"]\n')
+    pod = pods.find("sales")
+    assert pod["skills"] == ["x"] and pod["file"] == pods.BUILTIN_DIR / "sales" / "pod.md"
+    assert pod["roles"] == ["contacts", "email"]
+
+
+def test_a_missing_sales_pod_md_shows_no_pod_md(fake_home, capsys, monkeypatch, tmp_path):
+    _profile(fake_home, "work")
+    monkeypatch.setattr(pods, "BUILTIN_DIR", tmp_path / "empty")
+    assert pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="sales", json=False)) == 0
+    out = capsys.readouterr().out
+    assert "no pod.md" in out and "roles: contacts, email" in out
 
 
 @pytest.fixture
@@ -153,11 +187,11 @@ def test_a_hand_edit_is_kept_as_a_version_before_the_next_change(profile):
 
 
 def test_rule_add_adds_the_rule_as_a_new_version(profile, capsys):
-    pods.save_version("sales", "# Sales\n", "start", "me")
-    assert pods.cmd_pods(args(pods_cmd="rule", pod="sales", text="Never offer discounts")) == 0
-    text = pods.pod_file("sales").read_text()
+    pods.save_version("billing", "# Sales\n", "start", "me")
+    assert pods.cmd_pods(args(pods_cmd="rule", pod="billing", text="Never offer discounts")) == 0
+    text = pods.pod_file("billing").read_text()
     assert "## Rules\n- Never offer discounts\n" in text
-    assert len(pods.history("sales")) == 2
+    assert len(pods.history("billing")) == 2
 
 
 def test_rollback_to_2_matches_version_2_exactly_and_is_a_new_version(profile):
@@ -440,6 +474,30 @@ def test_rule_add_then_rollback_of_the_builtin_marketing_pod(fake_env, capsys):
 
 
 def test_rule_add_to_a_configured_pod_records_no_builtin_version(fake_env, monkeypatch):
-    monkeypatch.setattr(C, "PODS", {"sales": {}})
-    pods.cmd_pods(args(pods_cmd="rule", pod="sales", text="Never offer discounts"))
-    assert [v["note"] for v in pods.history("sales")] == ["rule: Never offer discounts"]
+    monkeypatch.setattr(C, "PODS", {"billing": {}})
+    pods.cmd_pods(args(pods_cmd="rule", pod="billing", text="Never offer discounts"))
+    assert [v["note"] for v in pods.history("billing")] == ["rule: Never offer discounts"]
+
+
+def test_a_sales_pipeline_launch_links_only_the_sales_skills(fake_env, monkeypatch):
+    for name in ("pl-spec", "pl-plan", "pl-run", "outside"):
+        _library_skill(fake_env, name)
+    monkeypatch.setattr(C, "POD", "sales")
+    monkeypatch.setattr(C, "WORK_DIR", str(fake_env["home"]))
+    claude = harnesses.get("claude")
+    pdir = skills.launch_plugin(claude, pod=pods.launch_pod())
+    assert sorted(p.name for p in (pdir / "skills").iterdir()) == ["pl-sales-follow-up", "pl-sales-proposal"]
+    assert "/pl:pl-plan" not in harnesses.launch_script(claude, None, "/pl-plan x", "sid", "label")
+
+
+def test_a_profile_named_sales_without_a_pipeline_pod_keeps_the_whole_library(fake_env, monkeypatch):
+    _library_skill(fake_env, "outside")
+    monkeypatch.setattr(C, "PROFILE_NAME", "sales")
+    assert pods.launch_pod() is None
+    assert "/pl:outside" in harnesses.launch_script(harnesses.get("claude"), None, "/outside x", "sid", "label")
+
+
+def test_an_engineering_launch_is_unchanged(fake_env):
+    _library_skill(fake_env, "outside")
+    assert pods.launch_pod() is None
+    assert "/pl:outside" in harnesses.launch_script(harnesses.get("claude"), None, "/outside x", "sid", "label")
