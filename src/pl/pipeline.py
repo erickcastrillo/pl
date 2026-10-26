@@ -187,17 +187,23 @@ def _add(name, p, a):
         print(f"profile {name} already exists, unchanged")
         return
     p = {k: v for k, v in {**p, "name": name}.items() if v is not None}
-    if a.account:
-        if a.account not in C.ACCOUNTS:
-            _fail(f"unknown account {a.account!r}")
-        p["stages"] = {n: {"account": a.account, **s} for n, s in p["stages"].items()}
+    chosen = getattr(a, "accounts", None)
+    for n in chosen or ():
+        if n not in C.ACCOUNTS:
+            _fail(f"unknown account {n!r}")
+    acc = {n: C.ACCOUNTS[n] for n in chosen} if chosen else C.ACCOUNTS
+    account = a.account or (chosen[0] if chosen and len(chosen) == 1 else None)
+    if account:
+        if account not in C.ACCOUNTS:
+            _fail(f"unknown account {account!r}")
+        p["stages"] = {n: {"account": account, **s} for n, s in p["stages"].items()}
     tracker = _tracker(a.board)
     if a.dry_run:
-        print(tomlkit.dumps(profiles.pipeline_config(p, tracker, C.ACCOUNTS)), end="")
+        print(tomlkit.dumps(profiles.pipeline_config(p, tracker, acc)), end="")
     elif not (a.yes or sys.stdin.isatty()):
         _fail(f"pl pipelines {a.pipelines_cmd} would create profile {name}: pass --yes")
     else:
-        profiles.new_profile(name, pipeline_doc=p, tracker_doc=tracker)
+        profiles.new_profile(name, pipeline_doc=p, tracker_doc=tracker, accounts=acc)
 
 
 def _pipeline_of(name) -> dict:
