@@ -9,6 +9,7 @@ from pl.util import parse_iso
 
 QUIET = 30 * 60
 EVERY = 300
+RECHECK = 60
 PREFIX = "ci_not_running:"
 FIX = "check the repository's Actions minutes and workflow settings (Settings → Actions)"
 _CACHE = {}
@@ -34,7 +35,7 @@ def _open_prs(all_cards):
 def _look(repo, number, url):
     """The head's push time and whether it has any check; None when the call could not be made."""
     hit = _CACHE.get(url)
-    if hit and hit["checks"] and _clock() - hit["at"] < EVERY:
+    if hit and _clock() - hit["at"] < (EVERY if hit["checks"] else RECHECK):
         return hit
     try:
         pr = json.loads(github._gh(["pr", "view", str(number), "--repo", repo, "--json", "headRefOid,commits,statusCheckRollup"]))

@@ -95,8 +95,11 @@ def test_resolves_when_a_queued_check_appears(monkeypatch, notes):
     logged = []
     monkeypatch.setattr(alerts, "_logged", lambda kind, **d: logged.append((kind, d)))
     _gh_says(monkeypatch, _view(31), _view(31, [{"status": "QUEUED"}]))
+    clock = [NOW]
+    monkeypatch.setattr(ci_watch, "_clock", lambda: clock[0])
     _pass([_card(1)], notes)
     assert _open()
+    clock[0] += ci_watch.RECHECK + 1
     _pass([_card(1)], notes)
     assert not _open()
     assert any(k == "alert_resolved" for k, _ in logged)
@@ -115,6 +118,19 @@ def test_one_call_per_pass_and_cached_hit_makes_none(monkeypatch, notes):
     assert len(calls) == 1 and "2" in calls[0]
     _pass(cards, notes)
     assert len(calls) == 1
+
+
+def test_no_check_result_is_cached_briefly(monkeypatch, notes):
+    calls = _gh_says(monkeypatch, _view(31))
+    clock = [NOW]
+    monkeypatch.setattr(ci_watch, "_clock", lambda: clock[0])
+    _pass([_card(1)], notes)
+    clock[0] += ci_watch.RECHECK - 1
+    _pass([_card(1)], notes)
+    assert len(calls) == 1
+    clock[0] += 2
+    _pass([_card(1)], notes)
+    assert len(calls) == 2
 
 
 def test_call_failure_leaves_state_unchanged(monkeypatch, notes):
