@@ -494,10 +494,11 @@ class CardsView(CardActions, Horizontal):
                     line = f"{r.get('col')} · {line}" if line else str(r.get("col"))
                 built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"), state,
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
-        if not built:
-            empty = (f"No cards in plan {self.plan}." if self.plan is not None
-                     else "Nothing needs you." if self.only_mine else "No cards on the board.")
-            built.append(("group:empty", (Text("■", style="dim"), Text(empty, style="dim"), Text(""), Text(""))))
+        if not built:   # the title column is narrow, so the message takes one short line per row
+            lines = ([f"No cards in plan {self.plan}."] if self.plan is not None else ["Nothing needs you."] if self.only_mine
+                     else ["No cards yet.", "Add one with n on the Ideas tab,", 'or pl idea "..."'])
+            for i, line in enumerate(lines):
+                built.append((f"group:empty{i}", (Text("■" if i == 0 else "", style="dim"), Text(line, style="dim"), Text(""), Text(""))))
         rebuilt = [k for k, _ in built] != [k for k, _ in self._built]
         if not rebuilt:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, self._built):

@@ -81,12 +81,13 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 `plan_scope` is the plan's scope sections (minimum change, acceptance, non-goals), joined; empty when there is no plan.
 
 ## merges
-`pl merges --dry-run --json`
+`pl merges [--dry-run] --json`
 
 ```
-{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action"}]}
+{"candidates": [{"card", "pr", "title", "rules": [{"rule", "ok", "why"}], "action", "loop"}]}
 ```
-`ok` is `true`, `false`, or `null` for a rule not checked yet.
+`ok` is `true`, `false`, or `null` for a rule that was not run (for example `tests` after a conflict). `action` is `"would merge"` when every rule passes, else `"needs a person: <rules>"`. `loop` is what the merge loop did (with `--dry-run`, would do) about
+a failed rule: `"add needs-person and comment"`, `"already commented on this head"`, `"remove needs-person"`, or `null`.
 
 ## manager-status
 `pl manager status --json`
@@ -124,3 +125,13 @@ When GitHub cannot answer, `prs` is `{"unavailable": "reason"}`.
 ```
 {"version", "enabled": bool, "latest": "vX.Y.Z" | null, "update_available": bool}
 ```
+
+## Self-description and jobs
+`pl help --json` prints every command, and `pl jobs --json` the long jobs running now. Neither has a shape name in `SHAPES`.
+
+```
+{"commands": [{"name", "shape", "flags": [{"name", "type", "choices", "required", "help"}], "commands": [...]}]}
+{"jobs": [{"id", "name", "pid", "argv": [], "started", "progress"}]}
+```
+`shape` is the name in `SHAPES` or null. Commands parsed before the profile loads carry `"own_parser": true` and no flags.
+A job prints progress lines and ends with `result: <path or id>`; a job file whose process has died is dropped by `pl jobs`.

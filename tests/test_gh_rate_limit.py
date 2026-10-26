@@ -259,10 +259,10 @@ def _pass():
 
 def test_one_console_refresh_reads_the_board_once(gh):
     """Measured before the fix: 9 calls, 2 item-lists (has_design re-read the whole board for one card).
-    The need: field-list 1 (cold), item-list 1, issue list 1 (one repo), pr_counts 2 searches, pr_activity 2 = 7."""
+    The need: field-list 1 (cold), item-list 1, issue list 1 (one repo), pr_counts 3 searches, pr_activity 2 = 8."""
     tui_app.default_provider()
     assert reads(gh) == 1
-    assert len(gh.calls()) <= 7
+    assert len(gh.calls()) <= 8
 
 
 def test_one_dispatcher_pass_reads_the_board_once(gh):
@@ -750,13 +750,13 @@ def test_an_hour_of_dispatcher_and_console_stays_inside_a_300_point_budget(gh, m
     assert gh.count("issue", "list") <= 12      # the default issue intake searches at most every 5 minutes
 
 
-def test_an_hour_with_an_idle_dispatcher_the_console_reads_no_board_and_28_searches_or_fewer(gh, monkeypatch):
+def test_an_hour_with_an_idle_dispatcher_the_console_reads_no_board_and_40_searches_or_fewer(gh, monkeypatch):
     """Measured before: a pass every 300 s (an idle board) and a console refresh every 60 s made 36 board reads
     (24 by the console: it reused a save for 120 s only) and 48 PR searches (4 every 5 minutes)."""
     C.DISPATCH["interval"] = 300                          # the dispatcher's wait on an idle board
     _hour(monkeypatch, 60, pass_every=300)
     assert reads(gh) == 12                                # the dispatcher's own reads; the console reuses every one
-    assert gh.count("search", "prs") <= 28                # open PRs 2 every 5 minutes, PR activity 2 every 30
+    assert gh.count("search", "prs") <= 40                # open PRs 3 every 5 minutes, PR activity 2 every 30
 
 
 def test_a_console_refresh_on_young_saves_makes_no_gh_call(gh, monkeypatch):
@@ -780,7 +780,7 @@ def test_r_asks_github_again_for_the_board_and_each_pr_search_once(gh):
     board.fresh_next()                                    # r in the console
     tui_app.default_provider()
     assert reads(gh) == 1
-    assert gh.count("search", "prs") == 4                 # open PRs 2, PR activity 2: once, though the frame asks twice
+    assert gh.count("search", "prs") == 5                 # open PRs 3, PR activity 2: once, though the frame asks twice
     gh.clear()
     tui_app.default_provider()                            # a refresh still inside r's few fresh seconds
     assert gh.count("search", "prs") == 0
@@ -1136,7 +1136,7 @@ def test_pr_searches_are_cached_5_minutes_and_shared_through_the_state_folder(gh
     monkeypatch.setattr(github, "_clock", lambda: now[0])
     watch.pr_counts()
     watch.pr_activity()
-    assert gh.count("search", "prs") == 4
+    assert gh.count("search", "prs") == 5
     gh.clear()
     monkeypatch.setattr(watch, "_pr_cache", {"at": 0, "counts": None})   # another process: the console, pl watch
     now[0] += 290
@@ -1145,7 +1145,7 @@ def test_pr_searches_are_cached_5_minutes_and_shared_through_the_state_folder(gh
     now[0] += 20
     watch.pr_counts()
     watch.pr_activity()
-    assert gh.count("search", "prs") == 2                 # open PRs again; PR activity (14 days) waits 30 minutes
+    assert gh.count("search", "prs") == 3                 # open PRs again; PR activity (14 days) waits 30 minutes
 
 
 def test_pr_activity_is_reused_for_30_minutes_across_processes(gh, monkeypatch):

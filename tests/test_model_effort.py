@@ -576,3 +576,187 @@ async def test_activity_shows_model_and_reason_and_old_started_events(work, monk
         await pilot.press("y")
         await settle(pilot)
         assert "stage=spec" in copied[-1] and "model=" not in copied[-1]
+
+
+# ---------- Settings: stage x harness models ----------
+
+STAGE_CONFIG = """# keep this comment
+[accounts.main]
+harness = "claude"
+config_dir = "{acct}"
+
+[accounts.agy]
+harness = "antigravity"
+config_dir = "{acct}"
+
+[stages.plan]
+effort = "high"
+
+[stages.plan.models]
+antigravity = "claude-opus-5-5-high"
+
+[stages.run.small]
+max_lines = 60
+max_files = 3
+models = {{claude = "haiku"}}
+"""
+STAGES = ("spec", "design", "plan", "run")
+STAGE_AGY_OUT = AGY_OUT + "claude-opus-5-5-high\tClaude Opus 5.5 (High)\n"
+
+
+@pytest.fixture
+def staged(fake_home, monkeypatch):
+    acct = fake_home / ".claude-main"
+    acct.mkdir()
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: types.SimpleNamespace(returncode=0, stdout=STAGE_AGY_OUT, stderr=""))
+    return _profile(fake_home, STAGE_CONFIG.format(acct=acct))
+
+
+def _app():
+    from pl.tui.app import PlApp
+    from test_settings import app_data
+    return PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
+
+
+def _pick(view, path, value):
+    view.query_one(f"#{_wid(view, path)}", Select).value = value
+
+
+def _notes(app, monkeypatch):
+    notes = []
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((msg, kw.get("severity"))))
+    return notes
+
+
+def _fields(view):
+    return {p for p, _, _ in view.fields.values()}
+
+
+async def test_settings_shows_a_stage_by_harness_table_with_current_values(staged):
+    async with _app().run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        fields = _fields(view)
+        for stage in STAGES:
+            for h in ("claude", "antigravity"):
+                assert ("stages", stage, "models", h) in fields
+            assert ("stages", stage, "models", "codex") not in fields
+        assert ("stages", "run", "small", "models", "antigravity") in fields
+        assert not any(p[:3] == ("stages", "plan", "small") for p in fields)
+        sel = lambda path: view.query_one(f"#{_wid(view, path)}", Select).value   # noqa: E731
+        assert sel(("stages", "plan", "models", "antigravity")) == "claude-opus-5-5-high"
+        assert sel(("stages", "run", "small", "models", "claude")) == "haiku"
+        assert sel(("stages", "spec", "models", "claude")) is Select.NULL
+        assert sel(("stages", "run", "small", "models", "antigravity")) is Select.NULL
+        text = " ".join(str(w.render()) for w in view.query("Select, Static"))
+        assert "account's" in text and "normal" in text and "n/a" in text
+
+
+async def test_picking_a_stage_model_saves_only_that_key(staged):
+    before = staged.read_text()
+    async with _app().run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        _pick(view, ("stages", "spec", "models", "claude"), "sonnet")
+        _pick(view, ("stages", "run", "small", "models", "antigravity"), "gemini-3.1-pro-high")
+        view.action_save()
+        from test_settings import settle
+        await settle(pilot)
+    doc = tomlkit.parse(staged.read_text())
+    assert doc["stages"]["spec"]["models"]["claude"] == "sonnet"
+    assert doc["stages"]["run"]["small"]["models"]["antigravity"] == "gemini-3.1-pro-high"
+    assert doc["stages"]["run"]["small"]["models"]["claude"] == "haiku"
+    assert (doc["stages"]["run"]["small"]["max_lines"], doc["stages"]["run"]["small"]["max_files"]) == (60, 3)
+    assert "# keep this comment" in staged.read_text()
+    after = [ln for ln in staged.read_text().splitlines() if ln not in before.splitlines()]
+    assert not any("sonnet" not in ln and "gemini" not in ln and "[stages.spec" not in ln and ln.strip()
+                   and "antigravity" not in ln and "claude" not in ln and "[" not in ln for ln in after), after
+
+
+async def test_custom_types_a_stage_model(staged):
+    from test_settings import settle
+    app = _app()
+    async with app.run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        _pick(view, ("stages", "plan", "models", "claude"), settings.CUSTOM)
+        await settle(pilot)
+        assert isinstance(app.screen, settings.ModelScreen)
+        assert "stage plan" in str(app.screen.query_one("Static").render())
+        await pilot.press(*"claude-opus-5-5", "enter")
+        await settle(pilot)
+        view.action_save()
+        await settle(pilot)
+    assert tomlkit.parse(staged.read_text())["stages"]["plan"]["models"]["claude"] == "claude-opus-5-5"
+
+
+async def test_clearing_a_stage_cell_removes_the_key_and_empty_tables(staged):
+    from test_settings import settle
+    async with _app().run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        _pick(view, ("stages", "plan", "models", "antigravity"), Select.NULL)
+        _pick(view, ("stages", "run", "small", "models", "claude"), Select.NULL)
+        view.action_save()
+        await settle(pilot)
+    doc = tomlkit.parse(staged.read_text())
+    assert "models" not in doc["stages"]["plan"] and "plan" in doc["stages"]
+    assert "models" not in doc["stages"]["run"]["small"] and doc["stages"]["run"]["small"]["max_lines"] == 60
+
+
+async def test_clearing_the_last_small_key_removes_small(fake_home, monkeypatch):
+    from test_settings import settle
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: types.SimpleNamespace(returncode=0, stdout=STAGE_AGY_OUT, stderr=""))
+    path = _profile(fake_home, '[accounts.main]\nharness = "claude"\nconfig_dir = "~"\n'
+                               '[stages.run]\neffort = "high"\n[stages.run.small.models]\nclaude = "haiku"\n')
+    async with _app().run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        _pick(view, ("stages", "run", "small", "models", "claude"), Select.NULL)
+        view.action_save()
+        await settle(pilot)
+    assert "small" not in tomlkit.parse(path.read_text())["stages"]["run"]
+
+
+async def test_account_rows_follow_the_table_in_the_same_panel(staged):
+    async with _app().run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        order = [p for p, _, _ in view.fields.values()]
+        assert order.index(("stages", "run", "small", "models", "claude")) < order.index(("accounts", "agy", "model"))
+        panel = view.query_one(f"#{_wid(view, ('accounts', 'agy', 'model'))}").parent.parent
+        assert view.query_one(f"#{_wid(view, ('stages', 'plan', 'models', 'claude'))}").parent.parent is panel
+
+
+@pytest.mark.parametrize("bad,words", [("opus", "claude model"), ("-x", "must be a model id")])
+async def test_a_refused_stage_model_shows_under_its_row_and_writes_nothing(staged, monkeypatch, bad, words):
+    from test_settings import settle
+    from textual.widgets import Static
+    app = _app()
+    async with app.run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        notes = _notes(app, monkeypatch)
+        _pick(view, ("stages", "plan", "models", "antigravity"), settings.CUSTOM)
+        await settle(pilot)
+        await pilot.press(*bad, "enter")
+        await settle(pilot)
+        _pick(view, ("accounts", "main", "effort"), "high")
+        before = staged.read_bytes()
+        view.action_save()
+        await settle(pilot)
+        err = view.query_one("#stage-err-plan-antigravity", Static)
+        assert err.display and words in str(err.render())
+        assert not view.query_one("#stage-err-spec-claude", Static).display
+        assert any(m.startswith("pl: not saved:") for m, _ in notes)
+    assert staged.read_bytes() == before
+
+
+async def test_no_profile_shows_the_table_read_only(fake_home, monkeypatch):
+    from test_settings import settle
+    monkeypatch.setattr(C, "ACCOUNTS", {"main": {}})
+    monkeypatch.setattr(C, "STAGES", {"plan": {"models": {"claude": "opus"}}})
+    app = _app()
+    async with app.run_test(size=(176, 80)) as pilot:
+        view = await _settings(pilot)
+        notes = _notes(app, monkeypatch)
+        assert view.query_one(f"#{_wid(view, ('stages', 'plan', 'models', 'claude'))}", Select).value == "opus"
+        cells = [w for w, (p, _, _) in view.fields.items() if p[0] == "stages" and "models" in p]
+        assert cells and all(view.query_one(f"#{w}").disabled for w in cells)
+        view.action_save()
+        await settle(pilot)
+        assert notes[-1][0] == settings.LEGACY_HINT
+    assert not list(fake_home.glob("**/config.toml"))

@@ -7,12 +7,14 @@ import json
 import os
 import re
 import sys
+import time
 import tomllib
+from datetime import date
 from urllib.parse import urlsplit
 
 from pl import alerts
 from pl import config as C
-from pl import connectors_oauth, manager
+from pl import connectors_oauth, manager, secrets
 from pl.util import ask
 
 ROLES = ("payments", "contacts", "email", "calendar", "messaging", "memory")
@@ -24,6 +26,7 @@ KEYS = {"url", "command", "args", "env", "mcp_config", "server", "auth", "token"
 VAR_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$")
 SECRET_HEADER = re.compile(r"auth|key|token|secret|cookie", re.I)
 ADAPTER_WARNING = "filled by an adapter, not the vendor's own server"
+ROLE_PROBES = {"payments": ("payments_since", lambda: {"since": date.today().isoformat()})}
 
 
 def path():
@@ -214,14 +217,87 @@ def list_connectors(json_out: bool = False):
 
 
 def revoke(name: str) -> None:
-    """Remove a connector from connectors.toml and forget its approved tool state."""
-    if name not in load_config():
+    """Disable a connector (saved first, so a failure below leaves it off), revoke its tokens at the server, then delete them."""
+    cfg = load_config().get(name)
+    if cfg is None:
         raise SystemExit(f"pl connectors revoke: no connector {name!r}")
-    _edit_config(lambda table: table.pop(name))
+    _edit_config(lambda table: table[name].__setitem__("enabled", False))
+    print(f"{name}: disabled")
+    try:
+        stored = secrets.get(name) or {}
+    except Exception:
+        stored = {}
+    print(_run(connectors_oauth.revoke_at_server(cfg["url"], stored)) if cfg.get("url") else "server: nothing to revoke")
+    try:
+        secrets.delete(name)
+    except Exception as e:
+        print(f"tokens: not deleted ({type(e).__name__})", file=sys.stderr)
+        raise SystemExit(1) from None
+    print("tokens: deleted")
     state = load_state()
-    if state.pop(name, None) is not None:
+    if state.get(name, {}).pop("status", None):
         save_state(state)
+    alerts.resolve(f"connector_signin:{name}")
     alerts.resolve(f"connector_tools:{name}")
+
+
+def _usage_error(msg: str):
+    print(f"pl connectors: {msg}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _probe(name: str, cfg: dict, listed: list[dict]):
+    """(tool, args) of the one read call `pl connectors test` makes: the test mapping, else the role's probe, else the first read tool without required arguments."""
+    reads = {t["name"]: t for t in listed if not t["write"]}
+    if test := cfg.get("test"):
+        if test["tool"] not in reads:
+            _usage_error(f"{name}: test tool {test['tool']} is not a read tool of the server")
+        return test["tool"], test.get("args") or {}
+    for r in cfg.get("role", []):
+        if r in ROLE_PROBES:
+            std, make_args = ROLE_PROBES[r]
+            if (tool := (cfg.get("tools") or {}).get(std, std)) in reads:
+                return tool, make_args()
+    for tool, t in reads.items():
+        if not (t.get("inputSchema") or {}).get("required"):
+            return tool, {}
+    _usage_error(f"{name}: no read tool to call; set [connectors.{name}] test")
+
+
+def _masked(text, limit: int = 300) -> str:
+    from pl.trackers import mcp
+    return mcp._mask(str(text), sorted(mcp._secrets, key=len, reverse=True))[:limit]
+
+
+def test_connector(name: str, json_out: bool = False) -> None:
+    cfg = load_config().get(name)
+    if cfg is None:
+        _usage_error(f"no connector {name!r}")
+    tool = None
+    try:
+        tool, args = _probe(name, cfg, tools(name))
+        start = time.monotonic()
+        result = call(name, tool, args)
+        ms = round((time.monotonic() - start) * 1000)
+    except (Exception, BaseExceptionGroup) as e:
+        while isinstance(e, BaseExceptionGroup):
+            e = e.exceptions[0]
+        error = _masked(e)
+        print(json.dumps({"connector": name, "tool": tool, "ok": False, "error": error}) if json_out
+              else f"pl connectors test: {name}: {error}", file=sys.stdout if json_out else sys.stderr)
+        raise SystemExit(1) from None
+    text = _masked(result)
+    print(json.dumps({"connector": name, "tool": tool, "ok": True, "ms": ms, "result": text}) if json_out
+          else f"{name}: {tool} ok in {ms} ms\n{text}")
+
+
+def _confirm_revoke(a) -> None:
+    if getattr(a, "yes", False):
+        return
+    if not sys.stdin.isatty():
+        _usage_error(f"pass --yes to revoke {a.name} without asking")
+    if ask("connectors revoke", f"revoke connector {a.name}: disable it and delete its tokens? [y/N] ").strip().lower() != "y":
+        raise SystemExit("pl connectors revoke: cancelled")
 
 
 def _audit(action, name):
@@ -239,18 +315,22 @@ def cmd_connectors(a):
     elif sub == "approve-tools":
         approve_tools(a.name, yes=a.yes, json_out=getattr(a, "json", False))
     elif sub == "revoke":
-        revoke(a.name)
-        _audit("connectors.revoke", a.name)
-        print(f"revoked connector {a.name}")
+        _confirm_revoke(a)
+        try:
+            revoke(a.name)
+        finally:
+            _audit("connectors.revoke", a.name)
+    elif sub == "test":
+        test_connector(a.name, json_out=getattr(a, "json", False))
     elif sub == "import":
         import_servers(a.source, add_name=a.add, teams=a.team, roles=a.role, yes=a.yes, json_out=a.json)
     elif sub == "add":
         add_cmd(a)
     elif sub == "serve":
         from pl import connectors_proxy
-        connectors_proxy.serve(a.name)
+        connectors_proxy.serve(a.name, a.card, a.stage)
     else:
-        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | import --from claude [--add NAME] | approve-tools NAME | revoke NAME | serve NAME --card ID --stage S")
+        raise SystemExit("usage: pl connectors list [--json] | add NAME (COMMAND... | --url URL) [--pin VERSION] | import --from claude [--add NAME] | approve-tools NAME | test NAME [--json] | revoke NAME --yes | serve NAME --card ID --stage S")
 
 
 def add_cmd(a) -> None:
@@ -532,6 +612,8 @@ def tools(name: str) -> list[dict]:
 def call(name: str, tool_name: str, args: dict | None = None, mode: str | None = None):   # mode: who calls (trigger, stage); reads and writes are told apart by the tool, not the mode
     if is_write_forbidden(name, tool_name):
         raise PermissionError(f"Connector {name}: write tool {tool_name} forbidden while tools are unapproved")
+    if mode in ("trigger", "reader") and is_write_tool(name, tool_name):
+        raise PermissionError(f"Connector {name}: write tool {tool_name} is never called in {mode} mode")
     cfg = load_config().get(name, {})
     async def _call(auth):
         from mcp import ClientSession

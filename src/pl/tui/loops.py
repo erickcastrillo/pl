@@ -1,25 +1,31 @@
 """Loops tab (each service loop and its live screen) and Activity tab (the event feed, newest first)."""
+import io
 import json
 import re
 import shutil
 import subprocess
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import DataTable, Static
+from textual.widgets import Checkbox, DataTable, Input, Label, Static
 
-from pl import agents
+from pl import agents, loops, schedule, util
 from pl import config as C
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
-from pl.util import short_id, tmux
+from pl.util import load_state, short_id, tmux
 
 TAIL_LINES = 40
 ACTIVE_RE = re.compile(r"active (\d+)([mhd]) ago")
 UNIT = {"m": 60, "h": 3600, "d": 86400}
 HINT = "n/a: no Claude turn seen yet · an idle loop restarts fresh over max_context (80% unless set; 0 = off)"
+COLUMNS = (("loop", "name"), ("state", "state"), ("context", "context"), ("tokens 1h", "tokens"), ("tokens 7d", "tokens7d"),
+           ("account", "account"), ("prompt", "prompt"), ("last active", "last"), ("next run", "next"), ("last result", "output"))
 
 
 COPIERS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"])
@@ -45,11 +51,20 @@ def _short(sec):
     return f"{sec // 60}m" if sec < 3600 else f"{sec // 3600}h"
 
 
+def _next_run(name, svc, runs):
+    """When a scheduled loop runs next: the dispatcher's recorded time, else the schedule's next time from now."""
+    at = (runs.get(name) or {}).get("next_at")
+    if not at:
+        at = schedule.next_run(schedule.parse_every(svc["every"]), datetime.now()).isoformat()
+    return at.replace("T", " ")[:16]
+
+
 def loop_rows(data):
-    """One dict per configured service loop: name, state, prompt, account, last active, next pass, output line, pane, window."""
+    """One dict per configured loop, paused ones too: name, state, prompt, account, last active, next run, last result, pane, window."""
     rows = (data or {}).get("snapshot", {}).get("rows", [])
     by_name = {r["loop"]: r for r in rows if r.get("loop")}
     prs = [r["pr"] for r in rows if r.get("pr")]
+    runs = load_state().get("services") or {}
     out = []
     for name, svc in C.SERVICES.items():
         r = by_name.get(name) or {}
@@ -58,10 +73,15 @@ def loop_rows(data):
         m = ACTIVE_RE.search(str(r.get("text") or ""))
         every = re.match(r"/loop (\d+)([mhd]) ", svc["prompt"] + " ")
         nxt = "-"
-        if every and m and state != "off":
+        if svc.get("every"):
+            nxt = _next_run(name, svc, runs)
+        elif every and m and state != "off":
             left = int(every[1]) * UNIT[every[2]] - int(m[1]) * UNIT[m[2]]
             nxt = f"in ~{_short(left)}" if left > 0 else "due now"
-        if name == "auto-review":
+        last_result = (runs.get(name) or {}).get("last_run", {}).get("result")
+        if svc.get("every") and last_result:
+            output = last_result
+        elif name == "auto-review":
             output = f"{sum(p['state'] == 'decide' for p in prs)} need your decision, {sum(p['state'] != 'decide' for p in prs)} reviewed"
         elif name == "merge-gate":
             output = (f"{sum(p['state'] == 'merge' for p in prs)} merge-ready, {sum(p['state'] == 'rework' for p in prs)} need rework, "
@@ -74,11 +94,86 @@ def loop_rows(data):
             state = "dead?"   # on for 3 fires of its interval, 0 tokens spent
         ctx = f"{u['context']}%" if claude and u.get("context") is not None else "n/a"
         tok = human(u["tokens_1h"]) if claude and u else "n/a"
+        week = human(u["tokens_7d"]) if svc.get("every") and u.get("tokens_7d") is not None else "-"
         out.append({"name": name, "state": state, "prompt": svc["prompt"], "account": svc.get("profile") or "-",
-                    "context": ctx, "tokens": tok,
+                    "context": ctx, "tokens": tok, "tokens7d": week,
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
                     "pane": w.get("pane"), "window": w.get("window")})
+    for name, v in C.LOOPS_OFF.items():
+        out.append({"name": name, "state": "paused", "prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""),
+                    "account": v.get("account") or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-", "last": "-",
+                    "next": "-", "output": ((runs.get(name) or {}).get("last_run") or {}).get("result") or "not reported",
+                    "pane": None, "window": None})
+    if C.TRACKER.get("type") == "github-project":
+        out.append(_auto_merge_row())
     return out
+
+
+def _call(fn, *args, **kw):
+    """Run a pl.loops function as the CLI does; a refusal (SystemExit, bad input) comes back as text."""
+    err = io.StringIO()
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            fn(*args, **kw)
+    except SystemExit as e:
+        if e.code in (0, None):
+            return None
+        return err.getvalue().strip() or str(e.code)
+    except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+        return str(e)
+    return None
+
+
+class EditLoopScreen(ModalScreen):
+    """The fields of `pl loops edit`, filled with the loop's current values; dismisses with the fields that changed."""
+    DEFAULT_CSS = """
+    EditLoopScreen { align: center middle; }
+    EditLoopScreen > Vertical { width: 90; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
+    FIELDS = (("skill", "skill"), ("prompt", "prompt"), ("every", "every"), ("hours", "hours"), ("account", "account"))
+
+    def __init__(self, name, current):
+        super().__init__()
+        self.loop_name = name
+        self.current = current
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"Edit loop {self.loop_name}", style="bold"))
+            for key, label in self.FIELDS:
+                yield Label(label)
+                yield Input(value=str(self.current.get(key) or ""), id=f"loop-{key}")
+            yield Checkbox("writes (off = read-only)", bool(self.current.get("writes")), id="loop-writes")
+            yield Static(Text("ctrl+s save · esc cancel · a cleared field stays as it was", style="dim"))
+
+    def on_input_submitted(self, _):
+        self.action_save()
+
+    def action_save(self):
+        changes = {}
+        for key, _ in self.FIELDS:
+            value = self.query_one(f"#loop-{key}", Input).value.strip()
+            if value and value != str(self.current.get(key) or ""):
+                changes[key] = value
+        writes = self.query_one("#loop-writes", Checkbox).value
+        if writes != bool(self.current.get("writes")):
+            changes["writes"] = writes
+        self.dismiss(changes)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+def _auto_merge_row():
+    from pl import merges   # merges -> merge_check -> tui.prs would loop back into this package
+    s = util.load_state().get("services", {}).get("auto-merge", {})
+    last, nxt = (s.get("last_run") or {}), s.get("next_at")
+    on, waits = C.AUTO_MERGE.get("enabled") is True, s.get("waits")
+    return {"name": "auto-merge", "state": "waiting" if on and waits else "on" if on else "off",
+            "prompt": "built in: merges what passes every rule", "account": merges.account() or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-",
+            "last": util.ago(last.get("at")), "next": nxt[11:16] if nxt else "-",
+            "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
 
 
 class LoopsView(Widget):
@@ -87,7 +182,8 @@ class LoopsView(Widget):
     #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
     #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
-    BINDINGS = [Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
+    BINDINGS = [Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
+                Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
 
     def __init__(self):
         super().__init__()
@@ -100,7 +196,7 @@ class LoopsView(Widget):
 
     def on_mount(self):
         t = self.query_one(DataTable)
-        t.add_columns("loop", "state", "context", "tokens 1h", "account", "prompt", "last active", "next pass", "output")
+        t.add_columns(*(label for label, _ in COLUMNS))
         t.border_subtitle = HINT
 
     def selected(self):
@@ -115,7 +211,7 @@ class LoopsView(Widget):
             self.loops = loops
             t.clear()
             for x in self.loops:
-                t.add_row(*(Text(str(x[k])) for k in ("name", "state", "context", "tokens", "account", "prompt", "last", "next", "output")))
+                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS))
             if self.loops:
                 t.move_cursor(row=min(max(keep, 0), len(self.loops) - 1))
         self.load_tail()
@@ -145,6 +241,49 @@ class LoopsView(Widget):
         body = Text(f"{name} loop\n" if pane else f"{name} loop is off; showing the dispatcher\n", style="bold")
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
+
+    def _change(self, done, fn, *args, **kw):
+        def run():
+            problem = _call(fn, *args, **kw)
+            self.app.call_from_thread(self.app.notify, problem or done, severity="error" if problem else "information", markup=False)
+        self.run_worker(run, thread=True, group="loops-action")
+
+    def action_edit(self):
+        x = self.selected()
+        if x is None:
+            return
+        name = x["name"]
+        svc = C.SERVICES.get(name) or C.LOOPS_OFF.get(name) or {}
+        current = {"skill": svc.get("skill"), "prompt": None if svc.get("skill") else svc.get("prompt"),
+                   "every": svc.get("every"), "hours": svc.get("hours"), "account": svc.get("profile") or svc.get("account"),
+                   "writes": svc.get("writes")}
+
+        def saved(changes):
+            if changes:
+                self._change(f"edited {name}", loops.edit, name, **changes)
+        self.app.push_screen(EditLoopScreen(name, current), saved)
+
+    def action_pause(self):
+        x = self.selected()
+        if x is not None:
+            resume = x["state"] == "paused"
+            self._change(f"{'resumed' if resume else 'paused'} {x['name']}", loops.set_enabled, x["name"], resume)
+
+    def action_run_now(self):
+        x = self.selected()
+        if x is not None:
+            self._change(f"queued {x['name']}; the dispatcher starts it on its next pass", loops.run, x["name"])
+
+    def action_delete(self):
+        x = self.selected()
+        if x is None:
+            return
+        name = x["name"]
+
+        def answered(yes):
+            if yes:
+                self._change(f"deleted {name}", loops.remove, name)
+        self.app.push_screen(ConfirmScreen(f"Delete the {name} loop? pl removes [loops.{name}] from config.toml."), answered)
 
     def action_open_window(self):
         x = self.selected()

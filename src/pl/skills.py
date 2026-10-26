@@ -703,6 +703,9 @@ def _cmd_reset(a):
     if a.name not in builtin_names():
         raise SystemExit(f"pl: {a.name!r} is not a built-in skill ({', '.join(builtin_names())})")
     dest = library() / a.name / "SKILL.md"
+    if getattr(a, "dry_run", False):
+        print(f"would replace {dest} with the shipped version of {a.name}")
+        return 0
     if not a.yes:
         try:
             ok = ask("skills reset", f"Replace {dest} with the shipped version of {a.name}? A backup is kept. [y/N]: ")
@@ -819,11 +822,15 @@ def cmd_skills(a):
         placed = _root(account) / "skills" / a.name
         if _links_to(placed, library() / a.name):
             print(f"{placed} already exists, unchanged")
+        elif getattr(a, "dry_run", False):
+            print(f"would share {placed} into {library() / a.name} (a link would be left in its place)")
         else:
             print(f"shared: {share(account, a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":
         target = getattr(a, "account", None) or "all"
-        if target == "all":
+        if getattr(a, "dry_run", False):
+            print(f"would link {a.name} into {target if target != 'all' else 'every linkable account'}")
+        elif target == "all":
             msgs = install_in_all_harnesses(a.name)
             if not msgs:
                 print(f"skill {a.name} is already linked into all accounts (or no linkable accounts configured)")

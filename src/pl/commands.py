@@ -283,7 +283,9 @@ def _at_gate(c, verb):
 
 def _approve_gate(c):
     name, stage = _at_gate(c, "approve")
-    gates = {**((c.get("metadata") or {}).get("gates") or {}), name: {"approved_by": C.USER_EMAIL, "approved_at": now_iso()}}
+    m = c.get("metadata") or {}
+    approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0)}
+    gates = {**(m.get("gates") or {}), name: approval}
     target = pipeline.approved_column(stage)
     update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None})
     events.emit("gate_approved", c["id"])
@@ -544,6 +546,9 @@ def cmd_profiles(a):
     if getattr(a, "check_trust", False):
         return _check_trust()
     st = profile_state()
+    if a.reset and getattr(a, "dry_run", False):
+        print(f"would un-park {a.reset}")
+        return
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):
             st.pop(p, None)
@@ -1026,6 +1031,9 @@ def cmd_pause(a):
     if paused():
         print(f"already paused since {paused().get('since', '?')[:16]} UTC")
         return
+    if getattr(a, "dry_run", False):
+        print("would pause: no new agents would start from the next dispatcher pass")
+        return
     C.ATTN.mkdir(exist_ok=True)
     C.PAUSE_FILE.write_text(json.dumps({"since": now_iso(), "host": C.HOST}))
     print("paused: no new agents start from the next dispatcher pass; working agents finish their step (pl resume)")
@@ -1034,6 +1042,9 @@ def cmd_pause(a):
 def cmd_resume(a):
     if not paused():
         print("not paused")
+        return
+    if getattr(a, "dry_run", False):
+        print("would resume: the next dispatcher pass would start waiting cards again")
         return
     C.PAUSE_FILE.unlink()
     print("resumed: the next dispatcher pass starts waiting cards again")

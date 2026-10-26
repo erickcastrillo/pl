@@ -10,7 +10,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pl import audit, connectors
+from pl import alerts, audit, connectors, outward
+from pl import config as C
 
 
 def is_write_forbidden(connector: str, tool: str) -> bool:
@@ -173,17 +174,54 @@ class Forbidden(Exception):
     pass
 
 
+def _read_write(name: str) -> bool:
+    return (connectors.get(name) or {}).get("access") == "read-write"
+
+
 def visible_tools(name: str) -> list[dict]:
-    return [t for t in connectors.tools(name) if not t.get("write")]
+    write_ok = _read_write(name)
+    return [t for t in connectors.tools(name) if write_ok or not t.get("write")]
 
 
-def proxy_call(name: str, tool: str, args: dict | None):
-    if tool not in {t["name"] for t in visible_tools(name)}:
+def _gate_before(stage: str) -> str | None:
+    """The owner-gated stage nearest before `stage`: the person approved its output, which `stage` then sends."""
+    names = list(((C.PIPELINE or {}).get("stages") or {}))
+    if stage not in names:
+        return None
+    gated = [n for n in names[:names.index(stage)] if C.PIPELINE["stages"][n].get("gate") == "owner"]
+    return gated[-1] if gated else None
+
+
+def _gate_approved(card_id: str | None, stage: str | None) -> bool:
+    """True when the gate before `stage` was approved in the card's current review round; a reject starts a new one."""
+    from pl import board
+    gate = _gate_before(stage) if (card_id and stage) else None
+    if not gate:
+        return False
+    board.fresh_next()
+    meta = board.find_card(card_id).get("metadata") or {}
+    approval = (meta.get("gates") or {}).get(gate)
+    return bool(approval) and approval.get("review_round", 0) == int(meta.get("review_round") or 0)
+
+
+def proxy_call(name: str, tool: str, args: dict | None, card: str | None = None, stage: str | None = None):
+    listed = {t["name"]: t for t in connectors.tools(name)}
+    if not listed.get(tool, {"write": True}).get("write"):
+        return connectors.call(name, tool, args, mode="stage")
+    if not _read_write(name):
+        alerts.open(f"connector_forbidden:{name}:{stage}", "warn", "a stage tried to write through a read-only connector",
+                    f"set access = \"read-write\" on connector {name} if stage {stage} should write")
         raise Forbidden(f"forbidden: {tool} is not available on connector {name}")
+    if tool not in listed:
+        raise Forbidden(f"forbidden: {tool} is not available on connector {name}")
+    if not _gate_approved(card, stage):
+        raise Forbidden("gate_required: approve the card's gate first")
+    if outward.state().get("on"):
+        raise Forbidden("kill_switch: outward writes are paused; turn the kill switch off and call again")
     return connectors.call(name, tool, args, mode="stage")
 
 
-def build_server(name: str):
+def build_server(name: str, card: str | None = None, stage: str | None = None):
     from mcp import types
     from mcp.server.lowlevel import Server
     server = Server(f"pl-{name}")
@@ -195,16 +233,16 @@ def build_server(name: str):
 
     @server.call_tool()
     async def _call(tool, args):
-        return [types.TextContent(type="text", text=str(await asyncio.to_thread(proxy_call, name, tool, args)))]
+        return [types.TextContent(type="text", text=str(await asyncio.to_thread(proxy_call, name, tool, args, card, stage)))]
 
     return server
 
 
-def serve(name: str) -> None:
+def serve(name: str, card: str | None = None, stage: str | None = None) -> None:
     from mcp.server.stdio import stdio_server
 
     async def _run():
-        server = build_server(name)
+        server = build_server(name, card, stage)
         async with stdio_server() as (r, w):
             await server.run(r, w, server.create_initialization_options())
     asyncio.run(_run())

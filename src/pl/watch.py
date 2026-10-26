@@ -215,7 +215,7 @@ def detail_for(r, full_card, full_pr):
 
 
 _pr_cache = {"at": 0, "counts": None}
-PR_TTL = 300   # PR searches are reused this long, across the profile's processes (4 searches cost 4 of 30 a minute)
+PR_TTL = 300   # PR searches are reused this long, across the profile's processes (5 searches cost 5 of 30 a minute)
 ACTIVITY_TTL = 1800   # PR activity is 14 days of history: reused for 30 minutes
 _FORCED = {}   # PR search name -> the r press (board.fresh_next) it already asked GitHub again for
 
@@ -254,8 +254,12 @@ def _owner_args():
     return ["--owner", owner] if owner else []
 
 
+def _label_names(pr):
+    return {l["name"] for l in pr.get("labels") or []}
+
+
 def pr_counts():
-    """Open PRs assigned to you that finished auto-review, by what they need next. Cached PR_TTL s, shared via the state folder (GitHub search is rate-limited).
+    """Open PRs assigned to you or authored by you that finished auto-review, by what they need next. Cached PR_TTL s, shared via the state folder (GitHub search is rate-limited).
     None when [code_host] labels has no `ready` label: pl then does not track PRs."""
     lab = _labels()
     if not lab.get("ready"):
@@ -273,19 +277,27 @@ def pr_counts():
     tail = ["--assignee", "@me", "--limit", "300", "--json", "labels,number,repository,title,url,updatedAt"]
     r = subprocess.run([*search, lab["ready"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env())
     f = subprocess.run([*search, lab["failed"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env()) if lab.get("failed") else None
-    if any(x is not None and x.returncode and github.back_off(x.stderr, resource="search") for x in (r, f)):
+    a = subprocess.run([*search[:-1], "--author", "@me", "--limit", "300", *tail[-2:]], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    if any(x is not None and x.returncode and github.back_off(x.stderr, resource="search") for x in (r, f, a)):
         return _pr_cache["counts"]
+    authored = json.loads(a.stdout) if a.returncode == 0 and a.stdout.strip() else []
     failed = json.loads(f.stdout) if f and f.returncode == 0 and f.stdout.strip() else []
+    failed += [p for p in authored if lab.get("failed") and lab["failed"] in _label_names(p)]
     counts = None
     if r.returncode == 0:
         try:
             prs = []
             seen = set()
             for pr in failed:   # stopped on purpose by auto-review: a human decision is needed
+                if pr["url"] in seen:
+                    continue
                 pr["state"], pr["repo"] = "decide", (pr.get("repository") or {}).get("name", "?")
                 seen.add(pr["url"])
                 prs.append(pr)
-            for pr in [x for x in json.loads(r.stdout) if x["url"] not in seen]:
+            for pr in json.loads(r.stdout) + [p for p in authored if lab["ready"] in _label_names(p)]:
+                if pr["url"] in seen:
+                    continue
+                seen.add(pr["url"])
                 ls = [l["name"] for l in pr.get("labels") or []]
                 pr["state"] = "rework" if lab.get("rework") in ls else ("merge" if lab.get("merge_ready") in ls else "gate")
                 pr["repo"] = (pr.get("repository") or {}).get("name", "?")

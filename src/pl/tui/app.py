@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import subprocess
 import sys
+import time
 
 from rich.text import Text
 from textual import work
@@ -237,7 +238,7 @@ class PlApp(App):
         self.interval = interval or default_interval()
         self.open_card = open_card
         self.initial_tab = tab
-        self.data, self.error, self.window = None, None, 1   # window: index into WINDOWS, 24 hours first
+        self.data, self.error, self.last_good_at, self.window = None, None, None, 1   # window: index into WINDOWS, 24 hours first
 
     def compose(self) -> ComposeResult:
         yield Static(header_text(None), id="header")
@@ -462,7 +463,7 @@ class PlApp(App):
 
     def show_dispatcher_note(self, note):
         self.dispatcher_note = note
-        self.query_one("#header", Static).update(header_text(self.data, self.error, note))
+        self.query_one("#header", Static).update(header_text(self.data, self.error, note, self.last_good_at))
         self.refresh_data()
 
     def action_dispatcher(self):
@@ -508,16 +509,16 @@ class PlApp(App):
 
     async def on_data_ready(self, m: DataReady):
         if m.data is not None:
-            self.data = m.data
+            self.data, self.last_good_at = m.data, time.strftime("%H:%M")
         self.error = m.error
         try:
             await self.render_views()
         except Exception as e:  # noqa: BLE001 - a bad row must not kill the console
             self.error = f"render failed: {type(e).__name__}: {e}"
-            self.query_one("#header", Static).update(header_text(self.data, self.error, self.dispatcher_note))
+            self.query_one("#header", Static).update(header_text(self.data, self.error, self.dispatcher_note, self.last_good_at))
 
     async def render_views(self):
-        self.query_one("#header", Static).update(header_text(self.data, self.error, self.dispatcher_note))
+        self.query_one("#header", Static).update(header_text(self.data, self.error, self.dispatcher_note, self.last_good_at))
         if self.data is None:
             return
         rows = self.data["snapshot"]["rows"]
@@ -530,6 +531,9 @@ class PlApp(App):
         self.query_one(SubagentsView).show(self.data)
         self.query_one(AlertsView).show(self.data)
         self.query_one(CardsView).show(self.data)
+        failed = (self.error or "").splitlines()[0] if self.error else ""
+        for table in ("#cards-table", "#prs-table"):
+            self.query_one(table).border_subtitle = failed if failed.startswith("refresh failed") else ""
         tabs = self.query_one(TabbedContent)
         n_prs = sum(1 for r in rows if r.get("pr"))
         mine = needs_you_count(self.data)

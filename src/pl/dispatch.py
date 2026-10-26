@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, alerts, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -673,6 +673,34 @@ def _loop_waits(svc_state, name, why):
     s.setdefault("ran_at", now_iso())
 
 
+def budget_wait(until):
+    return "GitHub budget low" + (f" (until {time.strftime('%H:%M', time.localtime(until))})" if until else "")
+
+
+def _auto_merge(st, all_cards, dry):
+    """The built-in merge loop (merges.py): no agent window; runs on its every, waits like other loops."""
+    if C.AUTO_MERGE.get("enabled") is not True:
+        return
+    from pl import merges   # merges -> merge_check -> commands imports dispatch
+    svc = st.setdefault("services", {})
+    s, now = svc.setdefault("auto-merge", {}), _local_now()
+    if s.get("next_at") and now < datetime.fromisoformat(s["next_at"]):
+        return
+    if wait := ghquota.check("read"):
+        return _loop_waits(svc, "auto-merge", budget_wait(wait[0]))
+    if (acct := merges.account()) and acct in accounts.exhausted_profiles():
+        return _loop_waits(svc, "auto-merge", f"its account {acct} is parked")
+    try:
+        result = f"merged {len(merges.run_pass(all_cards, dry))}"
+    except OverBudget as e:
+        return _loop_waits(svc, "auto-merge", budget_wait(e.until))
+    except SystemExit as e:   # a failed look never stops the pass; the next due time tries again
+        result = f"failed: {e}"
+    s.pop("waits", None)
+    s.update(ran_at=now_iso(), last_run={"at": now_iso(), "result": result},
+             next_at=schedule.next_run(schedule.parse_every(C.AUTO_MERGE.get("every", "15m")), after=now).isoformat())
+
+
 def _context_restart(name, svc, sid, s, ust, dry):
     """Why an idle loop session over its max_context should restart fresh, or None. Waits one loop interval after
     the loop started and allows at most 3 an hour. A session whose first turn was already over the limit is never
@@ -919,6 +947,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rework.sweep(all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
             print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
+        try:
+            _auto_merge(st, all_cards, dry)
+        except (RateLimited, OverBudget, SystemExit) as e:
+            print(f"auto-merge skipped this pass: {e}", file=sys.stderr)
         try:
             from pl import triggers
             triggers.run_due(dry=dry)
@@ -1692,6 +1724,15 @@ def reload_config():
 
 
 def cmd_dispatch(a):
+    if not getattr(a, "once", False):
+        return _dispatch(a)
+    with jobs.track("dispatch"):
+        jobs.progress("dispatch pass started")
+        _dispatch(a)
+        jobs.result(f"{C.PROFILE_NAME} pass done")
+
+
+def _dispatch(a):
     if not a.dry_run and os.environ.get("PL_MANAGED") != "1" and manager.manages(C.PROFILE_NAME):
         print(f"this machine is run by pl manager (pid {manager.holder_pid() or '?'}); it starts this profile's dispatcher")
         return   # a restored tmux window just closes; the manager's own dispatcher keeps running
@@ -1736,6 +1777,10 @@ def cmd_dispatch(a):
             seen = dispatch_once(setting("max_runs"), a.dry_run, setting("max_prep"), not a.no_pull)
             alerts.resolve("github_rate_limited")
         except OverBudget as e:   # not a failure: the pass waits for GitHub's reset, once said per window
+            if C.AUTO_MERGE.get("enabled") is True:
+                waiting = load_state()
+                _loop_waits(waiting.setdefault("services", {}), "auto-merge", budget_wait(e.until))
+                save_state(waiting)
             if e.until != noted:
                 print(f"pass waits: {e.note}", file=sys.stderr)
                 events.emit("github_budget_wait", message=e.note)
