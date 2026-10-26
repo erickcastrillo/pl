@@ -740,8 +740,14 @@ def cmd_board(a):
     if a.action == "migrate":
         from pl import migrate
         return migrate.cmd_migrate(a)
+    if a.action == "restore":
+        if not a.from_:
+            raise SystemExit("pl board restore: --from DIR is required")
+        from pl.trackers import localrestore
+        print(localrestore.restore(Path(a.from_).expanduser(), a.yes))
+        return
     if a.action != "init":
-        raise SystemExit("pl board: only 'init' is supported")
+        raise SystemExit("pl board: only 'init' and 'restore' are supported")
     if "Inbox" in lists():
         print(f"Inbox already exists, unchanged: {lists()['Inbox']['id']}")
         return

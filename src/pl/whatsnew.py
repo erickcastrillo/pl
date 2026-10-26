@@ -226,6 +226,9 @@ ENTRIES = [
        "pl sync resolve <card> --keep remote"),
     _e("2026-10-25.42", "Board backup to git: board.json every 5 minutes",
        "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)", "pl alerts"),
+    _e("2026-10-25.43", "Restore the local board from its git backup, keeping card ids",
+       "pl board restore --from <clone> --yes (stop the dispatcher first; the old board is kept next to board.db)",
+       "pl board restore --from ~/pl-board-backup"),
 ]
 
 
