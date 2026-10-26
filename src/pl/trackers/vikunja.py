@@ -24,16 +24,19 @@ class Vikunja:
         self.view = int(cfg["view_id"])
         self._columns = None
 
-    def _http(self, method, path, body=None):
+    def _open(self, method, path, body=None):
         token = mcp._resolve(self._token_ref, [])
         req = urllib.request.Request(
             f"{self.url_base}/api/v1{path}", method=method,
             data=None if body is None else json.dumps(body).encode(),
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+        with opener.open(req, timeout=TIMEOUT) as r:
+            return r.read()
+
+    def _http(self, method, path, body=None):
         try:
-            with opener.open(req, timeout=TIMEOUT) as r:
-                raw = r.read()
+            raw = self._open(method, path, body)
         except urllib.error.HTTPError as e:
             raise SystemExit(util.mask(f"pl: vikunja: {method} {path}: {e.code}")) from None
         except urllib.error.URLError as e:
@@ -143,5 +146,44 @@ class Vikunja:
     def url(self, item_id):
         return f"{self.url_base}/tasks/{self._tid(item_id)}"
 
+    def _check_url(self):
+        try:
+            reply = json.loads(self._open("GET", "/info"))
+            if "version" in reply:
+                return None
+            reason = "not a Vikunja reply"
+        except urllib.error.HTTPError as e:
+            reason = e.code
+        except urllib.error.URLError as e:
+            reason = e.reason
+        except (OSError, ValueError, TypeError):
+            reason = "not a Vikunja reply"
+        return f"url is wrong: {self.url_base} does not answer as Vikunja ({reason}); check [tracker] url"
+
+    def _check_token(self):
+        try:
+            self._open("GET", "/user")
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return f"token is wrong or expired: {self.url_base} refused it ({e.code}); check the token variable"
+            return f"token check failed: {e.code}"
+        except OSError as e:
+            return f"token check failed: {e}"
+        return None
+
+    def _check_view(self):
+        wrong = (f"view_id is wrong: project {self.project} has no kanban view {self.view}; "
+                 "check [tracker] view_id")
+        try:
+            kind = json.loads(self._open("GET", self._view_path())).get("view_kind")
+        except urllib.error.HTTPError as e:
+            return wrong if e.code in (403, 404) else f"view check failed: {e.code}"
+        except (OSError, ValueError, AttributeError) as e:
+            return f"view check failed: {e}"
+        return None if kind in ("kanban", 3) else wrong
+
     def test(self):
-        return f"ok: vikunja {self.url_base} project {self.project}, {len(self.columns())} columns"
+        for check in (self._check_url, self._check_token, self._check_view):
+            if problem := check():
+                return util.mask(problem)
+        return util.mask(f"ok: vikunja {self.url_base} project {self.project}, {len(self.columns())} columns")
