@@ -254,6 +254,8 @@ ENTRIES = [
        "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
     _e("2026-10-26.56", "Ctrl+P finds and runs any console action or tab",
        "ctrl+p, type an action like retry", "pl --help"),
+    _e("2026-10-25.56", "New loop starts from a template gallery: what each does and needs",
+       "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
 ]
 
 
