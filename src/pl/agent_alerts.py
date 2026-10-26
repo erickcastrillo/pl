@@ -122,13 +122,13 @@ def _blocked(c, w, all_cards, lines):
 
 
 def _excused(c, w, word):
-    """True when the agent waits on a person or a reset: that is not a stall."""
+    """True when the agent waits on a person or a reset, or has finished (agent_unmoved covers that): not a stall."""
     d = _dispatch()
     if (c.get("metadata") or {}).get("question") or w.get("limit_hit") or w.get("permission_wait") or w.get("trust_wait"):
         return True
     text = agent_screen.read(w["pane"])[0]
     gate = any(g in d.HUMAN_GATES for g in agents.GATE_RE.findall(agent_screen.plain(text or "")))
-    return gate or word == "waiting for you"
+    return gate or word in ("waiting for you", "finished")
 
 
 def stall(c, w, reg, st, seen):
@@ -143,6 +143,8 @@ def stall(c, w, reg, st, seen):
     seen[cid] = rec
     idle, limit = agents.idle_seconds(w, reg, st), (C.DISPATCH.get("stall_minutes") or 0) * 60
     if not limit or idle is None or idle < limit or _excused(c, w, agent_screen.read(w["pane"])[1]):
+        rec.pop("nudged_at", None)   # working or waiting again: the next stall starts with a fresh nudge
+        rec.pop("reported", None)
         return False
     if not rec.get("reported"):
         rec["reported"] = True

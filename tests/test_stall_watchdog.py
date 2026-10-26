@@ -145,3 +145,20 @@ def test_unmoved_alert_skipped_while_stalled(fake):
 def test_a_reset_or_prompt_wait_is_excused(fake, key):
     assert agent_alerts._excused(_card(), {**W, key: "x"}, "")
     assert not agent_alerts._excused(_card(), W, "")
+
+
+def test_an_agent_that_resumes_gets_a_fresh_nudge_before_a_restart(fake):
+    fake.run([_card()])
+    fake.idle = None   # busy again
+    fake.now += 3 * 3600
+    fake.run([_card()])
+    fake.idle = 21 * 60
+    fake.run([_card()])
+    assert not fake.stops and not fake.started
+    assert len(fake.nudges()) == 2 and len(fake.kinds("stalled")) == 2
+
+
+def test_a_finished_agent_is_not_nudged(fake):
+    fake.word = "finished"
+    fake.run([_card()])
+    assert not fake.nudges() and not fake.kinds("stalled")
