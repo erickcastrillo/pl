@@ -1521,6 +1521,38 @@ def check_pr_person_alerts(all_cards):
     alerts.sweep("pr_person:", active, notify)
 
 
+def check_stalled(all_cards, st=None):
+    """Open an alert, and notify once, for work that stopped moving: a run agent idle stall_minutes while its card has
+    not reached the run stage's done column, or a run agent the dispatcher released that waits out its retry (high after two
+    releases). An alert clears when the card moves on or its agent works again. Read from card metadata and the
+    dispatcher state only: no tmux or GitHub call."""
+    limit = C.DISPATCH.get("stall_minutes", 20)
+    run = ((C.PIPELINE or {}).get("stages") or {}).get("run") or {}
+    building = {run.get("column") or "Approved", "In progress"}   # the run stage starts from its column, works in In progress
+    waits, now, active = (st or {}).get("run_waits") or {}, time.time(), set()
+    for c in all_cards:
+        if col_name(c.get("list_id")) not in building:
+            continue
+        m, head, key = c.get("metadata") or {}, short_id(c["id"]), f"stalled:{c['id']}"
+        since = (waits.get(c["id"]) or {}).get("since")
+        if limit and isinstance(since, (int, float)) and now - since >= limit * 60:
+            title = f"Card {head}: its run agent is idle {int((now - since) // 60)} min and the card has not moved"
+            fix = f"pl card {cmd_id(c['id'])} shows the agent; the dispatcher releases it at release_waiting_after"
+            severity = "warn"
+        elif blocked := run_blocked(c, now):
+            n = int(m.get("run_releases") or 0)
+            retry = blocked.rsplit("\u00b7", 1)[-1].strip()
+            title = f"Card {head}: run agent released {n}x ({m.get('run_released_why') or 'waiting'}), {retry}"
+            fix = f"pl retry {cmd_id(c['id'])} starts it now; pl card {cmd_id(c['id'])} shows why it stopped"
+            severity = "high" if n >= 2 else "warn"
+        else:
+            continue
+        active.add(key)
+        if why := alerts.open(key, severity, title, fix, cards=[c["id"]]):
+            notify(alerts.headline(why, f"Stalled: {c['title'][:40]}"), title)
+    alerts.sweep("stalled:", active, notify)
+
+
 def check_alerts(all_cards, failed, st=None):
     """End of a pass: resolve the alerts whose condition cleared, escalate the rest, and run the pass-end checks
     (a dead loop, a loop that has not run for 2 of its intervals, a PR waiting over PR_WAIT). failed: the
@@ -1531,6 +1563,7 @@ def check_alerts(all_cards, failed, st=None):
     check_machine_alerts()
     alerts.sweep("stage_failed:", failed, notify)
     alerts.sweep("permission_wait:", failed, notify)
+    check_stalled(all_cards, st)
     held = {a["key"] for a in alerts.listing() if a["key"].startswith("trust:")
             and (p := a["key"].split(":", 2))[1] in C.PROFILES
             and untrusted_folder(harnesses.account_harness(p[1]), p[1]) == Path(p[2])}
