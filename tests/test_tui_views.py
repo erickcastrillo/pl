@@ -3451,7 +3451,9 @@ async def test_each_extend_sub_tab_shows_its_panel(monkeypatch, vid, panel):
         assert app.active_tab == vid
         assert [type(w).__name__ for w in app.query(f"#{vid} > VerticalScroll > *")] == [panel]
         if vid == "connectors":
-            app.query_one("#connectors").query_one(DataTable).focus()
+            table = app.query_one("#connectors").query_one(DataTable)
+            table.focus()
+            table.move_cursor(row=1)
             await pilot.press("t")
             await settle(pilot)
             assert ["pl", "connectors", "test", "conn1"] in calls
@@ -3575,5 +3577,5 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
         await settle(pilot)
         app.action_skills()
         await settle(pilot)
-        assert {"new", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
+        assert {"new skill", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
                 "update check"} <= _footer_keys(app)
