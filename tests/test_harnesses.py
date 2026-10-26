@@ -552,7 +552,7 @@ def test_run_waiting_says_exited_when_the_pane_is_back_at_a_shell(fake_home, mon
     assert agents.run_waiting(RUN_W, {"s1": {"status": status}}) == want
 
 
-def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None):
+def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None, updates=None):
     started = []
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ask)   # the permission-prompt screen check
     monkeypatch.setattr(dispatch, "registry", lambda: {"s1": {"status": "idle"}})
@@ -562,6 +562,7 @@ def _pass(monkeypatch, cs, waiting, max_runs=1, ask=None):
     monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg, st=None: waiting)
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)   # no real tmux
     monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: started.append((c["id"], stage)))
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: updates is None or updates.append(f))
     for name in ("sweep_untracked", "ensure_services", "mirror_to_product", "screen_hit_limit", "notify"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     dispatch.dispatch_once(max_runs, False, pull=False)
@@ -785,12 +786,11 @@ def test_permission_wait_needs_a_prompt_on_screen_and_two_idle_minutes(fake_home
 def test_a_stuck_agent_opens_an_alert_and_its_card_says_waiting_for_permission(fake_home, monkeypatch):
     from pl import alerts
     updates, opened = [], []
-    monkeypatch.setattr(dispatch, "update", lambda cid, **f: updates.append(f))
     real_open = alerts.open
     monkeypatch.setattr(alerts, "open", lambda *a: opened.append(a) or real_open(*a))
     c = _auto("eeee0005", "In progress", spec_slug="fix-x",
               worker={**RUN_W, "profile": "acme", "started_at": now_iso()})
-    _pass(monkeypatch, [c], None, ask="Bash command · git push origin feat/x")
+    _pass(monkeypatch, [c], None, ask="Bash command · git push origin feat/x", updates=updates)
     key, sev, title = opened[0][:3]
     assert key == "permission_wait:eeee0005" and sev == "warn"
     assert title == "agent waiting for permission in run-fix-x: Bash command · git push origin feat/x"
@@ -800,7 +800,7 @@ def test_a_stuck_agent_opens_an_alert_and_its_card_says_waiting_for_permission(f
     monkeypatch.setattr(agents, "col_name", lambda lid: "In progress")
     assert agents.worker_view(c, {}) == "run agent waiting for permission (acme)"
     # the prompt is answered: the label and the alert clear
-    _pass(monkeypatch, [c], None)
+    _pass(monkeypatch, [c], None, updates=updates)
     assert "permission_wait" not in updates[-1]["metadata"]["worker"]
     assert alerts.get("permission_wait:eeee0005")["resolved_at"]
 
