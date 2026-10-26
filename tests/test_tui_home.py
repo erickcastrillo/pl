@@ -90,6 +90,11 @@ async def test_home_shows_one_row_per_pipeline_with_bold_needs_you():
         home_view = app.query_one(HomeView)
         table = home_view.query_one("DataTable")
         assert len(table.ordered_rows) == 3
+        assert app.active_tab == "dashboard"
+        assert not any("Home" in str(t.label) for t in app.query_one("#tabs").query_one("Tabs").query("Tab") if t.display)
+        await pilot.press("H")
+        await pilot.pause()
+        assert app.active_tab == "home"
         cell = table.get_cell_at((0, 3))
         assert getattr(cell, "style", None) and "bold" in str(cell.style)
 
@@ -133,6 +138,9 @@ async def test_one_profile_skips_home_and_opens_as_today():
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.pause()
         assert not app.query(HomeView)
+        assert app.active_tab == "dashboard"
+        await pilot.press("H")
+        await pilot.pause()
         assert app.active_tab == "dashboard"
 
 
