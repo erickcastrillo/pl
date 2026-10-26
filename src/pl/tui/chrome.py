@@ -29,7 +29,7 @@ TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 MEANING = {
     "tab": "go to tab", "brain": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
     "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
-    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines",
+    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines", "pipeline": "switch pipeline",
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
