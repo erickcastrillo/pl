@@ -2,6 +2,7 @@
 import json
 import subprocess
 import sys
+import tomllib
 from types import SimpleNamespace
 
 import pytest
@@ -231,3 +232,26 @@ def test_list_templates_names_all_five(capsys):
     pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
     names = {r["name"] for r in json.loads(capsys.readouterr().out)}
     assert names == {"engineering", "new-client", "existing-client", "billing", "team"}
+
+
+# ---------- Plan 35 slice 2: add takes a ready tracker table ----------
+
+GH_TRACKER = {"type": "github-project", "owner": "acme", "number": 7, "status_field": "pl stage", "repo": "acme/web"}
+
+
+def test_add_with_a_tracker_table_writes_it_as_is(fake_home, capsys):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "dry_run": True, "tracker": GH_TRACKER}))
+    assert 'type = "github-project"' in capsys.readouterr().out
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "tracker": GH_TRACKER}))
+    written = tomllib.loads((fake_home / ".pl-sales" / "config.toml").read_text())
+    assert written["tracker"] == GH_TRACKER
+
+
+def test_add_with_board_mcp_still_writes_type_mcp(fake_home):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "board": "mcp:boards"}))
+    written = tomllib.loads((fake_home / ".pl-sales" / "config.toml").read_text())
+    assert written["tracker"] == {"type": "mcp", "server": "boards"}
