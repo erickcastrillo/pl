@@ -300,6 +300,9 @@ def install(text, yes, out, dry_run=False, name=None, plugin=None):
                 return _fail(f"{lib / n} already exists; pl never overwrites")
         if plugin_name and os.path.lexists(kept):
             return _fail(f"{kept} already exists; pl never overwrites")
+        if dry_run:
+            where = f"{src['owner']}/{src['repo']}" + (f"/{path}" if path else "")
+            print(f"Source: github:{where}@{sha}", file=out)
         if plugin_name:
             _print_plugin_listing(inv, plugin_name, out)
         _print_listing(root, path if plugin_name else picks[0][1], inv, out, show_text=tty)

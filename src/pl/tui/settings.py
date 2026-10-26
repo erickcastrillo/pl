@@ -10,11 +10,9 @@ from textual.widgets import Button, Input, Label, Select, Static
 from pl import config as C
 from pl import harnesses, stage_models, trackers
 from pl.trackers import github
-from pl.tui.connectors import ConnectorsPanel
-from pl.tui.extensions import ExtensionsView, missing_skill
-from pl.tui.panels import make_chat_panel, make_models_panel, make_pods_panel
+from pl.tui.extensions import missing_skill
+from pl.tui.panels import make_chat_panel
 from pl.tui.review import ConfirmScreen
-from pl.tui.skills import SkillsView
 
 SUBSCRIPTION_LINE = ("pl runs the harness CLIs you already have installed and signed in, on your own subscription. "
                      "It never asks for or stores an API key.")
@@ -214,8 +212,6 @@ class SettingsView(Widget):
                 if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
                     yield Button("Create project", id="create-project", compact=True)
                 yield Static(Text("code host  gh: checking…", style="dim"), id="codehost")
-            with self._panel("Connectors"):
-                yield ConnectorsPanel()
             with self._panel("Stages and harnesses"):
                 names = list(harnesses.BUILTINS)
                 for stage in C.PROMPTS:
@@ -250,18 +246,8 @@ class SettingsView(Widget):
                     if hname in harnesses.EFFORT_LEVELS:
                         yield from self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
                                                options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
-            with self._panel("Skills, agents and commands (every account; ctrl+p Skills jumps here)"):
-                yield SkillsView()
-            with self._panel("Connectors"):
-                yield ConnectorsPanel()
-            with self._panel("Pods"):
-                yield make_pods_panel()
-            with self._panel("Local models"):
-                yield make_models_panel()
             with self._panel("Chat"):
                 yield make_chat_panel()
-            with self._panel("Extensions"):
-                yield ExtensionsView(SUBSCRIPTION_LINE)
             with self._panel("Loops"):
                 for name, svc in C.SERVICES.items():
                     yield from self._field(f"{name} prompt", ("loops", name, "prompt"), svc["prompt"])

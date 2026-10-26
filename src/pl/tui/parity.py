@@ -34,6 +34,8 @@ COMMANDS = {
     "AlertsView.ack": "pl alerts --ack KEY",
     "IdeasView.new": "pl idea",
     "IdeasView.approve": "pl approve <id>",
+    "WaitingView.approve": "pl approve <id>",
+    "WaitingView.send_back": "pl reject <id> NOTES",
     "ReviewScreen.approve": "pl approve <id>",
     "ReviewScreen.send_back": "pl reject <id> <notes>",
     "SkillsView.share": "pl skills share NAME",
@@ -63,6 +65,8 @@ NAV = {
     "pick",
     # Tab and focus navigation
     "tab",
+    "sub_tab",
+    "sub_letter",
     "focus_next",
     "focus_previous",
     "app.focus_next",

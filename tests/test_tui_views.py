@@ -156,7 +156,7 @@ async def test_pull_requests_groups():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("4")
+        app.action_tab("prs")
         await pilot.pause()
         text = screen_text(app)
         for s in ("NEED YOUR DECISION 1", "READY TO MERGE 2", "NEED REWORK 1", "AWAITING MERGE CHECK 1",
@@ -213,7 +213,7 @@ async def _open_tab(pilot, app, tid):
     await settle(pilot)
 
 
-@pytest.mark.parametrize("tid", ["cards", "prs"])
+@pytest.mark.parametrize("tid", ["cards", "waiting", "prs"])
 async def test_80x24_every_tab_fits_with_no_cut_columns(tid):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(80, 24)) as pilot:
@@ -285,7 +285,7 @@ async def test_card_markup_is_shown_as_plain_text(monkeypatch):
         table_line = next(l for l in screen_text(app).splitlines() if "4a000001 " in l)
         assert "[bold]x[/bold]" in table_line.split("││")[0]      # the list, not only the detail pane
         assert "[bold]x[/bold]" in str(app.query_one("#cards-detail").render())        # card detail pane
-        await pilot.press("4")
+        app.action_tab("prs")
         await pilot.pause()
         assert "[red]pr[/red] [link=https://evil.example]z[/link]" in screen_text(app)
 
@@ -508,7 +508,7 @@ async def test_health_opens_in_a_details_panel():
 
 async def _open_pr(pilot, app, url="https://github.com/o/frontend/pull/1200"):
     await settle(pilot)
-    await pilot.press("4")
+    app.action_tab("prs")
     await settle(pilot)
     t = app.query_one("#prs-table")
     t.move_cursor(row=t.get_row_index(url))
@@ -1244,7 +1244,7 @@ async def test_the_top_tabs_are_the_eight_jobs_in_order():
 @pytest.mark.parametrize("old,place", [
     ("home", ("home", "home")), ("dashboard", ("dashboard", "dashboard")), ("assistant", ("assistant", "assistant")),
     ("ideas", ("work", "ideas")), ("cards", ("work", "cards")), ("prs", ("review", "prs")),
-    ("loops", ("automate", "loops")), ("alerts", ("activity", "alerts")), ("activity", ("activity", "activity")),
+    ("waiting", ("review", "waiting")), ("loops", ("automate", "loops")), ("alerts", ("activity", "alerts")), ("activity", ("activity", "activity")),
     ("settings", ("settings", "settings")), ("subagents", ("automate", "subagents")), ("brain", ("assistant", "brain"))])
 def test_every_old_tab_id_resolves(monkeypatch, old, place):
     from pl.tui import chrome
@@ -1266,7 +1266,7 @@ def test_hidden_features_stay_hidden(monkeypatch):
     assert chrome.resolve("assistant") == ("assistant", None)
     assert chrome.resolve("home") is None   # one profile
     gids = [g[0] for g in chrome.groups()]
-    assert "home" not in gids and "extend" not in gids
+    assert "home" not in gids and "extend" in gids
 
 
 def _github_data():
@@ -1317,7 +1317,7 @@ async def test_pull_requests_down_skips_headings_and_none_rows(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        await pilot.press("4")
+        app.action_tab("prs")
         await settle(pilot)
         t = app.query_one("#prs-table")
         first = _cursor(app, "#prs-table")
@@ -1574,12 +1574,38 @@ async def test_the_console_opens_on_dashboard_and_keys_open_the_jobs(monkeypatch
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert _labels(app, "#tabs") == ["1 Dashboard", "2 Assistant", "3 Work", "4 Review", "5 Automate", "7 Activity", "8 Settings"]
+        assert _labels(app, "#tabs") == ["1 Dashboard", "2 Assistant", "3 Work", "4 Review", "5 Automate", "6 Extend", "7 Activity", "8 Settings"]
         assert app.active_tab == "dashboard"
-        for key, view in (("3", "ideas"), ("4", "prs"), ("5", "loops"), ("1", "dashboard")):
+        for key, view in (("3", "ideas"), ("4", "waiting"), ("5", "loops"), ("1", "dashboard")):
             await pilot.press(key)
             await settle(pilot)
             assert app.active_tab == view, key
+
+
+async def test_review_opens_on_waiting_then_pull_requests(monkeypatch):
+    from pl.tui.needs import needs_you_count
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("4")
+        await settle(pilot)
+        assert app.active_tab == "waiting"
+        labels = _labels(app, "#review-views")
+        assert labels[0] == "Waiting" and labels[1].startswith("Pull requests")
+        assert app.query_one("#waiting-table").row_count == needs_you_count(app.data) > 0
+
+
+async def test_footer_shows_the_review_keys(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("4")
+        await settle(pilot)
+        app.query_one("#waiting-table").focus()
+        await settle(pilot)
+        assert {"approve", "send back", "open"} <= _footer_keys(app)
 
 
 async def test_without_the_assistant_the_keys_stay_put(monkeypatch):
@@ -2333,9 +2359,10 @@ async def test_help_panel_lists_every_bound_action_with_a_command(tab, key, monk
         assert isinstance(app.screen, HelpScreen)
         text = " ".join(app.screen.body().plain.split())
         under = app.screen_stack[-2]
+        shadowed = {b.key for bs in app._bindings.key_to_bindings.values() for b in bs if b.priority}
         for b_key, active in under.active_bindings.items():
-            if active.enabled and active.binding.description:
-                assert active.binding.description in text, b_key
+            if active.enabled and active.binding.description and (b_key not in shadowed or active.node is app):
+                assert active.binding.description in text, b_key   # a priority app key (left/right views) hides the widget's own
         assert app.screen.rows and all(command for _, _, _, command in app.screen.rows)
         if tab == "cards":
             assert any(what == "drop" and command == "pl drop <id>" for _, _, what, command in app.screen.rows)
@@ -2437,7 +2464,7 @@ async def test_three_prs_and_two_gates_give_5_everywhere(monkeypatch):
         assert "needs you 5" in text
         assert str(app.query_one("#work-views", TabbedContent).get_tab("cards").label) == "Board 3 · 5 need you"
         assert tile(app, "waiting") == "5"
-        await pilot.press("4")
+        app.action_tab("prs")
         await settle(pilot)
         assert "5 need you" in app.query_one("#prs-table").border_title
 
@@ -2958,3 +2985,106 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
         assert str(form.query_one("#loop-hours-error").render()).strip()
         assert not str(form.query_one("#loop-problem").render()).strip()
     assert "chase" not in (profile / "config.toml").read_text()
+
+
+EXTEND_VIEWS = ["skills", "connectors", "pods", "models", "extensions"]
+
+
+def _fake_extend_cli(monkeypatch):
+    """Every pl subcommand the Extend panels run, answered with an empty or one-row list; returns the argv log."""
+    from pl.tui import connectors, panels, skills
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(list(argv))
+        out = json.dumps([{"name": "conn1", "type": "github", "status": "connected"}]) \
+            if argv[:3] == ["pl", "connectors", "list"] else "[]"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    for mod in (connectors, panels, skills):
+        monkeypatch.setattr(mod, "_run", fake_run, raising=False)
+    return calls
+
+
+def test_extend_tab_lists_its_five_sub_tabs_in_order():
+    from pl.tui.chrome import GROUP_KEYS, GROUPS
+    views = next(g[2] for g in GROUPS if g[0] == "extend")
+    assert [v[0] for v in views] == EXTEND_VIEWS
+    assert [v[1] for v in views] == ["Skills", "Connectors", "Pods", "Models", "Extensions"]
+    assert GROUP_KEYS["extend"] == "6"
+
+
+def test_a_chat_view_id_does_not_resolve():
+    from pl.tui import chrome
+    assert chrome.resolve("chat") is None
+
+
+async def test_six_opens_extend_on_skills(monkeypatch):
+    from pl.tui.skills import SkillsView
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("6")
+        await settle(pilot)
+        assert app.active_tab == "skills"
+        assert app.query_one("#extend-views").query_one(SkillsView)
+
+
+@pytest.mark.parametrize("vid,panel", [("skills", "SkillsView"), ("connectors", "ConnectorsPanel"), ("pods", "CommandPanel"),
+                                       ("models", "CommandPanel"), ("extensions", "ExtensionsView")])
+async def test_each_extend_sub_tab_shows_its_panel(monkeypatch, vid, panel):
+    calls = _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab(vid)
+        await settle(pilot)
+        assert app.active_tab == vid
+        assert [type(w).__name__ for w in app.query(f"#{vid} > VerticalScroll > *")] == [panel]
+        if vid == "connectors":
+            table = app.query_one("#connectors").query_one(DataTable)
+            table.focus()
+            table.move_cursor(row=1)
+            await pilot.press("t")
+            await settle(pilot)
+            assert ["pl", "connectors", "test", "conn1"] in calls
+
+
+async def test_extend_fits_80_columns(monkeypatch):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(pilot)
+        app.action_tab("connectors")
+        await settle(pilot)
+        row = next(line for line in screen_text(app).splitlines() if "Extend" in line)
+        assert "Extend" in row
+        subs = next(line for line in screen_text(app).splitlines() if "Skills" in line and "Extensions" in line)
+        assert all(label in subs for label in ("Skills", "Connectors", "Pods", "Models", "Extensions"))
+        app.query_one("#connectors-table").focus()
+        await settle(pilot)
+        assert {"test", "revoke"} <= _footer_keys(app)
+
+
+async def test_palette_skills_opens_extend_skills(monkeypatch):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_skills()
+        await settle(pilot)
+        assert app.active_tab == "skills"
+        assert app.focused is not None and app.focused.id == "skills-table"
+        texts = [str(c.help) for c in app.get_system_commands(app.screen) if c.title.startswith("Skills")]
+        assert any("(Extend tab)" in t and "(Settings tab)" not in t for t in texts)
+
+
+@pytest.mark.parametrize("vid", EXTEND_VIEWS)
+async def test_tab_flag_opens_extend_views(monkeypatch, vid):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider(), tab=vid)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert app.active_tab == vid
+        assert app.query_one("#tabs", TabbedContent).active == "g-extend"

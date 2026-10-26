@@ -227,7 +227,7 @@ async def test_R_revokes_behind_confirm(monkeypatch):
         assert revoke_calls[0][0] == ["pl", "connectors", "revoke", "conn1", "--yes"]
 
 
-async def test_settings_view_includes_connectors_panel():
+async def test_settings_view_has_no_extend_panels():
     from pl.tui import settings
 
     class SettingsApp(App):
@@ -238,7 +238,15 @@ async def test_settings_view_includes_connectors_panel():
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(pilot)
         view = app.query_one(settings.SettingsView)
-        assert view.query(ConnectorsPanel)
+        assert not view.query(ConnectorsPanel)
+        from pl.tui.extensions import ExtensionsView
+        from pl.tui.panels import CommandPanel
+        from pl.tui.skills import SkillsView
+        assert not view.query(SkillsView) and not view.query(ExtensionsView)
+        assert len(view.query(CommandPanel)) == 1   # the Chat panel
+        titles = [p.border_title for p in view.query(".panel")]
+        assert titles == ["General", "Connections", "Stages and harnesses", titles[3], "Chat", "Loops", "Dispatcher", "Notifications"]
+        assert titles[3].startswith("Models and effort")
 
 
 def _footer_keys(app):

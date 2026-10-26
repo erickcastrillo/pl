@@ -529,7 +529,12 @@ async def test_settings_mounts_the_section_and_warns_about_a_missing_skill(accou
         await settle(pilot)
         app.action_tab("settings")
         await settle(pilot)
-        assert app.query(extensions.ExtensionsView)
+        assert not app.query_one("#settings").query(extensions.ExtensionsView)
+        app.action_tab("extensions")
+        await settle(pilot)
+        assert app.query_one("#extensions").query(extensions.ExtensionsView)
+        app.action_tab("settings")
+        await settle(pilot)
         text = " ".join(screen_text(app).split())
         assert "/missing-skill is not a skill or command of account a" in text
         warns = [str(w.render()) for w in app.query(".stage-warning") if w.display]

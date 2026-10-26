@@ -16,6 +16,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Input, Static, Tabs, TabbedContent, TabPane, TextArea
+from textual.widgets._footer import FooterKey
 from textual.css.query import NoMatches
 
 from pl import board, dispatch, manager, update, whatsnew
@@ -26,7 +27,9 @@ from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, card_count
-from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, groups, header_text, resolve, tabs
+from pl.tui.connectors import ConnectorsPanel
+from pl.tui.extensions import ExtensionsView
+from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, MAIN_KEYS, groups, header_text, resolve, sub_label, tabs
 from pl.tui.needs import needs_you_count, review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, HealthScreen, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
@@ -34,15 +37,33 @@ from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
 from pl.tui.prs import PrsView
 from pl.tui.review import ConfirmScreen
-from pl.tui.settings import SettingsView
+from pl.tui.panels import make_models_panel, make_pods_panel
+from pl.tui.settings import SUBSCRIPTION_LINE, SettingsView
 from pl.tui.skills import SkillsView
 from pl.tui.subagents import SubagentsView
+from pl.tui.waiting import WaitingView
 
 LATER = {}
+
+
+def _titled(title, make):
+    def build():
+        pane = VerticalScroll(make(), classes="panel")
+        pane.border_title = title
+        pane.styles.height = "1fr"
+        return pane
+    return build
+
+
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
-         "brain": BrainView}
+         "brain": BrainView, "waiting": WaitingView,
+         "skills": _titled("Skills, agents and commands (every account)", SkillsView),
+         "connectors": _titled("Connectors", ConnectorsPanel),
+         "pods": _titled("Pods", make_pods_panel),
+         "models": _titled("Local models", make_models_panel),
+         "extensions": _titled("Extensions", lambda: ExtensionsView(SUBSCRIPTION_LINE))}
 
 _run = subprocess.run   # the one subprocess runner here; tests fake it
 
@@ -218,6 +239,24 @@ class DispatcherChoice(ModalScreen):
 NARROW_BELOW = 120   # columns: below this the list fills the width and the details pane gives way
 
 
+class ViewFooter(Footer):
+    """The footer with the active view's main keys first, then help and the view switch, so a narrow terminal cuts the
+    console-wide keys."""
+
+    def compose(self):
+        main = MAIN_KEYS.get(self.app.active_tab, [])
+
+        def rank(item):
+            action = getattr(item, "action", None)
+            if action in main:
+                return main.index(action)
+            return len(main) + {"help": 0, "sub_tab": 1}.get(action, 2 if isinstance(item, FooterKey) else 3)
+        items = list(super().compose())
+        palette = [i for i in items if "-command-palette" in i.classes]
+        yield from sorted((i for i in items if i not in palette), key=rank)
+        yield from palette
+
+
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
@@ -232,6 +271,8 @@ class PlApp(App):
         Binding("ctrl+x", "review('send_back')", "send back", key_display="^x"),
         Binding("D", "dispatcher", "dispatcher (this profile)"), Binding("r", "refresh", "refresh"),
         Binding("K", "kill_switch", "kill switch"),
+        Binding("left", "sub_tab(-1)", "views", key_display="←/→", priority=True),
+        Binding("right", "sub_tab(1)", "views", show=False, priority=True),
         Binding("question_mark", "help", "help", key_display="?"), Binding("U", "update", "update", show=False),
         Binding("ctrl+k", "switcher", "switch", priority=True),
         Binding("exclamation_mark", "oldest", "oldest waiting", key_display="!"),
@@ -251,6 +292,7 @@ class PlApp(App):
         self.interval = interval or default_interval()
         self.open_card = open_card
         self.initial_tab = tab
+        self.sub_keys, self.subtabs = {}, {}
         self.data, self.error, self.last_good_at, self.window = None, None, None, 1   # window: index into WINDOWS, 24 hours first
 
     def compose(self) -> ComposeResult:
@@ -259,13 +301,13 @@ class PlApp(App):
             for gid, label, views in groups():
                 with TabPane(f"{GROUP_KEYS[gid]} {label}" if gid != "home" else label, id=f"g-{gid}"):
                     with TabbedContent(id=f"{gid}-views", classes="-single" if len(views) == 1 else ""):
-                        for vid, sub_label in views:
-                            with TabPane(sub_label, id=vid):
+                        for vid, name in views:
+                            with TabPane(name, id=vid):
                                 if vid in VIEWS:
                                     yield VIEWS[vid]()
                                 else:
                                     yield Static(Text(LATER[vid], style="dim"))
-        yield Footer()
+        yield ViewFooter()
 
     def on_resize(self, event):
         self.set_class(event.size.width < NARROW_BELOW, "-narrow")
@@ -290,8 +332,57 @@ class PlApp(App):
             self.push_screen(CardScreen(self.open_card, None))
         if self.query("#home-views"):
             self.query_one("#tabs", TabbedContent).hide_tab("g-home")
+        self.subtabs = self._load_subtabs()
+        for gid, _, views in groups():
+            if self.subtabs.get(gid) in (v for v, _ in views):
+                self.query_one(f"#{gid}-views", TabbedContent).active = self.subtabs[gid]
+        self.sub_keys = self.sub_letters()
+        for letter in {k for letters in self.sub_keys.values() for k in letters}:
+            self.bind(letter, f"sub_letter('{letter}')", show=False)
+        for gid, letters in self.sub_keys.items():
+            for letter, vid in letters.items():
+                self.query_one(f"#{gid}-views", TabbedContent).get_tab(vid).label = sub_label(dict(self.view_names())[vid], letter)
         if self.initial_tab:
             self.action_tab(self.initial_tab)
+
+    @staticmethod
+    def view_names():
+        return [v for _, _, views in groups() for v in views]
+
+    def sub_letters(self):
+        """{group: {letter: view_id}}: a sub-tab's lowercase first letter, when it starts one sub-tab of its group and no
+        binding of the app, the screen or the group's widgets already uses it."""
+        found = {}
+        for gid, _, views in groups():
+            if len(views) < 2:
+                continue
+            taken = set(self._bindings.key_to_bindings) | set(self.screen._bindings.key_to_bindings)
+            for w in self.query(f"#g-{gid} *"):
+                taken |= set(w._bindings.key_to_bindings)
+            firsts = [name[0].lower() for _, name in views]
+            letters = {f: vid for f, (vid, _) in zip(firsts, views) if firsts.count(f) == 1 and f not in taken}
+            if letters:
+                found[gid] = letters
+        return found
+
+    def _typing(self):
+        return isinstance(self.focused, (Input, TextArea))
+
+    def _load_subtabs(self):
+        try:
+            saved = json.loads((C.STATE_DIR / "subtabs.json").read_text())
+        except (OSError, ValueError):
+            return {}
+        ok = isinstance(saved, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in saved.items())
+        return saved if ok else {}
+
+    def _save_subtabs(self):
+        tmp = C.STATE_DIR / "subtabs.json.tmp"
+        try:
+            tmp.write_text(json.dumps(self.subtabs))
+            os.replace(tmp, C.STATE_DIR / "subtabs.json")
+        except OSError:
+            pass
 
     @work(thread=True, exclusive=True, group="build")
     def build_job(self):
@@ -415,7 +506,7 @@ class PlApp(App):
         yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
                             self.action_whatsnew)
         yield SystemCommand("Health", "agents, loops, last error and tokens", self.action_health)
-        yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
+        yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Extend tab)",
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
@@ -431,8 +522,8 @@ class PlApp(App):
         self.action_tab("brain")
 
     def action_skills(self):
-        """Settings tab, the Skills section, its list focused."""
-        self.action_tab("settings")
+        """Extend tab, the Skills sub-tab, its list focused."""
+        self.action_tab("skills")
         self.query_one(SkillsView).focus_table()
 
     @work(thread=True, group="dispatcher")
@@ -551,6 +642,7 @@ class PlApp(App):
         if self.query(HomeView):
             self.query_one(HomeView).show(self.data)
         self.query_one(DashboardView).show(self.data, self.window)
+        self.query_one(WaitingView).show(self.data)
         self.query_one(PrsView).show(self.data)
         self.query_one(LoopsView).show(self.data)
         self.query_one(ActivityView).show(self.data)
@@ -565,7 +657,7 @@ class PlApp(App):
         for group, tid, label in (("work", "cards", f"Board {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
                                   ("review", "prs", f"Pull requests {n_prs}"),
                                   ("activity", "alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
-            self.query_one(f"#{group}-views", TabbedContent).get_tab(tid).label = label
+            self.query_one(f"#{group}-views", TabbedContent).get_tab(tid).label = sub_label(label, tid in self.sub_keys.get(group, {}).values())
 
     @property
     def active_tab(self):
@@ -588,7 +680,26 @@ class PlApp(App):
             target.focus()
         self.refresh_bindings()
 
-    def on_tabbed_content_tab_activated(self, _):
+    def action_sub_tab(self, step):
+        views = [v for v, _ in self.active_group_views()]
+        self.action_tab(views[(views.index(self.active_tab) + step) % len(views)])
+
+    def action_sub_letter(self, letter):
+        self.action_tab(self.sub_keys[self.active_group()][letter])
+
+    def active_group(self):
+        return self.query_one("#tabs", TabbedContent).active.removeprefix("g-")
+
+    def active_group_views(self):
+        return next((views for gid, _, views in groups() if gid == self.active_group()), [])
+
+    def on_tabbed_content_tab_activated(self, event):
+        tc = event.tabbed_content
+        if (tc.id or "").endswith("-views"):
+            gid = tc.id.removesuffix("-views")
+            if tc.active and self.subtabs.get(gid) != tc.active:
+                self.subtabs[gid] = tc.active
+                self._save_subtabs()
         self.refresh_bindings()
         if self.active_tab == "subagents":
             self.query_one(SubagentsView).tick()
@@ -613,6 +724,10 @@ class PlApp(App):
     def check_action(self, action, parameters):
         if action == "tab":
             return resolve(parameters[0]) is not None
+        if action == "sub_tab":
+            return len(self.screen_stack) == 1 and not self._typing() and len(self.active_group_views()) > 1
+        if action == "sub_letter":
+            return len(self.screen_stack) == 1 and not self._typing() and parameters[0] in self.sub_keys.get(self.active_group(), {})
         if action == "cycle_window":
             return self.active_tab == "dashboard"
         if action == "standup":
