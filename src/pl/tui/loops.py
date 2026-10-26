@@ -16,6 +16,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
 
 from pl import agents, loops, schedule, skills, util
 from pl import config as C
+from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
@@ -241,11 +242,15 @@ class LoopForm(ModalScreen):
     """The fields of `pl loops add`; a template fills them all, and each can be edited before saving."""
     DEFAULT_CSS = """
     LoopForm { align: center middle; }
-    LoopForm > Vertical { width: 90; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    LoopForm > Vertical { width: 90; height: auto; max-height: 100%; overflow-y: auto; border: round $accent; padding: 1 2; background: $surface; }
+    LoopForm .error { color: $error; height: auto; }
     """
     BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
     TEXT_FIELDS = (("prompt", "prompt (or pick a skill)"), ("every", "every"), ("hours", "hours"), ("account", "account"),
                    ("team", "team"))
+    DEFAULTS = {"every": "hourly"}
+    # a refusal goes under the first field whose name it mentions; anything else goes under the form's own problem line
+    ERROR_FIELDS = ("every", "hours", "account", "team")
 
     def compose(self):
         with Vertical():
@@ -258,7 +263,8 @@ class LoopForm(ModalScreen):
             yield Select([(i["name"], i["name"]) for i in self._skills()], prompt="no skill", id="loop-skill", compact=True)
             for key, label in self.TEXT_FIELDS:
                 yield Label(label)
-                yield Input(id=f"loop-{key}")
+                yield Input(value=self.DEFAULTS.get(key, ""), id=f"loop-{key}")
+                yield Static(id=f"loop-{key}-error", classes="error")
             yield Checkbox("writes (off = read-only)", False, id="loop-writes")
             yield Static(id="loop-problem")
             yield Static(Text("ctrl+s save · esc cancel", style="dim"))
@@ -283,7 +289,12 @@ class LoopForm(ModalScreen):
         self.query_one("#loop-writes", Checkbox).value = template["writes"]
 
     def _show_problem(self, text):
-        self.query_one("#loop-problem", Static).update(Text(text, style="bold red"))
+        for key in self.ERROR_FIELDS:
+            self.query_one(f"#loop-{key}-error", Static).update("")
+        field = next((k for k in self.ERROR_FIELDS if k in text), None)
+        target = f"#loop-{field}-error" if field else "#loop-problem"
+        self.query_one("#loop-problem", Static).update("")
+        self.query_one(target, Static).update(Text(text, style="bold red"))
 
     @staticmethod
     def _name_problem(name):
@@ -312,12 +323,14 @@ class LoopForm(ModalScreen):
                 schedule.parse_every(self._value("every"))
             except ValueError as e:
                 problem = str(e)
+        fields = {"skill": skill, "prompt": prompt, "every": self._value("every"), "hours": self._value("hours"),
+                  "account": self._value("account"), "team": self._value("team"),
+                  "writes": self.query_one("#loop-writes", Checkbox).value}
+        problem = problem or _call(loops.add, name, **fields)
         if problem:
-            self._show_problem(problem)
+            self._show_problem(problem.removeprefix("pl loops: "))
             return
-        self.dismiss((name, {"skill": skill, "prompt": prompt, "every": self._value("every"), "hours": self._value("hours"),
-                             "account": self._value("account"), "team": self._value("team"),
-                             "writes": self.query_one("#loop-writes", Checkbox).value}))
+        self.dismiss(name)
 
     def action_cancel(self):
         self.dismiss(None)
@@ -387,7 +400,10 @@ class LoopsView(Widget):
 
     def selected(self):
         t = self.query_one(DataTable)
-        return self.loops[t.cursor_row] if self.loops and 0 <= t.cursor_row < len(self.loops) else None
+        if not t.row_count:
+            return None
+        key = t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
+        return next((x for x in self.loops if x["name"] == key), None)
 
     def show(self, data):
         t = self.query_one(DataTable)
@@ -396,14 +412,20 @@ class LoopsView(Widget):
         if loops != self.loops:   # an unchanged table is not rebuilt
             self.loops = loops
             t.clear()
+            t.add_row(new_row("loop"), *[""] * (len(COLUMNS) - 1), key=NEW_ROW)
             for x in self.loops:
-                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS))
-            if self.loops:
-                t.move_cursor(row=min(max(keep, 0), len(self.loops) - 1))
+                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS), key=x["name"])
+            t.move_cursor(row=min(max(keep, 0), len(self.loops)))
         self.load_tail()
 
     def on_data_table_row_highlighted(self, _):
         self.load_tail()
+
+    def action_new(self):
+        def added(name):
+            if name:
+                self.app.notify(f"added loop {name}", markup=False)
+        self.app.push_screen(LoopForm(), added)
 
     def load_tail(self):
         x = self.selected()
@@ -429,7 +451,10 @@ class LoopsView(Widget):
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
 
-    def on_data_table_row_selected(self, _):
+    def on_data_table_row_selected(self, event):
+        if event.row_key.value == NEW_ROW:   # "+ New loop" opens the add form; any other row opens its log
+            self.action_new()
+            return
         x = self.selected()
         if x is None:
             return
@@ -448,13 +473,6 @@ class LoopsView(Widget):
             problem = _call(fn, *args, **kw)
             self.app.call_from_thread(self.app.notify, problem or done, severity="error" if problem else "information", markup=False)
         self.run_worker(run, thread=True, group="loops-action")
-
-    def action_new(self):
-        def saved(result):
-            if result:
-                name, fields = result
-                self._change(f"added {name}", loops.add, name, **fields)
-        self.app.push_screen(LoopForm(), saved)
 
     def action_edit(self):
         x = self.selected()

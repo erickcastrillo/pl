@@ -2682,6 +2682,11 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         assert [r["name"] for r in app.query_one(tui_loops.LoopsView).loops] == ["invoices"]
         await pilot.press("p")
         await settle(pilot)
+        assert calls == []   # the cursor starts on the "+ New" row, so p does nothing there
+        await pilot.press("down")
+        await settle(pilot)
+        await pilot.press("p")
+        await settle(pilot)
         await pilot.press("g")
         await settle(pilot)
         await pilot.press("w")
@@ -2765,7 +2770,7 @@ async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
         await pilot.press("ctrl+s")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
-        problem = str(form.query_one("#loop-problem").render())
+        problem = str(form.query_one("#loop-every-error").render())
         assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
     assert added == []
 
@@ -2852,7 +2857,7 @@ async def test_loop_log_hides_secrets(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("enter")
+        await pilot.press("down", "enter")   # row 0 is + New loop
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LogScreen)
         assert "ghp_" not in screen_text(app)
@@ -2869,7 +2874,7 @@ async def test_enter_on_a_loop_opens_its_log(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("enter")
+        await pilot.press("down", "enter")   # row 0 is + New loop
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LogScreen)
         text = screen_text(app)
@@ -2891,7 +2896,65 @@ async def test_enter_without_a_log_says_so(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("enter")
+        await pilot.press("down", "enter")   # row 0 is + New loop
         await settle(pilot)
         assert not isinstance(app.screen, tui_loops.LogScreen)
         assert any("no log yet for invoices" in n for n in notes)
+
+
+def test_new_row_reads_plus_new_thing_and_is_dim():
+    from pl.tui.chrome import NEW_ROW, new_row
+    row = new_row("loop")
+    assert row.plain == "+ New loop" and "dim" in str(row.style)
+    assert NEW_ROW == "+new"
+
+
+async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        t = app.query_one("#loops-table", DataTable)
+        assert t.get_row_at(0)[0].plain == "+ New loop" and t.row_count == 2
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert app.screen.query_one("#loop-every").value == "hourly"
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LoopForm)
+        await pilot.press("down")
+        await pilot.press("n")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+
+
+async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stays_open(monkeypatch, tmp_path):
+    from pl.tui import loops as tui_loops
+    profile = tmp_path / ".pl-fake"
+    profile.mkdir()
+    (profile / "config.toml").write_text("")
+    C.load(config_dir=str(profile))
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        form = app.screen
+        form.query_one("#loop-name").value = "chase"
+        form.query_one("#loop-prompt").value = "chase invoices"
+        form.query_one("#loop-hours").value = "never o'clock"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert str(form.query_one("#loop-hours-error").render()).strip()
+        assert not str(form.query_one("#loop-problem").render()).strip()
+    assert "chase" not in (profile / "config.toml").read_text()
