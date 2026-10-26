@@ -38,11 +38,17 @@ def _copy_run(argv, text):
         pass
 
 
+def _fields(e, skip):
+    """The key=value pairs of an event; an action that came through pl mcp serve says so."""
+    return " ".join(f"{k}={'agent session (pl mcp serve)' if (k, v) == ('source', 'mcp') else v}"
+                    for k, v in e.items() if k not in skip)
+
+
 def event_text(e):
     """The plain text of one event: a header line with the full message, then the other fields as key=value."""
     key = next((k for k in ("message", "error", "reason", "text") if e.get(k)), None)
     text = str(e[key]) if key else ""
-    rest = " ".join(f"{k}={v}" for k, v in e.items() if k not in ("ts", "kind", "card", "profile", key))
+    rest = _fields(e, ("ts", "kind", "card", "profile", key))
     head = f"{str(e.get('ts') or '')[11:19]}  {e.get('kind') or ''}  {e.get('card') or ''}  {text}"
     return head + ("\n" + rest if rest else "")
 
@@ -394,7 +400,7 @@ class ActivityView(Widget):
         self._shown = shown
         t.clear()
         for e in shown:
-            detail = " ".join(f"{k}={v}" for k, v in e.items() if k not in ("ts", "kind", "card", "profile"))
+            detail = _fields(e, ("ts", "kind", "card", "profile"))
             t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
                       Text(short_id(e.get("card") or "")), Text(detail))
 
