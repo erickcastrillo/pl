@@ -140,6 +140,19 @@ def screen_quiet(st, pane):
     return now - rec["since"]
 
 
+def idle_seconds(w, reg, st=None):
+    """Seconds a live agent's pane has been quiet, or None when its session is busy or its pane is gone. With the
+    dispatcher state st, a harness with no session registry (agy) is idle by an unchanged screen."""
+    rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if _on_pane(r, w)), {})
+    if rec.get("status") == "busy" or not pane_exists(w.get("pane")):
+        return None
+    h = _harness(w)
+    if st is not None and h is not None and not h.session_registry:
+        return screen_quiet(st, w["pane"])
+    act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
+    return time.time() - int(act) if act.isdigit() else 0
+
+
 def run_waiting(w, reg, st=None):
     """'waiting (<why>)' when a live run agent is not working: its session is not busy and its screen shows a
     /run-plan GATE line or its pane has been idle WAIT_IDLE seconds. Such an agent does not hold a run slot.
@@ -154,12 +167,7 @@ def run_waiting(w, reg, st=None):
         return f"waiting ({gates[-1]})"
     if w.get("finished_turn"):   # the Stop hook said so: no waiting out the quiet screen
         return "waiting (finished turn)"
-    h = _harness(w)
-    if st is not None and h is not None and not h.session_registry:
-        idle = screen_quiet(st, w["pane"])
-    else:
-        act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
-        idle = time.time() - int(act) if act.isdigit() else 0
+    idle = idle_seconds(w, reg, st) or 0
     return f"waiting (idle {int(idle // 60)} min)" if idle >= WAIT_IDLE else None
 
 
