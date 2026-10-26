@@ -1266,7 +1266,7 @@ def test_hidden_features_stay_hidden(monkeypatch):
     assert chrome.resolve("assistant") == ("assistant", None)
     assert chrome.resolve("home") is None   # one profile
     gids = [g[0] for g in chrome.groups()]
-    assert "home" not in gids and "extend" not in gids
+    assert "home" not in gids and "extend" in gids
 
 
 def _github_data():
@@ -1574,7 +1574,7 @@ async def test_the_console_opens_on_dashboard_and_keys_open_the_jobs(monkeypatch
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert _labels(app, "#tabs") == ["1 Dashboard", "2 Assistant", "3 Work", "4 Review", "5 Automate", "7 Activity", "8 Settings"]
+        assert _labels(app, "#tabs") == ["1 Dashboard", "2 Assistant", "3 Work", "4 Review", "5 Automate", "6 Extend", "7 Activity", "8 Settings"]
         assert app.active_tab == "dashboard"
         for key, view in (("3", "ideas"), ("4", "waiting"), ("5", "loops"), ("1", "dashboard")):
             await pilot.press(key)
@@ -2984,3 +2984,104 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
         assert str(form.query_one("#loop-hours-error").render()).strip()
         assert not str(form.query_one("#loop-problem").render()).strip()
     assert "chase" not in (profile / "config.toml").read_text()
+
+
+EXTEND_VIEWS = ["skills", "connectors", "pods", "models", "extensions"]
+
+
+def _fake_extend_cli(monkeypatch):
+    """Every pl subcommand the Extend panels run, answered with an empty or one-row list; returns the argv log."""
+    from pl.tui import connectors, panels, skills
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(list(argv))
+        out = json.dumps([{"name": "conn1", "type": "github", "status": "connected"}]) \
+            if argv[:3] == ["pl", "connectors", "list"] else "[]"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    for mod in (connectors, panels, skills):
+        monkeypatch.setattr(mod, "_run", fake_run, raising=False)
+    return calls
+
+
+def test_extend_tab_lists_its_five_sub_tabs_in_order():
+    from pl.tui.chrome import GROUP_KEYS, GROUPS
+    views = next(g[2] for g in GROUPS if g[0] == "extend")
+    assert [v[0] for v in views] == EXTEND_VIEWS
+    assert [v[1] for v in views] == ["Skills", "Connectors", "Pods", "Models", "Extensions"]
+    assert GROUP_KEYS["extend"] == "6"
+
+
+def test_a_chat_view_id_does_not_resolve():
+    from pl.tui import chrome
+    assert chrome.resolve("chat") is None
+
+
+async def test_six_opens_extend_on_skills(monkeypatch):
+    from pl.tui.skills import SkillsView
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("6")
+        await settle(pilot)
+        assert app.active_tab == "skills"
+        assert app.query_one("#extend-views").query_one(SkillsView)
+
+
+@pytest.mark.parametrize("vid,panel", [("skills", "SkillsView"), ("connectors", "ConnectorsPanel"), ("pods", "CommandPanel"),
+                                       ("models", "CommandPanel"), ("extensions", "ExtensionsView")])
+async def test_each_extend_sub_tab_shows_its_panel(monkeypatch, vid, panel):
+    calls = _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab(vid)
+        await settle(pilot)
+        assert app.active_tab == vid
+        assert [type(w).__name__ for w in app.query(f"#{vid} > VerticalScroll > *")] == [panel]
+        if vid == "connectors":
+            app.query_one("#connectors").query_one(DataTable).focus()
+            await pilot.press("t")
+            await settle(pilot)
+            assert ["pl", "connectors", "test", "conn1"] in calls
+
+
+async def test_extend_fits_80_columns(monkeypatch):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(pilot)
+        app.action_tab("connectors")
+        await settle(pilot)
+        row = next(line for line in screen_text(app).splitlines() if "Extend" in line)
+        assert "Extend" in row
+        subs = next(line for line in screen_text(app).splitlines() if "Skills" in line and "Extensions" in line)
+        assert all(label in subs for label in ("Skills", "Connectors", "Pods", "Models", "Extensions"))
+        app.query_one("#connectors-table").focus()
+        await settle(pilot)
+        assert {"test", "revoke"} <= _footer_keys(app)
+
+
+async def test_palette_skills_opens_extend_skills(monkeypatch):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_skills()
+        await settle(pilot)
+        assert app.active_tab == "skills"
+        assert app.focused is not None and app.focused.id == "skills-table"
+        texts = [str(c.help) for c in app.get_system_commands(app.screen) if c.title.startswith("Skills")]
+        assert any("(Extend tab)" in t and "(Settings tab)" not in t for t in texts)
+
+
+@pytest.mark.parametrize("vid", EXTEND_VIEWS)
+async def test_tab_flag_opens_extend_views(monkeypatch, vid):
+    _fake_extend_cli(monkeypatch)
+    app = PlApp(snapshot_provider=Provider(), tab=vid)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert app.active_tab == vid
+        assert app.query_one("#tabs", TabbedContent).active == "g-extend"

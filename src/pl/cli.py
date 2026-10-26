@@ -163,7 +163,7 @@
   pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | update --check [--json] | update NAME [--yes] | remove NAME [--yes] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
-                          library skill to another Claude or Codex account (Settings: Skills, or ctrl+p "Skills");
+                          library skill to another Claude or Codex account (Extend: Skills, or ctrl+p "Skills");
                           reset puts back the shipped version of a built-in stage skill (pl-spec, pl-plan, ...);
                           install github:owner/repo[/path][@ref] pins the commit, lists every file (code that runs first)
                           and installs into the library only after a yes; a Claude Code plugin or marketplace entry
