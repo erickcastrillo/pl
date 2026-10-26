@@ -206,3 +206,34 @@ PARITY = {   # the card screen's own header actions (and the Connectors panel's)
     ("connectors", "add"): "pl connectors add", ("connectors", "test"): "pl connectors test", ("connectors", "revoke"): "pl connectors revoke",
 }
 MAP = PARITY
+
+NAVIGATE = {"tab", "step", "cycle_window", "focus_next", "focus_previous", "jump", "open_window", "switcher", "oldest",
+            "close", "cancel", "back", "leave_box", "scroll_top", "scroll_bottom", "only_mine", "plan_filter",
+            "next_filter", "show_done", "help"}
+GROUPS = ("navigate", "act on the selection", "add", "other")
+
+
+def _action_name(action):
+    return action.split("(")[0].removeprefix("app.")
+
+
+def command_for(owner, action, key=None):
+    """The pl command a bound action runs, or None for navigation and local UI actions."""
+    name = _action_name(action)
+    for found in (LOOPS_KEYS.get(key) if owner == "LoopsView" else None,   # the key names the exact command (pause or resume)
+                  COMMANDS.get(f"{owner}.{name}"), COMMANDS.get(name), PARITY.get(name)):
+        if found:
+            return found
+    return None
+
+
+def group_of(action, command):
+    """Which help group a bound action belongs to (one of GROUPS)."""
+    name = _action_name(action)
+    if name in NAVIGATE:
+        return "navigate"
+    if name == "new" or name.startswith("new_") or name == "file_idea":
+        return "add"
+    if command and any(token in command for token in ("<id>", "<card>", "NAME")):
+        return "act on the selection"
+    return "other"
