@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 8
+pl-builtin-version: 9
 ---
 
 # pl-run: build the approved plan for one card
@@ -61,12 +61,12 @@ such choice in the pull request description.
 3. For each work package, in order (an "End-to-end tests" package comes last, as below):
    1. Write the tests the package lists. Run them and confirm they fail for the expected reason.
    2. Make the change the package describes, and nothing else.
-   3. Run the package's tests until they pass, then the project's usual test and lint commands.
+   3. Run the package's tests until they pass. Then run the test files `pl tests affected --json` lists in "tests", and the project's
+      lint command (the full test suite only when the JSON has `full` true or the command fails: non-zero exit, or output that is not JSON), in the foreground under `timeout 1200`; read the result before going on.
    4. Check `git diff --stat` against the plan's "Minimum change" budget; if over, remove code until inside it.
    5. Commit with a message that names the work package.
 
-4. When every package is done, run the full test suite once more.
-5. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
+4. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
 
    ```
    git diff --numstat origin/<default branch>...HEAD
@@ -74,9 +74,9 @@ such choice in the pull request description.
    ```
 
    Note the diff metrics: within target_lines and target_files it qualifies for auto-merge; if larger, put the
-   metrics in the pull request description for standard review. Always go on to step 6 so review and CI can run.
+   metrics in the pull request description for standard review. Always go on to step 5 so review and CI can run.
 
-6. Push and open the pull request:
+5. Push and open the pull request:
 
    ```
    git push -u origin pl/<short-name>
@@ -84,10 +84,10 @@ such choice in the pull request description.
    ```
 
    `<review label>` is the `review=<label>` argument; leave out `--label` when there is none. The body says what
-   changed, which acceptance criteria it meets, how it was tested, and every choice you made where the plan was
-   unclear, with the card id.
+   changed, which acceptance criteria it meets, how it was tested (the affected test files you ran, or that you ran the full
+   suite and why: `full` true, or `pl tests affected` failed), and every choice you made where the plan was unclear, with the card id.
 
-7. Move the card and record the pull request on it:
+6. Move the card and record the pull request on it:
 
    ```
    pl move <id> "PR open" --pr <pull request URL>
@@ -124,7 +124,7 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
 4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.
    Where a finding is marked unsure or is a product call, pick the safer behaviour and say so. When a finding
    is caused by code on the default branch that another card is fixing, leave it and name that card.
-5. Run the project's usual test and lint commands, then push to the same branch (no force-push).
+5. Run the new finding tests, then the tests as in step 3.3 (affected tests plus lint; the full suite only when `full` is true or the command fails; foreground, `timeout 1200`), then push to the same branch (no force-push).
 6. Comment on each pull request you fixed, starting "Rework round N": each finding and what you changed, or why not.
 7. Send each fixed pull request back to review: remove the `rework_label` and `ready` labels and add the `review`
    label (`gh pr edit --add-label/--remove-label`; when it fails, `gh api -X DELETE
