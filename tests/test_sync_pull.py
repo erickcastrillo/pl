@@ -213,11 +213,148 @@ def test_pipeline_metadata_never_pulled(world):
     assert local.card(lid)["metadata"] == {"worker": {"pane": "%1"}}
 
 
-def test_unmapped_github_card_skipped(world):
+def _stranger(**kw):
+    return _gcard(**{"id": "o/r#99", "item_id": "PVTI_99", "title": "stranger", "description": "d", "tags": ["x"],
+                     "assigned_to": "alice", "list_id": "o1", **kw})
+
+
+def _local_titles(local):
+    return sorted(c["title"] for c in local.cards())
+
+
+def test_pull_creates_unmapped_github_card(world):
     local, lid, fake = world
-    fake.board[:] = [_gcard(id="o/r#99", title="stranger")]
+    fake.board.append(_stranger())
     r = sync.pull()
-    assert r["pulled"] == 0 and [c["title"] for c in local.cards()] == ["t0"]
+    new = next(c for c in local.cards() if c["title"] == "stranger")
+    assert (new["description"], new["tags"], new["assigned_to"]) == ("d", ["x"], "alice")
+    assert board.col_name(new["list_id"]) == "Backlog"
+    assert sync._state()["ids"][new["id"]] == "o/r#99" and sync._state()["items"][new["id"]] == "PVTI_99"
+    assert r["pulled"] == 1
+
+
+def test_sync_now_counts_created_card(world, monkeypatch, capsys):
+    _stub_replay(monkeypatch)
+    world[2].board.append(_stranger())
+    _now(monkeypatch)
+    assert "1 card pulled" in capsys.readouterr().out
+    world[2].board.append(_stranger(id="o/r#98"))
+    _now(monkeypatch, "--json")
+    assert json.loads(capsys.readouterr().out)["pulled"] == 1
+
+
+def test_created_card_queues_nothing(world):
+    world[2].board.append(_stranger())
+    before = outbox.count()
+    sync.pull()
+    assert outbox.count() == before
+
+
+def test_second_pull_does_not_duplicate(world):
+    local, lid, fake = world
+    fake.board.append(_stranger())
+    sync.pull()
+    assert sync.pull()["pulled"] == 0
+    assert _local_titles(local) == ["stranger", "t0"]
+
+
+def test_unknown_github_column_added(world):
+    local, lid, fake = world
+    fake.columns = lambda: {"Backlog": "o1", "Todo": "o2", "Triage": "o3"}
+    fake.board.append(_stranger(list_id="o3"))
+    r = sync.pull()
+    local = Local(C.TRACKER)
+    new = next(c for c in local.cards() if c["title"] == "stranger")
+    assert new["list_id"] == local.columns().get("Triage") and r["error"] is None
+
+
+def test_pipeline_metadata_not_copied(world):
+    local, lid, fake = world
+    fake.board.append(_stranger(metadata={"worker": {"pane": "%9"}, "pr_urls": ["u"], "pipeline_mode": "auto"}))
+    sync.pull()
+    new = next(c for c in local.cards() if c["title"] == "stranger")
+    assert not (new.get("metadata") or {})
+
+
+def test_pending_create_not_duplicated(world):
+    local, lid, fake = world
+    z = local.create("Todo", title="Z")
+    outbox.append(z["id"], "create", {"title": "Z", "column": "Todo"})
+    sync.pull()
+    assert _local_titles(local) == ["Z", "t0"] and "remote_edit" not in (local.card(z["id"]).get("metadata") or {})
+    fake.board.append(_stranger(title="Z"))
+    sync.pull()
+    assert _local_titles(local) == ["Z", "t0"]
+
+
+def test_no_github_column_goes_to_inbox(world):
+    local, lid, fake = world
+    fake.board.append(_stranger(list_id=None))
+    sync.pull()
+    new = next(c for c in local.cards() if c["title"] == "stranger")
+    assert board.col_name(new["list_id"]) == "Inbox"
+
+
+def test_strip_none_drops_all_updates_of_card():
+    outbox.append("A", "update", {"title": "x"})
+    outbox.append("A", "update", {"tags": ["t"]})
+    outbox.append("B", "update", {"title": "z"})
+    outbox.append("C", "create", {"title": "c"})
+    assert outbox.strip("A", None) == 2
+    assert [(e["seq"], e["card"], e["op"]) for e in outbox.entries()] == [(3, "B", "update"), (4, "C", "create")]
+    assert stat.S_IMODE(os.stat(outbox.path()).st_mode) == 0o600
+
+
+def _gone(world):
+    local, lid, fake = world
+    fake.board[:] = [_gcard(id="o/r#7", title="other")]
+    return local, lid, fake
+
+
+def test_gone_card_kept_with_deleted_remote_edit(world):
+    local, lid, fake = _gone(world)
+    before = {k: local.card(lid)[k] for k in ("title", "description", "tags", "assigned_to", "list_id")}
+    r = sync.pull()
+    cur = local.card(lid)
+    assert {k: cur[k] for k in before} == before
+    assert set(cur["metadata"]["remote_edit"]["deleted"]) == {"value", "at"} and r["conflicts"] == [lid]
+    (alert,) = alerts.listing()
+    assert alert["key"] == f"sync-conflict:{lid}" and "deleted" in alert["title"]
+
+
+def test_gone_card_second_run_one_alert_no_rewrite(world):
+    local, lid, fake = _gone(world)
+    sync.pull()
+    at = local.card(lid)["metadata"]["remote_edit"]["deleted"]["at"]
+    assert sync.pull()["conflicts"] == []
+    assert local.card(lid)["metadata"]["remote_edit"]["deleted"]["at"] == at and len(alerts.listing()) == 1
+
+
+def test_gone_card_pending_updates_removed(world):
+    local, lid, fake = _gone(world)
+    outbox.append(lid, "update", {"title": "a"})
+    outbox.append(lid, "update", {"tags": ["t"]})
+    outbox.append("B", "update", {"title": "b"})
+    sync.pull()
+    assert [e["card"] for e in outbox.entries()] == ["B"]
+
+
+def test_reserve_or_read_error_marks_nothing_deleted(world):
+    local, lid, fake = _gone(world)
+    _ledger(200)
+    sync.pull()
+    fake.fail = "boom"
+    os.remove(ghquota._path())
+    sync.pull()
+    assert "remote_edit" not in (local.card(lid).get("metadata") or {}) and alerts.listing() == []
+    assert _local_titles(local) == ["t0"]
+
+
+def test_empty_github_read_marks_nothing_deleted(world):
+    local, lid, fake = world
+    fake.board[:] = []
+    assert sync.pull()["conflicts"] == []
+    assert "remote_edit" not in (local.card(lid).get("metadata") or {})
 
 
 def test_below_reserve_reads_nothing(world):
