@@ -217,7 +217,8 @@ class PipelinesScreen(ModalScreen):
 
     def compose(self):
         with Vertical():
-            yield OptionList(*(Option(self._line(r)) for r in self.rows), id="pipeline-options")
+            yield OptionList(*(Option(self._line(r)) for r in self.rows),
+                             Option(Text("+ New pipeline", style="bold"), id="new-pipeline"), id="pipeline-options")
             yield Static(Text("↑↓ choose · enter switch · esc close", style="dim"))
 
     @staticmethod
@@ -232,7 +233,12 @@ class PipelinesScreen(ModalScreen):
         ol.focus()
 
     def on_option_list_option_selected(self, event):
+        app = self.app
         self.dismiss(None)
+        if event.option.id == "new-pipeline":
+            from pl.tui.newpipeline import NewPipelineScreen
+            app.push_screen(NewPipelineScreen(), lambda name: name and app.switch_to(name, tab="cards"))
+            return
         row = self.rows[event.option_index]
         if not row["current"]:
             self.app.switch_to(row["name"], tab=self.app.active_tab)
