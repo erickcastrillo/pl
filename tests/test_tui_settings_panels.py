@@ -8,7 +8,7 @@ from textual.widgets import DataTable, Input
 
 from pl.tui import connectors
 from pl.tui.connectors import AddConnectorScreen, ConnectorsPanel
-from pl.tui.parity import PARITY
+from pl.tui.parity import COMMANDS, PARITY
 
 
 def screen_text(app):
@@ -173,6 +173,7 @@ def test_parity_mapping():
     assert PARITY["connectors.add"] == "pl connectors add"
     assert PARITY["connectors.test"] == "pl connectors test"
     assert PARITY["connectors.revoke"] == "pl connectors revoke"
+    assert COMMANDS["ConnectorsPanel.chat_test"] == "pl chat test NAME"
 
 
 async def test_t_runs_test_command(monkeypatch):
@@ -310,3 +311,105 @@ async def test_footer_reads_n_new_connector(monkeypatch):
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(pilot)
         assert "new connector" in _footer_keys(app)
+
+
+TG = {"role": "messaging", "adapter": "telegram", "token": "${TG_TOKEN}", "allow": ["12345"], "routes": ["gates", "digest"]}
+
+
+def _fake_chat(monkeypatch, conns, test_rc=0, calls=None, test_out="Connection OK"):
+    def fake_run(argv, **kw):
+        if calls is not None:
+            calls.append(argv)
+        if argv == ["pl", "chat", "list", "--json"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"connectors": conns}), stderr="")
+        if argv[:3] == ["pl", "chat", "test"]:
+            return subprocess.CompletedProcess(argv, test_rc, stdout=test_out, stderr="")
+        out = "[]" if argv == ["pl", "connectors", "list", "--json"] else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+    monkeypatch.setattr(connectors, "_run", fake_run)
+
+
+def _capture_notices(app):
+    notices = []
+    real = app.notify
+    app.notify = lambda msg, **kw: (notices.append(str(msg)), real(msg, **kw))[1]
+    return notices
+
+
+async def _press_t_on_chat_row(app, pilot):
+    chat = app.query_one("#chat-table", DataTable)
+    chat.focus()
+    chat.move_cursor(row=0)
+    await pilot.press("t")
+    await settle(pilot)
+    return chat
+
+
+async def test_chat_group_lists_connectors(monkeypatch):
+    _fake_chat(monkeypatch, {"tg": TG})
+    app = HostApp()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        txt = screen_text(app)
+        for want in ("Chat connectors", "tg", "telegram", "12345", "gates, digest", "not tested", "shared by all profiles"):
+            assert want in txt
+
+
+async def test_chat_group_empty_shows_new_row_and_note(monkeypatch):
+    _fake_chat(monkeypatch, {})
+    app = HostApp()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        txt = screen_text(app)
+        assert "New chat connector" in txt and "Telegram, Slack or Discord" in txt
+        assert app.query_one("#chat-table", DataTable).row_count == 1
+
+
+async def test_t_on_chat_row_runs_pl_chat_test_and_marks_pass(monkeypatch):
+    monkeypatch.setenv("TG_TOKEN", "x")
+    calls = []
+    _fake_chat(monkeypatch, {"tg": TG}, calls=calls)
+    app = HostApp()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        notices = _capture_notices(app)
+        chat = await _press_t_on_chat_row(app, pilot)
+        assert ["pl", "chat", "test", "tg"] in calls
+        assert chat.get_row_at(0)[4].plain == "pass"
+        assert any("pl chat test tg" in n for n in notices)
+
+
+async def test_t_on_chat_row_marks_fail_on_nonzero_exit(monkeypatch):
+    monkeypatch.setenv("TG_TOKEN", "x")
+    _fake_chat(monkeypatch, {"tg": TG}, test_rc=1, test_out="bad")
+    app = HostApp()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        chat = await _press_t_on_chat_row(app, pilot)
+        assert chat.get_row_at(0)[4].plain == "fail"
+
+
+async def test_t_on_chat_row_with_unset_variable_names_it(monkeypatch):
+    monkeypatch.delenv("TG_TOKEN", raising=False)
+    calls = []
+    _fake_chat(monkeypatch, {"tg": TG}, calls=calls)
+    app = HostApp()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        notices = _capture_notices(app)
+        chat = await _press_t_on_chat_row(app, pilot)
+        assert not [c for c in calls if c[:3] == ["pl", "chat", "test"]]
+        assert any("TG_TOKEN is not set" in n and "restart pl" in n for n in notices)
+        assert chat.get_row_at(0)[4].plain == "fail"
+
+
+async def test_chat_token_value_never_shown(monkeypatch):
+    monkeypatch.setenv("TG_TOKEN", "sekret-123456")
+    _fake_chat(monkeypatch, {"tg": TG})
+    app = HostApp()
+    async with app.run_test(size=(140, 40)) as pilot:
+        await settle(pilot)
+        notices = _capture_notices(app)
+        await _press_t_on_chat_row(app, pilot)
+        assert "sekret-123456" not in screen_text(app)
+        assert not any("sekret-123456" in n for n in notices)

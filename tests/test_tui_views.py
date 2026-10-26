@@ -802,34 +802,99 @@ async def test_dashboard_header_shows_free_memory_and_a_red_warning_when_low():
         assert any("red" in str(s.style) for s in bar.spans if "LOW" in bar.plain[s.start:s.end])
 
 
-async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
+def _alert(key, severity="warn", ago=0, cards=None, **kw):
+    return {"key": key, "severity": severity, "title": f"title of {key}", "fix": f"fix for {key}", "first_seen": NOW.timestamp() - ago,
+            "last_seen": NOW.timestamp(), "count": 1, "cards": cards or [], **kw}
+
+
+async def test_alerts_tab_a_acknowledges_and_hides(monkeypatch):
     from pl import alerts
     from pl.tui import alerts as tui_alerts
     acked = []
     monkeypatch.setattr(alerts, "ack", lambda key: acked.append(key) or True)
     data = fake_data()
-    data["alerts"] = [{"key": "stage_failed:abcd1234:spec", "severity": "high", "title": "Card abcd1234: the spec agent died 3 times",
-                       "fix": "pl retry abcd1234", "first_seen": NOW.timestamp() - 7200, "last_seen": NOW.timestamp(), "count": 4}]
+    data["alerts"] = [_alert("stage_failed:abcd1234:spec", "high", 60, count=4), _alert("pr_waiting:abcd1234", ago=7200)]
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(data))
+    told = []
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app)
         assert "ALERTS" not in screen_text(app)   # the Pipeline lists only cards; alerts live on their own tab
-        assert str(app.query_one("#activity-views", TabbedContent).get_tab("alerts").label) == "Alerts 1"
+        assert str(app.query_one("#activity-views", TabbedContent).get_tab("alerts").label) == "Alerts 2"
         app.action_tab("alerts")
         await pilot.pause()
         assert app.active_tab == "alerts"
-        text = screen_text(app)
-        for s in ("high 2h", "pl retry abcd1234", "×4"):
-            assert s in text, s
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
         assert app.query_one(tui_alerts.AlertsView)._current()[0] == "stage_failed:abcd1234:spec"
-        await pilot.press("k")
+        await pilot.press("a")
         await pilot.pause()
-        assert acked == ["stage_failed:abcd1234:spec"] and "acked" in screen_text(app)
-        data["alerts"] = []                       # resolved: the dispatcher's next read leaves it out
-        app.refresh_data()
+        assert acked == ["stage_failed:abcd1234:spec"] and any("hidden until" in m for m in told)
+        assert "title of stage_failed" not in screen_text(app) and "Alerts 1" in screen_text(app)
+        assert "Approve" not in screen_text(app)
+        await pilot.press("k")                    # the hidden alias
+        await pilot.pause()
+        assert acked[-1] == "pr_waiting:abcd1234" and "Alerts 0" in screen_text(app)
+
+
+async def test_alerts_tab_newest_first_with_cards(monkeypatch):
+    data = fake_data()
+    data["alerts"] = [_alert("k3", ago=10, cards=["o/r#3"]), _alert("k2", "high", ago=20, cards=["o/r#1", "o/r#2"]), _alert("k1", ago=30)]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert "none open" in screen_text(app) and "Alerts 0" in screen_text(app)
+        app.action_tab("alerts")
+        await settle(pilot)
+        text = screen_text(app)
+    assert text.index("title of k3") < text.index("title of k2") < text.index("title of k1")
+    assert "r#3" in text and "r#1, " in text
+    row = next(line for line in text.splitlines() if "title of k1" in line)
+    assert row.rstrip(" │").endswith("-") or " - " in row
+
+
+async def test_alerts_enter_shows_detail():
+    from pl.tui.alerts import AlertsView
+    data = fake_data()
+    data["alerts"] = [_alert("k1", "high", 3600, cards=["o/r#7"], count=4, details="the agent exited twice")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        app.query_one(AlertsView).query_one("DataTable").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        text = screen_text(app)
+    for s in ("high", "seen 4 times", "r#7", "the agent exited twice", "fix for k1"):
+        assert s in text, s
+
+
+async def test_alerts_empty_lists_watches():
+    from pl import alerts
+    data = fake_data()
+    data["alerts"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(240, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        text = " ".join(screen_text(app).split())
+    assert "No open alerts. pl watches for:" in text and "waiting agents" in text
+    assert alerts.WATCHES["permission_wait"] == "waiting agents"
+
+
+async def test_a_still_approves_outside_alerts(monkeypatch):
+    from pl.tui import needs as tui_needs
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    monkeypatch.setattr(tui_needs, "ReviewScreen", lambda *a, **kw: ConfirmScreen("review"))
+    data = fake_data()
+    data["alerts"] = [_alert("k1")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "4a000001aaaa")
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Approve the plan for 4a000001" in screen_text(app)
 
 
 def test_an_old_alert_title_with_a_cut_github_id_shows_repo_and_number():
@@ -911,6 +976,50 @@ async def test_pipeline_lists_every_card_by_column_with_its_text(monkeypatch):
         assert "[bold]the text of 4a000001[/bold]" in text   # card text is data, never markup
         assert reads and all(t is not threading.main_thread() for _, t in reads)
         assert view._current()[0] == "4a000001aaaa"
+
+
+def _sales_ui(fields=("company", "next step")):
+    C.PIPELINE = {**(C.PIPELINE or {}), "ui": {"item": "lead", "items": "leads", "fields": list(fields)}}
+
+
+def _column_keys(view):
+    return [c.key.value for c in view.query_one(DataTable).ordered_columns]
+
+
+async def test_pipeline_tab_uses_the_pipelines_words_and_field_columns(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    _sales_ui()
+    data = fake_data()
+    meta = next(r for r in data["snapshot"]["rows"] if r.get("card") and r["card"]["id"] == "4a000001aaaa")["card"]["metadata"]
+    meta.update({"company": "Acme", "next_step": "call"})
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app, "4a000001aaaa")
+        table = view.query_one(DataTable)
+        assert "leads" in table.border_title and "cards" not in table.border_title
+        assert _column_keys(view) == ["id", "title", "field:company", "field:next step", "state", "now"]
+        row = [str(c) for c in table.get_row("4a000001aaaa")]
+        assert "Acme" in row and "call" in row
+
+
+async def test_pipeline_tab_without_ui_looks_as_today(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app)
+        assert "cards" in view.query_one(DataTable).border_title
+        assert _column_keys(view) == ["id", "title", "state", "now"]
+
+
+async def test_a_missing_field_shows_blank_not_an_error(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    _sales_ui()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _open_cards(pilot, app, "4a000001aaaa")
+        row = [str(c) for c in view.query_one(DataTable).get_row("4a000001aaaa")]
+        assert row[2:4] == ["", ""]
+        assert app.is_running
 
 
 async def test_pipeline_a_and_x_review_only_specs_and_plans(monkeypatch):
@@ -1071,8 +1180,8 @@ def test_the_pipeline_keys_do_not_clash_with_the_console_keys():
     assert len(view_keys) == len(set(view_keys))
     assert not ({"d", "h", "f", "F", "z", "u", "e"} & app_keys) and {"d", "h", "f", "F", "z", "u", "e"} <= set(view_keys)
     assert "D" in app_keys and "D" not in view_keys   # D stays the dispatcher's key
-    assert "P" in view_keys and "P" not in app_keys
-    assert {b.key: b.description for b in tui_cards.CardsView.BINDINGS}["P"] == "plan filter"
+    assert "P" in app_keys and "P" not in view_keys   # P opens the pipeline picker everywhere
+    assert {b.key: b.description for b in tui_cards.CardsView.BINDINGS}["L"] == "plan filter"
     assert {"ctrl+k", "exclamation_mark"} <= app_keys and not ({"ctrl+k", "exclamation_mark"} & set(view_keys))
 
 
@@ -2703,8 +2812,9 @@ def test_no_key_has_two_meanings_across_every_view_and_screen():
         meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]
         meanings.setdefault(b.key, {}).setdefault(meaning, []).append(cls.__name__)
     # H: the Ideas view's own harness key wins while it has focus; elsewhere H opens Home
+    # a: acknowledges while focus is in the Alerts tab; everywhere else it approves
     # A: Ideas approves, Dashboard toggles all pipelines; each view only sees its own while it has focus
-    assert {k: m for k, m in meanings.items() if len(m) > 1 and k not in ("H", "A")} == {}
+    assert {k: m for k, m in meanings.items() if len(m) > 1 and k not in ("H", "a", "A")} == {}
 
 
 # ---------- one "needs you" count ----------
@@ -2739,7 +2849,7 @@ def _with_plan():
 
 
 async def _filter_plan(pilot, text):
-    await pilot.press("P")
+    await pilot.press("L")
     await pilot.pause()
     await pilot.press(*text, "enter")
     await settle(pilot)
@@ -2754,7 +2864,7 @@ async def test_P_shows_one_plan_ordered_by_slice_with_done_and_columns(monkeypat
         await _filter_plan(pilot, "21")
         t = app.query_one("#cards-table")
         assert list(view._rows) == ["c0000003aaaa", "f0000001aaaa", "spec0001aaaa"]
-        assert "plan 21 · 3 cards · P clears" in t.border_title
+        assert "plan 21 · 3 cards · L clears" in t.border_title
         for k in view._rows:
             cells = [c.plain for c in t.get_row(k)]
             assert cells[:3] == before[k][:3] if k in before else True
@@ -2795,21 +2905,21 @@ async def test_P_rejects_bad_numbers_and_esc_changes_nothing(monkeypatch, typed)
         await _filter_plan(pilot, typed)
         assert view.plan is None and list(view._rows) == rows
         assert any("whole number from 1" in str(n.message) for n in app._notifications)
-        await pilot.press("P")
+        await pilot.press("L")
         await pilot.pause()
         await pilot.press("escape")
         await settle(pilot)
         assert view.plan is None and list(view._rows) == rows and len(app.screen_stack) == 1
 
 
-async def test_P_again_clears_the_filter(monkeypatch):
+async def test_L_again_clears_the_filter(monkeypatch):
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(_with_plan()))
     async with app.run_test(size=(176, 48)) as pilot:
         view = await _open_cards(pilot, app)
         rows, title = list(view._rows), app.query_one("#cards-table").border_title
         await _filter_plan(pilot, "21")
-        await pilot.press("P")
+        await pilot.press("L")
         await settle(pilot)
         assert view.plan is None and list(view._rows) == rows and app.query_one("#cards-table").border_title == title
 
@@ -2981,7 +3091,7 @@ async def test_an_empty_alerts_tab_says_how_alerts_arrive(monkeypatch):
         assert all(line in text for line in empty_state("alerts"))
         told = []
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
-        await pilot.press("k")
+        await pilot.press("a")
         await pilot.pause()
         assert told == ["select an alert to acknowledge"]
 
@@ -3046,6 +3156,27 @@ def test_status_sentence(snap, stopped, sentence):
     assert status_sentence(snap, stopped) == sentence
 
 
+def _one_manual_card_data(alerts):
+    from pl.tui.needs import needs_you_count
+    data = fake_data()
+    data["snapshot"]["rows"] = [_card("c0000003aaaa", "Host DB proxy", "Manual", auto=False, hours=30)]
+    data["alerts"] = alerts
+    assert needs_you_count(data) == 1
+    return data
+
+
+def test_header_counts_alerts_and_high_needs_you():
+    from pl.tui.chrome import header_text
+    plain = header_text(_one_manual_card_data([_alert("k1", "high"), _alert("k2")])).plain
+    assert "alerts 2" in plain and "needs you 2" in plain
+
+
+def test_header_without_alerts_is_unchanged():
+    from pl.tui.chrome import header_text
+    plain = header_text(_one_manual_card_data([])).plain
+    assert "alerts" not in plain and "needs you 1" in plain
+
+
 def test_header_never_shows_the_raw_profile_line():
     from pl.tui.chrome import header_text
     data = fake_data()
@@ -3072,6 +3203,7 @@ def test_loops_tab_shows_next_run_last_result_and_week_tokens():
     assert rows["invoices"]["output"] == "ok, 3 invoices overdue"
     assert rows["invoices"]["tokens7d"] == "12.5k"
     assert rows["triage"]["tokens7d"] == "-" and rows["triage"]["next"] == "-"
+    assert rows["invoices"]["every"] == "hourly" and rows["triage"]["every"] is None
     assert rows["stale"]["state"] == "paused" and rows["stale"]["next"] == "-"
 
 
@@ -3918,6 +4050,280 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
                 "update check"} <= _footer_keys(app)
 
 
+# ---------- empty states on Loops, Activity, Background, Home and Dashboard ----------
+
+async def _open_tab(pilot, app, tab):
+    await settle(pilot)
+    app.action_tab(tab)
+    await settle(pilot)
+
+
+def _no_loops():
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+
+
+async def test_an_empty_loops_tab_says_what_it_is_for():
+    from pl.tui.chrome import empty_state
+    _no_loops()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "loops")
+        text = screen_text(app)
+        assert all(line in text for line in empty_state("loops"))
+        assert str(app.query_one("#loops-screen").render()) == "select a loop"
+
+
+async def test_the_first_loop_replaces_the_empty_state():
+    from pl.tui.loops import LoopsView
+    _no_loops()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "loops")
+        assert "? learn more" in screen_text(app)
+        C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+        app.query_one(LoopsView).show(fake_data())
+        await settle(pilot)
+        text = screen_text(app)
+    assert "invoices" in text and "? learn more" not in text
+
+
+async def test_empty_loops_row_keys_do_nothing(monkeypatch):
+    from pl import loops
+    from pl.tui.loops import LoopsView
+    _no_loops()
+    monkeypatch.setattr(loops, "edit", lambda *a, **kw: pytest.fail("edit"))
+    monkeypatch.setattr(loops, "set_enabled", lambda *a, **kw: pytest.fail("set_enabled"))
+    monkeypatch.setattr(loops, "run", lambda *a, **kw: pytest.fail("run"))
+    monkeypatch.setattr(loops, "remove", lambda *a, **kw: pytest.fail("remove"))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "loops")
+        table = app.query_one("#loops-table", DataTable)
+        table.focus()
+        table.move_cursor(row=1)   # row 0 is "+ New loop"
+        depth = len(app.screen_stack)
+        told = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
+        await pilot.press("e", "p", "g", "d", "enter", "w", "R")
+        await settle(pilot)
+        assert len(app.screen_stack) == depth and app.query_one(LoopsView).selected() is None
+        assert told == ["this loop has no window: the dispatcher restarts stopped loops",
+                        "this loop is not running: the dispatcher starts it on its next pass"]
+
+
+async def test_question_mark_on_an_empty_loops_tab_opens_its_help():
+    from pl.tui.app import HelpScreen
+    from pl.tui.chrome import HELP
+    _no_loops()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "loops")
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        assert HELP["loops"] in " ".join(screen_text(app).replace("│", " ").split())
+
+
+def _write_events(*events):
+    path = C.STATE_DIR / "events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+
+async def test_an_empty_activity_log_says_what_it_is_for(monkeypatch):
+    from pl.tui.chrome import empty_state
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "activity")
+        assert all(line in screen_text(app) for line in empty_state("activity"))
+        told = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
+        app.query_one("#activity-table", DataTable).focus()
+        await pilot.press("y")
+        await pilot.pause()
+        assert told == ["select an event first"]
+
+
+async def test_activity_filter_with_no_matches_shows_no_empty_state():
+    from pl.tui.loops import ActivityView
+    _write_events({"ts": _iso(1), "kind": "moved", "card": "abcd1234", "to": "Done"})
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "activity")
+        view = app.query_one(ActivityView)
+        view.filter = "errors"
+        view.show()
+        await settle(pilot)
+        assert app.query_one("#activity-table", DataTable).row_count == 0
+        assert "? learn more" not in screen_text(app)
+
+
+async def test_the_first_event_replaces_the_activity_empty_state():
+    from pl.tui.loops import ActivityView
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "activity")
+        assert "? learn more" in screen_text(app)
+        _write_events({"ts": _iso(1), "kind": "dispatched", "card": "abcd1234"})
+        app.query_one(ActivityView).show()
+        await settle(pilot)
+        text = screen_text(app)
+    assert "dispatched" in text and "? learn more" not in text
+
+
+async def _background_view(pilot, app, monkeypatch):
+    from pl.tui.subagents import SubagentsView
+    await _open_tab(pilot, app, "subagents")
+    return app.query_one(SubagentsView)
+
+
+def _quiet_background(monkeypatch):
+    from pl.tui.subagents import SubagentsView
+    monkeypatch.setattr(SubagentsView, "tick", lambda self: None)
+
+
+_TASK = {"parent": "acme", "card": "abcd1234", "what": "explore the repo", "state": "working", "age": 5,
+         "path": "/x/agent.jsonl", "key": 1, "ident": None}
+
+
+async def test_an_empty_background_tab_says_what_it_is_for(monkeypatch):
+    from pl.tui.chrome import empty_state
+    _quiet_background(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _background_view(pilot, app, monkeypatch)
+        view._apply([], [], None, None, [])
+        await settle(pilot)
+        assert all(line in screen_text(app) for line in empty_state("subagents"))
+        told = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
+        app.query_one("#subagents-table", DataTable).focus()
+        await pilot.press("y")
+        await pilot.pause()
+        assert told == ["select a background agent first"]
+
+
+async def test_background_shows_no_empty_state_before_the_first_scan(monkeypatch):
+    _quiet_background(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _background_view(pilot, app, monkeypatch)
+        assert "? learn more" not in screen_text(app)
+
+
+async def test_the_first_background_task_replaces_the_empty_state(monkeypatch):
+    _quiet_background(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        view = await _background_view(pilot, app, monkeypatch)
+        view._apply([], [], None, None, [])
+        await settle(pilot)
+        assert "? learn more" in screen_text(app)
+        view._apply([_TASK], [], None, None, [])
+        await settle(pilot)
+        text = screen_text(app)
+    assert "abcd1234" in text and "? learn more" not in text
+
+
+def _first_column(app, table_id):
+    t = app.query_one(table_id, DataTable)
+    return [str(t.get_row_at(i)[0]) for i in range(t.row_count)]
+
+
+async def test_an_empty_home_tab_says_what_it_is_for(monkeypatch, tmp_path):
+    from pl.tui.chrome import empty_state
+    from pl.tui.home import HomeView
+    _two_profiles(monkeypatch, tmp_path)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("H")
+        await settle(pilot)
+        app.query_one(HomeView).show({"home": []})
+        await settle(pilot)
+        assert all(line in _first_column(app, "#home-table") for line in empty_state("home"))
+        switched = []
+        monkeypatch.setattr(app, "switch_to", lambda *a, **kw: switched.append(a))
+        table = app.query_one("#home-table", DataTable)
+        table.focus()
+        table.move_cursor(row=1)   # row 0 is "+ New pipeline"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.active_tab == "home" and switched == []
+
+
+async def test_the_first_pipeline_replaces_the_home_empty_state(monkeypatch, tmp_path):
+    from pl.tui.home import HomeView
+    _two_profiles(monkeypatch, tmp_path)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("H")
+        await settle(pilot)
+        view = app.query_one(HomeView)
+        view.show({"home": []})
+        await settle(pilot)
+        assert "? learn more" in _first_column(app, "#home-table")
+        view.show({"home": [{"name": "zeta-pipeline", "running": True}]})
+        await settle(pilot)
+        text = _first_column(app, "#home-table")
+    assert "zeta-pipeline" in text and "? learn more" not in text
+
+
+def _empty_board():
+    data = fake_data()
+    data["snapshot"]["rows"] = []
+    return data
+
+
+async def test_decide_next_on_an_empty_board_says_how_to_start():
+    from pl.tui.chrome import empty_state
+    app = PlApp(snapshot_provider=Provider(_empty_board()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "dashboard")
+        table = app.query_one("#decide", DataTable)
+        assert table.row_count == 3
+        text = screen_text(app)
+        assert all(line in text for line in empty_state("dashboard")) and "› " not in text
+        table.focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.active_tab == "dashboard"
+
+
+async def test_decide_next_with_a_card_keeps_its_rows():
+    data = fake_data()
+    data["snapshot"]["rows"] = [_card("d0000004aaaa", "objective_outcome recorded succeeded", "PR open")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "dashboard")
+        assert [r.key.value for r in app.query_one("#decide", DataTable).ordered_rows] == ["needs", "health"]
+        assert "? learn more" not in screen_text(app)
+
+
+async def test_the_first_card_replaces_the_decide_next_empty_state():
+    prov = Provider(_empty_board())
+    app = PlApp(snapshot_provider=prov)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "dashboard")
+        assert "? learn more" in screen_text(app)
+        prov.data = fake_data()
+        app.refresh_data()
+        await settle(pilot)
+        text = screen_text(app)
+        assert "? learn more" not in text and "Needs you" in text
+        assert app.query_one("#decide", DataTable).row_count > 3
+
+
+async def test_the_assistant_keeps_its_empty_screen_text(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    fa.lines = []
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        assert _chat_text(app) == "the assistant's screen is empty"
+
+
 # ---------- waiting for you (plan 40, slice 4) ----------
 
 def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None, blocked=None,
@@ -4018,3 +4424,55 @@ def test_ac8_waiting_states_add_no_capture_pane_calls(monkeypatch):
 def test_ac9_markup_and_secrets_in_wait_text_show_plain_and_masked(monkeypatch):
     row, _, _ = _waiting_card(monkeypatch, worker={"stage": "run", "permission_wait": "echo [red]x[/] ghp_" + "a" * 36})
     assert "[red]x[/]" in row["approved"] and "ghp_" not in row["approved"] and "***" in row["approved"]
+
+
+def _detail_runs():
+    first = datetime(2026, 10, 26, 9, 0, 0).astimezone()
+    newest = {"started_at": first.isoformat(), "ended_at": (first + timedelta(seconds=125)).isoformat(), "ok": True,
+              "reason": "", "output": ["checked 4", "3 invoices overdue"]}
+    older = {"started_at": (first - timedelta(days=1)).isoformat(), "ended_at": (first - timedelta(days=1)).isoformat(),
+             "ok": False, "reason": "usage limit", "output": ["stopped"]}
+    return first, [newest, older]
+
+
+def test_loop_detail_shows_last_run_output_and_earlier_runs():
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    row = tui_loops.loop_rows({"snapshot": {"rows": []}})[0]
+    first, runs = _detail_runs()
+    plain = tui_loops.run_detail(row, runs).plain
+    assert "What it does: list overdue invoices" in plain and "Account acme" in plain
+    assert f"Last run {first:%H:%M} · ok · 2m 5s" in plain
+    assert "3 invoices overdue" in plain and "Earlier runs" in plain and "failed: usage limit" in plain
+
+
+def test_loop_detail_with_no_runs_says_when_it_runs():
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    row = tui_loops.loop_rows({"snapshot": {"rows": []}})[0]
+    plain = tui_loops.run_detail(row, []).plain
+    assert "No run yet" in plain and "Earlier runs" not in plain
+    bad = tui_loops.run_detail(row, [{"started_at": "bad", "ended_at": "worse", "ok": True, "output": []}]).plain
+    assert "Last run ?" in bad
+
+
+async def test_loops_view_shows_run_detail_for_a_scheduled_loop(monkeypatch):
+    from pl import agents
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    folder = C.STATE_DIR / "loops" / "invoices"
+    folder.mkdir(parents=True)
+    _, runs = _detail_runs()
+    (folder / "runs.json").write_text(json.dumps(runs[::-1]))
+    monkeypatch.setattr(agents, "pane_tail", lambda *a, **k: pytest.fail("a scheduled loop reads its run log, not tmux"))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("down")
+        await settle(pilot)
+        await settle(pilot)
+        assert "Last run" in str(app.query_one("#loops-screen").visual)

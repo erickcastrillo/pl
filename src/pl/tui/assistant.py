@@ -16,6 +16,7 @@ from pl import agents, assistant, brain, ideas
 from pl import config as C
 from pl.trackers import mcp
 from pl.tui import subagents
+from pl.tui.chrome import EMPTY, empty_state
 from pl.tui.review import ConfirmScreen
 from pl.util import mask, short_id
 
@@ -268,7 +269,8 @@ class AssistantView(Widget):
             else:             # no transcript yet (or not claude): the screen itself
                 key = ("screen", tuple(lines), len(earlier))
                 if key != last:
-                    chat = Text("\n".join(lines)) if lines else Text(f"the {self.prefix}'s screen is empty", style="dim")
+                    chat = Text("\n".join(lines)) if lines else Text("\n".join(empty_state(self.prefix)) if self.prefix in EMPTY
+                                                                else f"the {self.prefix}'s screen is empty", style="dim")
                     if earlier:
                         chat = Text.assemble(render_chat(earlier), "\n", chat)
             menu = getattr(self.backend, "menu", assistant.menu)(lines)

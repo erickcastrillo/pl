@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -34,12 +35,12 @@ LOG_CHARS = 200
 READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
 BRAIN_TOOLS = "mcp__pl-brain__*"
 BRAIN_ASK = ["mcp__pl-brain__pl_file_card"]
-READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)",
+READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)", "Bash(pl activity*)",
              "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl help*)", "Bash(pl jobs*)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl sync*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry", "caps", "loops",
              "restart", "hold", "unhold", "rework", "merges", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
-             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit", "models", "memory", "pipelines")   # move also covers move-agent
+             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit", "models", "memory", "pipelines", "activity")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
           "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",
           "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable",
@@ -186,13 +187,45 @@ def pane(st=None, where=None):
 
 # ---------- account and first prompt ----------
 
-def account():
-    """[assistant] account when it names an account, else the first account not parked, else None."""
+def usable(acct):
+    return harnesses.account_harness(acct).name in ASK_FIRST
+
+
+def pick():
+    """(account, reason): [assistant] account when it names one, else the first account not parked whose harness can
+    ask first, from the plan, spec and design pools, then [accounts]; (None, None) when none qualifies."""
     want = C.ASSISTANT.get("account")
     if want in C.PROFILES:
-        return want
+        return want, "named"
     parked = accounts.exhausted_profiles()
-    return next((a for a in C.PROFILES if a not in parked), None)
+
+    def ok(a):
+        return a in C.PROFILES and a not in parked and usable(a)
+
+    for stage in ("plan", "spec", "design"):
+        if a := next((a for a in harnesses.stage_pool(stage) or [] if ok(a)), None):
+            return a, f"from stage {stage}"
+    if a := next((a for a in C.PROFILES if ok(a)), None):
+        return a, "first usable account"
+    return None, None
+
+
+def account():
+    """The account pick() chooses, else None."""
+    return pick()[0]
+
+
+def _read_assistant_config():
+    """Re-read only [assistant], so an open console sees a changed account; a full C.load would reset every global
+    while other threads read them."""
+    path = C.path()
+    if path is None:
+        return
+    try:
+        t = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise SystemExit(f"pl: {path}: {e}") from None
+    C.ASSISTANT = dict(t.get("assistant", {}))
 
 
 def first_prompt():
@@ -250,25 +283,31 @@ def _ensure():
         if harnesses.pane_command(pane_) in harnesses.SHELLS:
             return "the assistant exited: R starts a new conversation"
         return f"assistant running in {C.TMUX_SESSION}:{WINDOW} ({st.get('account')})"
+    _read_assistant_config()
     acct = account()
     if acct is None:
-        raise SystemExit("pl: no harness account is free for the assistant (pl accounts)")
-    h = harnesses.account_harness(acct)
-    if not h.interactive:
-        raise SystemExit(f"pl: harness {h.name} has no interactive template for the assistant")
-    h = ask_first(h, acct)
-    resume = bool(h.resume and st.get("session_id") and st.get("account") == acct and st.get("harness") == h.name)
-    sid = st["session_id"] if resume else str(uuid.uuid4())
-    if _run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"]).returncode:
-        _tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
-    from pl import dispatch   # the launch helpers; imported here so the console's import stays light
-    win = _tmux("new-window", "-d", "-t", f"={C.TMUX_SESSION}:", "-n", WINDOW, "-c", str(work_dir()),
-                "-e", "DISABLE_AUTO_UPDATE=true", "-e", f"PL_CONFIG_DIR={C.CONFIG_DIR}", "-e", "PL_ASSISTANT=1",
-                *dispatch._gh_env_args(), "-P", "-F", "#{window_id}")
-    _tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
-    pane_ = _tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
-    dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
-                                                           resume=resume, plugin=False, worktrees=False))
+        raise SystemExit("pl: no account can run the assistant: each one is parked or on a harness that cannot ask before "
+                         "each action; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
+    h = None
+    try:
+        h = harnesses.account_harness(acct)
+        if not h.interactive:
+            raise SystemExit(f"pl: harness {h.name} has no interactive template for the assistant")
+        h = ask_first(h, acct)
+        resume = bool(h.resume and st.get("session_id") and st.get("account") == acct and st.get("harness") == h.name)
+        sid = st["session_id"] if resume else str(uuid.uuid4())
+        if _run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"]).returncode:
+            _tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
+        from pl import dispatch   # the launch helpers; imported here so the console's import stays light
+        win = _tmux("new-window", "-d", "-t", f"={C.TMUX_SESSION}:", "-n", WINDOW, "-c", str(work_dir()),
+                    "-e", "DISABLE_AUTO_UPDATE=true", "-e", f"PL_CONFIG_DIR={C.CONFIG_DIR}", "-e", "PL_ASSISTANT=1",
+                    *dispatch._gh_env_args(), "-P", "-F", "#{window_id}")
+        _tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
+        pane_ = _tmux("list-panes", "-t", win, "-F", "#{pane_id}").split()[0]
+        dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
+                                                               resume=resume, plugin=False, worktrees=False))
+    except SystemExit as e:
+        raise SystemExit(f"{e} (account {acct}, harness {h.name if h else 'unknown'}; to use another set [assistant] account in config.toml)") from None
     from pl import brain   # pl.brain imports this module at load time
     _save({"session_id": sid, "account": acct, "harness": h.name, "window": win, "pane": pane_,
            "started_at": now_iso(), "mode": st.get("mode") if resume else "chat", "build": update.build_id(),

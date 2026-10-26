@@ -29,7 +29,7 @@ TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 MEANING = {
     "tab": "go to tab", "brain": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
     "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
-    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher",
+    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines",
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
@@ -195,12 +195,23 @@ def status_sentence(snap, stopped=None):
     return sentence
 
 
+def others_need_you(data):
+    """"sales 2 · support 1 need you": the other pipelines with items waiting on the person, "" when none."""
+    from pl.tui.home import home_rows   # home imports this module
+    waiting = [f"{r['name']} {r['needs_you']}" for r in home_rows((data or {}).get("home") or [])
+               if r["name"] != C.PROFILE_NAME and r["needs_you"] > 0]
+    return f"{' · '.join(waiting)} need you" if waiting else ""
+
+
 def header_text(data, error=None, note=None, last_good=None):
     """pl, profile badge, tracker type, dispatcher state, accounts, pause state, clock, and the last refresh error."""
     from pl.tui.needs import needs_you_count   # needs -> subagents -> loops imports this module
     t = Text(no_wrap=True, overflow="ellipsis")
     t.append(" pl ", style="bold #e0a040")
-    t.append(f" {C.PROFILE_NAME or 'no profile'} ", style="bold #101010 on #e0a040")
+    t.append(f" {C.PROFILE_NAME or 'no profile'} ▾ ", style="bold #101010 on #e0a040")
+    t.append(f" {(getattr(C, 'PIPELINE', None) or {}).get('name', 'engineering')}", style="dim")
+    if others := others_need_you(data):
+        t.append(f"  {others}", style="#e0a040")
     t.append(f"  {(C.TRACKER or {}).get('type') or 'no tracker'}", style="dim")
     snap = (data or {}).get("snapshot")
     if snap:
@@ -224,8 +235,11 @@ def header_text(data, error=None, note=None, last_good=None):
         hhmm = since.split("T")[1][:5] if "T" in since else since[:5]
         since_str = f" since {hhmm}" if hhmm else ""
         t.append(f"   KILL SWITCH ON{since_str}", style="bold red")
-    if snap and (n := needs_you_count(data)):
+    al = (data or {}).get("alerts") or []
+    if snap and (n := needs_you_count(data) + sum(a.get("severity") == "high" for a in al)):
         t.append(f"   needs you {n}", style="bold red")
+    if al:
+        t.append(f"   alerts {len(al)}", style="bold #e0a040")
     if note:
         t.append(f"   {note}", style="bold red" if "fail" in note or "still running" in note else "#e0a040")
     if error:

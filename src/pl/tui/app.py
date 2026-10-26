@@ -102,10 +102,10 @@ def _now(rows):
 
 
 def _alerts():
-    """Open alerts for the Alerts tab; an unreadable file never fails the refresh."""
+    """Open, unacknowledged alerts for the Alerts tab; an unreadable file never fails the refresh."""
     from pl import alerts
     try:
-        return alerts.listing()
+        return alerts.shown()
     except Exception:  # noqa: BLE001
         return []
 
@@ -277,7 +277,7 @@ class PlApp(App):
         Binding("left", "sub_tab(-1)", "views", key_display="←/→", priority=True),
         Binding("right", "sub_tab(1)", "views", show=False, priority=True),
         Binding("question_mark", "help", "help", key_display="?"), Binding("U", "update", "update", show=False),
-        Binding("ctrl+k", "switcher", "switch", priority=True),
+        Binding("ctrl+k", "switcher", "switch", priority=True), Binding("P", "pipelines", "pipelines"),
         Binding("exclamation_mark", "oldest", "oldest waiting", key_display="!"),
         Binding("N", "restart_console", "restart on the new pl", show=False),
         Binding("q", "quit", "quit")]
@@ -475,6 +475,15 @@ class PlApp(App):
         from pl.tui.switcher import SwitcherScreen
         if not isinstance(self.screen, SwitcherScreen):
             self.push_screen(SwitcherScreen(self.data))
+
+    def action_pipelines(self):
+        from pl.tui.switcher import PipelinesScreen
+        if not isinstance(self.screen, PipelinesScreen):
+            self.push_screen(PipelinesScreen(self.data))
+
+    def on_click(self, event):
+        if getattr(event.widget, "id", None) == "header" and len(self.screen_stack) == 1:
+            self.action_pipelines()
 
     @work(thread=True, group="inbox")
     def action_oldest(self):

@@ -203,3 +203,84 @@ def test_a_dry_run_idea_is_printed_not_filed(idea, read_only_loop, monkeypatch, 
     monkeypatch.setenv("PL_DRY_RUN", "1")
     file_idea()
     assert t.created == [] and "would file: Chase Acme invoice" in capsys.readouterr().out
+
+
+def _run_record(n=0, **kw):
+    return {"started_at": f"2026-10-26T09:{n:02d}:00", "ended_at": f"2026-10-26T09:{n:02d}:30", "result": "ok",
+            "tokens": "n/a", "exit": 0, **kw}
+
+
+def test_a_finished_run_keeps_its_masked_output_and_log(profile, tmux_calls, monkeypatch):
+    from pl import loops
+    from pl.trackers import mcp
+    calls, panes = tmux_calls
+    _loop()
+    monkeypatch.setattr(mcp, "_secrets", {"s3cr3t-value"})
+    st = {}
+    dispatch.ensure_services(st, [], {}, False, None)
+    (C.STATE_DIR / "loops" / "invoices.log").write_text("line a\ntoken s3cr3t-value\n3 invoices overdue\n")
+    record = C.STATE_DIR / "loops" / "invoices.run.json"
+    record.write_text(json.dumps(_run_record(result="token s3cr3t-value")))
+    panes["text"] = "@7 %9 sh invoices\n"
+    dispatch.ensure_services(st, [], {}, False, None)
+    dispatch.ensure_services(st, [], {}, False, None)
+    kept = loops.read_runs("invoices")
+    assert kept[0]["output"][-1] == "3 invoices overdue"
+    folder = loops.run_log_dir("invoices")
+    log = folder / kept[0]["log"]
+    assert "s3cr3t-value" not in (folder / "runs.json").read_text() and "s3cr3t-value" not in log.read_text()
+    assert stat.S_IMODE(os.stat(log).st_mode) == 0o600 and stat.S_IMODE(os.stat(folder / "runs.json").st_mode) == 0o600
+    assert st["services"]["invoices"]["last_run"]["ok"] is True
+    assert "s3cr3t-value" not in json.dumps(st) and "output" not in st["services"]["invoices"]["last_run"]
+    assert len(kept) == 1
+
+
+def test_a_run_log_that_cannot_be_kept_still_ends_the_run(profile, tmux_calls, monkeypatch):
+    from pl import events, loops
+    calls, panes = tmux_calls
+    _loop()
+    st = {}
+    dispatch.ensure_services(st, [], {}, False, None)
+    record = C.STATE_DIR / "loops" / "invoices.run.json"
+    record.write_text(json.dumps(_run_record()))
+    panes["text"] = "@7 %9 sh invoices\n"
+    emitted = []
+    monkeypatch.setattr(loops, "keep_run", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(events, "emit", lambda kind, card_id=None, **d: emitted.append((kind, d)))
+    dispatch.ensure_services(st, [], {}, False, None)
+    assert not record.exists() and st["services"]["invoices"]["last_run"]["exit"] == 0
+    assert emitted and emitted[0][0] == "error" and "disk full" in emitted[0][1]["message"]
+
+
+def test_run_log_keeps_the_last_20_runs(profile):
+    from pl import loops
+    h = harnesses.BUILTINS["codex"]
+    for n in range(22):
+        loops.keep_run("invoices", _run_record(n), C.STATE_DIR / "none.log", h)
+    kept = loops.read_runs("invoices")
+    assert len(kept) == 20 and kept[0]["started_at"].endswith("09:21:00") and kept[-1]["started_at"].endswith("09:02:00")
+    assert len(list(loops.run_log_dir("invoices").glob("*.log"))) == 20
+    assert not (loops.run_log_dir("invoices") / "20261026090000.log").exists()
+
+
+def test_failed_runs_get_a_plain_reason(profile):
+    from pl import loops
+    h = harnesses.Harness("fake", "fake", limit_patterns=[r"usage limit reached"])
+    log = C.STATE_DIR / "run.log"
+    log.write_text("oops\nUsage limit reached for today\n")
+    assert loops.keep_run("a", _run_record(0, exit=1), log, h)["reason"] == "usage limit"
+    assert loops.keep_run("a", _run_record(1, exit=124), C.STATE_DIR / "none.log", h)["reason"] == "timeout"
+    assert loops.keep_run("a", _run_record(2, exit=3), C.STATE_DIR / "none.log", h)["reason"] == "error (exit 3)"
+    ok = loops.keep_run("a", _run_record(3), log, h)
+    assert ok["reason"] == "" and ok["ok"] is True
+
+
+def test_read_runs_of_a_loop_with_no_runs_is_empty(profile):
+    from pl import loops
+    assert loops.read_runs("nothing") == []
+    folder = loops.run_log_dir("bad")
+    folder.mkdir(parents=True)
+    (folder / "runs.json").write_text("{not json")
+    assert loops.read_runs("bad") == []
+    (folder / "runs.json").write_text('{"a": 1}')
+    assert loops.read_runs("bad") == []

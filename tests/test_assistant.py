@@ -157,7 +157,8 @@ def test_a_harness_without_resume_starts_fresh(tmux):
 
 
 def test_a_harness_that_cannot_be_made_to_ask_is_refused(tmux, monkeypatch):
-    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
+    for a in ("acme", "acme2"):
+        C.ACCOUNTS[a] = {**C.ACCOUNTS[a], "harness": "antigravity"}
     with pytest.raises(SystemExit, match="ask"):
         assistant.ensure()
     from pl import harnesses
@@ -240,6 +241,88 @@ def test_account_skips_a_parked_one_and_honours_the_setting(monkeypatch):
     assert assistant.account() == "acme"
     C.ASSISTANT = {"account": "nope"}
     assert assistant.account() == "acme2"
+
+
+def _accounts(**harness_of):
+    C.ACCOUNTS = {a: {"harness": h} for a, h in harness_of.items()}
+    C.PROFILES = {a: C.CONFIG_DIR / a for a in harness_of}
+
+
+def test_account_prefers_a_usable_plan_pool_account_over_an_antigravity_first_account():
+    _accounts(agy="antigravity", acme="claude")
+    C.STAGES = {"plan": {"accounts": ["agy", "acme"]}}
+    assert assistant.pick() == ("acme", "from stage plan")
+    assert assistant.account() == "acme"
+
+
+def test_account_falls_back_through_spec_then_design_then_accounts(monkeypatch):
+    _accounts(agy="antigravity", parked="claude", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"parked"})
+    C.STAGES = {"spec": {"accounts": ["parked"]}, "design": {"accounts": ["agy", "acme"]}}
+    assert assistant.pick() == ("acme", "from stage design")
+    C.STAGES = {}
+    assert assistant.pick() == ("acme", "first usable account")
+
+
+def test_a_named_account_is_used_whatever_its_state(monkeypatch):
+    _accounts(agy="antigravity", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"agy"})
+    C.ASSISTANT = {"account": "agy"}
+    assert assistant.pick() == ("agy", "named")
+
+
+def test_nothing_usable_picks_nothing(monkeypatch):
+    _accounts(agy="antigravity", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    assert assistant.pick() == (None, None)
+
+
+def test_a_named_antigravity_account_is_refused_with_the_message(tmux):
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
+    (C.CONFIG_DIR / "config.toml").write_text(
+        '[accounts.acme]\nconfig_dir = "~/.claude-acme"\nharness = "antigravity"\n[assistant]\naccount = "acme"\n')
+    with pytest.raises(SystemExit, match=r"antigravity.*\[assistant\] account"):
+        assistant.ensure()
+    assert tmux.verb("new-window") == []
+
+
+def test_no_usable_account_says_how_to_set_assistant_account(tmux, monkeypatch):
+    _accounts(agy="antigravity", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    with pytest.raises(SystemExit, match=r"no account can run the assistant.*\[assistant\] account"):
+        assistant.ensure()
+    assert tmux.verb("new-window") == []
+
+
+def test_a_failed_start_names_the_account_and_its_harness(tmux, monkeypatch):
+    from pl import harnesses
+    real = harnesses.get
+    monkeypatch.setattr(harnesses, "get", lambda n: __import__("dataclasses").replace(real(n), interactive=[]))
+    with pytest.raises(SystemExit, match=r"account acme, harness claude.*\[assistant\] account"):
+        assistant.ensure()
+
+
+def test_a_harness_lookup_failure_keeps_its_own_message(tmux, monkeypatch):
+    from pl import harnesses
+
+    def boom(acct):
+        raise SystemExit("pl: unknown harness 'zzz'")
+    monkeypatch.setattr(assistant, "account", lambda: "acme")
+    monkeypatch.setattr(harnesses, "account_harness", boom)
+    with pytest.raises(SystemExit, match=r"unknown harness 'zzz'.*account acme"):
+        assistant.ensure()
+
+
+def test_a_changed_assistant_account_is_used_on_the_next_start_without_reload(tmux, monkeypatch):
+    assert assistant.ensure()
+    assert json.loads((C.STATE_DIR / "assistant.json").read_text())["account"] == "acme"
+    assistant.reset()
+    monkeypatch.setattr(C, "load", lambda *a, **k: pytest.fail("C.load must not be called"))
+    (C.CONFIG_DIR / "config.toml").write_text(
+        '[accounts.acme]\nconfig_dir = "~/.claude-acme"\n[accounts.acme2]\nconfig_dir = "~/.claude-acme2"\n'
+        '[assistant]\naccount = "acme2"\n')
+    assert assistant.ensure()
+    assert json.loads((C.STATE_DIR / "assistant.json").read_text())["account"] == "acme2"
 
 
 # ---------- reset ----------

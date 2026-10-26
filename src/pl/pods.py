@@ -13,6 +13,8 @@ from pl.util import ask, now_iso, parse_iso, short_id
 BUILTIN_DIR = Path(__file__).parent / "pods_builtin"
 BUDGETS = {"knowledge": 2000, "pod": 1500, "client": 1500}   # tokens; the role and card layers are uncut
 ENGINEERING_SKILLS = ["pl-spec", "pl-design", "pl-plan", "pl-run", "pl-review"]
+BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"]}
+OWN_SKILLS_ONLY = ("marketing",)   # built-in pods that limit a launch to their own skills
 
 
 def _resolve(path):
@@ -20,9 +22,10 @@ def _resolve(path):
     return p if p.is_absolute() or C.CONFIG_DIR is None else C.CONFIG_DIR / p
 
 
-def _builtin():
-    return {"name": "engineering", "file": BUILTIN_DIR / "engineering" / "pod.md", "knowledge": [],
-            "skills": list(ENGINEERING_SKILLS), "plugins": [], "budgets": dict(BUDGETS)}
+def _builtin(name="engineering"):
+    own = pod_file(name) if C.CONFIG_DIR else None
+    return {"name": name, "file": own if own and own.is_file() else BUILTIN_DIR / name / "pod.md", "knowledge": [],
+            "skills": list(BUILTIN_SKILLS[name]), "plugins": [], "budgets": dict(BUDGETS)}
 
 
 def _configured(name):
@@ -36,7 +39,7 @@ def _configured(name):
 def find(name):
     if name in C.PODS:
         return _configured(name)
-    return _builtin() if name == "engineering" else None
+    return _builtin(name) if name in BUILTIN_SKILLS else None
 
 
 def current():
@@ -50,11 +53,14 @@ def current():
 def launch_pod():
     """The pod whose skills a launch is limited to: only one the profile configures with a `skills` key, so a profile without pods, or a pod table that sets only file or knowledge, keeps the whole library."""
     name = next((n for n in (C.POD or C.PROFILE_NAME, "engineering") if n in C.PODS), None)
-    return find(name) if name and "skills" in C.PODS[name] else None
+    if name:
+        return find(name) if "skills" in C.PODS[name] else None
+    own = C.POD or C.PROFILE_NAME
+    return find(own) if own in OWN_SKILLS_ONLY else None
 
 
 def names():
-    return sorted({"engineering", *C.PODS})
+    return sorted({*BUILTIN_SKILLS, *C.PODS})
 
 
 def rules(pod):
@@ -155,6 +161,11 @@ def _history_dir(pod: str) -> Path:
     return C.CONFIG_DIR / "pods" / ".history" / pod
 
 
+def _shipped(pod: str) -> bytes | None:
+    f = BUILTIN_DIR / pod / "pod.md"
+    return f.read_bytes() if pod in BUILTIN_SKILLS and f.is_file() else None
+
+
 def _write_private(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(path.name + ".tmp")
@@ -190,6 +201,9 @@ def save_version(pod: str, text: str | bytes, note: str, author: str) -> int:
     data = text.encode() if isinstance(text, str) else text
     p = pod_file(pod)
     versions = history(pod)
+    if not p.is_file() and not versions and (shipped := _shipped(pod)) is not None:
+        _record(pod, shipped, "built-in pod.md", author)
+        versions = history(pod)
     if p.is_file():
         current = p.read_bytes()
         if not versions:
@@ -234,7 +248,8 @@ def _author() -> str:
 def _cmd_rule(a) -> int:
     _confirm(f"Add this rule to {a.pod}: {a.text}?", a.yes)
     p = pod_file(a.pod)
-    current = p.read_text() if p.is_file() else ""
+    shipped = _shipped(a.pod)
+    current = p.read_text() if p.is_file() else shipped.decode() if shipped else ""
     n = save_version(a.pod, add_rule(current, a.text), a.note or f"rule: {a.text}", _author())
     print(f"added the rule to {a.pod} (version {n})")
     return 0

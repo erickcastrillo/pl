@@ -74,6 +74,11 @@
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
                           --plain prints a refreshing text frame instead; --once prints one frame and exits
+  pl activity [--level info|warning|error] [--kind KIND] [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--json]
+                          the activity feed, newest first: time, level, kind, card, detail; --json prints one
+                          object per line. demo writes one sample entry per level (tagged demo); demo --clear removes them
+  pl activity thresholds [--json]
+                          the slow-work warning limits ([activity]) the dispatcher uses; exits 2 when one is invalid
   pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack] [--summary]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
@@ -130,7 +135,7 @@
   pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
-  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
+  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the [tracker] and [intake] boards, the assistant's account)
   pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
@@ -159,6 +164,9 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
+  pl tests affected [--base REF] [--json]
+                          the test files a change can affect (import graph for Python) and whether it needs the
+                          full suite. No profile needed
   pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -226,6 +234,7 @@ from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, 
                          cmd_review, cmd_restart, cmd_hold, cmd_unhold, cmd_depends, cmd_sync)
 from pl.dispatch import cmd_dispatch
 from pl.move_agent import cmd_move_agent
+from pl.activity import cmd_activity
 from pl.standup import cmd_standup
 from pl.usage import cmd_usage
 from pl.watch import cmd_watch
@@ -238,7 +247,7 @@ PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFI
 ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
                      "restart", "hold", "unhold", "depends")
 # commands parsed before the profile loads, each by its own module
-PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "manager", "mcp", "ask")
+PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "tests", "manager", "mcp", "ask")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -291,6 +300,9 @@ def _main():
     if pre_a.rest[:1] == ["e2e"]:              # repo-driven: reads .pl/e2e.yaml, needs no tracker
         from pl import e2e
         return e2e.cmd_e2e(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["tests"]:            # repo-driven: reads only the repository, needs no profile
+        from pl import tests_affected
+        return tests_affected.cmd_tests(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])
@@ -334,7 +346,7 @@ def _main():
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
+     "standup": cmd_standup, "activity": cmd_activity, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
@@ -449,6 +461,8 @@ def build_parser():
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
     for verb in ("pause", "resume"):
         sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("activity"); p.add_argument("action", nargs="?", choices=["demo", "thresholds"]); p.add_argument("--clear", action="store_true", help="with demo: remove the demo entries")
+    p.add_argument("--level", help="info, warning or error"); p.add_argument("--kind"); p.add_argument("--since", help="90m, 24h, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM"); p.add_argument("--json", action="store_true", help="one JSON object per line")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
