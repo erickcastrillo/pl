@@ -8,14 +8,16 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Markdown, OptionList, Static
+from textual.worker import get_current_worker
 
+from pl import agent_screen
 from pl import config as C
 from pl import confirm, move_agent, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import empty_state, show_first_heading, skip_headings
-from pl.tui.live import LiveScreen
+from pl.tui.live import NO_WINDOW, LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
@@ -428,12 +430,17 @@ def drop_back(c):
     return back if back in C.COLUMNS and back != "Done" else "Inbox"
 
 
+AGENT_LINES, AGENT_SECONDS = 20, 2
+AGENT_COLOURS = {"stopped": "red", "waiting for you": "yellow", "working": "green"}
+
+
 class CardsView(CardActions, Horizontal):
     DEFAULT_CSS = """
     CardsView { height: 1fr; }
     #cards-table { height: 1fr; border: round $primary; }
     #cards-side { width: 1fr; height: 1fr; }
     #cards-detail { height: auto; }
+    #cards-agent { height: auto; max-height: 23; border-top: solid $primary; }
     #cards-body { height: 1fr; }
     """
     BINDINGS = [Binding("tab", "app.focus_next", "list / text"), *CardActions.CARD_BINDINGS,
@@ -453,6 +460,7 @@ class CardsView(CardActions, Horizontal):
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
         self._last = None   # the cursor row before the last move: which way it travels
+        self._agent = None   # (key, pane, text, word, why) last drawn in the Agent section
 
     def compose(self):
         t = FitTable("title", TITLE_WIDTH, ("now",), id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
@@ -463,8 +471,13 @@ class CardsView(CardActions, Horizontal):
         yield t
         with Vertical(id="cards-side", classes="panel"):
             yield Static(Text(""), id="cards-detail")
+            yield Static(Text(""), id="cards-agent", markup=False)
             with VerticalScroll(id="cards-body"):
                 yield Markdown("", open_links=False, id="cards-md")
+
+    def on_mount(self):
+        self.query_one("#cards-agent").display = False
+        self.set_interval(AGENT_SECONDS, self._agent_tick)
 
     def show(self, data):
         self._now, self._data = data.get("now") or {}, data
@@ -556,6 +569,10 @@ class CardsView(CardActions, Horizontal):
             self._pending[key] = stamp   # the old text stays on screen until the new one arrives; read only when shown
             self._load(key, stamp)
         self._paint_card(key)
+        if (self._agent or (None,))[0] != key:
+            self._agent = None
+            self._draw_agent(Text.assemble(("Agent", "bold"), "  ·  ", ("reading…", "dim")))
+        self._agent_tick()
 
     def opened(self):
         """The tab was just shown: read the selected card's text now; on the first card, show its heading too."""
@@ -570,6 +587,40 @@ class CardsView(CardActions, Horizontal):
                 hit = ("error", getattr(e, "note", None) or f"could not read the card: {e}")
             self.app.call_from_thread(self._loaded, stamp, key, hit)
         self.run_worker(run, thread=True, group="cards-body")
+
+    def _draw_agent(self, text):
+        agent = self.query_one("#cards-agent", Static)
+        agent.display = True
+        agent.update(text)
+
+    def _agent_tick(self):
+        if self.app.active_tab != "cards" or len(self.app.screen_stack) != 1:
+            return
+        key, r = self._current()
+        if r is None:
+            self.query_one("#cards-agent").display = False
+            return
+        pane = (r.get("worker") or {}).get("pane")
+        if not pane:
+            self._agent_show(key, pane, None, NO_WINDOW, "")
+            return
+        self.run_worker(lambda: self._agent_read(key, pane), thread=True, group="cards-agent", exclusive=True)
+
+    def _agent_read(self, key, pane):
+        result = agent_screen.read(pane, lines=AGENT_LINES)
+        if not get_current_worker().is_cancelled:
+            self.app.call_from_thread(self._agent_show, key, pane, *result)
+
+    def _agent_show(self, key, pane, text, word, why):
+        if self._current()[0] != key or (shown := (key, pane, text, word, why)) == self._agent:
+            return
+        self._agent = shown
+        status = f"{word}: {why}" if why else word
+        out = Text.assemble(("Agent", "bold"), "  ·  ", (status, AGENT_COLOURS.get(word, "dim")))
+        if text is not None:
+            out.append("\n")
+            out.append_text(Text.from_ansi(text, no_wrap=True, overflow="ellipsis"))
+        self._draw_agent(out)
 
     def _loaded(self, stamp, key, hit):
         if self._pending.get(key) == stamp:

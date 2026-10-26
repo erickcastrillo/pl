@@ -47,8 +47,10 @@ def _match(path, globs):
 
 
 def _pr(repo, num):
-    return json.loads(github._gh(["pr", "view", str(num), "--repo", repo, "--json",
-                                  "number,url,state,isDraft,baseRefName,headRefOid,body,labels,files,statusCheckRollup"]))
+    pr = json.loads(github._gh(["pr", "view", str(num), "--repo", repo, "--json",
+                                "number,url,state,isDraft,baseRefName,headRefOid,body,labels,files,statusCheckRollup"]))
+    rework.saw(pr.get("url", ""), pr.get("state"), [x["name"] for x in pr.get("labels") or []])
+    return pr
 
 
 def _eligible(pr):
