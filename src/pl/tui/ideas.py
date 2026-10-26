@@ -27,6 +27,13 @@ STATUS = {"interviewing": "interviewing", "approving": "creating the {item}…",
           "discarded": "discarded"}
 
 
+def status_text(status, item, default=None):
+    """The status sentence with the pipeline's word; an unknown status is shown as it is, never formatted."""
+    if status in STATUS:
+        return STATUS[status].replace("{item}", item)
+    return str(status) if default is None else default
+
+
 class IdeaInput(TextArea):
     """enter sends, ctrl+j adds a new line."""
 
@@ -168,7 +175,7 @@ class IdeasView(Widget):
         ol.add_option(Option(new_row("idea"), id=NEW_ROW))
         for i in items:
             q = sum(1 for e in i.get("transcript", []) if e.get("role") == "harness")
-            line = STATUS.get(i.get("status"), str(i.get("status"))).format(item=pipeline.ui()["item"]) + (f" · {q} question{'s' * (q != 1)}" if q else "")
+            line = status_text(i.get("status"), pipeline.ui()["item"]) + (f" · {q} question{'s' * (q != 1)}" if q else "")
             ol.add_option(Option(Text(f"{str(i.get('title'))[:60]}\n{line}"), id=i["id"]))
         if not items:
             ol.add_option(Option(Text("\n".join(empty_state("ideas")), style="dim"), disabled=True))
@@ -224,7 +231,7 @@ class IdeasView(Widget):
         if idea is None:
             return ""
         if idea.get("status") != "interviewing":
-            return STATUS.get(idea.get("status"), "").format(item=pipeline.ui()["item"])
+            return status_text(idea.get("status"), pipeline.ui()["item"], "")
         if ideas.is_clear(idea):
             return "the brief is clear: press A to approve it and start the spec"
         return "● waiting for your answer" if idea.get("question") else ""

@@ -92,6 +92,12 @@ async def test_home_cards_column_header_says_leads(sales):
         assert [str(c.label) for c in table.columns.values()][:3] == ["pipeline", "status", "leads"]
 
 
+def test_needs_you_detail_keeps_a_long_word_apart_from_the_id(monkeypatch):
+    monkeypatch.setattr(C, "PIPELINE", {**pipeline.engineering(), "ui": {"item": "opportunity", "items": "opportunities", "fields": []}})
+    row = {"card": {"id": "abc123", "title": "t", "metadata": {}, "tags": []}, "col": "Inbox", "worker": {}}
+    assert "opportunity abc123" in needs.detail(row).plain.splitlines()
+
+
 def test_needs_you_detail_label_says_lead(sales):
     row = {"card": {"id": "abc", "title": "t", "metadata": {}, "tags": []}, "col": "Inbox", "worker": {}}
     lines = needs.detail(row).plain.splitlines()
@@ -124,6 +130,13 @@ async def test_engineering_home_header_is_unchanged(eng):
 def test_ideas_status_says_lead(sales):
     view = tui_ideas.IdeasView()
     assert view._status({"status": "approving"}) == "creating the lead…"
+
+
+@pytest.mark.parametrize("status", ["{x}", "{item}", "a}b{"])
+async def test_ideas_list_shows_an_unknown_status_with_braces_as_is(sales, status):
+    view = tui_ideas.IdeasView()
+    assert view._status({"status": status}) == ""
+    assert tui_ideas.status_text(status, "lead") == status
 
 
 async def test_ideas_toasts_say_lead(sales):
