@@ -65,6 +65,28 @@ def list_profiles(check_lock=True) -> list[dict]:
     return rows
 
 
+def all_accounts() -> tuple[list[dict], list[str]]:
+    """Accounts of the current profile and every ~/.pl-* profile, one row per (name, folder); plus a line per unreadable profile.
+    Reads config.toml files only, never an account folder."""
+    sources = [(C.PROFILE_NAME or "-", C.ACCOUNTS)]
+    skipped = []
+    for d in sorted(Path.home().glob(".pl-*")):
+        name = d.name.removeprefix(".pl-")
+        if not C.NAME_RE.match(name) or name == C.PROFILE_NAME or not (d / "config.toml").is_file():
+            continue
+        try:
+            sources.append((name, tomllib.loads((d / "config.toml").read_text()).get("accounts", {})))
+        except (OSError, tomllib.TOMLDecodeError):
+            skipped.append(f"skipped profile {name}: its config.toml could not be read")
+    rows = {}
+    for profile, accounts in sources:
+        for n, a in accounts.items():
+            folder = _tilde(Path(a.get("config_dir", f"~/.claude-{n}")).expanduser())
+            row = rows.setdefault((n, folder), {"name": n, "settings": dict(a), "dir": folder, "profiles": []})
+            row["profiles"].append(profile)
+    return list(rows.values()), skipped
+
+
 def current_row() -> dict:
     """The profile this process is running as, shaped like a list_profiles row and counted as running."""
     return {"name": C.PROFILE_NAME or "-", "dir": str(C.CONFIG_DIR or C.ATTN), "running": True, "holder": "",
