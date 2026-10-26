@@ -1,5 +1,6 @@
 """Settings section "Skills": every account's skills, agents and commands, a read-only Markdown preview, an in-app
 editor (backup + diff confirm before saving), new from a template, delete to .pl-trash, and the shared library."""
+import io
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from pl.tui.extensions import TargetScreen
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
-HINT = ("e edit · E $EDITOR · n new (install or write) · d delete (to .pl-trash) · S share to the library · l link a library skill "
+HINT = ("e edit · E $EDITOR · n new (install or write) · d remove (a skill: its users are shown first) · S share to the library · l link a library skill "
         "to an account · I install from GitHub · u update the selected skill (diff first) · plugin files are read-only")
 DIFF_LINES = 30
 PINNED_RE = re.compile(r"^Source: (github:\S+@[0-9a-f]{40})$", re.M)
@@ -56,6 +57,17 @@ def _origin_label(it, builtin, recs):
     if it["origin"] == "omc":
         return "oh-my-claude"
     return "library link" if it["library"] else "you"
+
+
+def _users_line(name):
+    """(sentence for the confirmation, the users it found)."""
+    try:
+        used = skill_sources.users(name)
+    except Exception as e:  # noqa: BLE001 - a broken pod file must not stop the person removing a skill
+        return f"Could not check which stages, loops or pods use it: {e}.", []
+    if used:
+        return f"Used by: {', '.join(used)}.", used
+    return "Not used by any stage, loop or pod.", []
 
 
 def grouped(items):
@@ -356,7 +368,7 @@ class SkillsView(Widget):
     #skills-meta { height: auto; }
     """
     BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new"),
-                Binding("d", "delete", "delete"), Binding("S", "share", "share to library"),
+                Binding("d", "delete", "remove"), Binding("S", "share", "share to library"),
                 Binding("l", "link", "link to account"), Binding("I", "install", "install"),
                 Binding("u", "update", "update")]
 
@@ -543,8 +555,25 @@ class SkillsView(Widget):
         self.app.push_screen(NewChoiceScreen(), picked)
 
     def action_delete(self):
-        it, _ = self._editable()
-        if not it:
+        it = self._item()
+        if it is None:
+            self._say("nothing selected", "information")
+            return
+        is_library = it["account"] == skills.LIBRARY
+        if is_library and it["name"] in skills.builtin_names():
+            self._say("pl's built-in stage skills are not removed; use pl skills reset <name> to restore one", "warning")
+            return
+        try:
+            skills.check_editable(it)
+        except SystemExit as e:
+            self._say(e, "warning")
+            return
+        line, used = _users_line(it["name"]) if it["kind"] == "skill" else ("", [])
+        if is_library and it["kind"] == "skill" and it["name"] in skill_sources.records():
+            self._confirm_library_removal(it, line, used)
+            return
+        if is_library and it.get("linked"):
+            self._say(f"{it['name']} is still linked from {', '.join(it['linked'])}; unlink it there first", "warning")
             return
         what = "folder" if it["kind"] == "skill" else "file"
 
@@ -559,8 +588,23 @@ class SkillsView(Widget):
             self.rescan()
         self.app.push_screen(ConfirmScreen(f"Move the {it['kind']} {it['name']} of {it['account']} to .pl-trash? "
                                            f"The {what} goes to {it['root']}/.pl-trash; nothing is deleted. Links to it "
-                                           f"from accounts of other profiles and /pl:{it['name']} prompts will break."),
+                                           f"from accounts of other profiles will break. {line}".strip()),
                              answered)
+
+    def _confirm_library_removal(self, it, line, used):
+        name, lib = it["name"], skills.library()
+
+        def answered(yes):
+            if not yes:
+                return
+            try:
+                if skill_sources.remove(name, True, io.StringIO(), used=used) == 0:
+                    self._say(f"removed {name}", "information")
+            except (SystemExit, Exception) as e:  # noqa: BLE001
+                self._say(e)
+            self.rescan()
+        self.app.push_screen(ConfirmScreen(f"Remove {name} from {lib}? It is unlinked from every account and moved to "
+                                           f"{lib}/.pl-trash; its install record is dropped. {line}"), answered)
 
     def action_share(self):
         it = self._item()
