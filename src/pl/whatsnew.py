@@ -287,6 +287,8 @@ ENTRIES = [
        "pl chat list"),
     _e("2026-10-26.72", "A built-in marketing pod: writer, editor and analyst rules", "Extend: pods",
        "pl pods show marketing"),
+    _e("2026-10-26.73", "Customer-support pipeline template: triage and owner-approved replies",
+       "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
 ]
 
 

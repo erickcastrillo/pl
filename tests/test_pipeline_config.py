@@ -118,7 +118,7 @@ def test_engineering_template_equals_the_builtin_pipeline():
 
 def test_every_template_passes_validation():
     templates = pipeline.templates()
-    assert {"engineering", "new-client", "existing-client", "billing", "team"} <= set(templates)
+    assert {"engineering", "new-client", "existing-client", "billing", "team", "customer-support"} <= set(templates)
     for name, p in templates.items():
         if name != "engineering":   # engineering keeps its own code path, where design and plan share a column
             assert pipeline.errors(p) == [], name
@@ -132,6 +132,36 @@ def test_billing_outward_stages_are_gated():
         assert stage["connectors"] == [], name
     ungated = {**billing, "stages": {n: {**s, "gate": "none"} for n, s in billing["stages"].items()}}
     assert len(pipeline.errors(ungated)) == 2
+
+
+def test_customer_support_columns_in_order():
+    assert pipeline.templates()["customer-support"]["columns"] == [
+        "Inbox", "Triage", "Reply draft", "Reply review", "Waiting on customer", "Resolved"]
+
+
+def test_customer_support_stages_triage_and_reply():
+    stages = pipeline.templates()["customer-support"]["stages"]
+    assert set(stages) == {"triage", "reply"}
+    for name, stage in stages.items():
+        assert stage["skill"] == "pl-stage" and stage["instructions"], name
+    triage, reply = stages["triage"], stages["reply"]
+    assert (triage["column"], triage["done"], triage["gate"], triage["section"], triage["next"]) == (
+        "Inbox", "Triage", "owner", "TRIAGE", "Reply draft")
+    assert (reply["column"], reply["done"], reply["gate"], reply["section"], reply["next"]) == (
+        "Reply draft", "Reply review", "owner", "REPLY", "Waiting on customer")
+    assert reply["outward"] is True
+
+
+def test_customer_support_ui_words_and_fields():
+    ui = pipeline.templates()["customer-support"]["ui"]
+    assert ui["item"] == "ticket" and ui["items"] == "tickets"
+    assert {"customer", "priority", "response time"} <= set(ui["fields"])
+
+
+def test_customer_support_ungated_reply_is_refused():
+    p = pipeline.templates()["customer-support"]
+    ungated = {**p, "stages": {**p["stages"], "reply": {**p["stages"]["reply"], "gate": "none"}}}
+    assert pipeline.errors(ungated) == ["pipeline.stages.reply.gate: " + pipeline.OUTWARD_REFUSAL]
 
 
 def test_other_templates_use_the_generic_stage_skill():
