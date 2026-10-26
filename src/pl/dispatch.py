@@ -981,24 +981,28 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rework.sweep(all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
             print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
-            events.failure("pass_step_skipped", "warning", f"auto-rework skipped this pass: {e}", step="rework")
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"auto-rework skipped this pass: {e}", step="rework")
         try:
             _auto_merge(st, all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:
             print(f"auto-merge skipped this pass: {e}", file=sys.stderr)
-            events.failure("pass_step_skipped", "warning", f"auto-merge skipped this pass: {e}", step="auto-merge")
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"auto-merge skipped this pass: {e}", step="auto-merge")
         try:
             from pl import triggers
             triggers.run_due(dry=dry)
         except Exception as e:
             print(f"triggers skipped this pass: {e}", file=sys.stderr)
-            events.failure("pass_step_skipped", "warning", f"triggers skipped this pass: {e}", step="triggers")
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"triggers skipped this pass: {e}", step="triggers")
         try:
             from pl import outbound
             outbound.send_due(dry=dry)
         except Exception as e:
             print(f"outbound send skipped this pass: {e}", file=sys.stderr)
-            events.failure("pass_step_skipped", "warning", f"outbound send skipped this pass: {e}", step="outbound")
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"outbound send skipped this pass: {e}", step="outbound")
         try:   # daily retention pass for cards created from email (retention.py)
             from pl import retention
             retention.sweep(all_cards, dry)
@@ -1009,7 +1013,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             worktrees.sweep(all_cards, dry)
         except Exception as e:
             print(f"worktrees cleanup skipped this pass: {e}", file=sys.stderr)
-            events.failure("pass_step_skipped", "warning", f"worktrees cleanup skipped this pass: {e}", step="worktrees")
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"worktrees cleanup skipped this pass: {e}", step="worktrees")
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
