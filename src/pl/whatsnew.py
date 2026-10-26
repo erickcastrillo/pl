@@ -226,6 +226,8 @@ ENTRIES = [
        "pl sync resolve <card> --keep remote"),
     _e("2026-10-25.42", "Board backup to git: board.json every 5 minutes",
        "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)", "pl alerts"),
+    _e("2026-10-25.43", "The Dashboard leads with what needs you; Health moved to a panel",
+       "Dashboard: the first row, Enter on Health or palette: Health", "pl"),
 ]
 
 
