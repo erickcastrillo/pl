@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1017,6 +1017,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     todo = []
     failed = set()   # stage_failed and permission_wait alert keys seen this pass
     waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
+    slow = {}        # slow-work conditions seen this pass (slowwork.py)
     waits, seen_waits = st.get("run_waits") or {}, {}   # card id -> when its run agent was first seen waiting
     for c in all_cards:
         if c.get("unreadable"):
@@ -1131,6 +1132,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             ask = None if trust else permission_wait(wh, w.get("pane")) or hooks.hook_permission(w)
             if ask and w.get("window"):
                 waiting.append(w["window"])
+            word = agent_screen.read(w.get("pane"))[1] if w.get("pane") else ""
+            detail = {"window": w.get("window"), "stage": w.get("stage")}
+            if trust or ask or word == "waiting for you":
+                slow[f"prompt:{c['id']}"] = ("agent_waiting_prompt", c["id"], "prompt_minutes", detail)
+            elif w.get("finished_turn") or word == "finished":
+                slow[f"finished:{c['id']}"] = ("finished_window_open", c["id"], "finished_minutes", detail)
             if ask:
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
@@ -1379,6 +1386,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 st["notified"][key] = time.time()
                 notify("Pipeline drained", "no agent is working; safe to shut down (pl resume after restart)")
     if not dry:
+        slowwork.observe(slow)
         check_alerts(all_cards, failed, st)
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
         summary.write(summary.build(all_cards, reg, time.time()))

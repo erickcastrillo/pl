@@ -76,6 +76,16 @@ def build(profile: str | None = None) -> FastMCP:
     def pl_standup(profile: str | None = profile, since: str | None = None) -> Any:
         return _read(profile, "standup", *(["--since", since] if since else []))
 
+    @server.tool(description="The activity feed, newest first: filter by level (info, warning, error), kind and since "
+                             "(24h, 90m, 7d or a date).")
+    def pl_activity(profile: str | None = profile, level: str | None = None, kind: str | None = None,
+                    since: str | None = None) -> Any:
+        opts = [x for flag, v in (("--level", level), ("--kind", kind), ("--since", since)) if v for x in (flag, v)]
+        out = _read(profile, "activity", *opts)
+        if isinstance(out, str):
+            return [json.loads(ln) for ln in out.splitlines()]
+        return [out] if out else []
+
     @server.tool(description="Token usage since 24h (default), 90m, 7d or a date, grouped by card, account, model or loop.")
     def pl_usage(profile: str | None = profile, since: str | None = None, by: str = "account") -> Any:
         return _read(profile, "usage", *(["--since", since] if since else []), "--by", by)

@@ -14,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
 
-from pl import agents, loops, schedule, skills, util
+from pl import agents, events, loops, schedule, skills, util
 from pl import config as C
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.live import LiveScreen
@@ -708,7 +708,7 @@ class LoopsView(Widget):
 
 MAX_EVENTS = 500
 MAX_BYTES = 500 * 4096
-FILTERS = ["all", "errors", "needs you", "dispatcher", "loops"]
+FILTERS = ["all", "errors", "warnings", "needs you", "dispatcher", "loops"]
 NEEDS_COLUMNS = {"Plan for review", "Manual", "Spec ready"}
 
 
@@ -735,7 +735,9 @@ def read_events(path):
 def matches(e, f):
     kind = str(e.get("kind") or "")
     if f == "errors":
-        return kind == "error"
+        return events.level(e) == "error"
+    if f == "warnings":
+        return events.level(e) == "warning"
     if f == "needs you":
         return kind == "moved" and isinstance(e.get("to"), str) and e["to"] in NEEDS_COLUMNS
     if f == "dispatcher":
@@ -763,23 +765,29 @@ class ActivityView(Widget):
             yield DataTable(id="activity-table", cursor_type="row", zebra_stripes=True)
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("time", "kind", "card", "detail")
+        self.query_one(DataTable).add_columns("time", "level", "kind", "card", "detail")
 
     def show(self, data=None):
+        evs = read_events(C.STATE_DIR / "events.jsonl")
         bar = Text("filter  ")
         for f in FILTERS:
-            bar.append(f" {f} ", style="bold reverse" if f == self.filter else "dim")
+            bar.append(f" {f} {sum(matches(e, f) for e in evs)} ", style="bold reverse" if f == self.filter else "dim")
         bar.append("   f next filter", style="dim")
         self.query_one("#activity-filter", Static).update(bar)
         t = self.query_one(DataTable)
-        shown = [e for e in read_events(C.STATE_DIR / "events.jsonl") if matches(e, self.filter)]
+        shown = [e for e in evs if matches(e, self.filter)]
         if shown == getattr(self, "_shown", None):   # an unchanged table is not rebuilt
             return
         self._shown = shown
         t.clear()
         for e in shown:
-            detail = _fields(e, ("ts", "kind", "card", "profile"))
-            t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
+            detail = _fields(e, ("ts", "kind", "card", "profile", "level", "demo"))
+            lv = events.level(e)
+            kind = Text(str(e.get("kind") or ""))
+            if e.get("demo"):
+                kind.append(" demo", style="dim")
+            t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")),
+                      Text(lv, style="red" if lv == "error" else "yellow" if lv == "warning" else ""), kind,
                       Text(short_id(e.get("card") or "")), Text(detail))
         if not shown and self.filter == "all":
             for line in empty_state("activity"):

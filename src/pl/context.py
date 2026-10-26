@@ -89,7 +89,7 @@ def build(card, stage, pod, prompt=""):
 def launch_prompt(card, stage, prompt):
     """The prompt that points at the context file when the pipeline's pod has a [pods.<name>] table, else prompt."""
     name = C.POD or C.PROFILE_NAME
-    if name not in C.PODS:
+    if name not in C.PODS and name not in pods.OWN_SKILLS_ONLY:
         return prompt
     path, _ = build(card, stage, pods.find(name), prompt)
     return f"Follow the instructions in {path}."

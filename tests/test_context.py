@@ -123,3 +123,13 @@ def test_a_profile_without_a_pods_table_keeps_the_one_line_prompt(home, monkeypa
     seen = []
     _launch(monkeypatch, seen)
     assert seen[0].startswith("/pl-run " + "c" * 36)
+
+
+def test_a_marketing_stage_prompt_holds_the_marketing_rules_not_the_engineering_ones(home, monkeypatch):
+    monkeypatch.setattr(C, "POD", "marketing")
+    monkeypatch.setattr(C, "PODS", {})
+    C.STATE_DIR.mkdir()
+    prompt = context.launch_prompt(_card(), "draft", "/pl-stage x")
+    assert prompt.startswith("Follow the instructions in ")
+    body = open(prompt.removeprefix("Follow the instructions in ").rstrip(".")).read()
+    assert "Flag every factual claim" in body and "Write the tests first" not in body
