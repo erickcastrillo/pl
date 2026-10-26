@@ -198,7 +198,7 @@ def _add(name, p, a):
         if account not in known:
             _fail(f"unknown account {account!r}")
         p["stages"] = {n: {"account": account, **s} for n, s in p["stages"].items()}
-    tracker = _tracker(a.board)
+    tracker = getattr(a, "tracker", None) or _tracker(a.board)
     if a.dry_run:
         print(tomlkit.dumps(profiles.pipeline_config(p, tracker, acc)), end="")
     elif not (a.yes or sys.stdin.isatty()):
