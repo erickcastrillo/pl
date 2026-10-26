@@ -132,6 +132,46 @@ def _list_worktrees(work_dir: Path) -> list[dict]:
     return worktrees
 
 
+def _worktree_on(work: Path, branch: str) -> Path | None:
+    return next((w["path"] for w in _list_worktrees(work) if w.get("branch") == branch), None)
+
+
+def for_run(c) -> tuple[Path | None, str | None]:
+    """(worktree, None) for card c's run agent, reusing its branch or worktree; (None, git's last line) when git fails.
+    Only fetch and worktree add touch the repository, never the main checkout's files."""
+    work, slug = Path(C.WORK_DIR), slug_of(c)
+    branch = f"pl/{slug}"
+    if found := _worktree_on(work, branch):
+        return found, None
+    rework = (c.get("metadata") or {}).get("rework") or {}
+    if rework.get("active") and rework.get("prs"):
+        head = ((_pr_info(rework["prs"][0]) or {}).get("headRefName") or "")
+        if head and not head.startswith("-"):
+            branch = head
+            if found := _worktree_on(work, branch):
+                return found, None
+    root = Path(C.WORKTREES_DIR or work.parent)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = root / f"{work.name}-pl-{slug}"
+
+    def git(*args):
+        return _run(["git", *args], capture_output=True, text=True, cwd=str(work))
+
+    steps = [git("fetch", "origin")]
+    if not steps[0].returncode:
+        if git("show-ref", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:
+            steps.append(git("worktree", "add", str(path), branch))
+        elif git("rev-parse", "--verify", "--quiet", f"origin/{branch}").returncode == 0:
+            steps.append(git("worktree", "add", "-b", branch, str(path), f"origin/{branch}"))
+        else:
+            steps.append(git("worktree", "add", "-b", branch, str(path), "origin/HEAD"))
+    failed = next((r for r in steps if r.returncode), None)
+    if failed is None:
+        return path, None
+    lines = [l.strip() for l in (failed.stderr or "").splitlines() if l.strip()]
+    return None, lines[-1] if lines else "git worktree add failed"
+
+
 def _settled_path() -> Path:
     return Path(C.STATE_DIR) / "pr-settled.json"
 
