@@ -730,8 +730,91 @@ async def test_view_shows_headings_and_a_heading_row_selects_nothing(grouped_hom
         assert "Your library" in text and "a (claude)" in text
         t = app.query_one("#skills-table", DataTable)
         t.focus()
-        t.move_cursor(row=0)
+        t.move_cursor(row=1)   # row 0 is "+ New skill"
         await settle(pilot)
         await pilot.press("e")
         await settle(pilot)
         assert len(app.screen_stack) == 1
+
+
+# ---------- the "+ New skill" row ----------
+
+def _footer_keys(app):
+    return {b.description for _, (_, b, enabled, _) in app.screen.active_bindings.items() if enabled}
+
+
+async def test_first_row_is_new_skill_even_with_no_skills(home, monkeypatch):
+    monkeypatch.setattr(skills, "scan", lambda: [])
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one("#skills-table", DataTable)
+        assert t.row_count == 1
+        assert t.get_row_at(0)[0].plain == "+ New skill" and "dim" in str(t.get_row_at(0)[0].style)
+        assert "nothing selected" in app.query_one("#skills-preview", Markdown).source
+
+
+async def test_enter_on_new_skill_and_n_open_the_same_form_and_save_through_skills_create(home, monkeypatch):
+    made = []
+    real = skills.create
+    monkeypatch.setattr(skills, "create", lambda *a: made.append(a) or real(*a))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui.NewScreen)
+        await pilot.press("escape")
+        await settle(pilot)
+        await select(pilot, "alpha", "a")
+        await pilot.press("n")
+        await settle(pilot)
+        assert isinstance(app.screen, tui.NewScreen)
+        app.screen.query_one("#skills-new-account", Select).value = "b"
+        app.screen.query_one("#skills-new-name", Input).value = "made-here"
+        app.screen.query_one("#skills-new-name", Input).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert made == [("b", "skill", "made-here")]
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.query_one("#skills-table", DataTable).get_row_at(0)[0].plain == "+ New skill"
+
+
+async def test_item_actions_on_the_new_row_say_nothing_selected(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await settle(pilot)
+        for key in ("e", "E", "d", "S", "l"):
+            await pilot.press(key)
+            await settle(pilot)
+            assert len(app.screen_stack) == 1
+            assert "nothing selected" in screen_text(app)
+            app.clear_notifications()
+
+
+async def test_footer_reads_n_new_skill(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.query_one("#skills-table", DataTable).focus()
+        await settle(pilot)
+        assert "new skill" in _footer_keys(app)
+
+
+async def test_the_first_real_item_is_acted_on_not_the_one_after_it(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await select(pilot, "alpha", "a")
+        await pilot.press("e")
+        await settle(pilot)
+        assert "alpha" in app.screen.query_one(TextArea).text

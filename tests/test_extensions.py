@@ -15,6 +15,7 @@ from pl import config as C
 from pl import harnesses
 from pl.tui import extensions
 from pl.tui.app import PlApp
+from pl.tui.chrome import NEW_ROW
 
 SKILL = "---\nname: {n}\ndescription: {d}\n---\nBody\n"
 
@@ -405,7 +406,7 @@ class Host(App):
 
 def rows(app, table):
     t = app.query_one(f"#{table}", DataTable)
-    return [str(t.get_row_at(i)[0]) for i in range(t.row_count)]
+    return [str(t.get_row_at(i)[0]) for i in range(t.row_count) if t.coordinate_to_cell_key((i, 0)).row_key.value != NEW_ROW]
 
 
 async def test_screen_lists_all_three_kinds_and_repeats_the_subscription_line(accounts):
@@ -474,6 +475,7 @@ async def test_e_opens_the_selected_file_in_the_editor_without_a_shell(accounts,
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         app.query_one("#ext-skills").focus()
+        app.query_one("#ext-skills", DataTable).move_cursor(row=1)   # row 0 is "+ New skill"
         await pilot.press("e")
         await settle(pilot)
         assert app.is_running and app._exception is None
@@ -492,6 +494,7 @@ async def test_r_rescans_and_y_copies_to_another_account(accounts):
         await settle(pilot)
         assert "gamma" in rows(app, "ext-skills")
         app.query_one("#ext-skills").focus()
+        app.query_one("#ext-skills", DataTable).move_cursor(row=1)
         await pilot.press("y")
         await settle(pilot)
         picker = app.screen.query_one(OptionList)
@@ -531,3 +534,115 @@ async def test_settings_mounts_the_section_and_warns_about_a_missing_skill(accou
         assert "/missing-skill is not a skill or command of account a" in text
         warns = [str(w.render()) for w in app.query(".stage-warning") if w.display]
         assert len(warns) == 1 and "missing-skill" in warns[0]
+
+
+# ---------- the "+ New" rows ----------
+
+def _footer_keys(app):
+    return {b.description for _, (_, b, enabled, _) in app.screen.active_bindings.items() if enabled}
+
+
+def _first(app, table):
+    return app.query_one(f"#{table}", DataTable).get_row_at(0)[0]
+
+
+async def test_skills_and_commands_tables_start_with_a_new_row(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        for table, text in (("ext-skills", "+ New skill"), ("ext-commands", "+ New command")):
+            assert _first(app, table).plain == text and "dim" in str(_first(app, table).style)
+
+
+async def test_hooks_new_row_is_a_hint_and_opens_no_form(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        assert _first(app, "ext-hooks").plain == "+ New hook: edit settings.json"
+        t = app.query_one("#ext-hooks", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert not isinstance(app.screen, extensions.NameScreen)
+        assert [n.message for n in app._notifications] == ["hooks live in settings.json: select one and press e"]
+
+
+async def test_unsupported_tables_get_no_new_row(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.query_one(extensions.ExtensionsView).show("c")
+        await settle(pilot)
+        assert app.query_one("#ext-skills", DataTable).row_count == 0
+        assert _first(app, "ext-commands").plain == "+ New command"
+
+
+@pytest.mark.parametrize("table,kind,name", [("ext-skills", "skills", "fresh-skill"), ("ext-commands", "commands", "fresh-cmd")])
+async def test_enter_on_a_new_row_opens_the_name_form_and_creates_through_create(accounts, monkeypatch, table, kind, name):
+    made = []
+    real = extensions.create
+    monkeypatch.setattr(extensions, "create", lambda *a: made.append(a) or real(*a))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one(f"#{table}", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, extensions.NameScreen)
+        app.screen.query_one(Input).value = name
+        await pilot.press("enter")
+        await settle(pilot)
+        assert [(a[1], a[2], a[3]) for a in made] == [("a", kind, name)]
+        assert name in rows(app, table) and _first(app, table).plain.startswith("+ New")
+
+
+async def test_e_and_y_on_a_new_row_say_nothing_selected(accounts, monkeypatch):
+    calls = []
+    monkeypatch.setattr(extensions, "_run", lambda argv, **kw: calls.append(argv))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one("#ext-skills", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await settle(pilot)
+        for key in ("e", "y"):
+            await pilot.press(key)
+            await settle(pilot)
+            assert len(app.screen_stack) == 1
+            assert [n.message for n in app._notifications] == ["nothing selected"]
+            app.clear_notifications()
+        assert calls == []
+
+
+async def test_footer_follows_the_focused_table(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.query_one("#ext-skills").focus()
+        await settle(pilot)
+        assert "new skill" in _footer_keys(app) and "new command" not in _footer_keys(app)
+        app.query_one("#ext-commands").focus()
+        await settle(pilot)
+        assert "new command" in _footer_keys(app) and "new skill" not in _footer_keys(app)
+        app.query_one("#ext-hooks").focus()
+        await settle(pilot)
+        assert "new hook" in _footer_keys(app)
+
+
+async def test_the_first_real_item_is_acted_on_not_the_one_after_it(accounts, monkeypatch):
+    calls = []
+    monkeypatch.setattr(extensions, "_run", lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr(Host, "suspend", contextlib.contextmanager(lambda self: (yield)), raising=False)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        t = app.query_one("#ext-skills", DataTable)
+        t.focus()
+        t.move_cursor(row=1)
+        await pilot.press("e")
+        await settle(pilot)
+    assert calls[0][-1] == str(accounts["a"] / "skills/alpha/SKILL.md")
