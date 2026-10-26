@@ -21,13 +21,14 @@ from textual.css.query import NoMatches
 from pl import board, dispatch, manager, update, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
+from pl.tui import parity
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, groups, header_text, resolve, tabs
 from pl.tui.needs import needs_you_count, review_kind
-from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
+from pl.tui.dashboard import WINDOWS, DashboardView, HealthScreen, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
 from pl.tui.ideas import IdeasView
 from pl.tui.loops import ActivityView, LoopsView
@@ -137,15 +138,26 @@ class HelpScreen(ModalScreen):
     """
     BINDINGS = [Binding("escape", "close", "close"), Binding("question_mark", "help", "close", show=False)]
 
-    def __init__(self, title, about, keys):
+    def __init__(self, title, about, rows):
         super().__init__()
-        self.title_text, self.about, self.keys = title, about, keys
+        self.title_text, self.about, self.rows = title, about, rows
+
+    def body(self):
+        text = Text(self.about + "\n")
+        for group in parity.GROUPS:
+            rows = [r for r in self.rows if r[0] == group]
+            if rows:
+                text.append(f"\n{group}\n", style="bold")
+            for _, key, what, command in rows:
+                text.append(f"  {key:<14} {what:<28} ")
+                text.append(command + "\n", style="dim")
+        return text
 
     def compose(self):
         with Vertical():
             yield Static(Text(f"Help: {self.title_text}", style="bold"))
             with VerticalScroll(id="help-body"):
-                yield Static(Text(self.about + "\n\n" + "\n".join(f"{k}  {what}" for k, what in self.keys)))
+                yield Static(self.body())
             yield Static(Text("esc close · the palette (ctrl+p) has What's new", style="dim"))
 
     def action_help(self):
@@ -357,14 +369,19 @@ class PlApp(App):
     def action_help(self):
         if isinstance(self.screen, HelpScreen):
             return
-        keys, seen = [], set()
+        rows, seen = [], set()
         for key, active in self.screen.active_bindings.items():
             b = active.binding
-            if active.enabled and b.show and b.description and b.description not in seen:
+            if active.enabled and b.description and b.description not in seen:
                 seen.add(b.description)
-                keys.append((b.key_display or key, b.description))
-        title = dict(tabs()).get(self.active_tab, self.active_tab)
-        self.push_screen(HelpScreen(title, HELP.get(self.active_tab, ""), keys))
+                command = parity.command_for(type(active.node).__name__, b.action, key)
+                rows.append((parity.group_of(b.action, command), b.key_display or key, b.description, command or "console only"))
+        if self.screen is self.screen_stack[0]:
+            title, about = dict(tabs()).get(self.active_tab, self.active_tab), HELP.get(self.active_tab, "")
+        else:
+            title = type(self.screen).__name__.removesuffix("Screen")
+            about = (type(self.screen).__doc__ or "").strip().partition("\n")[0]
+        self.push_screen(HelpScreen(title, about, rows))
 
     def action_switcher(self):
         from pl.tui.switcher import SwitcherScreen
@@ -397,12 +414,17 @@ class PlApp(App):
         yield from super().get_system_commands(screen)
         yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
                             self.action_whatsnew)
+        yield SystemCommand("Health", "agents, loops, last error and tokens", self.action_health)
         yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Settings tab)",
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
         yield SystemCommand("Brain: ask questions across pipelines", "one read-only brain session per machine",
                             self.action_brain)
+
+    def action_health(self):
+        if self.data is not None:
+            self.push_screen(HealthScreen(self.data, self.window))
 
     def action_brain(self):
         """Brain tab, one machine-wide brain session."""

@@ -509,3 +509,31 @@ def test_hints_for_a_github_card_use_the_quoted_short_id(monkeypatch):
     assert fix == "pl card 'your-repo#43' shows why; pl retry 'your-repo#43' starts it fresh"
     assert shlex.split(fix.split(";")[0]) == ["pl", "card", "your-repo#43", "shows", "why"]
     assert notes[0][1].endswith("see pl card 'your-repo#43'")
+
+
+# ---------- affected cards and the Activity log ----------
+
+def _logged(kind):
+    p = C.STATE_DIR / "events.jsonl"
+    rows = [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+    return [r for r in rows if r["kind"] == kind]
+
+
+def test_open_records_cards_and_logs_once(clock):
+    alerts.open("k1", "warn", "Card o/r#1 stuck", "pl card o/r#1", cards=["o/r#1"])
+    alerts.open("k1", "warn", "Card o/r#1 stuck", "pl card o/r#1", cards=["o/r#1"])
+    assert alerts.get("k1")["cards"] == ["o/r#1"]
+    assert len(_logged("alert_opened")) == 1
+
+
+def test_sweep_resolve_logs_alert_resolved(clock):
+    alerts.open("k:1", "warn", "Card o/r#1 stuck", "fix")
+    clock["now"] += 90
+    alerts.sweep("k:", set(), lambda *a: None)
+    [ev] = _logged("alert_resolved")
+    assert ev["key"] == "k:1" and ev["duration"] == 90
+
+
+def test_open_without_cards_still_works(clock):
+    assert alerts.open("k1", "warn", "t", "f") == "open"
+    assert alerts.get("k1")["cards"] == []

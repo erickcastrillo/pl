@@ -6,7 +6,6 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
-from pl.tui.needs import needs_you_count
 
 
 GROUPS = [
@@ -34,7 +33,8 @@ MEANING = {
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
     "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
-    "open_window": "open window", "jump": "open window", "drop": "remove", "discard": "remove", "delete": "remove",
+    "open_window": "open window", "jump": "open window", "live_view": "open window",
+    "page_up": "page up", "page_down": "page down", "drop": "remove", "discard": "remove", "delete": "remove",
     "revoke": "remove", "retry": "try again", "move_agent": "move to account", "move_column": "move to column",
     "only_mine": "filter", "plan_filter": "filter", "next_filter": "filter", "done": "done", "show_done": "show done", "undrop": "undo",
     "undo": "undo", "adopt": "to pipeline", "hand_off": "to Manual", "answer": "answer", "edit": "edit",
@@ -43,6 +43,13 @@ MEANING = {
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
     "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
 }
+
+NEW_ROW = "+new"   # the row key of every list's "+ New <thing>" row
+
+
+def new_row(thing):
+    return Text(f"+ New {thing}", style="dim")
+
 
 HELP = {
     "dashboard": "What needs you first, then what the agents did in the chosen window. [ and ] change the window, s writes a standup.",
@@ -145,6 +152,7 @@ def status_sentence(snap, stopped=None):
 
 def header_text(data, error=None, note=None, last_good=None):
     """pl, profile badge, tracker type, dispatcher state, accounts, pause state, clock, and the last refresh error."""
+    from pl.tui.needs import needs_you_count   # needs -> subagents -> loops imports this module
     t = Text(no_wrap=True, overflow="ellipsis")
     t.append(" pl ", style="bold #e0a040")
     t.append(f" {C.PROFILE_NAME or 'no profile'} ", style="bold #101010 on #e0a040")

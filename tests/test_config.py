@@ -355,3 +355,26 @@ def test_auto_merge_needs_no_prompt_but_every_is_checked():
     import tomlkit
     assert not [e for e in C.validate(tomlkit.parse('[loops.auto-merge]\nenabled = true\n')) if "prompt" in e]
     assert any("loops.auto-merge: every" in e for e in C.validate(tomlkit.parse('[loops.auto-merge]\nenabled = true\nevery = "soon"\n')))
+
+
+# ---------- vikunja tracker settings ----------
+
+VIKUNJA_OK = '[tracker]\ntype = "vikunja"\nurl = "https://v.example"\ntoken = "${VIKUNJA_TOKEN}"\nproject_id = 4\nview_id = 9\n'
+
+
+def test_vikunja_tracker_config_ok():
+    assert C.validate(tomllib.loads(VIKUNJA_OK)) == []
+
+
+def test_vikunja_tracker_needs_numeric_ids():
+    for bad in ('project_id = "4"', "project_id = true", "view_id = 1.5"):
+        key = bad.split(" =")[0]
+        doc = VIKUNJA_OK.replace(next(l for l in VIKUNJA_OK.splitlines() if l.startswith(key)), bad)
+        assert any(f"tracker.{key}" in e for e in C.validate(tomllib.loads(doc))), bad
+    errs = C.validate(tomllib.loads(VIKUNJA_OK.replace("https://v.example", "v.example")))
+    assert any("tracker.url" in e for e in errs)
+
+
+def test_vikunja_token_must_be_env_reference():
+    errs = C.validate(tomllib.loads(VIKUNJA_OK.replace("${VIKUNJA_TOKEN}", "tk_literal")))
+    assert any("tracker.token must be a ${VAR} reference" in e for e in errs)

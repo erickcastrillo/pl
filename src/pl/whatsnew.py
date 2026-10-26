@@ -232,7 +232,12 @@ ENTRIES = [
        "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs", "pl merges --dry-run"),
     _e("2026-10-25.45", "Skills are grouped: pl's stage skills, your library, each account",
        "Settings tab, Skills section: origin and used by on every row", "pl skills list"),
-    _e("2026-10-25.46", "+ New skill: install from GitHub after reviewing every file, or write one",
+    _e("2026-10-25.46", "? lists every action on a screen with its pl command", "any screen: press ?", "pl --help"),
+    _e("2026-10-25.47", "The Dashboard leads with what needs you; Health moved to a panel",
+       "Dashboard: the first row, Enter on Health or palette: Health", "pl"),
+    _e("2026-10-25.48", "Loops read in plain words: what each does, when it runs, how its last run went",
+       "Loops tab: does, schedule, last result; Enter opens the log", "pl loops list"),
+    _e("2026-10-25.49", "+ New skill: install from GitHub after reviewing every file, or write one",
        "Settings tab, Skills section: n", "pl skills install SOURCE --dry-run"),
 ]
 
