@@ -182,12 +182,13 @@ def _target(name):
 
 
 def new_profile(name: str, from_current: bool = False, github_owner: str | None = None, github_title: str | None = None,
-                github_repo: str | None = None, pipeline_doc: dict | None = None, tracker_doc: dict | None = None):
+                github_repo: str | None = None, pipeline_doc: dict | None = None, tracker_doc: dict | None = None,
+                accounts: dict | None = None):
     """Write ~/.pl-<name>/config.toml with the effective (or neutral default) values and [gates] spec = true.
     With github_owner, first create a GitHub Project with a "pl stage" field and make it the tracker."""
     d = _target(name)
     if pipeline_doc is not None:
-        if _write_config(d, pipeline_config(pipeline_doc, tracker_doc, C.ACCOUNTS)):
+        if _write_config(d, pipeline_config(pipeline_doc, tracker_doc, accounts if accounts is not None else C.ACCOUNTS)):
             print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
         return
     v = _values(from_current)

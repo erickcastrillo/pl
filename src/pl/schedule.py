@@ -3,6 +3,8 @@ import re
 from datetime import datetime, timedelta
 
 FORMS = ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:<expr>")
+KINDS = (("minutes", "Every N minutes/hours"), ("daily", "Every day at"), ("weekdays", "Weekdays at"),
+         ("cron", "Custom (cron)"))
 _CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
 _MAX_LOOKAHEAD_MINUTES = 366 * 24 * 60
 
@@ -100,6 +102,46 @@ def next_run(spec: dict, after: datetime) -> datetime:
             return probe
         probe += timedelta(minutes=1)
     raise ValueError("cron expression never fires within 366 days")
+
+
+def preview(every, after: datetime, n: int = 3) -> list[datetime]:
+    spec = parse_every(every)
+    runs = []
+    for _ in range(n):
+        after = next_run(spec, after)
+        runs.append(after)
+    return runs
+
+
+def join(kind, number="", unit="minutes", at="", cron="") -> str:
+    """The `every` text for a picker's values; a value that is not valid is left for `parse_every` to refuse."""
+    if kind == "minutes":
+        number = str(number).strip()
+        return f"{int(number) * 60 if unit == 'hours' else int(number)}m" if number.isdigit() else f"{number}m"
+    if kind in ("daily", "weekdays"):
+        return f"{kind} {at.strip()}"
+    if kind == "cron":
+        return f"cron:{cron.strip()}"
+    return ""
+
+
+def split(every) -> dict:
+    """The picker's values for an `every` text; text that fits no simple kind goes to the cron box as it is."""
+    text = str(every or "").strip()
+    parts = {"kind": None, "number": "", "unit": "minutes", "at": "", "cron": ""}
+    if not text:
+        return parts
+    try:
+        spec = parse_every(text)
+    except ValueError:
+        return parts | {"kind": "cron", "cron": text.removeprefix("cron:")}
+    if spec["kind"] == "minutes":
+        n = spec["minutes"]
+        return parts | ({"kind": "minutes", "number": str(n // 60), "unit": "hours"} if n % 60 == 0
+                        else {"kind": "minutes", "number": str(n)})
+    if spec["kind"] == "cron":
+        return parts | {"kind": "cron", "cron": text[5:].strip()}
+    return parts | {"kind": spec["kind"], "at": "%02d:%02d" % spec["at"]}
 
 
 def parse_hours(text) -> dict:

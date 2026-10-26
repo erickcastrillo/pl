@@ -82,6 +82,26 @@ HELP = {
 }
 
 
+# tab -> (line 2 of its empty state, the key line 2 names, the tab that key lives on); line 2 fits the Pipeline's title column
+EMPTY = {
+    "ideas": ('n adds one, or pl idea "..."', "n", "ideas"),
+    "cards": ('n on Ideas, or pl idea "..."', "n", "ideas"),
+    "prs": ("A run stage opens them.", None, None),
+    "alerts": ("pl adds one when a thing fails.", None, None),
+    "loops": ("n adds one, or pl loops add", "n", "loops"),
+    "activity": ("Each card action adds a line.", None, None),
+    "subagents": ("An agent's background task.", None, None),
+    "dashboard": ('n on Ideas, or pl idea "..."', "n", "ideas"),
+    "home": ("pl setup adds a pipeline.", None, None),
+    "brain": ("Type a question and press Enter.", None, None),
+}
+
+
+def empty_state(tab):
+    """The three lines an empty list shows: what the tab is for, how its first item gets there, and the help pointer."""
+    return [HELP[tab].split(". ")[0].rstrip(".") + ".", EMPTY[tab][0], "? learn more"]
+
+
 def sub_label(text, letter):
     """A sub-tab label with its first character underlined when that letter switches to the tab."""
     label = Text(text)

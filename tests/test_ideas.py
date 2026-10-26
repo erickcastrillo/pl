@@ -591,7 +591,8 @@ async def test_pilot_ideas_list_with_no_ideas_holds_only_the_new_idea_row(harnes
         await app.workers.wait_for_complete()
         await pilot.pause()
         ol = app.query_one("#idea-list", OptionList)
-        assert ol.option_count == 1 and ol.get_option_at_index(0).id == NEW_ROW
+        assert [o.id for o in ol.options if not o.disabled] == [NEW_ROW]   # the empty state is a disabled, id-less option
+        assert ol.option_count == 2 and ol.get_option_at_index(1).disabled
         assert ol.border_title == "Ideas · 0"
 
 

@@ -177,6 +177,7 @@ PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
     ("pods", "r"): "pl pods rule add",
     ("pods", "show"): "pl pods show",
     ("pods", "enter"): "pl pods show",
+    ("triggers", "list"): "pl triggers list",
     ("models", "list"): "pl models list",
     ("models", "test"): "pl models test",
     ("models", "t"): "pl models test",
