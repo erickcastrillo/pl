@@ -258,6 +258,8 @@ ENTRIES = [
        "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
     _e("2026-10-26.58", "Editing a loop uses the same form as adding one",
        "Loops tab: e opens the add form filled in, with the skill list and schedule check", "pl loops edit"),
+    _e("2026-10-26.59", "A scheduled loop keeps what each run said: last run, its output and earlier runs",
+       "Loops tab: select a scheduled loop; its last 20 runs are kept under state/loops/<name>/", "pl loops run <name>"),
 ]
 
 
