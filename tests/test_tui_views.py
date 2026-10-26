@@ -2613,8 +2613,137 @@ async def test_an_empty_board_says_no_cards_and_how_to_add_one():
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app)
         text = screen_text(app)
-    assert "No cards yet." in text and "Add one with n on the Ideas tab," in text and 'or pl idea "..."' in text
+    from pl.tui.chrome import empty_state
+    assert all(line in text for line in empty_state("cards"))
     assert "loading" not in text and "not reachable" not in text
+
+
+def test_empty_state_is_three_lines_for_every_list_tab():
+    from pl.tui.chrome import EMPTY, HELP, TABS, empty_state
+    assert set(EMPTY) <= {t for t, _ in TABS} and {"ideas", "cards", "prs", "alerts", "loops", "activity", "subagents",
+                                                   "dashboard", "home", "brain"} == set(EMPTY)
+    for tid in EMPTY:
+        lines = empty_state(tid)
+        assert len(lines) == 3 and all(lines), tid
+        assert lines[2] == "? learn more"
+        assert lines[0] == HELP[tid].split(". ")[0].rstrip(".") + ".", tid
+
+
+def test_empty_state_keys_are_real_bindings():
+    from pl.tui.app import VIEWS
+    from pl.tui.chrome import EMPTY
+    for tab, (_, key, key_tab) in EMPTY.items():
+        if key is not None:
+            assert key in [b.key for b in VIEWS[key_tab].BINDINGS], tab
+
+
+def test_empty_state_line_two_fits_the_pipeline_title():
+    from pl.tui.chrome import EMPTY
+    assert all(len(line2) <= tui_cards.TITLE_WIDTH for line2, _, _ in EMPTY.values())
+
+
+async def test_an_empty_ideas_tab_says_what_it_is_for_and_how_to_add_one(monkeypatch):
+    from pl import ideas
+    from pl.tui.chrome import empty_state
+    monkeypatch.setattr(ideas, "list_ideas", lambda: [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("ideas")
+        await settle(pilot)
+        text = screen_text(app)
+    assert all(line in text for line in empty_state("ideas"))
+
+
+async def test_the_first_idea_replaces_the_empty_state(monkeypatch):
+    from pl import ideas
+    from pl.tui.ideas import IdeasView
+    monkeypatch.setattr(ideas, "list_ideas", lambda: [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("ideas")
+        await settle(pilot)
+        assert "? learn more" in screen_text(app)
+        app.query_one(IdeasView)._fill([{"id": "abcdefabcdef", "title": "Faster page", "status": "interviewing"}])
+        await settle(pilot)
+        text = screen_text(app)
+    assert "Faster page" in text and "? learn more" not in text
+
+
+async def test_a_filtered_empty_pipeline_keeps_its_filter_message(monkeypatch):
+    _fake_card_read(monkeypatch, [])
+    app = PlApp(snapshot_provider=Provider(_with_plan()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app)
+        await _filter_plan(pilot, "7")
+        text = screen_text(app)
+        assert "No cards in plan 7." in text and "? learn more" not in text
+
+
+async def test_question_mark_on_an_empty_tab_opens_its_help(monkeypatch):
+    from pl import ideas
+    from pl.tui.app import HelpScreen
+    from pl.tui.chrome import HELP
+    monkeypatch.setattr(ideas, "list_ideas", lambda: [])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("ideas")
+        await settle(pilot)
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        assert HELP["ideas"] in " ".join(screen_text(app).replace("│", " ").split())
+
+
+async def test_an_empty_prs_tab_says_how_pull_requests_arrive():
+    from pl.tui.chrome import empty_state
+    data = fake_data()
+    data["snapshot"]["rows"] = [r for r in data["snapshot"]["rows"] if not r.get("pr")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("prs")
+        await settle(pilot)
+        text = screen_text(app)
+    assert all(line in text for line in empty_state("prs")) and "  none" not in text
+
+
+async def test_an_empty_alerts_tab_says_how_alerts_arrive(monkeypatch):
+    from pl.tui.chrome import empty_state
+    data = fake_data()
+    data["alerts"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        text = screen_text(app)
+        assert all(line in text for line in empty_state("alerts"))
+        told = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
+        await pilot.press("k")
+        await pilot.pause()
+        assert told == ["select an alert to acknowledge"]
+
+
+async def test_the_first_alert_replaces_the_empty_state():
+    from pl.tui.alerts import AlertsView
+    data = fake_data()
+    data["alerts"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        assert "? learn more" in screen_text(app)
+        data["alerts"] = [{"key": "stage_failed:abcd1234:spec", "severity": "high", "title": "Card abcd1234: the spec agent died",
+                           "fix": "pl retry abcd1234", "first_seen": NOW.timestamp(), "last_seen": NOW.timestamp(), "count": 1}]
+        app.query_one(AlertsView).show(data)
+        await settle(pilot)
+        text = screen_text(app)
+    assert "pl retry abcd1234" in text and "? learn more" not in text
 
 
 async def test_a_failed_refresh_shows_last_good_time_and_what_failed(monkeypatch):
