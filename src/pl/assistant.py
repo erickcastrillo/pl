@@ -288,6 +288,7 @@ def _ensure():
     if acct is None:
         raise SystemExit("pl: no account can run the assistant: each one is parked or on a harness that cannot ask before "
                          "each action; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
+    h = None
     try:
         h = harnesses.account_harness(acct)
         if not h.interactive:
@@ -306,7 +307,7 @@ def _ensure():
         dispatch._launch(pane_, WINDOW, harnesses.launch_script(h, acct, None if resume else first_prompt(), sid, WINDOW,
                                                                resume=resume, plugin=False, worktrees=False))
     except SystemExit as e:
-        raise SystemExit(f"{e} (account {acct}, harness {h.name}; to use another set [assistant] account in config.toml)") from None
+        raise SystemExit(f"{e} (account {acct}, harness {h.name if h else 'unknown'}; to use another set [assistant] account in config.toml)") from None
     from pl import brain   # pl.brain imports this module at load time
     _save({"session_id": sid, "account": acct, "harness": h.name, "window": win, "pane": pane_,
            "started_at": now_iso(), "mode": st.get("mode") if resume else "chat", "build": update.build_id(),

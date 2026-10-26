@@ -302,6 +302,17 @@ def test_a_failed_start_names_the_account_and_its_harness(tmux, monkeypatch):
         assistant.ensure()
 
 
+def test_a_harness_lookup_failure_keeps_its_own_message(tmux, monkeypatch):
+    from pl import harnesses
+
+    def boom(acct):
+        raise SystemExit("pl: unknown harness 'zzz'")
+    monkeypatch.setattr(assistant, "account", lambda: "acme")
+    monkeypatch.setattr(harnesses, "account_harness", boom)
+    with pytest.raises(SystemExit, match=r"unknown harness 'zzz'.*account acme"):
+        assistant.ensure()
+
+
 def test_a_changed_assistant_account_is_used_on_the_next_start_without_reload(tmux, monkeypatch):
     assert assistant.ensure()
     assert json.loads((C.STATE_DIR / "assistant.json").read_text())["account"] == "acme"
