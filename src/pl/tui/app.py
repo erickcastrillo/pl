@@ -22,7 +22,7 @@ from textual.css.query import NoMatches
 from pl import board, dispatch, manager, update, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
-from pl.tui import parity
+from pl.tui import palette, parity
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.cards import CardsView, card_count
@@ -256,6 +256,9 @@ class ViewFooter(Footer):
         yield from palette
 
 
+APP_TABS = {"cycle_window": "dashboard", "standup": "dashboard", "review": "cards"}   # app actions only valid on one tab
+
+
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
@@ -460,13 +463,7 @@ class PlApp(App):
     def action_help(self):
         if isinstance(self.screen, HelpScreen):
             return
-        rows, seen = [], set()
-        for key, active in self.screen.active_bindings.items():
-            b = active.binding
-            if active.enabled and b.description and b.description not in seen:
-                seen.add(b.description)
-                command = parity.command_for(type(active.node).__name__, b.action, key)
-                rows.append((parity.group_of(b.action, command), b.key_display or key, b.description, command or "console only"))
+        rows = [r[:4] for r in palette.rows(self.screen.active_bindings.items())]
         if self.screen is self.screen_stack[0]:
             title, about = dict(tabs()).get(self.active_tab, self.active_tab), HELP.get(self.active_tab, "")
         else:
@@ -510,6 +507,8 @@ class PlApp(App):
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
+        if screen is self.screen_stack[0]:
+            yield from palette.commands(self, APP_TABS)
 
     def action_health(self):
         if self.data is not None:
@@ -720,7 +719,7 @@ class PlApp(App):
             view = self.query_one(AssistantView)
             self.call_after_refresh(view.focus_box)
 
-    def check_action(self, action, parameters):
+    def check_action(self, action, parameters):   # APP_TABS repeats the tab each gated action below needs
         if action == "tab":
             return resolve(parameters[0]) is not None
         if action == "sub_tab":

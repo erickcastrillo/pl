@@ -164,3 +164,14 @@ def test_cli_brain_end_and_undo(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "undone 1" in out
     assert forgot == ["m-cli-1"]
+
+
+def test_prune_keeps_the_assistants_recent_conversation():
+    import os
+    import time
+    old = _setup_conv("old-one", [{"ts": "2020-01-01T00:00:00+00:00", "role": "user", "text": "x"}])
+    os.utime(old, (time.time() - 400 * 86400,) * 2)
+    cur = brain.conv_new()
+    brain.conv_append(cur, "user", "recent")
+    assert brain.prune() == [old]
+    assert (brain._conv_dir() / f"{cur}.jsonl").exists() and not old.exists()

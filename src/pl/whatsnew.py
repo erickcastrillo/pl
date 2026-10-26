@@ -254,6 +254,8 @@ ENTRIES = [
        "Settings tab, Skills section: d on any skill, GitHub installs too", "pl skills remove NAME"),
     _e("2026-10-26.01", "The Brain tab is gone: ask its questions in the Assistant",
        "Assistant tab; b opens the Assistant for one release", "press b in the console"),
+    _e("2026-10-26.56", "Ctrl+P finds and runs any console action or tab",
+       "ctrl+p, type an action like retry", "pl --help"),
 ]
 
 
