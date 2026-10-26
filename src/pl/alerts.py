@@ -13,7 +13,7 @@ from pl.util import age
 ESCALATE = (3600, 4 * 3600)   # seconds after first seen: the two escalations
 STEP = {1: "1 h", 2: "4 h"}
 KEEP = 7 * 86400              # a resolved alert stays this long for pl alerts --all
-FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration"}
+FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards"}
 _clock = time.time
 
 
@@ -98,18 +98,30 @@ def flush_offers():
             pass
 
 
-def open(key, severity, title, fix):
+def _logged(kind, **detail):
+    """Write an alert event to the Activity log. It never fails the alert."""
+    try:
+        from pl import events   # imported here: the alerts module stays light
+        events.emit(kind, None, **detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def open(key, severity, title, fix, cards=()):
     """Open the alert, or count one more sighting. Returns what to notify: "open", "1 h", "4 h", or None."""
-    now = _clock()
+    now, cards = _clock(), [str(c) for c in cards]
     with _locked() as d:
         a = d.get(key)
         if not _live(a):
             d[key] = {"severity": severity, "title": title, "fix": fix, "first_seen": now, "last_seen": now,
-                      "count": 1, "level": 0}
+                      "count": 1, "level": 0, "cards": cards}
             why = "open"
         else:
-            a.update(severity=severity, title=title, fix=fix, last_seen=now, count=int(a.get("count") or 0) + 1)
+            a.update(severity=severity, title=title, fix=fix, cards=cards, last_seen=now,
+                     count=int(a.get("count") or 0) + 1)
             why = _step(a, now)
+    if why == "open":
+        _logged("alert_opened", key=key, severity=severity, title=title, cards=cards)
     if why:
         _offer(key, why, title)
     return why
@@ -123,7 +135,9 @@ def resolve(key):
         if not _live(a):
             return False
         a.update(resolved_at=now, duration=now - a["first_seen"])
-        return True
+        title, duration = a["title"], int(a["duration"])
+    _logged("alert_resolved", key=key, title=title, duration=duration)
+    return True
 
 
 def ack(key):
@@ -138,15 +152,18 @@ def ack(key):
 
 def sweep(prefix, active, send):
     """Resolve the open alerts under prefix whose key is not in active; escalate the rest, calling send(title, fix)."""
-    now, out = _clock(), []
+    now, out, closed = _clock(), [], []
     with _locked() as d:
         for key, a in d.items():
             if not key.startswith(prefix) or not _live(a):
                 continue
             if key not in active:
                 a.update(resolved_at=now, duration=now - a["first_seen"])
+                closed.append((key, a["title"], int(a["duration"])))
             elif why := _step(a, now):
                 out.append((key, why, a["title"], a["fix"]))
+    for key, title, duration in closed:
+        _logged("alert_resolved", key=key, title=title, duration=duration)
     for key, why, title, fix in out:
         send(headline(why, title), fix)
         _offer(key, why, title)

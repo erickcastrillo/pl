@@ -147,9 +147,9 @@ async def test_dashboard_renders_tiles_and_panels():
             ["12", "11", "2", "1", "2", "6"]
         text = screen_text(app)
         for s in ("SPECS WRITTEN", "READY TO MERGE", "WAITING ON YOU", "Throughput", "Where work waits",
-                  "Plan for review", "Decide next", "2 PRs pass the merge check", "Health",
-                  "tokens", "counting…", "exceeded", "legacy", "Running, 2 cards waiting"):
+                  "Plan for review", "Needs you", "2 PRs pass the merge check", "Health", "Running, 2 cards waiting"):
             assert s in text, s
+        assert "counting…" not in text
 
 
 async def test_pull_requests_groups():
@@ -199,11 +199,11 @@ async def test_brackets_cycle_the_window():
 
 
 @pytest.mark.parametrize("size", [(120, 40), (80, 24)])
-async def test_dashboard_bottom_row_three_equal_columns(size):
+async def test_dashboard_bottom_row_two_equal_columns(size):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=size) as pilot:
         await settle(pilot)
-        widths = [app.query_one(i).size.width for i in ("#decide", "#health", "#standup-panel")]
+        widths = [app.query_one(i).size.width for i in ("#decide", "#standup-panel")]
         assert min(widths) > 0 and max(widths) - min(widths) <= 1, widths
 
 
@@ -442,8 +442,8 @@ async def test_other_views_skip_the_redraw_when_their_data_is_unchanged(monkeypa
         assert {k: len(v) for k, v in clears.items()} == {k: 0 for k in clears}
 
 
-@pytest.mark.parametrize("row,tab,selected", [(0, "prs", None), (1, "cards", "spec0001aaaa"), (2, "cards", "4a000001aaaa"),
-                                              (3, "prs", None), (4, "prs", None), (5, "cards", "c0000003aaaa")])
+@pytest.mark.parametrize("row,tab,selected", [(1, "prs", None), (2, "cards", "spec0001aaaa"), (3, "cards", "4a000001aaaa"),
+                                              (4, "prs", None), (5, "prs", None), (6, "cards", "c0000003aaaa")])
 async def test_decide_next_rows_are_selectable(monkeypatch, row, tab, selected):
     """Card groups open the Pipeline with only the cards that need you, on the group's first card; PR groups open
     Pull requests."""
@@ -463,15 +463,47 @@ async def test_decide_next_rows_are_selectable(monkeypatch, row, tab, selected):
             assert "d0000004aaaa" not in view._rows   # PR open needs nobody: filtered out
 
 
-async def test_decide_next_row_with_zero_count_still_navigates(monkeypatch):
-    _fake_card_read(monkeypatch, [])
+async def test_zero_count_rows_are_hidden(monkeypatch):
     app = PlApp(snapshot_provider=Provider())   # spec gate off: no specs waiting
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        app.query_one("#decide").focus()
-        await pilot.press("down", "enter")
+        keys = [r.key.value for r in app.query_one("#decide").ordered_rows]
+        assert "specs" not in keys and keys[0] == "needs" and keys[-1] == "health"
+
+
+async def test_dashboard_leads_with_needs_you_and_hides_empty_rows():
+    from pl.tui.dashboard import decide_rows
+    from pl.tui.needs import needs_you_count
+    data = fake_data()
+    rows = decide_rows(data)
+    assert rows[0][0] == "needs" and rows[0][1] == needs_you_count(data) and rows[-1][0] == "health"
+    assert all(n for key, n, *_ in rows[1:-1])
+    data["snapshot"]["rows"] = []
+    rows = decide_rows(data)
+    assert [r[0] for r in rows] == ["needs", "health"] and "Nothing needs you" in rows[0][2]
+
+
+async def test_health_opens_in_a_details_panel():
+    from pl.tui.dashboard import HealthScreen
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert app.active_tab == "cards" and app.query_one(tui_cards.CardsView).only_mine
+        assert "counting…" not in screen_text(app)
+        table = app.query_one("#decide")
+        table.focus()
+        table.move_cursor(row=table.row_count - 1)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, HealthScreen)
+        text = screen_text(app)
+        for s in ("tokens", "counting…", "exceeded", "harness accounts"):
+            assert s in text, s
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, HealthScreen)
+        app.action_health()
+        await settle(pilot)
+        assert isinstance(app.screen, HealthScreen)
 
 
 async def _open_pr(pilot, app, url="https://github.com/o/frontend/pull/1200"):
@@ -2621,8 +2653,8 @@ def test_loops_tab_shows_next_run_last_result_and_week_tokens():
     C.LOOPS_OFF = {"stale": {"prompt": "find stale cards", "every": "daily 09:00", "enabled": False}}
     data = {"snapshot": {"rows": []}, "usage": {"loops": {"invoices": {"tokens_1h": 0, "tokens_7d": 12_500, "context": None, "dead": False}}}}
     rows = {r["name"]: r for r in tui_loops.loop_rows(data)}
-    assert rows["invoices"]["next"] == soon.replace("T", " ")[:16]
-    assert rows["invoices"]["output"] == "3 invoices overdue"
+    assert rows["invoices"]["next"] == tui_loops.when(soon, datetime.now())
+    assert rows["invoices"]["output"] == "ok, 3 invoices overdue"
     assert rows["invoices"]["tokens7d"] == "12.5k"
     assert rows["triage"]["tokens7d"] == "-" and rows["triage"]["next"] == "-"
     assert rows["stale"]["state"] == "paused" and rows["stale"]["next"] == "-"
@@ -2648,6 +2680,11 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await pilot.press("5")
         await settle(pilot)
         assert [r["name"] for r in app.query_one(tui_loops.LoopsView).loops] == ["invoices"]
+        await pilot.press("p")
+        await settle(pilot)
+        assert calls == []   # the cursor starts on the "+ New" row, so p does nothing there
+        await pilot.press("down")
+        await settle(pilot)
         await pilot.press("p")
         await settle(pilot)
         await pilot.press("g")
@@ -2733,7 +2770,7 @@ async def test_add_form_rejects_a_bad_every_with_the_forms(monkeypatch):
         await pilot.press("ctrl+s")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
-        problem = str(form.query_one("#loop-problem").render())
+        problem = str(form.query_one("#loop-every-error").render())
         assert all(f in problem for f in ("30m", "hourly", "daily HH:MM", "weekdays HH:MM", "cron:"))
     assert added == []
 
@@ -2753,3 +2790,171 @@ async def test_picking_a_skill_after_a_template_drops_the_template_prompt(monkey
         await pilot.press("ctrl+s")
         await settle(pilot)
     assert added[0][1]["skill"] == "pl-billing-chase" and added[0][1]["prompt"] is None
+
+
+def test_loop_row_reads_in_plain_words():
+    from pl.tui import loops as tui_loops
+    soon = (datetime.now() + timedelta(minutes=5)).replace(microsecond=0).isoformat()
+    _loops_state(soon, None)
+    C.SERVICES = {"invoices": {"prompt": "Review the open pull requests that wait for review: label them", "profile": "acme",
+                               "every": "30m", "writes": False},
+                  "triage": {"skill": "triage", "prompt": "/triage", "profile": "acme", "every": "daily 09:00", "writes": True},
+                  "watch": {"prompt": "/loop 30m check the board", "profile": "acme"}}
+    C.LOOPS_OFF = {}
+    rows = {r["name"]: r for r in tui_loops.loop_rows({"snapshot": {"rows": []}})}
+    assert rows["invoices"]["does"] == "Review the open pull requests that wait for review"
+    assert rows["invoices"]["schedule"] == "every 30 minutes" and rows["invoices"]["read_only"] is True
+    assert rows["invoices"]["next"] == tui_loops.when(soon, datetime.now())
+    assert rows["triage"]["does"] == "runs /triage" and rows["triage"]["read_only"] is False
+    assert rows["watch"]["does"] == "check the board" and rows["watch"]["schedule"] == "every 30 minutes"
+    assert rows["watch"]["read_only"] is False
+
+
+def test_loop_sentence():
+    from pl.tui import loops as tui_loops
+    row = {"does": "Review the open pull requests that wait for review", "schedule": "every 30 minutes",
+           "next": "16:30", "output": "ok, 3 PRs"}
+    assert tui_loops.sentence(row) == ("Review the open pull requests that wait for review every 30 minutes; "
+                                       "next at 16:30; last run ok, 3 PRs")
+    assert "next at" not in tui_loops.sentence({**row, "next": "-"})
+
+
+def test_failed_last_run_says_what_failed():
+    from pl.tui import loops as tui_loops
+    assert tui_loops.last_result({"exit": 1, "result": "gh: not logged in"}) == "failed: gh: not logged in (exit 1)"
+    assert tui_loops.last_result({"exit": 2}) == "failed: no output (exit 2)"
+    assert tui_loops.last_result({"exit": 0, "result": "3 PRs"}) == "ok, 3 PRs"
+    assert tui_loops.last_result({"result": "3 PRs"}) == "ok, 3 PRs"
+    assert tui_loops.last_result({"exit": 0}) == "ok"
+    assert tui_loops.last_result(None) == "not run yet"
+    assert tui_loops.last_result({}) == "not run yet"
+    assert tui_loops.last_result({"exit": -1, "result": "unreadable run record"}) == "unreadable run record"
+
+
+def test_when_formats_a_next_run_short():
+    from pl.tui import loops as tui_loops
+    now = datetime(2026, 10, 25, 12, 0)
+    assert tui_loops.when("2026-10-25T16:30:00", now) == "16:30"
+    assert tui_loops.when("2026-10-26T09:00:00", now) == "tomorrow 09:00"
+    assert tui_loops.when("2026-10-30T09:00:00", now) == "Fri 09:00"
+    assert tui_loops.when("-", now) == "-" and tui_loops.when("in ~5m", now) == "in ~5m"
+
+
+def _loops_log(name, lines):
+    d = C.STATE_DIR / "loops"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.log").write_text("\n".join(lines) + "\n")
+
+
+async def test_loop_log_hides_secrets(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    _loops_log("invoices", ["token ghp_" + "a" * 36])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("down", "enter")   # row 0 is + New loop
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LogScreen)
+        assert "ghp_" not in screen_text(app)
+
+
+async def test_enter_on_a_loop_opens_its_log(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    _loops_log("invoices", [f"line {i} [bold]" for i in range(300)])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("down", "enter")   # row 0 is + New loop
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LogScreen)
+        text = screen_text(app)
+        assert "line 299 [bold]" in text and "line 99 " not in text
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LogScreen)
+
+
+async def test_enter_without_a_log_says_so(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    notes = []
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("down", "enter")   # row 0 is + New loop
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LogScreen)
+        assert any("no log yet for invoices" in n for n in notes)
+
+
+def test_new_row_reads_plus_new_thing_and_is_dim():
+    from pl.tui.chrome import NEW_ROW, new_row
+    row = new_row("loop")
+    assert row.plain == "+ New loop" and "dim" in str(row.style)
+    assert NEW_ROW == "+new"
+
+
+async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        t = app.query_one("#loops-table", DataTable)
+        assert t.get_row_at(0)[0].plain == "+ New loop" and t.row_count == 2
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert app.screen.query_one("#loop-every").value == "hourly"
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LoopForm)
+        await pilot.press("down")
+        await pilot.press("n")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+
+
+async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stays_open(monkeypatch, tmp_path):
+    from pl.tui import loops as tui_loops
+    profile = tmp_path / ".pl-fake"
+    profile.mkdir()
+    (profile / "config.toml").write_text("")
+    C.load(config_dir=str(profile))
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        form = app.screen
+        form.query_one("#loop-name").value = "chase"
+        form.query_one("#loop-prompt").value = "chase invoices"
+        form.query_one("#loop-hours").value = "never o'clock"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert str(form.query_one("#loop-hours-error").render()).strip()
+        assert not str(form.query_one("#loop-problem").render()).strip()
+    assert "chase" not in (profile / "config.toml").read_text()

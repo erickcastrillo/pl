@@ -395,7 +395,7 @@ def _trusted_agent(monkeypatch, trusts, **meta):
     monkeypatch.setattr(dispatch.move_agent, "unlock", lambda cid: None)
     monkeypatch.setattr(dispatch.move_agent, "pane_refusal", lambda c, w: None)
     monkeypatch.setattr(dispatch.move_agent, "stop", lambda pane, sid: stops.append(pane) or True)
-    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: evs.append((a, k)))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: a[0].startswith("alert_") or evs.append((a, k)))
     return _card(1, profile="claude", worker=w, **meta), keys, evs, stops
 
 

@@ -10,6 +10,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -1399,6 +1400,37 @@ def check_deps(all_cards):
     alerts.sweep("dep_broken:", active, notify)
 
 
+_statvfs = os.statvfs   # a seam for tests
+TMP_FULL = 0.8
+
+
+def check_machine_alerts():
+    """The GitHub budget hold and a full temp folder: both read local data only (the ledger, statvfs)."""
+    hold = ghquota.check("read")
+    if hold and hold[0] > alerts._clock():
+        until, why = hold
+        if opened := alerts.open("gh_hold", "warn", f"GitHub budget hold: {why}",
+                                 f"waits until {time.strftime('%H:%M', time.gmtime(until))} UTC by itself; pl doctor shows the ledger"):
+            notify(alerts.headline(opened, f"GitHub budget hold: {why}"), "pl doctor shows the ledger")
+    else:
+        hold = None
+    alerts.sweep("gh_hold", {"gh_hold"} if hold else set(), notify)
+    path, full = tempfile.gettempdir(), set()
+    try:
+        s = _statvfs(path)
+    except OSError:
+        return
+    inodes = 1 - s.f_favail / s.f_files if s.f_files else 0
+    space = 1 - s.f_bavail / s.f_blocks if s.f_blocks else 0
+    if max(inodes, space) >= TMP_FULL:
+        full.add("tmp_full")
+        title = f"Temp folder {path} is {round(max(inodes, space) * 100)}% full ({'inodes' if inodes >= space else 'space'})"
+        fix = f"clean {path} (old pytest-of-*, pl worktree leftovers); pl doctor"
+        if why := alerts.open("tmp_full", "high", title, fix):
+            notify(alerts.headline(why, title), fix)
+    alerts.sweep("tmp_full", full, notify)
+
+
 def check_alerts(all_cards, failed, st=None):
     """End of a pass: resolve the alerts whose condition cleared, escalate the rest, and run the pass-end checks
     (a dead loop, a loop that has not run for 2 of its intervals, a PR waiting over PR_WAIT). failed: the
@@ -1407,6 +1439,7 @@ def check_alerts(all_cards, failed, st=None):
     alerts.sweep("account_parked:", {f"account_parked:{p}" for p in parked}, notify)
     out = bool(C.PROFILES) and set(C.PROFILES) <= set(parked)
     alerts.sweep("accounts_all_out", {"accounts_all_out"} if out else set(), notify)
+    check_machine_alerts()
     alerts.sweep("stage_failed:", failed, notify)
     alerts.sweep("permission_wait:", failed, notify)
     held = {a["key"] for a in alerts.listing() if a["key"].startswith("trust:")
