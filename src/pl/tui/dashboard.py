@@ -376,8 +376,14 @@ class DashboardView(Vertical):
         self.refresh_bindings()
 
     def action_inbox_approve(self):
-        if it := self._selected_item():
-            self.run_gate(it, ["approve", it["card"]])
+        if not (it := self._selected_item()):
+            return
+        from pl.tui.review import ConfirmScreen
+
+        def answered(yes):
+            if yes:
+                self.run_gate(it, ["approve", it["card"]])
+        self.app.push_screen(ConfirmScreen(f"Approve {short_id(it['card'])} in {it['pipeline']}?"), answered)
 
     def action_inbox_send_back(self):
         if not (it := self._selected_item()):

@@ -10,6 +10,7 @@ from pl.tui import dashboard
 from pl.tui.cards import CardScreen
 from pl.tui.dashboard import inbox_rows
 from pl.tui.panels import InputModal
+from pl.tui.review import ConfirmScreen
 from pl.tui.app import PlApp
 from test_tui_views import Provider, screen_text, settle
 
@@ -139,10 +140,27 @@ async def test_a_approves_in_the_items_pipeline_without_switching(monkeypatch):
         await _all_on(pilot, app)
         tab = app.active_tab
         await pilot.press("a")   # row 0 is the oldest: sales#7
+        await pilot.pause()
+        assert fake.gates() == []
+        await pilot.press("y")
         await settle(pilot)
         assert fake.gates()[0][1:] == ["-m", "pl", "--profile", "sales", "approve", "sales#7"]
         assert C.PROFILE_NAME == "eng" and app.active_tab == tab and app.restart_into is None
         assert len(_rows(app)) == 3 and not any("sales#7" in h for h, _ in _rows(app))
+
+
+async def test_a_asks_first_and_declining_runs_nothing(monkeypatch):
+    fake = FakePl()
+    monkeypatch.setattr(dashboard, "_run", fake)
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _all_on(pilot, app)
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("n")
+        await settle(pilot)
+        assert fake.gates() == [] and len(_rows(app)) == 4
 
 
 async def test_x_sends_back_with_notes_as_one_argument(monkeypatch):
@@ -189,6 +207,8 @@ async def test_failed_approve_shows_error_and_keeps_row(monkeypatch):
         await _all_on(pilot, app)
         refreshed.clear()
         await pilot.press("a")
+        await pilot.pause()
+        await pilot.press("y")
         await settle(pilot)
         assert any(m == "pl: card moved to Done" and kw.get("severity") == "error" for m, kw in told)
         assert len(_rows(app)) == 4
