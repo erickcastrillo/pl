@@ -1,6 +1,17 @@
 import json
 
+import pytest
+
 from pl import commands, config as C, dispatch, pods
+
+
+@pytest.fixture(autouse=True)
+def restore_config():
+    # every test here loads a throwaway profile; put pl.config back so later tests see the settings they set up
+    saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    yield
+    for k, v in saved.items():
+        setattr(C, k, v)
 
 
 def test_a_removed_sentence_is_recorded_on_approval(monkeypatch, tmp_path):

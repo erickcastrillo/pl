@@ -91,6 +91,7 @@ def _defaults():
     CAPS = {}             # [caps.<stage>] minutes, tokens ("2M", "500k" or a number): a stage's agent is stopped at the cap
     SYNC = {}
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    ACTIVITY = {}         # [activity] prompt_minutes, slow_factor, slow_minutes, wait_minutes, finished_minutes: slow-work warnings
     TRIGGERS = {}         # [triggers.<name>]
     CONNECTORS = {}       # [connectors.<name>]
     RETENTION = {"email_days": 90}  # [retention] email_days = 90
@@ -227,6 +228,7 @@ def _apply(g, t):
     if t.get("pipeline"):
         g["COLUMNS"] = g["PIPELINE"]["columns"]
     g["USAGE"] = dict(t.get("usage", {}))
+    g["ACTIVITY"] = dict(t.get("activity", {}))
     g["CAPS"] = parse_caps(t.get("caps", {}))
     g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))

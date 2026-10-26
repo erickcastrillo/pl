@@ -117,6 +117,9 @@ def open(key, severity, title, fix, cards=()):
                       "count": 1, "level": 0, "cards": cards}
             why = "open"
         else:
+            if a.get("acked") and (a.get("severity") != severity or sorted(a.get("cards") or []) != sorted(cards)):
+                a.pop("acked")
+                a["level"] = 0
             a.update(severity=severity, title=title, fix=fix, cards=cards, last_seen=now,
                      count=int(a.get("count") or 0) + 1)
             why = _step(a, now)
@@ -181,6 +184,45 @@ def listing(all=False):
     """Open alerts (all: resolved ones too), high severity first, then oldest first."""
     rows = [{"key": k, **v} for k, v in _load().items() if all or _live(v)]
     return sorted(rows, key=lambda a: (bool(a.get("resolved_at")), a.get("severity") != "high", a.get("first_seen") or 0))
+
+
+def shown():
+    """Open, unacknowledged alerts, newest first (the Alerts tab and header)."""
+    return sorted((r for r in listing() if not r.get("acked")), key=lambda a: -(a.get("first_seen") or 0))
+
+
+WATCHES = {
+    "account_parked": "parked accounts",
+    "accounts_all_out": "accounts out of credits",
+    "api_error": "agents stopped by API errors",
+    "card_unreadable": "cards with a broken pl metadata block",
+    "chat_unknown": "unknown chat users",
+    "connector_new_place": "connector sign-ins from a new place",
+    "connector_signin": "connector sign-ins",
+    "connector_tools": "connector tools",
+    "dep_broken": "unmerged prerequisites",
+    "exited_window": "agents that finished without moving their card",
+    "foreign_window": "tmux windows pl did not start",
+    "gh_hold": "the GitHub budget hold",
+    "loop_dead": "loops that burn no tokens",
+    "loop_failed": "loops that keep failing",
+    "loop_stale": "loops that stopped firing",
+    "near_cap": "cards near their token or time cap",
+    "permission_wait": "waiting agents",
+    "pr_person": "PRs that need a person",
+    "pr_waiting": "PRs waiting over 24 h",
+    "send_spike": "connector send spikes",
+    "stage_failed": "stages whose agent died",
+    "stage_unsafe": "unsafe stage settings",
+    "tmp_full": "temp folder space or inodes",
+    "trigger_cap": "triggers at their cap",
+    "trust": "folders an account does not trust",
+}
+
+
+def watching():
+    """What pl checks for, as one phrase list for the empty Alerts tab."""
+    return ", ".join(dict.fromkeys(WATCHES.values()))
 
 
 def cmd_alerts(a):

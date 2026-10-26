@@ -48,7 +48,7 @@ def from_toml(t) -> dict:
         return engineering()
     stages = {n: dict(s) for n, s in (t.get("stages") or {}).items() if isinstance(s, dict)}
     return {"name": t.get("name", "pipeline"), "template": t.get("template"), "columns": list(t.get("columns") or []),
-            "ui": _ui(t.get("ui")), "stages": stages}
+            "ui": _ui(t.get("ui")), "stages": stages, **({"pod": t["pod"]} if t.get("pod") else {})}
 
 
 def errors(p, connectors=None) -> list[str]:

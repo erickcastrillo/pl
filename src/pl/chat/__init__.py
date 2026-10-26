@@ -105,12 +105,24 @@ def adapter(name: str):
         if ad_type == "telegram":
             from pl.chat.telegram import Telegram
             return Telegram(name, cfg)
+        if ad_type == "slack":
+            from pl.chat.slack import Slack
+            return Slack(name, cfg)
+        if ad_type == "discord":
+            from pl.chat.discord import Discord
+            return Discord(name, cfg)
         raise KeyError(f"pl chat: unknown adapter {ad_type!r}")
     if name in ADAPTERS:
         return ADAPTERS[name]
     if name == "telegram":
         from pl.chat.telegram import Telegram
         return Telegram
+    if name == "slack":
+        from pl.chat.slack import Slack
+        return Slack
+    if name == "discord":
+        from pl.chat.discord import Discord
+        return Discord
     raise KeyError(f"pl chat: unknown connector or adapter {name!r}")
 
 

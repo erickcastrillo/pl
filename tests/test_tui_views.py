@@ -802,34 +802,99 @@ async def test_dashboard_header_shows_free_memory_and_a_red_warning_when_low():
         assert any("red" in str(s.style) for s in bar.spans if "LOW" in bar.plain[s.start:s.end])
 
 
-async def test_alerts_have_their_own_tab_and_k_acknowledges(monkeypatch):
+def _alert(key, severity="warn", ago=0, cards=None, **kw):
+    return {"key": key, "severity": severity, "title": f"title of {key}", "fix": f"fix for {key}", "first_seen": NOW.timestamp() - ago,
+            "last_seen": NOW.timestamp(), "count": 1, "cards": cards or [], **kw}
+
+
+async def test_alerts_tab_a_acknowledges_and_hides(monkeypatch):
     from pl import alerts
     from pl.tui import alerts as tui_alerts
     acked = []
     monkeypatch.setattr(alerts, "ack", lambda key: acked.append(key) or True)
     data = fake_data()
-    data["alerts"] = [{"key": "stage_failed:abcd1234:spec", "severity": "high", "title": "Card abcd1234: the spec agent died 3 times",
-                       "fix": "pl retry abcd1234", "first_seen": NOW.timestamp() - 7200, "last_seen": NOW.timestamp(), "count": 4}]
+    data["alerts"] = [_alert("stage_failed:abcd1234:spec", "high", 60, count=4), _alert("pr_waiting:abcd1234", ago=7200)]
     _fake_card_read(monkeypatch, [])
     app = PlApp(snapshot_provider=Provider(data))
+    told = []
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app)
         assert "ALERTS" not in screen_text(app)   # the Pipeline lists only cards; alerts live on their own tab
-        assert str(app.query_one("#activity-views", TabbedContent).get_tab("alerts").label) == "Alerts 1"
+        assert str(app.query_one("#activity-views", TabbedContent).get_tab("alerts").label) == "Alerts 2"
         app.action_tab("alerts")
         await pilot.pause()
         assert app.active_tab == "alerts"
-        text = screen_text(app)
-        for s in ("high 2h", "pl retry abcd1234", "×4"):
-            assert s in text, s
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
         assert app.query_one(tui_alerts.AlertsView)._current()[0] == "stage_failed:abcd1234:spec"
-        await pilot.press("k")
+        await pilot.press("a")
         await pilot.pause()
-        assert acked == ["stage_failed:abcd1234:spec"] and "acked" in screen_text(app)
-        data["alerts"] = []                       # resolved: the dispatcher's next read leaves it out
-        app.refresh_data()
+        assert acked == ["stage_failed:abcd1234:spec"] and any("hidden until" in m for m in told)
+        assert "title of stage_failed" not in screen_text(app) and "Alerts 1" in screen_text(app)
+        assert "Approve" not in screen_text(app)
+        await pilot.press("k")                    # the hidden alias
+        await pilot.pause()
+        assert acked[-1] == "pr_waiting:abcd1234" and "Alerts 0" in screen_text(app)
+
+
+async def test_alerts_tab_newest_first_with_cards(monkeypatch):
+    data = fake_data()
+    data["alerts"] = [_alert("k3", ago=10, cards=["o/r#3"]), _alert("k2", "high", ago=20, cards=["o/r#1", "o/r#2"]), _alert("k1", ago=30)]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert "none open" in screen_text(app) and "Alerts 0" in screen_text(app)
+        app.action_tab("alerts")
+        await settle(pilot)
+        text = screen_text(app)
+    assert text.index("title of k3") < text.index("title of k2") < text.index("title of k1")
+    assert "r#3" in text and "r#1, " in text
+    row = next(line for line in text.splitlines() if "title of k1" in line)
+    assert row.rstrip(" │").endswith("-") or " - " in row
+
+
+async def test_alerts_enter_shows_detail():
+    from pl.tui.alerts import AlertsView
+    data = fake_data()
+    data["alerts"] = [_alert("k1", "high", 3600, cards=["o/r#7"], count=4, details="the agent exited twice")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        app.query_one(AlertsView).query_one("DataTable").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        text = screen_text(app)
+    for s in ("high", "seen 4 times", "r#7", "the agent exited twice", "fix for k1"):
+        assert s in text, s
+
+
+async def test_alerts_empty_lists_watches():
+    from pl import alerts
+    data = fake_data()
+    data["alerts"] = []
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(240, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("alerts")
+        await settle(pilot)
+        text = " ".join(screen_text(app).split())
+    assert "No open alerts. pl watches for:" in text and "waiting agents" in text
+    assert alerts.WATCHES["permission_wait"] == "waiting agents"
+
+
+async def test_a_still_approves_outside_alerts(monkeypatch):
+    from pl.tui import needs as tui_needs
+    from pl.tui.review import ConfirmScreen
+    _fake_card_read(monkeypatch, [])
+    monkeypatch.setattr(tui_needs, "ReviewScreen", lambda *a, **kw: ConfirmScreen("review"))
+    data = fake_data()
+    data["alerts"] = [_alert("k1")]
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_cards(pilot, app, "4a000001aaaa")
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Approve the plan for 4a000001" in screen_text(app)
 
 
 def test_an_old_alert_title_with_a_cut_github_id_shows_repo_and_number():
@@ -2749,7 +2814,8 @@ def test_no_key_has_two_meanings_across_every_view_and_screen():
         meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]
         meanings.setdefault(b.key, {}).setdefault(meaning, []).append(cls.__name__)
     # H: the Ideas view's own harness key wins while it has focus; elsewhere H opens Home
-    assert {k: m for k, m in meanings.items() if len(m) > 1 and k != "H"} == {}
+    # a: acknowledges while focus is in the Alerts tab; everywhere else it approves
+    assert {k: m for k, m in meanings.items() if len(m) > 1 and k not in ("H", "a")} == {}
 
 
 # ---------- one "needs you" count ----------
@@ -3026,7 +3092,7 @@ async def test_an_empty_alerts_tab_says_how_alerts_arrive(monkeypatch):
         assert all(line in text for line in empty_state("alerts"))
         told = []
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
-        await pilot.press("k")
+        await pilot.press("a")
         await pilot.pause()
         assert told == ["select an alert to acknowledge"]
 
@@ -3089,6 +3155,27 @@ def _snap(disp="running", working=0, needs=None, summary="", prof="acme: ok (0 r
 def test_status_sentence(snap, stopped, sentence):
     from pl.tui.chrome import status_sentence
     assert status_sentence(snap, stopped) == sentence
+
+
+def _one_manual_card_data(alerts):
+    from pl.tui.needs import needs_you_count
+    data = fake_data()
+    data["snapshot"]["rows"] = [_card("c0000003aaaa", "Host DB proxy", "Manual", auto=False, hours=30)]
+    data["alerts"] = alerts
+    assert needs_you_count(data) == 1
+    return data
+
+
+def test_header_counts_alerts_and_high_needs_you():
+    from pl.tui.chrome import header_text
+    plain = header_text(_one_manual_card_data([_alert("k1", "high"), _alert("k2")])).plain
+    assert "alerts 2" in plain and "needs you 2" in plain
+
+
+def test_header_without_alerts_is_unchanged():
+    from pl.tui.chrome import header_text
+    plain = header_text(_one_manual_card_data([])).plain
+    assert "alerts" not in plain and "needs you 1" in plain
 
 
 def test_header_never_shows_the_raw_profile_line():

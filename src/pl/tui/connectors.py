@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from rich.text import Text
@@ -8,12 +9,15 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
-from pl import util
+from pl import chat, util
 from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run  # the one subprocess runner here; tests fake it
-HINT = "n new connector · t test · R revoke"
+HINT = "n new connector · t test · R revoke (t works on chat rows too)"
+NEW_CHAT = "new-chat"
+CHAT_NOTE = "Chat connectors send approvals, alerts and the digest to Telegram, Slack or Discord."
+CHAT_ADD_HELP = "pl chat add telegram|slack|discord --token-env VAR --allow ID --name NAME"
 
 
 def _format_expiry(exp):
@@ -104,6 +108,9 @@ class ConnectorsPanel(Widget):
     #connectors-hint { height: auto; color: $text-muted; }
     #connectors-table { height: auto; max-height: 12; }
     #connectors-notice { height: auto; color: $text-muted; display: none; }
+    #chat-title { height: auto; margin-top: 1; text-style: bold; }
+    #chat-note { height: auto; color: $text-muted; }
+    #chat-table { height: auto; max-height: 8; }
     """
     BINDINGS = [
         Binding("n", "new", "new connector"),
@@ -114,16 +121,85 @@ class ConnectorsPanel(Widget):
     def __init__(self):
         super().__init__()
         self.items = []
+        self.chat = {}
+        self.chat_tests = {}
 
     def compose(self):
         yield Static(Text(HINT), id="connectors-hint")
         yield Static("", id="connectors-notice")
         yield DataTable(cursor_type="row", id="connectors-table", zebra_stripes=True)
+        yield Static("Chat connectors · shared by all profiles on this machine", id="chat-title")
+        yield Static("", id="chat-note")
+        yield DataTable(cursor_type="row", id="chat-table", zebra_stripes=True)
 
     def on_mount(self):
-        t = self.query_one(DataTable)
-        t.add_columns("name", "role", "teams", "access", "status", "expiry", "tier warning")
+        self.query_one("#connectors-table", DataTable).add_columns(
+            "name", "role", "teams", "access", "status", "expiry", "tier warning")
+        self.query_one("#chat-table", DataTable).add_columns("name", "adapter", "allowed", "routes", "last test")
         self.rescan()
+        self.rescan_chat()
+
+    def rescan_chat(self):
+        def run():
+            conns = {}
+            try:
+                r = _run(["pl", "chat", "list", "--json"], capture_output=True, text=True)
+                data = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else {}
+                found = data.get("connectors") if isinstance(data, dict) else None
+                conns = found if isinstance(found, dict) else {}
+            except Exception:
+                conns = {}
+            self.app.call_from_thread(self._fill_chat, conns)
+
+        self.run_worker(run, thread=True, group="chat-scan", exclusive=True)
+
+    def _fill_chat(self, conns):
+        self.chat = {n: c for n, c in conns.items() if isinstance(c, dict)}
+        table = self.query_one("#chat-table", DataTable)
+        table.clear()
+        self.query_one("#chat-note", Static).update(Text("" if self.chat else CHAT_NOTE, style="dim"))
+        if not self.chat:
+            table.add_row(new_row("chat connector"), *[""] * 4, key=NEW_CHAT)
+            return
+        for name, cfg in self.chat.items():
+            result = self.chat_tests.get(name, "not tested")
+            style = {"pass": "green", "fail": "red"}.get(result, "dim")
+            table.add_row(
+                Text(util.mask(name)),
+                Text(str(cfg.get("adapter", ""))),
+                Text(", ".join(str(a) for a in cfg.get("allow") or [])),
+                Text(", ".join(cfg.get("routes") or ["gates"])),
+                Text(result, style=style),
+                key="chat:" + name,
+            )
+
+    def _selected_chat(self):
+        t = self.query_one("#chat-table", DataTable)
+        if not self.chat or not 0 <= t.cursor_row < len(self.chat):
+            return None
+        return list(self.chat)[t.cursor_row]
+
+    def _chat_test(self, name):
+        cfg = self.chat[name]
+        m = chat.VAR_RE.match(str(cfg.get("token", "")))
+        cmd = f"pl chat test {name}"
+        if m and m.group(1) not in os.environ:
+            var = m.group(1)
+            self.chat_tests[name] = "fail"
+            self._fill_chat(self.chat)
+            self.app.notify(f"{var} is not set: export {var}=… in the shell that starts pl, then restart pl · {cmd}",
+                            severity="error", markup=False)
+            return
+
+        def run():
+            r = _run(["pl", "chat", "test", name], capture_output=True, text=True)
+            self.chat_tests[name] = "pass" if r.returncode == 0 else "fail"
+            out = r.stdout.strip() or r.stderr.strip() or f"test finished ({r.returncode})"
+            sev = "information" if r.returncode == 0 else "error"
+            self.app.call_from_thread(self._fill_chat, self.chat)
+            self.app.call_from_thread(self.app.notify, f"{util.mask(out)} · {cmd}", severity=sev, markup=False)
+
+        self.run_worker(run, thread=True, group="connectors-action")
 
     def rescan(self):
         def run():
@@ -149,7 +225,7 @@ class ConnectorsPanel(Widget):
         notice = self.query_one("#connectors-notice", Static)
         notice.update(Text("pl connectors is not available in this pl", style="dim"))
         notice.display = True
-        self.query_one(DataTable).display = False
+        self.query_one("#connectors-table", DataTable).display = False
 
     def _show_error(self, err):
         self.app.notify(err, severity="error", markup=False)
@@ -157,7 +233,7 @@ class ConnectorsPanel(Widget):
     def _fill(self, items):
         self.items = items
         notice = self.query_one("#connectors-notice", Static)
-        table = self.query_one(DataTable)
+        table = self.query_one("#connectors-table", DataTable)
         notice.display = False
         table.display = True
         table.clear()
@@ -189,17 +265,26 @@ class ConnectorsPanel(Widget):
             )
 
     def _selected_item(self):
-        t = self.query_one(DataTable)
+        t = self.query_one("#connectors-table", DataTable)
         return self.items[t.cursor_row - 1] if 0 < t.cursor_row <= len(self.items) else None
 
     def on_data_table_row_selected(self, m):
-        if m.row_key.value == NEW_ROW:
+        if m.row_key.value == NEW_CHAT:
+            self.app.notify(CHAT_ADD_HELP, markup=False)
+        elif m.row_key.value == NEW_ROW:
             self.action_new()
 
     def action_new(self):
         self.app.push_screen(AddConnectorScreen(), lambda added: added and self.rescan())
 
     def action_test(self):
+        if self.query_one("#chat-table", DataTable).has_focus:
+            name = self._selected_chat()
+            if name is None:
+                self.app.notify("nothing selected", severity="warning")
+            else:
+                self._chat_test(name)
+            return
         item = self._selected_item()
         if not item:
             self.app.notify("nothing selected", severity="warning")

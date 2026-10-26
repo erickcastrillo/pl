@@ -323,3 +323,34 @@ def test_dispatch_once_calls_worktrees_sweep(monkeypatch):
 
     assert len(swept) == 1
     assert swept[0] == (test_cards, False)
+
+
+def _gh_views(runner):
+    return [cmd for cmd, _ in runner.commands if cmd[:3] == ["gh", "pr", "view"]]
+
+
+def test_sweep_matches_by_name_before_asking_github_about_other_cards(wt_env):
+    # 2026-10-26: one sweep asked GitHub about every Done card's PR to find each worktree's card (hundreds of calls a pass)
+    from pl import worktrees
+    wt_path = C.WORKTREES_DIR / "repo-pl-c1"
+    wt_path.mkdir()
+    wt_env.worktrees = [{"path": wt_path, "branch": "pl/c1"}]
+    others = [{"id": f"o{i}", "title": f"Other {i}", "list_id": "Done",
+               "metadata": {"pr_urls": [f"https://github.com/org/repo/pull/{100 + i}"]}} for i in range(50)]
+    mine = {"id": "c1", "title": "C1", "list_id": "In progress", "metadata": {"branch": "pl/c1"}}
+    worktrees.sweep(others + [mine])
+    assert _gh_views(wt_env) == []
+
+
+def test_a_merged_pr_is_asked_about_once_across_passes(wt_env, monkeypatch):
+    from pl import worktrees
+    wt_path = C.WORKTREES_DIR / "repo-pl-c1"
+    wt_path.mkdir()
+    wt_env.worktrees = [{"path": wt_path, "branch": "pl/c1"}]
+    url = "https://github.com/org/repo/pull/1"
+    wt_env.pr_views[url] = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z", "headRefName": "pl/c1"}
+    monkeypatch.setattr(worktrees, "_is_dirty", lambda p: True)   # kept, so the next pass looks at it again
+    card = {"id": "c1", "title": "C1", "list_id": "Done", "metadata": {"branch": "pl/c1", "pr_urls": [url]}}
+    worktrees.sweep([card])
+    worktrees.sweep([card])
+    assert len(_gh_views(wt_env)) == 1

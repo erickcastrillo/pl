@@ -277,7 +277,17 @@ ENTRIES = [
        "pl doctor", "pl doctor"),
     _e("2026-10-26.67", "Every console tab says what it is for and how to start when it is empty",
        "every list tab: ? opens its help", "pl"),
-    _e("2026-10-26.68", "Loops read as sentences, with a row to start one from a template",
+    _e("2026-10-26.68", "Builds can run only the tests a change can affect",
+       "pl tests affected --json", "pl tests affected"),
+    _e("2026-10-26.69", "Alerts tab: newest first with cards; a hides one until it changes",
+       "Alerts tab; header: alerts N", "pl alerts"),
+    _e("2026-10-26.70", "Activity levels: errors and warnings with counts",
+       "Activity tab: f cycles all, errors, warnings, needs you, dispatcher, loops", "pl activity --level warning"),
+    _e("2026-10-26.71", "Chat connectors in the console", "Extend → Connectors: Chat connectors; t tests one",
+       "pl chat list"),
+    _e("2026-10-26.72", "A built-in marketing pod: writer, editor and analyst rules", "Extend: pods",
+       "pl pods show marketing"),
+    _e("2026-10-26.73", "Loops read as sentences, with a row to start one from a template",
        "Automate → Loops: Enter on + New loop from a template", "pl loops add --help"),
 ]
 

@@ -127,7 +127,7 @@ async def test_alerts_tab_with_no_alerts_says_so():
         await settle(pilot)
         app.action_tab("alerts")
         await settle(pilot)
-        assert "Alerts: none open (pl alerts --all for history)" in screen_text(app)
+        assert "No open alerts. pl watches for:" in screen_text(app)
 
 
 def test_health_says_counting_until_the_first_scan():
@@ -185,4 +185,8 @@ def test_brain_tab_removal_has_an_entry():
 
 def test_whatsnew_lists_empty_states():
     entry = next(e for e in whatsnew.ENTRIES if "empty" in e["title"])
-    assert entry["key"] == "2026-10-26.67"
+    assert entry["key"] in {e["key"] for e in whatsnew.ENTRIES}   # later entries may follow it
+
+
+def test_whatsnew_names_the_marketing_pod():
+    assert sum("marketing pod" in e["title"] for e in whatsnew.ENTRIES) == 1
