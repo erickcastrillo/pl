@@ -11,7 +11,7 @@ import pytest
 from rich.console import Console
 from textual.widgets import DataTable, Select, Tabs, TabbedContent
 
-from pl import cli, trackers, watch
+from pl import cli, harnesses, trackers, watch
 from pl import config as C
 from pl.tui import app as tui_app
 from pl.tui import cards as tui_cards
@@ -38,6 +38,7 @@ def fake_home(tmp_path, monkeypatch):
     C.load()
     _accounts(tmp_path)
     monkeypatch.setattr(tui_prs, "_run", FakeGh(), raising=False)          # the PRs tab never reaches the real gh
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", ""))   # no agent window to read
     monkeypatch.setattr(tui_prs, "intent_text", lambda url, body: f"# What {url} was meant to do", raising=False)
     yield tmp_path
     for k, v in saved.items():
