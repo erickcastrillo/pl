@@ -256,7 +256,9 @@ ENTRIES = [
        "ctrl+p, type an action like retry", "pl --help"),
     _e("2026-10-26.57", "New loop starts from a template gallery: what each does and needs",
        "Loops tab: n, then pick a template or Blank loop", "pl loops add --template inbox-triage"),
-    _e("2026-10-26.58", "Alerts tab: newest first with cards; a hides one until it changes",
+    _e("2026-10-26.58", "Editing a loop uses the same form as adding one",
+       "Loops tab: e opens the add form filled in, with the skill list and schedule check", "pl loops edit"),
+    _e("2026-10-26.59", "Alerts tab: newest first with cards; a hides one until it changes",
        "Alerts tab; header: alerts N", "pl alerts"),
 ]
 
