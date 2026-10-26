@@ -218,6 +218,7 @@ ENTRIES = [
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
     _e("2026-10-25.38", "Auto-merge loop: pl merges what passes every rule",
        "Loops tab: auto-merge; [loops.auto-merge] enabled, every, merge_method, max_per_pass", "pl merges --dry-run"),
+    _e("2026-10-25.39", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
 ]
 
 

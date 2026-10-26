@@ -89,7 +89,7 @@ async def test_home_shows_one_row_per_pipeline_with_bold_needs_you():
         assert app.query(HomeView)
         home_view = app.query_one(HomeView)
         table = home_view.query_one("DataTable")
-        assert len(table.ordered_rows) == 3
+        assert len(table.ordered_rows) == 4   # three pipelines and the + New pipeline row
         cell = table.get_cell_at((0, 3))
         assert getattr(cell, "style", None) and "bold" in str(cell.style)
 
@@ -190,3 +190,39 @@ def test_enter_on_home_opens_the_pipeline(monkeypatch):
         monkeypatch.setattr(view, "selected", lambda name=name: {"name": name})
         view.action_select()
     assert calls == [("switch", "sales"), ("tab", "cards")]
+
+
+async def test_home_has_a_new_pipeline_row_after_the_pipelines():
+    data = {"home": _fake_summaries()}
+    from textual.app import App
+
+    class _Host(App):
+        def compose(self):
+            yield HomeView()
+
+    async with _Host().run_test(size=(176, 48)) as pilot:
+        view = pilot.app.query_one(HomeView)
+        view.show(data)
+        await pilot.pause()
+        table = view.query_one("DataTable")
+        assert str(table.get_cell_at((3, 0))) == "+ New pipeline"
+        table.move_cursor(row=3)
+        assert view.selected() is None
+
+
+async def test_enter_on_the_new_pipeline_row_opens_the_wizard():
+    from textual.app import App
+    from pl.tui.newpipeline import NewPipelineScreen
+
+    class _Host(App):
+        def compose(self):
+            yield HomeView()
+
+    async with _Host().run_test(size=(176, 48)) as pilot:
+        view = pilot.app.query_one(HomeView)
+        view.show({"home": _fake_summaries()})
+        await pilot.pause()
+        view.query_one("DataTable").move_cursor(row=3)
+        view.action_select()
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, NewPipelineScreen)
