@@ -302,7 +302,7 @@ async def test_pipeline_keys_jump_and_open_off_the_ui_thread(monkeypatch):
     monkeypatch.setattr(app, "open_url", lambda url, **kw: opened.append(url))
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "4a000001aaaa")
-        await pilot.press("w")
+        await pilot.press("W")
         await pilot.press("c")
         await settle(pilot)
     assert calls and calls[0][2] is not threading.main_thread()
