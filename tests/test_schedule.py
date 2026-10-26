@@ -47,3 +47,16 @@ def test_quiet_hours_exclude_20_00_on_a_weekday():
 def test_bad_hours_are_refused():
     with pytest.raises(ValueError):
         schedule.parse_hours("late")
+
+
+@pytest.mark.parametrize("text,words", [
+    ("30m", "every 30 minutes"), ("1m", "every 1 minute"), ("hourly", "every hour"), ("120m", "every 2 hours"),
+    ("daily 09:00", "every day at 09:00"), ("weekdays 09:00", "weekdays at 09:00"), ("cron:0 9 * * 1", "custom: 0 9 * * 1"),
+])
+def test_in_words_for_each_form(text, words):
+    assert schedule.in_words(text) == words
+
+
+def test_in_words_keeps_text_it_cannot_parse():
+    assert schedule.in_words("every tuesday") == "every tuesday"
+    assert schedule.in_words("") == "always on"
