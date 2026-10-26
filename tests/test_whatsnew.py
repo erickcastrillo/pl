@@ -186,3 +186,7 @@ def test_brain_tab_removal_has_an_entry():
 def test_whatsnew_lists_empty_states():
     entry = next(e for e in whatsnew.ENTRIES if "empty" in e["title"])
     assert entry["key"] in {e["key"] for e in whatsnew.ENTRIES}   # later entries may follow it
+
+
+def test_whatsnew_names_the_marketing_pod():
+    assert sum("marketing pod" in e["title"] for e in whatsnew.ENTRIES) == 1

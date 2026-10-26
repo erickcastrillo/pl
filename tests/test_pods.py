@@ -1,6 +1,7 @@
 """Pods: [pods.<name>] config, the built-in engineering pod, pl pods list|show."""
 import argparse
 import json
+import re
 import sys
 
 import pytest
@@ -80,10 +81,44 @@ def test_show_engineering_json_lists_its_coding_rules_and_the_stage_skills(fake_
 def test_list_names_every_pod_and_an_unknown_pod_exits_2(fake_home, capsys):
     _profile(fake_home, "work")
     pods.cmd_pods(argparse.Namespace(pods_cmd="list", json=False))
-    assert capsys.readouterr().out.split() == ["engineering"]
+    assert capsys.readouterr().out.split() == ["engineering", "marketing"]
     with pytest.raises(SystemExit) as e:
         pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="nope", json=False))
     assert e.value.code == 2
+    assert "marketing" in capsys.readouterr().err
+
+
+def test_list_json_includes_marketing_next_to_engineering(fake_home, capsys):
+    _profile(fake_home, "work")
+    pods.cmd_pods(argparse.Namespace(pods_cmd="list", json=True))
+    assert json.loads(capsys.readouterr().out) == ["engineering", "marketing"]
+
+
+def _marketing_sections():
+    text = (pods.BUILTIN_DIR / "marketing" / "pod.md").read_text()
+    return {h: body.splitlines() for h, body in re.findall(r"^## (\w+)\n(.*?)(?=^## |\Z)", text, re.S | re.M)}
+
+
+def test_show_marketing_prints_its_path_and_three_role_sections(fake_home, capsys):
+    _profile(fake_home, "work")
+    pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="marketing", json=False))
+    assert "pods_builtin/marketing/pod.md" in capsys.readouterr().out
+    sections = _marketing_sections()
+    assert list(sections) == ["Writer", "Editor", "Analyst"]
+    assert all(0 < sum(ln.startswith("- ") for ln in lines) <= 5 for lines in sections.values())
+
+
+def test_the_editor_flags_claims_and_prices_and_never_removes_them():
+    rules = [ln for ln in _marketing_sections()["Editor"] if ln.startswith("- ")]
+    assert sum(all(w in r for w in ("factual claim", "price or offer", "owner", "never remove or confirm"))
+               for r in rules) == 1
+
+
+def test_show_marketing_json_lists_only_pl_stage(fake_home, capsys):
+    _profile(fake_home, "work")
+    pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="marketing", json=True))
+    skills_ = json.loads(capsys.readouterr().out)["skills"]
+    assert skills_ == ["pl-stage"] and not set(skills_) & set(pods.ENGINEERING_SKILLS)
 
 
 @pytest.fixture
@@ -380,3 +415,31 @@ def test_show_json_includes_approval_rate_edits_per_draft_and_escalations(fake_h
     pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="sales", json=True))
     m = json.loads(capsys.readouterr().out)["metrics"]
     assert m == {"approval_rate": 0.75, "edits_per_draft": 4 / 3, "escalations": 2, "window_days": 30}
+
+
+def test_a_marketing_launch_leaves_out_the_engineering_skills(fake_env, monkeypatch):
+    _library_skill(fake_env, "pl-stage")
+    _library_skill(fake_env, "pl-plan")
+    monkeypatch.setattr(C, "POD", "marketing")
+    monkeypatch.setattr(C, "WORK_DIR", str(fake_env["home"]))
+    claude = harnesses.get("claude")
+    assert "/pl:pl-plan" not in harnesses.launch_script(claude, None, "/pl-plan x", "sid", "label")
+    assert "/pl:pl-stage" in harnesses.launch_script(claude, None, "/pl-stage x", "sid", "label")
+
+
+def test_rule_add_then_rollback_of_the_builtin_marketing_pod(fake_env, capsys):
+    shipped = (pods.BUILTIN_DIR / "marketing" / "pod.md").read_text()
+    before = pods.rules(pods.find("marketing"))
+    assert pods.cmd_pods(args(pods_cmd="rule", pod="marketing", text="Never promise results")) == 0
+    after = pods.rules(pods.find("marketing"))
+    assert after == before + ["Never promise results"]
+    assert pods.cmd_pods(args(pods_cmd="rollback", pod="marketing", to=1)) == 0
+    assert pods.rules(pods.find("marketing")) == before
+    assert pods.pod_file("marketing").read_text() == shipped
+    assert [v["n"] for v in pods.history("marketing")] == [1, 2, 3]
+
+
+def test_rule_add_to_a_configured_pod_records_no_builtin_version(fake_env, monkeypatch):
+    monkeypatch.setattr(C, "PODS", {"sales": {}})
+    pods.cmd_pods(args(pods_cmd="rule", pod="sales", text="Never offer discounts"))
+    assert [v["note"] for v in pods.history("sales")] == ["rule: Never offer discounts"]

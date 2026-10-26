@@ -265,3 +265,22 @@ def test_add_with_board_mcp_still_writes_type_mcp(fake_home):
     pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "board": "mcp:boards"}))
     written = tomllib.loads((fake_home / ".pl-sales" / "config.toml").read_text())
     assert written["tracker"] == {"type": "mcp", "server": "boards"}
+
+
+def test_a_template_pod_is_written_to_the_new_pipeline(fake_home, monkeypatch):
+    from pl import pods
+    _profile(fake_home, "dev")
+    C.load("dev")
+    fake = {**pipeline.templates()["new-client"], "name": "marketing", "pod": "marketing"}
+    monkeypatch.setattr(pipeline, "templates", lambda: {"marketing": fake})
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "name": "mkt", "template": "marketing"}))
+    assert tomllib.loads((fake_home / ".pl-mkt" / "config.toml").read_text())["pipeline"]["pod"] == "marketing"
+    C.load("mkt")
+    assert pods.current()["name"] == "marketing"
+
+
+def test_an_engineering_template_writes_no_pod_key(fake_home):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_add_args())
+    assert "pod" not in tomllib.loads((fake_home / ".pl-sales" / "config.toml").read_text())["pipeline"]

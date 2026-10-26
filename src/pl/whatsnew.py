@@ -285,6 +285,8 @@ ENTRIES = [
        "Activity tab: f cycles all, errors, warnings, needs you, dispatcher, loops", "pl activity --level warning"),
     _e("2026-10-26.71", "Chat connectors in the console", "Extend → Connectors: Chat connectors; t tests one",
        "pl chat list"),
+    _e("2026-10-26.72", "A built-in marketing pod: writer, editor and analyst rules", "Extend: pods",
+       "pl pods show marketing"),
 ]
 
 
