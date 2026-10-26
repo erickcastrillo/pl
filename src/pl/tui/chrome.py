@@ -10,7 +10,7 @@ from pl import config as C
 
 GROUPS = [
     ("dashboard", "Dashboard", [("dashboard", "Dashboard")]),
-    ("assistant", "Assistant", [("assistant", "Assistant"), ("brain", "Brain")]),
+    ("assistant", "Assistant", [("assistant", "Assistant")]),
     ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
     ("review", "Review", [("waiting", "Waiting"), ("prs", "Pull requests")]),
     ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
@@ -27,7 +27,7 @@ TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 # What each bound action means to the person at the keys. A key may serve several actions only when they share a meaning;
 # tests/test_tui_views.py fails on a key with two, and on a binding whose action is missing here.
 MEANING = {
-    "tab": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
+    "tab": "go to tab", "brain": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
     "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
     "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher",
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
@@ -44,12 +44,13 @@ MEANING = {
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
     "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
     "sub_tab": "switch view", "sub_letter": "switch view",
+    "get_started": "get started step", "collapse_start": "collapse", "dismiss_start": "dismiss",
 }
 
 # The bound actions a view shows first in the footer, so the console-wide keys are the ones cut at 80x24.
 MAIN_KEYS = {
     "cards": ["review('approve')", "move_column", "retry"], "ideas": ["new", "edit_brief"], "dashboard": ["standup", "copy"],
-    "assistant": ["mode", "file_idea"], "brain": ["mode", "undo"], "prs": ["merge"], "loops": ["pause", "run_now", "edit"],
+    "assistant": ["mode", "file_idea"], "prs": ["merge"], "loops": ["pause", "run_now", "edit"],
     "subagents": ["copy"], "activity": ["next_filter", "copy"], "alerts": ["ack"], "settings": ["save", "test"],
     "home": ["select"],
 }
@@ -78,7 +79,6 @@ HELP = {
     "models": "Local models: t test, s set.",
     "extensions": "Hooks, plugins and other extensions of every account.",
     "subagents": "Running: agents working in the background and what each is doing.",
-    "brain": "One read-only brain session per machine, for questions across your pipelines.",
     "home": "Your pipelines, one row each. Press Enter to open one.",
 }
 
@@ -94,7 +94,6 @@ EMPTY = {
     "subagents": ("An agent's background task.", None, None),
     "dashboard": ('n on Ideas, or pl idea "..."', "n", "ideas"),
     "home": ("pl setup adds a pipeline.", None, None),
-    "brain": ("Type a question and press Enter.", None, None),
 }
 
 
@@ -139,10 +138,11 @@ def show_first_heading(t, is_item):
 
 
 def tabs():
-    """The views this console shows: Home when >= 2 profiles have config.toml, less Assistant when disabled."""
+    """The views this console shows: Home when >= 2 profiles have config.toml or the Get started checklist is wanted, less Assistant when disabled."""
+    from pl.tui import getstarted
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
     return [(vid, name) for vid, name in TABS
-            if (vid != "home" or count >= 2) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
 
 
 def groups():
