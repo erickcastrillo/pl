@@ -218,7 +218,21 @@ ENTRIES = [
        "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)", "pl help --json"),
     _e("2026-10-25.38", "Auto-merge loop: pl merges what passes every rule",
        "Loops tab: auto-merge; [loops.auto-merge] enabled, every, merge_method, max_per_pass", "pl merges --dry-run"),
-    _e("2026-10-25.39", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
+    _e("2026-10-25.39", "pl mcp serve --stdio: pl's read commands as MCP tools for an agent session",
+       "Activity tab marks what an agent session did as \"agent session (pl mcp serve)\"", "pl mcp serve --stdio"),
+    _e("2026-10-25.40", "Custom loops on any harness, on a schedule", "Loops tab: n add, e p g d w",
+       "pl loops add --template stale-cards"),
+    _e("2026-10-25.41", "Settle a sync conflict in one command", "pl alerts: the sync-conflict alert names it",
+       "pl sync resolve <card> --keep remote"),
+    _e("2026-10-25.42", "Board backup to git: board.json every 5 minutes",
+       "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)", "pl alerts"),
+    _e("2026-10-25.43", "pl pulls people's GitHub edits onto the local board and alerts on conflicts",
+       "dispatcher: every 5 min with [sync] github; conflicts in pl alerts", "pl sync now"),
+    _e("2026-10-25.44", "The merge loop asks a model about UI and performance changes",
+       "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs", "pl merges --dry-run"),
+    _e("2026-10-25.45", "Skills are grouped: pl's stage skills, your library, each account",
+       "Settings tab, Skills section: origin and used by on every row", "pl skills list"),
+    _e("2026-10-25.46", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
 ]
 
 

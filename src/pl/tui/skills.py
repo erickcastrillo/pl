@@ -11,7 +11,8 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Markdown, Select, Static, TextArea
 
-from pl import skills
+from pl import config as C
+from pl import skill_sources, skills
 from pl.tui.extensions import TargetScreen
 from pl.tui.review import ConfirmScreen
 
@@ -19,6 +20,50 @@ _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests
 HINT = ("e edit · E $EDITOR · n new · d delete (to .pl-trash) · S share to the library · l link a library skill "
         "to an account · I install · u update check · plugin files are read-only")
 DIFF_LINES = 30
+
+
+def _origin_label(it, builtin, recs):
+    if builtin:
+        return "built in"
+    rec = recs.get(it["name"])
+    if rec and it["account"] == skills.LIBRARY:
+        return f"GitHub {rec['repo']}@{rec['sha'][:7]}"
+    if it["origin"] == "plugin":
+        return "plugin"
+    if it["origin"] == "omc":
+        return "oh-my-claude"
+    return "library link" if it["library"] else "you"
+
+
+def grouped(items):
+    """[(heading, [row, ...])]: the scan items under pl's stage skills, your library and one heading per account.
+    Each row is the item plus origin_label and used_by."""
+    builtins, recs, used = set(skills.builtin_names()), skill_sources.records(), {}
+
+    def users(it):
+        if it["kind"] != "skill":
+            return ""
+        if it["name"] not in used:
+            try:
+                used[it["name"]] = ", ".join(skill_sources.users(it["name"]))
+            except Exception:  # noqa: BLE001 - a broken pod file must not empty the list
+                used[it["name"]] = ""
+        return used[it["name"]]
+
+    def row(it):
+        is_builtin = it["account"] == skills.LIBRARY and it["name"] in builtins
+        return {**it, "origin_label": _origin_label(it, is_builtin, recs), "used_by": users(it)}
+
+    stage = [row(i) for i in items if i["account"] == skills.LIBRARY and i["name"] in builtins]
+    mine = [row(i) for i in items if i["account"] == skills.SHARED
+            or (i["account"] == skills.LIBRARY and i["name"] not in builtins)]
+    groups = [("pl's stage skills", stage), ("Your library", mine)]
+    for account, _ in skills.sources():
+        if account == skills.SHARED:
+            continue
+        harness = C.ACCOUNTS.get(account, {}).get("harness", "")
+        groups.append((f"{account} ({harness})" if harness else account, [row(i) for i in items if i["account"] == account]))
+    return [(h, rs) for h, rs in groups if rs]
 
 
 class PromptScreen(ModalScreen):
@@ -145,6 +190,7 @@ class SkillsView(Widget):
     def __init__(self):
         super().__init__()
         self.items = []
+        self.rows = []
 
     def compose(self):
         yield Static(Text(HINT), id="skills-hint")
@@ -154,35 +200,41 @@ class SkillsView(Widget):
                 yield Markdown("", id="skills-preview")
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("name", "account", "kind", "origin", "library", "description")
+        self.query_one(DataTable).add_columns("name", "kind", "origin", "used by", "linked", "description")
         self.rescan()
 
     def rescan(self):
         def run():
             try:
-                items = skills.scan()
+                groups = grouped(skills.scan())
             except (SystemExit, Exception) as e:  # noqa: BLE001 - a worker that raises kills the app
                 self.app.call_from_thread(self.app.notify, str(e), severity="error", markup=False)
                 return
-            self.app.call_from_thread(self._fill, items)
+            self.app.call_from_thread(self._fill, groups)
         self.run_worker(run, thread=True, group="skills-scan", exclusive=True)
 
-    def _fill(self, items):
+    def _fill(self, groups):
         t = self.query_one(DataTable)
         keep = t.cursor_row
         t.clear()
-        self.items = items
-        for i, it in enumerate(items):
-            lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
-            t.add_row(Text(it["name"]), Text(it["account"]), Text(it["kind"]), Text(it["origin"]), Text(lib),
-                      Text(it["description"][:80]), key=str(i))
-        if items:
-            t.move_cursor(row=min(keep, len(items) - 1))
+        self.rows = []
+        for n, (heading, rows) in enumerate(groups):
+            t.add_row(Text(heading, style="bold"), "", "", "", "", "", key=f"h{n}")
+            self.rows.append(None)
+            for it in rows:
+                lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
+                t.add_row(Text(it["name"]), Text(it["kind"]), Text(it["origin_label"]), Text(it["used_by"]), Text(lib),
+                          Text(it["description"][:80]), key=f"r{len(self.rows)}")
+                self.rows.append(it)
+        self.items = [r for r in self.rows if r]
+        if self.rows:
+            row = min(keep, len(self.rows) - 1)
+            t.move_cursor(row=row + 1 if self.rows[row] is None and row + 1 < len(self.rows) else row)
         self._preview()
 
     def _item(self):
         t = self.query_one(DataTable)
-        return self.items[t.cursor_row] if t.row_count and t.cursor_row < len(self.items) else None
+        return self.rows[t.cursor_row] if t.row_count and t.cursor_row < len(self.rows) else None
 
     def _preview(self):
         it = self._item()

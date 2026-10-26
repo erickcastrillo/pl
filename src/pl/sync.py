@@ -203,8 +203,33 @@ def _replay(limit):
             "error": error}
 
 
+PULL_EVERY = 300   # seconds between the dispatcher's pulls (one board read each)
+
+
+def _pull_stamp():
+    return C.STATE_DIR / "sync-pull.json"
+
+
+def pull_due():
+    at = board._load(_pull_stamp()).get("at")
+    return not isinstance(at, (int, float)) or not 0 <= github._clock() - at < PULL_EVERY   # a stamp from the future (the clock moved back) is due
+
+
+def pull_ok():
+    return board._load(_pull_stamp()).get("ok") is True
+
+
 def pull():
     """Take the GitHub edits no local change competes with; keep the local value, save GitHub's and alert on a clash."""
+    at = github._clock()
+    board._save(_pull_stamp(), {"at": at, "ok": False})   # every outcome, reserve and error too, counts for the window
+    out = _pull_once()
+    if out["stopped_because"] == "done":
+        board._save(_pull_stamp(), {"at": at, "ok": True})
+    return out
+
+
+def _pull_once():
     out = {"pulled": 0, "conflicts": [], "stopped_because": "done", "error": None}
     rem, lim, _ = _reading()
     if rem is not None and rem < ghquota.RESERVE * lim:
@@ -229,17 +254,55 @@ def _pull(out):
     lnames = {v: k for k, v in local.columns().items()}
     by_gid = {gid: lid for lid, gid in _state()["ids"].items()}
     base = _load_base()
-    pending = {}
+    pending, creating = {}, set()
     for e in outbox.entries():
         pending.setdefault(e["card"], set()).update("column" if k == "list_id" else k for k in e["fields"])
+        if e["op"] == "create":
+            creating.add(e["fields"].get("title"))
     try:
         for g in gcards:
             lid = by_gid.get(g["id"])
             if lid is not None:
                 _pull_card(local, lid, g, gnames, lnames, base.setdefault(lid, {}), pending.get(lid, ()), out)
+            elif g["title"] not in creating:   # else the replay's create is in flight: its card is already here
+                _create_local(local, g, gnames, base)
+                out["pulled"] += 1
+        if gcards:   # an empty read may be a wrong project, not a board with no cards
+            _flag_gone(local, {g["id"] for g in gcards}, out)
     finally:
         _save_base(base)
     return out
+
+
+def _create_local(local, g, gnames, base):
+    """Add a card people made on GitHub; no pipeline metadata is copied and nothing is queued back."""
+    col = gnames.get(g.get("list_id")) or "Inbox"
+    local.ensure_column(col)
+    new = local.create(col, title=g["title"], description=g.get("description") or "", tags=list(g.get("tags") or ()),
+                       assigned_to=g.get("assigned_to"))
+    state = _state()
+    state["ids"][new["id"]] = g["id"]
+    state.setdefault("items", {})[new["id"]] = g.get("item_id")
+    _save(state)   # per card: a crash later must not make a second local card
+    base[new["id"]] = _values(g, gnames)
+
+
+def _flag_gone(local, seen, out):
+    for lid, gid in _state()["ids"].items():
+        if gid in seen:
+            continue
+        try:
+            cur = local.card(lid)
+        except SystemExit:
+            continue
+        held = (cur.get("metadata") or {}).get("remote_edit") or {}
+        if "deleted" not in held:
+            local.update(lid, verify=True, metadata={"remote_edit": {**held, "deleted": {"value": True, "at": now_iso()}}})
+            out["conflicts"].append(lid)
+        outbox.strip(lid, None)
+        alerts.open(f"sync-conflict:{lid}", "high",
+                    f"card {lid} changed on GitHub and here: {', '.join(sorted({**held, 'deleted': 1}))}",
+                    f"pl sync resolve {lid} --keep remote   (or --keep local)")
 
 
 def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
@@ -276,6 +339,34 @@ def _pull_card(local, lid, g, gnames, lnames, b, pending, out):
     alerts.open(f"sync-conflict:{lid}", "high",
                 f"card {lid} changed on GitHub and here: {', '.join(sorted(still))}",
                 "edit the card here to match GitHub, or leave it to keep yours; the alert clears at the next pl sync now")
+
+
+def resolve(card_id, keep):
+    """Settle the GitHub edit saved on a card: take its values (remote) or queue the local ones (local)."""
+    local = Local(C.TRACKER)   # not trackers.get: taking GitHub's values must not reach the outbox
+    cur = local.card(card_id)
+    meta = dict(cur.get("metadata") or {})
+    held = {f: v for f, v in (meta.get("remote_edit") or {}).items() if f in PULLED}
+    if not held:
+        raise SystemExit(f"card {card_id} has no remote edit")
+    meta.pop("remote_edit")
+    outbox.strip(card_id, set(held))
+    if keep == "remote":
+        take = {f: v["value"] for f, v in held.items()}
+        if "column" in take:
+            local.ensure_column(take["column"])
+        local.update(card_id, verify=False, metadata=meta, **take)
+    else:
+        mine = _values(cur, {v: k for k, v in local.columns().items()})
+        for f in sorted(held):
+            outbox.append(card_id, "update", {f: mine[f]})
+        local.update(card_id, verify=False, metadata=meta)
+    base = _load_base()
+    base.setdefault(card_id, {}).update({f: _norm(f, v["value"]) for f, v in held.items()})
+    _save_base(base)
+    board.dirty()
+    alerts.resolve(f"sync-conflict:{card_id}")
+    return sorted(held)
 
 
 def local_id(token):
