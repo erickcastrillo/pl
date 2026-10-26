@@ -1,4 +1,6 @@
 """Plan 35 slice 1: the New pipeline wizard on Home."""
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -6,9 +8,11 @@ from textual.app import App
 from textual.widgets import Button, Input, RadioButton, RadioSet, SelectionList, Static
 
 from pl import config as C
-from pl import pipeline, profiles
+from pl import boardcheck, pipeline, profiles, setup
+from pl.trackers import github
+from pl.tui import newpipeline
 from pl.tui.home import HomeView
-from pl.tui.newpipeline import NewPipelineScreen, name_problem
+from pl.tui.newpipeline import NewPipelineScreen, board_label, check_board, name_problem
 
 ACCOUNTS = {"main": {"harness": "claude", "config_dir": "~/.claude"}, "alt": {"harness": "codex", "config_dir": "~/.codex"}}
 
@@ -159,3 +163,240 @@ async def test_a_failed_create_leaves_no_folder_and_names_step_5(monkeypatch):
         assert "step 5 (create) failed: disk full" in text(pilot.app)
         assert isinstance(pilot.app.screen, NewPipelineScreen)
     assert not (Path.home() / ".pl-sales").exists() and app.switched == []
+
+
+# ---------- Plan 35 slice 2: GitHub Project and MCP boards ----------
+
+PROJECTS = json.dumps({"projects": [{"number": 7, "title": "Sales", "owner": {"login": "acme"}},
+                                    {"number": 2, "title": "Ops", "owner": {"login": "me"}}]})
+GH_TRACKER = {"type": "github-project", "owner": "acme", "number": 7, "status_field": "pl stage", "repo": "acme/web"}
+MCP_TRACKER = {"type": "mcp", "mcp_config": "/w/.mcp.json", "server": "board-server"}
+
+
+def done(out="", code=0, err=""):
+    return subprocess.CompletedProcess([], code, out, err)
+
+
+def fake_gh(monkeypatch, replies):
+    """replies: [(argv prefix, CompletedProcess or SystemExit)]; an unlisted call succeeds with no output."""
+    calls = []
+
+    def run(args):
+        calls.append(list(args))
+        for prefix, reply in replies:
+            if list(args[:len(prefix)]) == list(prefix):
+                if isinstance(reply, BaseException):
+                    raise reply
+                return reply
+        return done()
+    monkeypatch.setattr(github, "_run", run)
+    return calls
+
+
+SIGNED_IN = [(("auth", "status"), done()), (("project", "list"), done(PROJECTS)), (("api", "user/orgs"), done(""))]
+
+
+async def to_step_3(pilot, name="sales"):
+    screen = await open_wizard(pilot)
+    await next_step(pilot)
+    screen.query_one("#np-name", Input).value = name
+    await pilot.pause()
+    await next_step(pilot)
+    return screen
+
+
+async def pick_board(pilot, index):
+    screen = pilot.app.screen
+    list(screen.query_one("#np-board", RadioSet).query(RadioButton))[index].value = True
+    await pilot.pause()
+    await pilot.pause()
+
+
+async def test_step_3_offers_three_boards_local_selected():
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await to_step_3(pilot)
+        radios = screen.query_one("#np-board", RadioSet)
+        labels = [str(b.label) for b in radios.query(RadioButton)]
+        assert [l.split(":")[0] for l in labels] == ["Local board", "GitHub Project", "MCP board"]
+        assert "needs a project and a repository" in labels[1] and "needs an MCP server name" in labels[2]
+        assert radios.pressed_index == 0 and not screen.query_one("#np-next", Button).disabled
+
+
+async def test_github_project_lists_projects_from_a_fake_gh_and_prefills_repo(monkeypatch):
+    fake_gh(monkeypatch, SIGNED_IN)
+    monkeypatch.setattr(setup, "_remote_repo", lambda d: "acme/web")
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await to_step_3(pilot)
+        await pick_board(pilot, 1)
+        projects = [str(b.label) for b in screen.query_one("#np-projects", RadioSet).query(RadioButton)]
+        assert projects == ["acme #7 Sales", "me #2 Ops"]
+        assert screen.query_one("#np-repo", Input).value == "acme/web"
+        assert screen.query_one("#np-next", Button).disabled
+        list(screen.query_one("#np-projects", RadioSet).query(RadioButton))[0].value = True
+        await pilot.pause()
+        assert not screen.query_one("#np-next", Button).disabled
+        screen.query_one("#np-repo", Input).value = "not a repo"
+        await pilot.pause()
+        assert screen.query_one("#np-next", Button).disabled
+
+
+@pytest.mark.parametrize("replies,said", [
+    ([(("auth", "status"), SystemExit("pl: gh is not installed: https://cli.github.com"))], "gh is not installed"),
+    ([(("auth", "status"), done(code=1))], "gh is not signed in: run gh auth login"),
+    ([(("auth", "status"), done()), (("project", "list"), done('{"projects": []}'))], "gh lists no projects"),
+])
+async def test_gh_missing_not_signed_in_or_no_projects_says_which_and_disables_next(monkeypatch, replies, said):
+    fake_gh(monkeypatch, replies)
+    monkeypatch.setattr(setup, "_remote_repo", lambda d: None)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await to_step_3(pilot)
+        await pick_board(pilot, 1)
+        assert said in str(screen.query_one("#np-gh-note", Static).render())
+        assert screen.query_one("#np-next", Button).disabled
+        await pick_board(pilot, 0)
+        assert not screen.query_one("#np-next", Button).disabled
+
+
+async def test_mcp_board_needs_a_name_and_shows_the_config_file(monkeypatch):
+    monkeypatch.setattr(setup, "_mcp_file", lambda flags, work: Path("/w/.mcp.json"))
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await to_step_3(pilot)
+        await pick_board(pilot, 2)
+        assert "looked up in /w/.mcp.json" in text(pilot.app)
+        assert screen.query_one("#np-next", Button).disabled
+        screen.query_one("#np-server", Input).value = "board-server"
+        await pilot.pause()
+        assert not screen.query_one("#np-next", Button).disabled
+        screen.query_one("#np-server", Input).value = "  "
+        await pilot.pause()
+        assert screen.query_one("#np-next", Button).disabled
+
+
+async def test_mcp_board_without_a_config_file_says_where_it_looked(monkeypatch):
+    monkeypatch.setattr(setup, "_mcp_file", lambda flags, work: None)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        await to_step_3(pilot)
+        await pick_board(pilot, 2)
+        assert "no MCP config file found" in text(pilot.app) and ".claude.json" in text(pilot.app)
+
+
+async def mcp_step_3(pilot, monkeypatch):
+    monkeypatch.setattr(setup, "_mcp_file", lambda flags, work: Path("/w/.mcp.json"))
+    screen = await to_step_3(pilot)
+    await pick_board(pilot, 2)
+    screen.query_one("#np-server", Input).value = "board-server"
+    await pilot.pause()
+    return screen
+
+
+async def test_next_on_step_3_shows_checking_board_then_moves_on(monkeypatch):
+    import threading
+    gate = threading.Event()
+    monkeypatch.setattr(newpipeline, "check_board", lambda tracker, columns: gate.wait(5) and None)
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await mcp_step_3(pilot, monkeypatch)
+        await next_step(pilot)
+        assert "Checking board…" in text(pilot.app)
+        assert screen.query_one("#np-next", Button).disabled and screen.query_one("#np-back", Button).disabled
+        gate.set()
+        await pilot.pause(0.3)
+        assert "Step 4 of 5" in text(pilot.app)
+
+
+async def test_failed_board_check_stays_on_step_3_with_the_reason_and_writes_nothing(monkeypatch):
+    monkeypatch.setattr(newpipeline, "check_board", lambda tracker, columns: "R3: card was not created")
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        screen = await mcp_step_3(pilot, monkeypatch)
+        await next_step(pilot)
+        await pilot.pause(0.3)
+        assert "Step 3 of 5" in text(pilot.app)
+        assert "board check failed: R3: card was not created" in text(pilot.app)
+        assert not screen.query_one("#np-back", Button).disabled
+    assert not (Path.home() / ".pl-sales").exists()
+
+
+def test_check_board_mcp_runs_pl_board_check_for_that_server(monkeypatch):
+    seen = []
+
+    def check(a):
+        seen.append((a.server, a.mcp_config))
+        print(json.dumps({"server": a.server, "rules": [{"id": "R1", "ok": True, "reason": ""},
+                                                        {"id": "R3", "ok": False, "reason": "no such column"}]}))
+        raise SystemExit(1)
+    monkeypatch.setattr(boardcheck, "cmd_check", check)
+    assert check_board(MCP_TRACKER, ["Lead"]) == "R3: no such column"
+    assert seen == [("board-server", "/w/.mcp.json")]
+    monkeypatch.setattr(boardcheck, "cmd_check", lambda a: (_ for _ in ()).throw(SystemExit(0)))
+    assert check_board(MCP_TRACKER, ["Lead"]) is None
+
+    def refuse(a):
+        print("pl board check: no such MCP config file /w/.mcp.json", file=__import__("sys").stderr)
+        raise SystemExit(2)
+    monkeypatch.setattr(boardcheck, "cmd_check", refuse)
+    assert "no such MCP config file" in check_board(MCP_TRACKER, ["Lead"])
+
+
+def test_check_board_github_needs_the_stage_field_and_a_reachable_repo(monkeypatch):
+    field = {"name": "pl stage", "options": [{"name": "Lead"}, {"name": "Won"}]}
+    monkeypatch.setattr(github, "stage_field", lambda owner, number, name: None)
+    assert check_board(GH_TRACKER, ["Lead"]) == 'project acme #7 has no "pl stage" field (pl setup adds it)'
+    monkeypatch.setattr(github, "stage_field", lambda owner, number, name: field)
+    assert check_board(GH_TRACKER, ["Lead", "Lost", "Won"]) == 'the "pl stage" field lacks: Lost'
+    calls = fake_gh(monkeypatch, [(("repo", "view"), done(code=1, err="not found"))])
+    assert check_board(GH_TRACKER, ["Lead"]) == "repository acme/web is not reachable: not found"
+    assert calls == [["repo", "view", "acme/web", "--json", "name"]]
+    fake_gh(monkeypatch, [(("repo", "view"), done('{"name": "web"}'))])
+    assert check_board(GH_TRACKER, ["Lead"]) is None
+    fake_gh(monkeypatch, [(("repo", "view"), SystemExit("pl: gh is not installed: https://cli.github.com"))])
+    assert "gh is not installed" in check_board(GH_TRACKER, ["Lead"])
+
+
+def test_board_label_names_the_tracker():
+    assert board_label({"type": "local"}) == "local"
+    assert board_label(GH_TRACKER) == "github-project acme #7"
+    assert board_label(MCP_TRACKER) == "mcp board-server"
+
+
+async def pick_github_7(pilot, monkeypatch):
+    fake_gh(monkeypatch, SIGNED_IN)
+    monkeypatch.setattr(setup, "_remote_repo", lambda d: "acme/web")
+    monkeypatch.setattr(newpipeline, "check_board", lambda tracker, columns: None)
+    screen = await to_step_3(pilot)
+    await pick_board(pilot, 1)
+    list(screen.query_one("#np-projects", RadioSet).query(RadioButton))[0].value = True
+    await pilot.pause()
+    await next_step(pilot)
+    await pilot.pause(0.3)
+    await next_step(pilot)
+    return screen
+
+
+async def test_create_with_github_project_writes_the_tracker(monkeypatch):
+    app = HostApp()
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pick_github_7(pilot, monkeypatch)
+        assert "Board: github-project acme #7" in text(pilot.app)
+        pilot.app.screen.query_one("#np-create", Button).press()
+        await pilot.pause()
+    import tomllib
+    written = tomllib.loads((Path.home() / ".pl-sales" / "config.toml").read_text())
+    assert written["tracker"] == GH_TRACKER
+
+
+async def test_dry_run_names_the_tracker_and_writes_nothing(monkeypatch):
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        await pick_github_7(pilot, monkeypatch)
+        pilot.app.screen.query_one("#np-dry", Button).press()
+        await pilot.pause()
+        assert "board: github-project acme #7" in text(pilot.app)
+        assert not (Path.home() / ".pl-sales").exists()
+
+
+async def test_local_board_flow_unchanged():
+    import tomllib
+    async with HostApp().run_test(size=(120, 50)) as pilot:
+        await to_review(pilot)
+        assert "Board: local" in text(pilot.app)
+        pilot.app.screen.query_one("#np-create", Button).press()
+        await pilot.pause()
+    assert tomllib.loads((Path.home() / ".pl-sales" / "config.toml").read_text())["tracker"] == {"type": "local"}

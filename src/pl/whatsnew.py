@@ -245,6 +245,7 @@ ENTRIES = [
     _e("2026-10-25.51", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
     _e("2026-10-25.52", "Skills pane: labelled buttons, where a skill is linked and why an action is off",
        "Settings → Skills: select a skill", "pl"),
+    _e("2026-10-26.01", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
 ]
 
 
