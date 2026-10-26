@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, alerts, backup, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, alerts, backup, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1245,6 +1245,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
+    if not dry:
+        try:
+            agent_alerts.check(all_cards, st, {t[0]["id"] for t in todo})
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed check never stops the pass
+            print(f"agent alerts skipped this pass: {e}", file=sys.stderr)
+            events.emit("error", message=f"agent alerts: {e}")
     prep_alive += sweep_untracked(all_cards, reg, dry, st) or 0
     st["screens"] = {p: r for p, r in (st.get("screens") or {}).items() if time.time() - r.get("seen", 0) < 3600}   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
@@ -1449,12 +1455,65 @@ def check_machine_alerts():
     alerts.sweep("tmp_full", full, notify)
 
 
+def check_parked_alerts(all_cards):
+    """One account_parked alert per parked run account, naming the cards waiting on it. Returns the parked accounts."""
+    parked = accounts.exhausted_profiles()
+    for a in sorted(parked & set(C.PROFILES)):
+        ids = []
+        for c in all_cards:
+            m = c.get("metadata") or {}
+            if m.get("dropped_at") or col_name(c.get("list_id")) in ("PR open", "Plan for review", "Done"):
+                continue
+            if a in (m.get("profile"), (m.get("worker") or {}).get("profile")) and c["id"] not in ids:
+                ids.append(c["id"])
+        shown = ", ".join(short_id(i) for i in ids[:10]) + (f" +{len(ids) - 10} more" if len(ids) > 10 else "")
+        until = accounts.parking(a).get("until") or ""
+        if why := alerts.open(f"account_parked:{a}", "warn", f"Account {a} is parked: usage limit",
+                              f"parked until {until[11:16]} UTC; {accounts.check_note(a)}; waiting: {shown or 'none'}; pl accounts --reset {a} un-parks it",
+                              cards=ids):
+            notify(alerts.headline(why, f"Account {a} is parked"), f"pl accounts --reset {a}")
+    alerts.sweep("account_parked:", {f"account_parked:{p}" for p in parked}, notify)
+    return parked
+
+
+def check_pr_person_alerts(all_cards):
+    """One pr_person alert per auto card in PR open that needs a person: its last rework round is used, rework gave up,
+    or its PR carries the failed or needs-person label (labels as the rework and merge passes last saw them)."""
+    n_max, lab = rework.rounds(), rework.labels()
+    need = C.AUTO_MERGE.get("needs_person_label", "needs-person")   # merges.settings() has the same default; merges imports dispatch
+    active = set()
+    for c in all_cards:
+        m = c.get("metadata") or {}
+        if col_name(c["list_id"]) != C.STAGE_DONE_AT["run"] or m.get("pipeline_mode") != "auto":
+            continue
+        rw, urls = m.get("rework") or {}, [u for _, _, u in rework._prs(c)]
+        why = []
+        if n_max and int(rw.get("round") or 0) >= n_max:
+            why.append(f"rework round {rw.get('round')} of {n_max} used")
+        elif n_max and rw.get("gave_up_at"):
+            why.append("auto-rework gave up")
+        seen = [rework.SEEN[u] for u in urls if u in rework.SEEN]
+        for label in (lab["failed"], need):
+            if any(label in names for names in seen):
+                why.append(f"label {label} is set")
+        if not why:
+            continue
+        key = f"pr_person:{c['id']}"
+        active.add(key)
+        fix = f"{', '.join(urls)}: fix the PR by hand, remove {lab['failed']} to send it back once more, or close it"
+        if any(need in names for names in seen):
+            fix += f"; or clear {need} once the merge rule it names is fixed"
+        if opened := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix,
+                                 cards=[c["id"]]):
+            notify(alerts.headline(opened, f"PR needs a person: {c['title'][:40]}"), fix)
+    alerts.sweep("pr_person:", active, notify)
+
+
 def check_alerts(all_cards, failed, st=None):
     """End of a pass: resolve the alerts whose condition cleared, escalate the rest, and run the pass-end checks
     (a dead loop, a loop that has not run for 2 of its intervals, a PR waiting over PR_WAIT). failed: the
     stage_failed keys this pass saw. st: the dispatcher state (its loop records)."""
-    parked = accounts.exhausted_profiles()
-    alerts.sweep("account_parked:", {f"account_parked:{p}" for p in parked}, notify)
+    parked = check_parked_alerts(all_cards)
     out = bool(C.PROFILES) and set(C.PROFILES) <= set(parked)
     alerts.sweep("accounts_all_out", {"accounts_all_out"} if out else set(), notify)
     check_machine_alerts()
@@ -1488,6 +1547,7 @@ def check_alerts(all_cards, failed, st=None):
             if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
                 notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {cmd_id(c['id'])}")
     alerts.sweep("pr_waiting:", waiting, notify)
+    check_pr_person_alerts(all_cards)
     check_deps(all_cards)
     stale = set()
     for name, svc in C.SERVICES.items() if st is not None and not paused() else ():
