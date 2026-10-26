@@ -1859,7 +1859,7 @@ async def test_esc_leaves_the_assistant_box_and_then_a_digit_switches_tab(monkey
         assert app.active_tab == "dashboard"
         await pilot.press("2")
         await settle(pilot)
-        await pilot.press("alt+1")
+        await pilot.press("ctrl+1")
         await settle(pilot)
         assert app.active_tab == "dashboard"
 
@@ -2803,10 +2803,10 @@ def _every_binding():
 def test_no_key_has_two_meanings_across_every_view_and_screen():
     from pl.tui.chrome import MEANING
     from pl.tui.review import ConfirmScreen
-    from pl.tui.app import DispatcherChoice
+    from pl.tui.app import DispatcherChoice, StoppedScreen
     meanings = {}
     for cls, b in _every_binding():
-        if issubclass(cls, (ConfirmScreen, DispatcherChoice)):   # y / n / enter / esc answer the dialog's own question
+        if issubclass(cls, (ConfirmScreen, DispatcherChoice, StoppedScreen)):   # y / n / enter / esc answer the dialog's own question
             continue
         assert b.action in MEANING or b.action.split("(")[0] in MEANING, f"{cls.__name__}: {b.action} has no MEANING"
         meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]

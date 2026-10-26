@@ -235,6 +235,30 @@ class DispatcherChoice(ModalScreen):
         self.dismiss(what)
 
 
+class StoppedScreen(ModalScreen):
+    """Choosing a pipeline whose dispatcher is stopped: enter starts it and switches, s switches, esc cancels."""
+    DEFAULT_CSS = """
+    StoppedScreen { align: center middle; }
+    StoppedScreen > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("enter", "pick('start')", "start its dispatcher and switch"),
+                Binding("s", "pick('switch')", "switch without starting"), Binding("escape", "pick(None)", "cancel")]
+
+    def __init__(self, name):
+        super().__init__()
+        self.pipeline = name
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"{self.pipeline} is stopped"))
+            yield Static(Text("enter start its dispatcher and switch · s switch without starting · esc cancel", style="dim"))
+
+    def action_pick(self, what):
+        self.dismiss(what)
+
+
+SWITCH_AFTER_ERROR = 2   # seconds: the switch replaces the process, so a failed start's error needs time to be read
+
 NARROW_BELOW = 120   # columns: below this the list fills the width and the details pane gives way
 
 
@@ -265,7 +289,9 @@ class PlApp(App):
     BINDINGS = [Binding(GROUP_KEYS[gid], f"tab('{gid}')", "views" if i == 0 else name, show=i == 0, key_display="1-8")
                 for i, (gid, name, _) in enumerate(g for g in GROUPS if g[0] != "home")] + [
         Binding(f"{mod}+{GROUP_KEYS[gid]}", f"tab('{gid}')", name, show=False)   # work even while the Assistant box has focus
-        for mod in ("ctrl", "alt") for gid, name, _ in GROUPS if gid != "home"] + [
+        for mod in ("ctrl",) for gid, name, _ in GROUPS if gid != "home"] + [
+        Binding(f"alt+{n}", f"pipeline({n})", "pipelines 1-9" if n == 1 else "", show=False, key_display="alt+1-9")
+        for n in range(1, 10)] + [
         Binding("H", "tab('home')", "pipelines", show=False),
         Binding("b", "brain", show=False),
         Binding("left_square_bracket", "cycle_window(-1)", "earlier window", key_display="["),
@@ -480,6 +506,45 @@ class PlApp(App):
         from pl.tui.switcher import PipelinesScreen
         if not isinstance(self.screen, PipelinesScreen):
             self.push_screen(PipelinesScreen(self.data))
+
+    def action_pipeline(self, n):
+        from pl.tui.switcher import picker_rows
+        if isinstance(self.screen, StoppedScreen):
+            return
+        rows = picker_rows(self.data)
+        if n > len(rows):
+            self.notify(f"no pipeline {n}", markup=False)
+        elif not rows[n - 1]["current"]:
+            self.choose_pipeline(rows[n - 1])
+
+    def choose_pipeline(self, row):
+        name, tab = row["name"], self.active_tab
+        if row["running"]:
+            self.switch_to(name, tab=tab)
+            return
+
+        def answered(what):
+            if what == "switch":
+                self.switch_to(name, tab=tab)
+            elif what == "start":
+                self.start_and_switch(name, tab)
+        self.push_screen(StoppedScreen(name), answered)
+
+    @work(thread=True, group="dispatcher")
+    def start_and_switch(self, name, tab):
+        """The start D does inside a stopped pipeline; with the manager off, that pipeline's own console starts it on mount."""
+        try:
+            if manager.enabled():
+                if manager.restart(name, "restart", source="console-D") is None:
+                    raise RuntimeError("the manager did not answer")
+                if not manager.running():
+                    manager.start()
+        except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+            self.call_from_thread(self.notify, f"{name}: failed to start its dispatcher — {e}",
+                                  severity="error", timeout=10, markup=False)
+            self.call_from_thread(self.set_timer, SWITCH_AFTER_ERROR, lambda: self.switch_to(name, tab=tab))
+            return
+        self.call_from_thread(self.switch_to, name, tab=tab)
 
     def on_click(self, event):
         if getattr(event.widget, "id", None) == "header" and len(self.screen_stack) == 1:

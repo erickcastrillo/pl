@@ -12,6 +12,7 @@ COMMANDS = {
     "HomeView.get_started": "pl setup",
     "PlApp.switcher": "pl list --json",
     "PlApp.pipelines": "pl pipelines list --json",
+    "PlApp.pipeline": "pl pipelines list --json",
     "PlApp.oldest": "pl inbox --json",
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
     "ConnectorsPanel.chat_test": "pl chat test NAME",
