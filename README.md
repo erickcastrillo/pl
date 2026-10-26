@@ -313,7 +313,7 @@ A Claude Code agent in a folder it has never opened stops at the "Is this a proj
 
 Tab `1` is a side chat that runs pl for you: "what is stuck?", "retry that card", "install this plugin", "change the review skill". It is a real, interactive harness session in the tmux window `assistant` of this profile's session, started the first time you open the tab. The tab shows its screen and types what you enter; a lone digit answers the harness's numbered permission menu. The window outlives the console, so reopening the console reattaches to the same conversation; if tmux lost the window, pl resumes the saved Claude conversation.
 
-`pl ask "text"` asks the same assistant from the shell (`--json` for scripts, `--conversation ID` to continue one). `pl brain show CONV` and `pl brain prune` inspect and prune its saved conversations.
+`pl ask "text"` asks the same assistant from the shell (`--json` for scripts, `--conversation ID` to continue one). `pl brain show CONV` and `pl brain prune` inspect and prune the conversations `pl ask` saves.
 
 It uses `[assistant] account`, else the first account not parked, and its usage counts on that account. It starts in the profile's `work_dir`, where the code lives (the profile folder when that folder is missing). pl always starts it in the harness's ask-first mode, whatever the account's own default mode is: Claude with `--permission-mode manual`, Codex with `--ask-for-approval on-request --sandbox read-only`. Claude also gets `--add-dir` for the account's config folder, the profile folder and the folder of pl's guide (never HOME), and permission rules through `--settings`. Claude Code checks deny, then ask, then allow:
 

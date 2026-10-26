@@ -349,7 +349,8 @@ def test_help_names_ask_as_the_assistant(monkeypatch, capsys):
 def test_help_brain_line_names_the_assistants_conversations(monkeypatch, capsys):
     text = _help_text(monkeypatch, capsys)
     block = _help_block(text, "  pl brain show")
-    assert "Assistant's saved conversations" in block
+    assert "conversations pl ask saves" in block
+    assert "Assistant tab write" not in block
     assert "[brain] keep_days (180)" in block
     assert "a brain conversation" not in text
 
@@ -362,6 +363,7 @@ def test_docs_describe_one_assistant():
     readme = (Path(__file__).parents[1] / "README.md").read_text()
     section = readme.split("## Assistant", 1)[1].split("\n## ", 1)[0]
     assert 'pl ask "text"' in section and "pl brain show" in section
+    assert "its saved conversations" not in section
 
 
 def test_every_read_command_names_a_shape():
