@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import pytest
 
 from pl import config as C
@@ -269,3 +272,92 @@ async def test_a_running_pipeline_switches_without_a_prompt(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+2")
         assert len(app.screen_stack) == 1 and app.restart_into == ("profile", "sales", None, "prs")
+
+
+def _picker_options(app):
+    return [o for o in app.screen.query_one("#pipeline-options").options]
+
+
+def _only_current():
+    return [_three_summaries()[0]]
+
+
+async def _open_picker(app, pilot):
+    await pilot.press("P")
+    await pilot.pause()
+    assert isinstance(app.screen, PipelinesScreen)
+
+
+async def _select_new_pipeline(app, pilot):
+    ol = app.screen.query_one("#pipeline-options")
+    await pilot.press(*["down"] * (len(ol.options) - 1 - (ol.highlighted or 0)), "enter")
+    await pilot.pause()
+
+
+async def test_the_picker_ends_with_new_pipeline_when_only_the_current_pipeline_exists():
+    app = PlApp(snapshot_provider=lambda: {**_data(), "home": _only_current()}, autostart=False,
+                whatsnew=False, updates=False, restarts=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_picker(app, pilot)
+        options = _picker_options(app)
+        assert len(options) == 2
+        assert options[-1].prompt.plain == "+ New pipeline"
+        assert "●" not in options[-1].prompt.plain
+
+
+async def test_the_picker_ends_with_new_pipeline_after_three_pipelines():
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_picker(app, pilot)
+        options = _picker_options(app)
+        assert len(options) == 4
+        assert [str(o.prompt).replace("●", "").split()[1] for o in options[:3]] == ["eng", "sales", "support"]   # after alt+N
+        assert options[-1].prompt.plain == "+ New pipeline"
+
+
+async def test_enter_on_new_pipeline_opens_the_wizard_at_step_1():
+    from pl.tui.newpipeline import NewPipelineScreen
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_picker(app, pilot)
+        await _select_new_pipeline(app, pilot)
+        assert isinstance(app.screen, NewPipelineScreen)
+        assert app.screen.query_one("#np-progress").content.plain.startswith("Step 1 of 5")
+        assert not any(isinstance(s, PipelinesScreen) for s in app.screen_stack)
+
+
+async def test_cancelling_the_wizard_from_the_picker_changes_nothing(temp_home):
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        app.action_tab("prs")
+        await pilot.pause()
+        await _open_picker(app, pilot)
+        await _select_new_pipeline(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+        assert app.active_tab == "prs"
+        assert app.restart_into is None
+    assert not list(Path(os.environ["HOME"]).glob(".pl-*"))
+
+
+async def test_a_finished_wizard_switches_to_the_new_pipeline(monkeypatch):
+    from textual.screen import ModalScreen
+    import pl.tui.newpipeline as np
+
+    class FakeWizard(ModalScreen):
+        def on_mount(self):
+            self.dismiss("ops")
+
+    monkeypatch.setattr(np, "NewPipelineScreen", FakeWizard)
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_picker(app, pilot)
+        await _select_new_pipeline(app, pilot)
+        assert app.restart_into == ("profile", "ops", None, "cards")
+
+
+def test_picker_rows_never_include_new_pipeline():
+    rows = picker_rows({"home": _three_summaries()})
+    assert len(rows) == 3
+    assert all(r["name"] != "+ New pipeline" for r in rows)
