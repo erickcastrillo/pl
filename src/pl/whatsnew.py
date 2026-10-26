@@ -281,6 +281,8 @@ ENTRIES = [
        "pl tests affected --json", "pl tests affected"),
     _e("2026-10-26.63", "Alerts tab: newest first with cards; a hides one until it changes",
        "Alerts tab; header: alerts N", "pl alerts"),
+    _e("2026-10-26.63", "Activity levels: errors and warnings with counts",
+       "Activity tab: f cycles all, errors, warnings, needs you, dispatcher, loops", "pl activity --level warning"),
 ]
 
 

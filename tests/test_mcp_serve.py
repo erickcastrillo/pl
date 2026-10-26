@@ -23,7 +23,7 @@ def _no_dry_run_after():
     yield
     trackers.set_dry_run(False)
 
-READ_TOOLS = {"pl_inbox", "pl_list", "pl_card", "pl_section", "pl_alerts", "pl_standup", "pl_usage"}
+READ_TOOLS = {"pl_inbox", "pl_list", "pl_card", "pl_section", "pl_alerts", "pl_standup", "pl_usage", "pl_activity"}
 WRITE_TOOLS = {"pl_idea", "pl_section_write", "pl_approve"}
 ALLOWED = READ_TOOLS | WRITE_TOOLS
 CARD = {"id": "acme/app#7", "title": "A card", "list_id": "L1", "tags": [], "updated_at": "2026-10-25T10:00:00+00:00",
@@ -258,3 +258,10 @@ def test_agent_approve_of_a_plain_plan_gate_goes_through_and_is_marked(monkeypat
     assert fake.items["card-app"]["list_id"] == "col-Approved"
     monkeypatch.setenv("PL_SOURCE", "mcp")
     assert audit.who() == "mcp-session"
+
+
+async def test_pl_activity_returns_the_same_entries_as_pl_activity_json(in_process):
+    res = await call("pl_activity", {"level": "warning", "kind": "runaway", "since": "2h"})
+    assert not res.isError
+    assert in_process == [["activity", "--level", "warning", "--kind", "runaway", "--since", "2h", "--json"]]
+    assert [json.loads(c.text) for c in res.content] in ([], [[]])

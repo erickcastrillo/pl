@@ -54,6 +54,7 @@ Status and the board:
 - `pl sync status` (`--json`): how many changes wait to be sent to the GitHub board, and when the next window opens.
 - `pl audit` (`--since 7d`, `--json`, `--verify`): the profile's append-only log of who did what; `--verify` checks its hash chain.
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
+- `pl activity` (`--level warning --kind K --since 2h --json`): the activity feed, newest first; `demo` / `demo --clear` write and remove sample entries, so it asks first.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
 - `pl doctor`: health checks (so far Ollama and each local job's model); exit 1 when one fails.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.

@@ -13,6 +13,9 @@ from pl import config as C
 MAX_LINES = 20_000      # past this many lines the file is rewritten without events older than KEEP_DAYS
 KEEP_DAYS = 30          # the Dashboard needs 14 days; never prune younger than this
 ERROR_CHARS = 200
+LEVELS = ("info", "warning", "error")
+ERROR_KINDS = {"error", "rework_gave_up", "runaway"}
+WARNING_KINDS = {"github_budget_wait", "github_budget_gap", "alert_opened", "agent_restarted", "loop_restart", "held"}
 
 
 def _now():
@@ -24,7 +27,18 @@ def _path():
     return C.STATE_DIR / "events.jsonl"
 
 
-def emit(kind, card_id=None, **detail):
+def _level_of(kind, own):
+    if own in LEVELS:
+        return own
+    return "error" if kind in ERROR_KINDS else "warning" if kind in WARNING_KINDS else "info"
+
+
+def level(e):
+    """The entry's own level when it has a valid one, else the level of its kind (old entries have none)."""
+    return _level_of(e.get("kind"), e.get("level"))
+
+
+def emit(kind, card_id=None, level=None, **detail):
     """Append one event line. Never raises on a disk problem: losing an event must not stop the dispatcher."""
     from pl import trackers
     if trackers.dry_run():
@@ -32,7 +46,7 @@ def emit(kind, card_id=None, **detail):
     if kind == "error" and "message" in detail:
         detail["message"] = str(detail["message"])[:ERROR_CHARS]
     rec = {**detail, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "profile": C.PROFILE_NAME,
-           "kind": kind, "card": card_id}
+           "kind": kind, "card": card_id, "level": _level_of(kind, level)}
     try:
         C.STATE_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -56,7 +70,7 @@ def emit(kind, card_id=None, **detail):
         pass
 
 
-def _read():
+def _read(demo=False):
     out = []
     try:
         text = _path().read_text()
@@ -65,6 +79,8 @@ def _read():
     for line in text.splitlines():
         try:
             e = json.loads(line)
+            if e.get("demo") is True and not demo:
+                continue
             e["_t"] = datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
             if e["_t"].tzinfo is None:
                 e["_t"] = e["_t"].replace(tzinfo=timezone.utc)
@@ -92,7 +108,7 @@ def _prune():
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")   # unique, 0600
     try:
         with os.fdopen(fd, "w") as f:
-            for e in _read():
+            for e in _read(demo=True):
                 if e["_t"] >= cutoff:
                     f.write(json.dumps({k: v for k, v in e.items() if k != "_t"}) + "\n")
             f.flush()
@@ -136,6 +152,45 @@ def forget(target, dry_run=False):
                     os.unlink(tmp)
                 raise
     return total_removed
+
+
+def clear_demo():
+    """Remove the entries marked demo, keeping every other line as it is. Returns how many were removed."""
+    path = _path()
+    try:
+        lock = os.open(path.with_name("events.jsonl.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    except OSError:
+        return 0
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            lines = path.read_text().splitlines(keepends=True)
+        except OSError:
+            return 0
+
+        def is_demo(line):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                return False
+            return isinstance(e, dict) and e.get("demo") is True
+        kept = [ln for ln in lines if not is_demo(ln)]
+        if len(kept) == len(lines):
+            return 0
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.writelines(kept)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+        return len(lines) - len(kept)
+    finally:
+        os.close(lock)
 
 
 def metrics(window_seconds, now=None):
