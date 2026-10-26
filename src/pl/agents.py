@@ -10,7 +10,7 @@ from datetime import datetime
 
 from pl import config as C
 from pl import harnesses
-from pl.board import col_name
+from pl.board import col_name, sections
 from pl.util import mask, parse_iso, short_id
 
 # ---------- claude session registry (which agents are alive) ----------
@@ -161,6 +161,30 @@ def run_waiting(w, reg, st=None):
         act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
         idle = time.time() - int(act) if act.isdigit() else 0
     return f"waiting (idle {int(idle // 60)} min)" if idle >= WAIT_IDLE else None
+
+
+WAIT_WIDTH = 48   # characters of a "waiting for you" reason: the state column sizes itself to its text
+
+
+def person_wait(c, status):
+    """"waiting for you: <what>" when the card's agent waits on a person, else None. Read from card metadata only
+    (no tmux call): an open question, then a trust prompt, a permission prompt, a run agent at a GATE."""
+    m = c.get("metadata") or {}
+    w = m.get("worker") or {}
+    if m.get("question"):
+        asked = [ln[3:] for ln in sections(c.get("description")).get("QUESTIONS", "").splitlines() if ln.startswith("Q: ")]
+        reason = asked[-1] if asked else "open question"
+    elif w.get("trust_wait"):
+        reason = f"trust {w['trust_wait']}"
+    elif w.get("permission_wait"):
+        reason = "permission" if w["permission_wait"] == "waiting: permission" else f"permission {w['permission_wait']}"
+    elif w.get("run_waiting") and w.get("stage") == "run" and status == "alive":
+        reason = w["run_waiting"]
+    else:
+        return None
+    text = "waiting for you: " + mask(str(reason).splitlines()[0] if str(reason).strip() else "open question")
+    limit = len("waiting for you: ") + WAIT_WIDTH
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 PR_RE = re.compile(r"(?<![\w&#])#(\d{1,7})\b")   # a PR or issue reference like #1757

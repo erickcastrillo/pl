@@ -76,6 +76,11 @@ def _seed_wait(cid, ago, sid="s1"):
     save_state({"notified": {}, "run_waits": {cid: {"since": time.time() - ago, "session": sid}}})
 
 
+def _release_writes(ns):
+    """Writes other than the worker's stored GATE line (those are covered by their own tests)."""
+    return [w for w in ns.writes if set((w[1].get("metadata") or {}).keys()) != {"worker"}]
+
+
 def _meta_write(ns, cid):
     return next(f["metadata"] for c, f in ns.writes if c == cid and "metadata" in f)
 
@@ -85,7 +90,7 @@ def _meta_write(ns, cid):
 def test_a_run_agent_waiting_under_the_limit_keeps_its_window(fake):
     fake.waiting = "waiting (nothing-runnable)"
     fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
-    assert fake.stops == [] and fake.writes == []
+    assert fake.stops == [] and not _release_writes(fake)
     assert "aaaa0001" in load_state()["run_waits"]   # the clock started on first sight
 
 
@@ -125,7 +130,7 @@ def test_a_gate_that_needs_a_person_is_never_released(fake, gate):
     fake.waiting = f"waiting ({gate})"
     _seed_wait("aaaa0001", 5 * 3600)
     fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
-    assert fake.stops == [] and fake.writes == []
+    assert fake.stops == [] and not _release_writes(fake)
 
 
 def test_an_idle_wait_is_released_with_its_reason(fake):
@@ -178,7 +183,7 @@ def test_an_agent_that_cannot_be_stopped_keeps_its_record_and_its_place(fake, re
           _auto("cccc0003", "In progress", worker={**RUN_W, "session_id": "s3", "pane": "%3", "window": "@3"})]
     _seed_wait("aaaa0001", 31 * 60)
     fake.run(cs)
-    assert not [w for w in fake.writes if w[0] == "aaaa0001"]
+    assert not _release_writes(fake)
     assert fake.started == []   # two live run agents: the cap (2 x 1) is full
     assert ("unlock", "aaaa0001") in fake.locked
 
@@ -188,7 +193,7 @@ def test_a_card_under_a_move_lock_is_not_released(fake, monkeypatch):
     monkeypatch.setattr(move_agent, "lock", lambda cid: False)
     _seed_wait("aaaa0001", 31 * 60)
     fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
-    assert fake.stops == [] and fake.writes == []
+    assert fake.stops == [] and not _release_writes(fake)
 
 
 def test_a_dry_run_releases_nothing(fake, monkeypatch):
@@ -196,7 +201,7 @@ def test_a_dry_run_releases_nothing(fake, monkeypatch):
     monkeypatch.setattr(dispatch, "cards", lambda: [_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
     _seed_wait("aaaa0001", 31 * 60)
     dispatch.dispatch_once(1, True, pull=False)
-    assert fake.stops == [] and fake.writes == []
+    assert fake.stops == [] and not _release_writes(fake)
 
 
 # ---------- backoff ----------
@@ -213,7 +218,7 @@ def test_a_released_card_in_backoff_gets_no_agent_and_holds_no_place(fake, capsy
     fake.run(cs)
     assert fake.started == [("bbbb0002", 1)]
     assert "aaaa0001  run blocked: nothing-runnable (#1757)" in capsys.readouterr().out
-    assert fake.writes == []
+    assert not _release_writes(fake)
 
 
 def test_after_the_backoff_the_run_starts_fresh_as_attempt_one(fake):
@@ -389,3 +394,29 @@ def test_a_dead_agent_keeps_its_error_line_on_the_card_once(fake, monkeypatch):
     fake.writes.clear()
     fake.run([c])   # the same line again: nothing new written
     assert not [w for w in fake.writes if "agent_error" in (w[1].get("metadata") or {})]
+
+
+# ---------- the GATE wait stored for the console ----------
+
+def test_a_run_agent_at_a_gate_stores_the_gate_line_on_its_worker(fake):
+    fake.waiting = "waiting (before-push)"
+    fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
+    assert _meta_write(fake, "aaaa0001")["worker"]["run_waiting"] == "GATE: before-push"
+
+
+def test_the_stored_gate_line_is_cleared_when_the_agent_moves_on(fake):
+    fake.waiting = None
+    fake.run([_auto("aaaa0001", "In progress", worker={**RUN_W, "run_waiting": "GATE: before-push"})])
+    assert "run_waiting" not in _meta_write(fake, "aaaa0001")["worker"]
+
+
+def test_an_idle_wait_without_a_gate_stores_nothing(fake):
+    fake.waiting = "waiting (idle 5 min)"
+    fake.run([_auto("aaaa0001", "In progress", worker=dict(RUN_W))])
+    assert not _release_writes(fake)
+
+
+def test_an_unchanged_gate_line_is_not_written_again(fake):
+    fake.waiting = "waiting (before-push)"
+    fake.run([_auto("aaaa0001", "In progress", worker={**RUN_W, "run_waiting": "GATE: before-push"})])
+    assert not _release_writes(fake)
