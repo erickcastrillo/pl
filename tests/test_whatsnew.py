@@ -41,6 +41,10 @@ def test_every_feature_shipped_this_week_has_an_entry():
         assert e["title"] and e["where"] and e["try"] and "\n" not in "".join(e.values())
 
 
+def test_whatsnew_names_the_marketing_template():
+    assert len([e for e in whatsnew.ENTRIES if "marketing template" in e["title"]]) == 1
+
+
 def test_pulling_github_edits_has_an_entry():
     # not "the newest": entries from later merges land after it
     entry = next(e for e in whatsnew.ENTRIES if "GitHub edits" in e["title"] and "conflicts" in e["title"])

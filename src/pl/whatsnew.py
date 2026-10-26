@@ -267,6 +267,8 @@ ENTRIES = [
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
     _e("2026-10-26.62", "Alerts for stuck agents: waiting, unmoved or blocked",
        "Alerts tab; pl alerts", "pl alerts"),
+    _e("2026-10-26.63", "A marketing template for new pipelines: brief, draft, publish, report",
+       "Home: n, step 1", "pl pipelines add NAME --template marketing --board local"),
 ]
 
 
