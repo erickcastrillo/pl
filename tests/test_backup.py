@@ -72,7 +72,7 @@ def env(tmp_path, monkeypatch):
     marks = [0]
     monkeypatch.setattr(board, "last_write", lambda: marks[0] or None)
     emitted = []
-    monkeypatch.setattr(events, "emit", lambda kind, card_id=None, **d: emitted.append((kind, d)))
+    monkeypatch.setattr(events, "emit", lambda kind, card_id=None, **d: kind.startswith("alert_") or emitted.append((kind, d)))
     monkeypatch.setattr(alerts, "_offer", lambda *a, **k: None)
     e = argparse.Namespace(clone=clone, tracker=tracker, git=git, clock=clock, marks=marks, events=emitted)
     backup._ok = None

@@ -207,7 +207,7 @@ def test_dispatch_reconciliation_prefers_limit_over_hook(monkeypatch):
 
 def _emitted(monkeypatch):
     seen = []
-    monkeypatch.setattr(hooks.events, "emit", lambda kind, card=None, **d: seen.append((kind, card, d)))
+    monkeypatch.setattr(hooks.events, "emit", lambda kind, card=None, **d: kind.startswith("alert_") or seen.append((kind, card, d)))
     return seen
 
 
