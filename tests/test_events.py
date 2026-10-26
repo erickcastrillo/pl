@@ -217,3 +217,41 @@ def test_a_move_to_done_of_a_dropped_card_is_marked_dropped(monkeypatch):
     _pass(monkeypatch, col, dropped_at="2026-09-28T11:00:00+00:00")
     moved = [e for e in _lines() if e["kind"] == "moved"]
     assert moved[0]["to"] == "Done" and moved[0]["dropped"] is True
+
+
+def test_emit_stores_the_level_from_the_table_by_kind():
+    for kind in ("error", "runaway", "held", "loop_restart", "moved"):
+        events.emit(kind, "c1")
+    assert [(e["kind"], e["level"]) for e in _lines()] == [
+        ("error", "error"), ("runaway", "error"), ("held", "warning"), ("loop_restart", "warning"), ("moved", "info")]
+
+
+def test_emit_keeps_a_valid_caller_level_and_ignores_a_bad_one():
+    events.emit("moved", "c1", level="warning")
+    events.emit("moved", "c1", level="fatal")
+    assert [e["level"] for e in _lines()] == ["warning", "info"]
+
+
+def test_an_old_entry_without_level_gets_it_from_the_table():
+    path = _write(("runaway", NOW, {}), ("moved", NOW, {}))
+    before = path.read_text()
+    assert [events.level(e) for e in events._read()] == ["error", "info"]
+    assert events.level({"kind": "moved", "level": "bogus"}) == "info"
+    assert path.read_text() == before
+
+
+def test_counting_readers_skip_demo_entries():
+    _write(("error", NOW, {"demo": True, "level": "error"}), ("error", NOW, {}))
+    assert [e.get("demo") for e in events._read()] == [None]
+    assert len(events._read(demo=True)) == 2
+    assert events.metrics(3600, now=NOW + timedelta(minutes=1))["errors_last"].get("demo") is None
+
+
+def test_clear_demo_removes_only_demo_lines_in_order():
+    path = _write(("moved", NOW, {"n": 1}), ("demo_error", NOW, {"demo": True}), ("runaway", NOW, {"n": 2}),
+                  ("demo_info", NOW, {"demo": True}), ("held", NOW, {"n": 3, "level": "warning"}))
+    with open(path, "a") as f:
+        f.write("not json\n")
+    keep = [ln for ln in path.read_text().splitlines() if '"demo"' not in ln]
+    assert events.clear_demo() == 2
+    assert path.read_text().splitlines() == keep

@@ -263,6 +263,8 @@ ENTRIES = [
     _e("2026-10-26.59", "Every agent window of this profile in one list",
        "Automate > Running: top table; Enter opens the live screen", "pl"),
     _e("2026-10-26.60", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
+    _e("2026-10-26.61", "Activity levels: errors and warnings with counts",
+       "Activity tab: f cycles all, errors, warnings, needs you, dispatcher, loops", "pl activity --level warning"),
 ]
 
 
