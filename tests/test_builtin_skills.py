@@ -612,6 +612,7 @@ def _start(monkeypatch, tmp_path, prompt=None, cfg="rel/profile", stage="run"):
     monkeypatch.setattr(dispatch, "_launch", lambda pane, name, script, p=None: tmp_path / "l.sh")
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (tmp_path / "wt", None))
     dispatch.start_worker({"id": "c" * 36, "title": "T", "description": ""}, stage, 0, False)
     return seen
 
@@ -628,7 +629,7 @@ LIMITS = " max_lines=300 max_files=10 target_lines=150 target_files=6"
 
 def test_the_builtin_run_stage_gets_the_review_label_and_pr_limits(monkeypatch, tmp_path):
     seen = _start(monkeypatch, tmp_path)
-    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS}") in seen
+    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS} worktree={tmp_path / 'wt'}") in seen
     seen = _start(monkeypatch, tmp_path, prompt="/my-run {id}")
     assert ("prompt", f"/my-run {'c' * 36}") in seen
 
@@ -753,3 +754,10 @@ def test_pl_run_assigns_the_pull_request_to_you():
     create = next(l for l in text.splitlines() if "gh pr create" in l)
     assert "--assignee @me" in create
     assert int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 8
+
+
+def test_pl_run_does_not_add_worktrees():
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    assert "git worktree add" not in text
+    assert "started you in" in text
+    assert "main checkout" in text and "stop" in text

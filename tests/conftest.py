@@ -218,7 +218,7 @@ def no_stage_hooks(monkeypatch):
 def trusted_work_dir(monkeypatch):
     """The dispatcher's trust gate reads the account's .claude.json: off unless a test turns it on."""
     from pl import dispatch
-    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account: None)
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account, folder=None: None)
 
 
 @pytest.fixture(autouse=True)

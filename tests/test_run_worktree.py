@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from pl import config as C
-from pl import worktrees
+from pl import dispatch, harnesses, worktrees
 from pl.util import slug_of
 
 CARD = {"id": "acme/app#7", "title": "Add thing", "metadata": {}}
@@ -121,3 +121,81 @@ def test_never_touches_main_checkout_files(monkeypatch):
         for argv in git.calls:
             assert argv[0] == "git"
             assert any(tuple(argv[1:1 + len(a)]) == a for a in allowed), argv
+
+
+REAL_GATE = dispatch.untrusted_folder   # conftest fakes it for every other test
+
+
+@pytest.fixture
+def launch(monkeypatch, fake_home):
+    """start_worker with tmux, the harness script, the board and for_run faked. Returns what it did."""
+    ns = type("Ns", (), {})()
+    ns.tmux, ns.prompts, ns.updates, ns.events, ns.notes, ns.for_run = [], [], [], [], [], []
+    ns.result = (fake_home / "wts" / "repo-pl-x", None)
+    monkeypatch.setattr(C, "PROMPTS", {**C.PROMPTS, "run": C.BUILTIN_PROMPTS["run"], "plan": C.BUILTIN_PROMPTS["plan"]}, raising=False)
+    monkeypatch.setattr(C, "CODE_HOST", {}, raising=False)
+    monkeypatch.setattr(C, "ATTENTION", None, raising=False)
+    monkeypatch.setattr(C, "TMUX_SESSION", "pl-t", raising=False)
+    monkeypatch.setattr(C, "STATE_DIR", fake_home / "state", raising=False)
+    monkeypatch.setattr(harnesses, "harness_for", lambda stage, c: (harnesses.get("claude"), "a"))
+    monkeypatch.setattr(harnesses, "unattended", lambda h: h)
+    monkeypatch.setattr(harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: ns.prompts.append(p) or "")
+    monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0))
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: ns.tmux.append(a) or "%1")
+    monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "update", lambda *a, **k: ns.updates.append((a, k)))
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: ns.notes.append(a))
+    monkeypatch.setattr(dispatch.events, "emit", lambda kind, cid=None, **d: ns.events.append((kind, cid, d)))
+    monkeypatch.setattr(dispatch.alerts, "open", lambda key, sev, title, hint: ns.events.append(("alert", key, sev)) or "opened")
+    monkeypatch.setattr(dispatch.alerts, "resolve", lambda key: None)
+    monkeypatch.setattr(dispatch.alerts, "headline", lambda why, t: t)
+    monkeypatch.setattr(dispatch.recall, "for_prompt", lambda c, p: "")
+    monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, stage, prompt: prompt)
+    monkeypatch.setattr(worktrees, "for_run", lambda c: ns.for_run.append(c["id"]) or ns.result)
+    return ns
+
+
+def _start(stage="run"):
+    dispatch.start_worker({"id": "acme/app#7", "title": "Add thing", "metadata": {}}, stage, 0, False)
+
+
+def test_run_window_starts_in_worktree(launch):
+    _start()
+    wt = str(launch.result[0])
+    window = next(a for a in launch.tmux if a[0] == "new-window")
+    assert window[window.index("-c") + 1] == wt
+    assert f"worktree={wt}" in launch.prompts[0]
+
+
+def test_worktree_failure_launches_nothing(launch):
+    launch.result = (None, "fatal: x")
+    _start()
+    assert not [a for a in launch.tmux if a[0] in ("new-window", "new-session")]
+    assert launch.updates == []
+    errors = [e for e in launch.events if e[0] == "error"]
+    assert len(errors) == 1 and "fatal: x" in errors[0][2]["message"]
+    assert ("alert", "worktree:acme/app#7", "high") in launch.events
+    assert len(launch.notes) == 1
+
+
+def test_plan_stage_still_starts_in_work_dir(launch):
+    _start("plan")
+    window = next(a for a in launch.tmux if a[0] == "new-window")
+    assert window[window.index("-c") + 1] == str(C.WORK_DIR)
+    assert launch.for_run == []
+
+
+def test_memory_file_written_inside_worktree(launch, monkeypatch):
+    (launch.result[0] / ".pl").mkdir(parents=True)
+    monkeypatch.setattr(dispatch.recall, "for_prompt", lambda c, p: "remember this")
+    _start()
+    assert f"memory={launch.result[0] / '.pl' / 'launch'}/" in launch.prompts[0]
+
+
+def test_trust_gate_checks_the_folder_it_is_given(monkeypatch):
+    seen = []
+    monkeypatch.setattr(harnesses, "folder_trust", lambda acct, folder: seen.append(folder) or (False,))
+    h = harnesses.get("claude")
+    assert REAL_GATE(h, "a", Path("/wts")) == Path("/wts")
+    assert REAL_GATE(h, "a") == C.WORK_DIR
+    assert seen == ["/wts", str(C.WORK_DIR)]
