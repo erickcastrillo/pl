@@ -9,6 +9,7 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
 from pl import util
+from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run  # the one subprocess runner here; tests fake it
@@ -105,7 +106,7 @@ class ConnectorsPanel(Widget):
     #connectors-notice { height: auto; color: $text-muted; display: none; }
     """
     BINDINGS = [
-        Binding("n", "new", "new"),
+        Binding("n", "new", "new connector"),
         Binding("t", "test", "test"),
         Binding("R", "revoke", "revoke"),
     ]
@@ -160,6 +161,7 @@ class ConnectorsPanel(Widget):
         notice.display = False
         table.display = True
         table.clear()
+        table.add_row(new_row("connector"), *[""] * 6, key=NEW_ROW)
         for idx, it in enumerate(items):
             name = util.mask(str(it.get("name") or ""))
             role = util.mask(str(it.get("role") or ""))
@@ -188,9 +190,11 @@ class ConnectorsPanel(Widget):
 
     def _selected_item(self):
         t = self.query_one(DataTable)
-        if t.row_count and t.cursor_row < len(self.items):
-            return self.items[t.cursor_row]
-        return None
+        return self.items[t.cursor_row - 1] if 0 < t.cursor_row <= len(self.items) else None
+
+    def on_data_table_row_selected(self, m):
+        if m.row_key.value == NEW_ROW:
+            self.action_new()
 
     def action_new(self):
         self.app.push_screen(AddConnectorScreen(), lambda added: added and self.rescan())
@@ -198,7 +202,7 @@ class ConnectorsPanel(Widget):
     def action_test(self):
         item = self._selected_item()
         if not item:
-            self.app.notify("no connector selected", severity="warning")
+            self.app.notify("nothing selected", severity="warning")
             return
         name = item.get("name")
 
@@ -213,7 +217,7 @@ class ConnectorsPanel(Widget):
     def action_revoke(self):
         item = self._selected_item()
         if not item:
-            self.app.notify("no connector selected", severity="warning")
+            self.app.notify("nothing selected", severity="warning")
             return
         name = item.get("name")
 

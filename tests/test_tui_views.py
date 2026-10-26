@@ -3070,7 +3070,7 @@ def test_dashboard_health_lists_every_harness_account():
 
 
 async def _open_loop_form(app, pilot, monkeypatch):
-    from pl import skills
+    from pl import loops, skills
     from pl.tui import loops as tui_loops
     monkeypatch.setattr(skills, "scan", lambda: [{"name": "pl-billing-chase"}])
     monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
@@ -3079,8 +3079,120 @@ async def _open_loop_form(app, pilot, monkeypatch):
     await settle(pilot)
     await pilot.press("n")
     await settle(pilot)
+    assert isinstance(app.screen, tui_loops.TemplateGallery)
+    app.screen.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
+    await pilot.press("enter")
+    await settle(pilot)
     assert isinstance(app.screen, tui_loops.LoopForm)
     return app.screen
+
+
+async def _open_gallery(app, pilot, monkeypatch):
+    from pl import skills
+    from pl.tui import loops as tui_loops
+    monkeypatch.setattr(skills, "scan", lambda: [])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press("n")
+    await settle(pilot)
+    assert isinstance(app.screen, tui_loops.TemplateGallery)
+    return app.screen
+
+
+def test_gallery_rows_say_what_each_template_does_and_needs():
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    rows = {r[0]: r for r in tui_loops.gallery_rows()}
+    assert [r[0] for r in tui_loops.gallery_rows()] == [*loops.TEMPLATES, "Blank loop"]
+    needs = {"auto-review": "write access", "inbox-triage": "email connector", "overdue-invoices": "payments connector",
+             "daily-standup": "nothing extra", "dependency-updates": "nothing extra", "stale-cards": "nothing extra"}
+    assert {n: rows[n][2] for n in needs} == needs
+    assert rows["inbox-triage"][1] == "Read the new mail through the email connector and group it as urgent, reply-needed or FYI."
+    assert rows["auto-review"][3] == "every 30m, 08:00-20:00"
+
+
+async def test_n_opens_the_template_gallery_first(monkeypatch):
+    from pl import loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        gallery = await _open_gallery(app, pilot, monkeypatch)
+        table = gallery.query_one("#gallery-table")
+        assert table.row_count == len(loops.TEMPLATES) + 1
+        names = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+        assert names == [*loops.TEMPLATES, "Blank loop"]
+
+
+async def test_choosing_a_template_in_the_gallery_prefills_the_form(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append((name, kw)))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        gallery = await _open_gallery(app, pilot, monkeypatch)
+        gallery.query_one("#gallery-table").move_cursor(row=list(loops.TEMPLATES).index("overdue-invoices"))
+        await pilot.press("enter")
+        await settle(pilot)
+        form = app.screen
+        assert isinstance(form, tui_loops.LoopForm)
+        template = loops.TEMPLATES["overdue-invoices"]
+        assert form.query_one("#loop-template").value == "overdue-invoices"
+        assert form.query_one("#loop-prompt").value == template["prompt"]
+        assert form._every() == template["every"]
+        assert form.query_one("#loop-hours").value == template["hours"]
+        assert form.query_one("#loop-writes").value is False
+        assert all(form.query_one(f"#loop-{k}").value == "" for k in ("name", "account", "team"))
+        form.query_one("#loop-kind").value = "minutes"
+        form.query_one("#loop-number").value = "60"
+        form.query_one("#loop-name").value = "invoices"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+    assert added == [("invoices", {"skill": None, "prompt": template["prompt"], "every": "60m", "hours": template["hours"],
+                                   "account": None, "team": None, "writes": False})]
+
+
+async def test_blank_loop_opens_an_empty_form(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    from textual.widgets import Input, Select
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        gallery = await _open_gallery(app, pilot, monkeypatch)
+        gallery.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
+        await pilot.press("enter")
+        await settle(pilot)
+        form = app.screen
+        assert isinstance(form, tui_loops.LoopForm)
+        assert all(i.value == "" for i in form.query(Input))
+        assert form._every() == ""
+        assert form.query_one("#loop-template").value is Select.NULL
+        assert form.query_one("#loop-writes").value is False
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LoopForm)
+    assert added == []
+
+
+async def test_esc_in_the_gallery_opens_no_form(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES, C.LOOPS_OFF = {}, {}
+    added = []
+    monkeypatch.setattr(loops, "add", lambda name, **kw: added.append(name))
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_gallery(app, pilot, monkeypatch)
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, (tui_loops.TemplateGallery, tui_loops.LoopForm))
+    assert added == []
 
 
 async def test_picking_a_template_fills_every_field_and_each_stays_editable(monkeypatch):
@@ -3345,6 +3457,7 @@ def test_new_row_reads_plus_new_thing_and_is_dim():
 
 
 async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(monkeypatch):
+    from pl import loops
     from pl.tui import loops as tui_loops
     C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
     C.LOOPS_OFF = {}
@@ -3358,6 +3471,14 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         assert t.get_row_at(0)[0].plain == "+ New loop" and t.row_count == 2
         await pilot.press("enter")
         await settle(pilot)
+        assert isinstance(app.screen, tui_loops.TemplateGallery)
+        await pilot.press("escape")
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        app.screen.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
+        await pilot.press("enter")
+        await settle(pilot)
         assert isinstance(app.screen, tui_loops.LoopForm)
         assert app.screen.query_one("#loop-kind").value is Select.NULL
         await pilot.press("escape")
@@ -3366,7 +3487,7 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         await pilot.press("down")
         await pilot.press("n")
         await settle(pilot)
-        assert isinstance(app.screen, tui_loops.LoopForm)
+        assert isinstance(app.screen, tui_loops.TemplateGallery)
 
 
 async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stays_open(monkeypatch, tmp_path):
@@ -3382,6 +3503,8 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
         await pilot.press("5")
         await settle(pilot)
         await pilot.press("n")
+        await settle(pilot)
+        await pilot.press("end", "enter")
         await settle(pilot)
         form = app.screen
         form.query_one("#loop-name").value = "chase"
@@ -3451,7 +3574,9 @@ async def test_each_extend_sub_tab_shows_its_panel(monkeypatch, vid, panel):
         assert app.active_tab == vid
         assert [type(w).__name__ for w in app.query(f"#{vid} > VerticalScroll > *")] == [panel]
         if vid == "connectors":
-            app.query_one("#connectors").query_one(DataTable).focus()
+            table = app.query_one("#connectors").query_one(DataTable)
+            table.focus()
+            table.move_cursor(row=1)
             await pilot.press("t")
             await settle(pilot)
             assert ["pl", "connectors", "test", "conn1"] in calls
@@ -3575,5 +3700,5 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
         await settle(pilot)
         app.action_skills()
         await settle(pilot)
-        assert {"new", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
+        assert {"new skill", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
                 "update check"} <= _footer_keys(app)

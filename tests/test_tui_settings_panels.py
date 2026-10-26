@@ -77,9 +77,9 @@ async def test_connectors_list_shows_status_and_expiry(monkeypatch):
 
         panel = app.query_one(ConnectorsPanel)
         table = panel.query_one(DataTable)
-        assert table.row_count == 2
+        assert table.row_count == 3   # row 0 is "+ New connector"
         # Verify expired row rendered with red style
-        row1_cells = [table.get_cell_at((1, col)) for col in range(len(table.columns))]
+        row1_cells = [table.get_cell_at((2, col)) for col in range(len(table.columns))]
         assert any(getattr(c, "style", None) == "red" or "expired" in str(c).lower() for c in row1_cells)
 
 
@@ -190,6 +190,7 @@ async def test_t_runs_test_command(monkeypatch):
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(pilot)
+        app.query_one(DataTable).move_cursor(row=1)
         await pilot.press("t")
         await settle(pilot)
 
@@ -213,6 +214,7 @@ async def test_R_revokes_behind_confirm(monkeypatch):
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(pilot)
+        app.query_one(DataTable).move_cursor(row=1)
         await pilot.press("R")
         await settle(pilot)
 
@@ -245,3 +247,66 @@ async def test_settings_view_has_no_extend_panels():
         titles = [p.border_title for p in view.query(".panel")]
         assert titles == ["General", "Connections", "Stages and harnesses", titles[3], "Chat", "Triggers", "Loops", "Dispatcher", "Notifications"]
         assert titles[3].startswith("Models and effort")
+
+
+def _footer_keys(app):
+    return {b.description for _, (_, b, enabled, _) in app.screen.active_bindings.items() if enabled}
+
+
+def _fake_list(monkeypatch, data, calls=None):
+    def fake_run(argv, **kw):
+        if calls is not None:
+            calls.append(argv)
+        out = json.dumps(data) if argv == ["pl", "connectors", "list", "--json"] else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+    monkeypatch.setattr(connectors, "_run", fake_run)
+
+
+async def test_first_row_is_new_connector_even_with_no_connectors(monkeypatch):
+    _fake_list(monkeypatch, [])
+    app = HostApp()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        t = app.query_one(DataTable)
+        assert t.row_count == 1
+        assert t.get_row_at(0)[0].plain == "+ New connector" and "dim" in str(t.get_row_at(0)[0].style)
+
+
+async def test_enter_on_new_connector_opens_the_add_form_and_runs_pl_connectors_add(monkeypatch):
+    calls = []
+    _fake_list(monkeypatch, [], calls)
+    app = HostApp()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, AddConnectorScreen)
+        app.screen.query_one("#connector-name", Input).value = "jira-work"
+        app.screen.query_one("#connector-url", Input).value = "https://jira.example.test"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert ["pl", "connectors", "add", "jira-work", "https://jira.example.test", "--yes"] in calls
+        assert app.query_one(DataTable).get_row_at(0)[0].plain == "+ New connector"
+
+
+async def test_t_and_R_on_the_new_row_say_nothing_selected(monkeypatch):
+    calls = []
+    _fake_list(monkeypatch, [{"name": "conn1", "role": "admin", "teams": "core", "access": "rw", "status": "ok"}], calls)
+    app = HostApp()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        for key in ("t", "R"):
+            await pilot.press(key)
+            await settle(pilot)
+            assert len(app.screen_stack) == 1
+            assert [n.message for n in app._notifications] == ["nothing selected"]
+            app.clear_notifications()
+        assert not [c for c in calls if c[1:3] in (["connectors", "test"], ["connectors", "revoke"])]
+
+
+async def test_footer_reads_n_new_connector(monkeypatch):
+    _fake_list(monkeypatch, [])
+    app = HostApp()
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(pilot)
+        assert "new connector" in _footer_keys(app)
