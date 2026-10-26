@@ -1,5 +1,6 @@
 """Settings section "Skills": every account's skills, agents and commands, a read-only Markdown preview, an in-app
 editor (backup + diff confirm before saving), new from a template, delete to .pl-trash, and the shared library."""
+import json
 import os
 import shlex
 import subprocess
@@ -18,7 +19,7 @@ from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 HINT = ("e edit · E $EDITOR · n new · d delete (to .pl-trash) · S share to the library · l link a library skill "
-        "to an account · I install · u update check · plugin files are read-only")
+        "to an account · I install · u update the selected skill (diff first) · plugin files are read-only")
 DIFF_LINES = 30
 
 
@@ -64,6 +65,39 @@ def grouped(items):
         harness = C.ACCOUNTS.get(account, {}).get("harness", "")
         groups.append((f"{account} ({harness})" if harness else account, [row(i) for i in items if i["account"] == account]))
     return [(h, rs) for h, rs in groups if rs]
+
+
+def _from_github(it):
+    return bool(it) and it["account"] == skills.LIBRARY and it["origin_label"].startswith("GitHub ")
+
+
+def update_label(it, checks):
+    """The row's "update" cell: the check's result for a GitHub-installed skill, empty for every other row."""
+    if not _from_github(it):
+        return ""
+    if checks is None:
+        return "checking…"
+    r = checks.get(it["name"])
+    if not r or r.get("error"):
+        return "check failed"
+    if r["update"]:
+        return f"update available {r['pinned'][:7]} -> {r['latest'][:7]}"
+    return "up to date"
+
+
+def update_block(it, checks):
+    """Why Update cannot run on this row; empty when it can."""
+    if not it:
+        return "nothing selected"
+    if not _from_github(it):
+        return "not installed from GitHub"
+    if checks is None:
+        return "checking for updates…"
+    r = checks.get(it["name"]) or {}
+    error = r.get("error") or checks.get("__error__") or (None if r else "no result for this skill")
+    if error:
+        return f"check failed: {error}"
+    return "" if r["update"] else "up to date"
 
 
 class PromptScreen(ModalScreen):
@@ -181,26 +215,30 @@ class SkillsView(Widget):
     #skills-hint { height: auto; color: $text-muted; }
     #skills-table { width: 3fr; height: 1fr; }
     #skills-preview-box { width: 2fr; height: 1fr; border: round $primary; }
+    #skills-update-note { height: auto; color: $text-muted; }
     """
     BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new"),
                 Binding("d", "delete", "delete"), Binding("S", "share", "share to library"),
                 Binding("l", "link", "link to account"), Binding("I", "install", "install"),
-                Binding("u", "update", "update check")]
+                Binding("u", "update", "update")]
 
     def __init__(self):
         super().__init__()
         self.items = []
         self.rows = []
+        self.groups = []
+        self.checks = None
 
     def compose(self):
         yield Static(Text(HINT), id="skills-hint")
         with Horizontal():
             yield DataTable(cursor_type="row", id="skills-table", zebra_stripes=True)
             with VerticalScroll(id="skills-preview-box"):
+                yield Static("", id="skills-update-note")
                 yield Markdown("", id="skills-preview")
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("name", "kind", "origin", "used by", "linked", "description")
+        self.query_one(DataTable).add_columns("name", "kind", "origin", "update", "used by", "linked", "description")
         self.rescan()
 
     def rescan(self):
@@ -210,21 +248,45 @@ class SkillsView(Widget):
             except (SystemExit, Exception) as e:  # noqa: BLE001 - a worker that raises kills the app
                 self.app.call_from_thread(self.app.notify, str(e), severity="error", markup=False)
                 return
-            self.app.call_from_thread(self._fill, groups)
+            self.app.call_from_thread(self._scanned, groups)
         self.run_worker(run, thread=True, group="skills-scan", exclusive=True)
 
+    def _scanned(self, groups):
+        self.checks = None
+        self._fill(groups)
+        self._check()
+
+    def _check(self):
+        def run():
+            r = None
+            try:
+                r = _run(["pl", "skills", "update", "--check", "--json"], capture_output=True, text=True)
+                checks = {c["name"]: c for c in json.loads(r.stdout)}
+            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+                said = ((r and r.stderr) or str(e)).strip().splitlines()
+                checks = {"__error__": said[-1] if said else "no output"}
+            self.app.call_from_thread(self._set_checks, checks)
+        self.run_worker(run, thread=True, group="skills-check", exclusive=True)
+
+    def _set_checks(self, checks):
+        self.checks = checks
+        self._fill(self.groups)
+
     def _fill(self, groups):
+        self.groups = groups
         t = self.query_one(DataTable)
         keep = t.cursor_row
         t.clear()
         self.rows = []
         for n, (heading, rows) in enumerate(groups):
-            t.add_row(Text(heading, style="bold"), "", "", "", "", "", key=f"h{n}")
+            t.add_row(Text(heading, style="bold"), "", "", "", "", "", "", key=f"h{n}")
             self.rows.append(None)
             for it in rows:
                 lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
-                t.add_row(Text(it["name"]), Text(it["kind"]), Text(it["origin_label"]), Text(it["used_by"]), Text(lib),
-                          Text(it["description"][:80]), key=f"r{len(self.rows)}")
+                label = update_label(it, self.checks)
+                style = "bold" if label.startswith("update available") else "red" if label == "check failed" else ""
+                t.add_row(Text(it["name"]), Text(it["kind"]), Text(it["origin_label"]), Text(label, style=style),
+                          Text(it["used_by"]), Text(lib), Text(it["description"][:80]), key=f"r{len(self.rows)}")
                 self.rows.append(it)
         self.items = [r for r in self.rows if r]
         if self.rows:
@@ -250,6 +312,8 @@ class SkillsView(Widget):
     def _show(self, it, text):
         if it is self._item():        # a newer row is selected: its own read follows
             self.query_one("#skills-preview", Markdown).update(text)
+            note = (update_block(it, self.checks) or "u: update this skill") if _from_github(it) else ""
+            self.query_one("#skills-update-note", Static).update(Text(note))
 
     def on_data_table_row_highlighted(self, _):
         self._preview()
@@ -396,15 +460,36 @@ class SkillsView(Widget):
         self.app.push_screen(PromptScreen("Install skill: <github:...> or owner/repo", placeholder="github:owner/repo"), asked)
 
     def action_update(self):
-        def run():
+        it = self._item()
+        why = update_block(it, self.checks)
+        if why:
+            self._say(why, "information")
+            return
+        name = it["name"]
+
+        def show_diff():
+            r = _run(["pl", "skills", "update", name, "--dry-run"], capture_output=True, text=True)
+            if r.returncode != 0:
+                self.app.call_from_thread(self._say, (r.stderr.strip() or "update failed").splitlines()[-1])
+                return
+            *diff, last = r.stdout.strip().splitlines()
+            repo, sha = last.rsplit(" ", 1)[-1].rsplit("@", 1)
+            shown = "\n".join(diff[:DIFF_LINES]) + (f"\n… {len(diff) - DIFF_LINES} more lines" if len(diff) > DIFF_LINES else "")
+            ask = ConfirmScreen(f"{shown}\n\nUpdate {name} to {repo}@{sha[:7]}?")
+            self.app.call_from_thread(self.app.push_screen, ask, lambda yes: yes and apply(sha))
+
+        def apply(sha):
+            def run():
+                r = _run(["pl", "skills", "update", name, "--yes", "--sha", sha], capture_output=True, text=True)
+                said = (r.stdout if r.returncode == 0 else r.stderr).strip().splitlines()
+                self.app.call_from_thread(self.app.notify, said[-1] if said else "update failed",
+                                          severity="information" if r.returncode == 0 else "error", markup=False)
+                self.app.call_from_thread(self.rescan)
+            self.run_worker(run, thread=True, group="skills-update")
+
+        def guarded():
             try:
-                r = _run(["pl", "skills", "update", "--check"], capture_output=True, text=True)
-                msg = (r.stdout.strip() or r.stderr.strip() or "updated").splitlines()[-1]
-            except Exception as e:
-                msg = str(e)
-            self.app.call_from_thread(self.app.notify, msg, markup=False)
-            self.app.call_from_thread(self.rescan)
-
-        self.run_worker(run, thread=True, group="skills-update")
-
-
+                show_diff()
+            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+                self.app.call_from_thread(self._say, e)
+        self.run_worker(guarded, thread=True, group="skills-update")

@@ -1,13 +1,19 @@
 import io
 import json
 import shutil
+import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
+from textual.app import App
+from textual.widgets import DataTable
 
 from pl import config as C
 from pl import skill_sources as S
+from pl.tui import skills as tui_skills
+from pl.tui.review import ConfirmScreen
 
 OLD, NEW = "c" * 40, "d" * 40
 
@@ -203,3 +209,164 @@ def test_cli_update_accepts_dry_run_and_sha():
     from pl import cli
     a = cli.build_parser().parse_args(["skills", "update", "review", "--dry-run", "--sha", "abc"])
     assert a.dry_run is True and a.sha == "abc"
+
+
+GITHUB = {"account": "library", "origin_label": f"GitHub acme/kit@{OLD[:7]}", "name": "review"}
+
+
+def row(update=True, error=None):
+    return {"name": "review", "update": update, "pinned": OLD, "latest": NEW, "error": error}
+
+
+def test_update_label_and_block_rules():
+    label, block = tui_skills.update_label, tui_skills.update_block
+    assert label(GITHUB, {"review": row()}) == f"update available {OLD[:7]} -> {NEW[:7]}"
+    assert label(GITHUB, {"review": row(False)}) == "up to date"
+    assert label(GITHUB, {"review": row(False, "no network")}) == "check failed"
+    assert label(GITHUB, {}) == "check failed"
+    assert label(GITHUB, None) == "checking…"
+    for origin in ("you", "built in", "plugin"):
+        assert label({**GITHUB, "origin_label": origin}, {"review": row()}) == ""
+    assert label({**GITHUB, "account": "work"}, {"review": row()}) == ""
+    assert block(GITHUB, {"review": row()}) == ""
+    assert block(None, {}) == "nothing selected"
+    assert block({**GITHUB, "origin_label": "you"}, {}) == "not installed from GitHub"
+    assert block(GITHUB, None) == "checking for updates…"
+    assert block(GITHUB, {"review": row(False, "no network")}) == "check failed: no network"
+    assert block(GITHUB, {"__error__": "boom"}) == "check failed: boom"
+    assert block(GITHUB, {"review": row(False)}) == "up to date"
+
+
+class Recorder:
+    def __init__(self, checks, dry=None, gate=None, code=0, err=""):
+        self.checks, self.gate, self.code, self.err = checks, gate, code, err
+        self.dry = dry or f"New or changed code: script run.sh\n--- a/SKILL.md\n+Better body\nwould update review to acme/kit@{NEW}"
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        done = lambda out, code=0, err="": subprocess.CompletedProcess(argv, code, stdout=out, stderr=err)  # noqa: E731
+        if "--check" in argv:
+            if self.gate:
+                self.gate.wait(5)
+            return done(json.dumps(self.checks), self.code, self.err)
+        if "--dry-run" in argv:
+            return done(self.dry)
+        return done(f"updated review to {NEW[:7]}")
+
+
+class Host(App):
+    def compose(self):
+        yield tui_skills.SkillsView()
+
+
+def review_cells(app):
+    view = app.query_one(tui_skills.SkillsView)
+    i = next(n for n, it in enumerate(view.rows) if it and it["name"] == "review")
+    return view, i, [c.plain for c in app.query_one(DataTable).get_row_at(i)]
+
+
+async def settle(app, pilot):
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+async def select_review(app, pilot):
+    view, i, _ = review_cells(app)
+    app.query_one(DataTable).move_cursor(row=i)
+    await settle(app, pilot)
+
+
+def note(app):
+    return str(app.query_one("#skills-update-note").render())
+
+
+def confirm_text(app):
+    return app.screen.message if isinstance(app.screen, ConfirmScreen) else None
+
+
+@pytest.mark.asyncio
+async def test_rows_show_update_available_after_the_background_check(env, monkeypatch):
+    rec = Recorder([row()])
+    monkeypatch.setattr(tui_skills, "_run", rec)
+    app = Host()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert f"update available {OLD[:7]} -> {NEW[:7]}" in review_cells(app)[2]
+    assert ["pl", "skills", "update", "--check", "--json"] in rec.calls
+
+
+@pytest.mark.asyncio
+async def test_a_failed_check_marks_the_row_and_shows_the_error_when_selected(env, monkeypatch):
+    monkeypatch.setattr(tui_skills, "_run", Recorder([row(False, "could not resolve host")], code=1))
+    app = Host()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await select_review(app, pilot)
+        assert "check failed" in review_cells(app)[2]
+        assert "check failed: could not resolve host" in note(app)
+        assert len(app.query_one(tui_skills.SkillsView).items) >= 1
+
+
+@pytest.mark.asyncio
+async def test_the_table_fills_before_the_check_returns(env, monkeypatch):
+    gate = threading.Event()
+    monkeypatch.setattr(tui_skills, "_run", Recorder([row()], gate=gate))
+    app = Host()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        assert "checking…" in review_cells(app)[2]
+        gate.set()
+        await settle(app, pilot)
+        assert f"update available {OLD[:7]} -> {NEW[:7]}" in review_cells(app)[2]
+
+
+@pytest.mark.asyncio
+async def test_u_shows_the_diff_and_no_changes_nothing(env, monkeypatch):
+    rec = Recorder([row()])
+    monkeypatch.setattr(tui_skills, "_run", rec)
+    app = Host()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await select_review(app, pilot)
+        await pilot.press("u")
+        await settle(app, pilot)
+        text = confirm_text(app)
+        assert "New or changed code" in text and f"Update review to acme/kit@{NEW[:7]}?" in text
+        await pilot.press("n")
+        await settle(app, pilot)
+    assert not any("--yes" in c for c in rec.calls)
+
+
+@pytest.mark.asyncio
+async def test_u_yes_updates_only_the_shown_commit(env, monkeypatch):
+    rec = Recorder([row()])
+    monkeypatch.setattr(tui_skills, "_run", rec)
+    app = Host()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await select_review(app, pilot)
+        await pilot.press("u")
+        await settle(app, pilot)
+        before = sum("--check" in c for c in rec.calls)
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert any(n.message == f"updated review to {NEW[:7]}" for n in app._notifications)
+        assert sum("--check" in c for c in rec.calls) > before
+    assert ["pl", "skills", "update", "review", "--yes", "--sha", NEW] in rec.calls
+
+
+@pytest.mark.asyncio
+async def test_u_on_an_up_to_date_row_says_why_and_runs_nothing(env, monkeypatch):
+    rec = Recorder([row(False)])
+    monkeypatch.setattr(tui_skills, "_run", rec)
+    app = Host()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await select_review(app, pilot)
+        await pilot.press("u")
+        await settle(app, pilot)
+        assert any(n.message == "up to date" for n in app._notifications)
+    assert not any("--dry-run" in c for c in rec.calls)

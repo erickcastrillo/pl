@@ -237,6 +237,8 @@ ENTRIES = [
        "Dashboard: the first row, Enter on Health or palette: Health", "pl"),
     _e("2026-10-25.48", "Loops read in plain words: what each does, when it runs, how its last run went",
        "Loops tab: does, schedule, last result; Enter opens the log", "pl loops list"),
+    _e("2026-10-26.49", "Skills screen: update available on GitHub skills, diff before updating",
+       "Settings tab, Skills section: u on a row", "pl skills update NAME --dry-run"),
 ]
 
 
