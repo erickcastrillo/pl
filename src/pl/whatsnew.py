@@ -265,7 +265,6 @@ ENTRIES = [
     _e("2026-10-26.60", "New pipeline: GitHub Project and MCP boards", "Home: n, step 3", "pl watch"),
     _e("2026-10-26.61", "All pipelines' waiting items on Dashboard",
        "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
-||||||| 3e1d636
 ]
 
 
