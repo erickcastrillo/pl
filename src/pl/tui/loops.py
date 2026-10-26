@@ -16,7 +16,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
 
 from pl import agents, loops, schedule, skills, util
 from pl import config as C
-from pl.tui.chrome import NEW_ROW, new_row
+from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.review import ConfirmScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
@@ -517,7 +517,7 @@ class LoopsView(Widget):
 
     def __init__(self):
         super().__init__()
-        self.loops = []
+        self.loops = None   # None until the first show, so an empty first refresh still draws
 
     def compose(self):
         with Horizontal():
@@ -546,6 +546,9 @@ class LoopsView(Widget):
             t.add_row(new_row("loop"), *[""] * (len(COLUMNS) - 1), key=NEW_ROW)
             for x in self.loops:
                 t.add_row(*(Text(str(x[k])) for _, k in COLUMNS), key=x["name"])
+            if not self.loops:
+                for line in empty_state("loops"):
+                    t.add_row(Text(line, style="dim"), *(Text("") for _ in COLUMNS[1:]))
             t.move_cursor(row=min(max(keep, 0), len(self.loops)))
         self.load_tail()
 
@@ -767,6 +770,9 @@ class ActivityView(Widget):
             detail = _fields(e, ("ts", "kind", "card", "profile"))
             t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
                       Text(short_id(e.get("card") or "")), Text(detail))
+        if not shown and self.filter == "all":
+            for line in empty_state("activity"):
+                t.add_row(Text(line, style="dim"), Text(""), Text(""), Text(""))
 
     def action_next_filter(self):
         self.filter = FILTERS[(FILTERS.index(self.filter) + 1) % len(FILTERS)]

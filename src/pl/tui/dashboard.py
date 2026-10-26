@@ -15,6 +15,7 @@ from pl import config as C
 from pl import standup
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.cards import CardsView
+from pl.tui.chrome import empty_state
 from pl.tui.needs import needs_groups, needs_you_count
 from pl.tui.prs import pr_groups
 from pl.usage import human
@@ -262,12 +263,15 @@ class DashboardView(Vertical):
             for col, n, oldest, median in rows:
                 waits.add_row(Text(col), Text(str(n), style="bold"), Text(oldest), Text(median, style="dim"))
         self.data, self.window = data, window
-        items = decide_rows(data)
+        items = decide_rows(data) if any(r.get("card") or r.get("pr") for r in data["snapshot"]["rows"]) else []
         if items != getattr(self, "_decide", None):   # an unchanged table is not rebuilt; the cursor stays put
             self._decide = items
             table = self.query_one("#decide", DataTable)
             keep = table.cursor_row
             table.clear()
+            if not items:
+                for i, line in enumerate(empty_state("dashboard")):
+                    table.add_row(Text(line, style="dim"), Text(""), key=f"empty:{i}")
             for key, n, head, sub, colour in items:
                 table.add_row(Text(f"› {head}", style=f"bold {colour}" if n or key == "needs" else "dim"), Text(sub, style="dim"), key=key)
             table.move_cursor(row=keep)
