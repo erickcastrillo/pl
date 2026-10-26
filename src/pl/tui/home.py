@@ -10,6 +10,10 @@ from textual.widgets import DataTable
 
 from pl import config as C
 from pl import util
+from pl.tui.chrome import NEW_ROW, new_row
+from pl.tui.dashboard import copy_text
+
+NEW_PIPELINE = "pl pipelines add NAME --template T --board local"
 
 
 def read(profile_dir: Path | str) -> dict | None:
@@ -72,12 +76,13 @@ def home_rows(summaries) -> list[dict]:
 
 class HomeView(Widget):
     """The Home tab DataTable showing all configured pipelines."""
-    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details")]
+    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details"),
+                Binding("n", "new", "new pipeline", show=True), Binding("y", "copy", "copy add command")]
 
     def __init__(self, selected_profile=None):
         super().__init__()
         self.selected_profile = selected_profile
-        self.rows = []
+        self.rows = None   # None until the first show, so that draw adds the "+ New" row even with no pipelines
 
     def compose(self):
         yield DataTable(id="home-table")
@@ -89,20 +94,22 @@ class HomeView(Widget):
 
     def selected(self):
         t = self.query_one(DataTable)
-        return self.rows[t.cursor_row] if self.rows and 0 <= t.cursor_row < len(self.rows) else None
+        i = t.cursor_row - 1
+        return self.rows[i] if self.rows and 0 <= i < len(self.rows) else None
 
     def show(self, data):
         t = self.query_one(DataTable)
         keep, rows = t.cursor_row, home_rows((data or {}).get("home", []))
-        if rows != self.rows:
+        if rows != self.rows or not t.row_count:
+            first = self.rows is None
             self.rows = rows
             t.clear()
+            t.add_row(new_row("pipeline"), Text(NEW_PIPELINE, style="dim"), *[""] * 5, key=NEW_ROW)
             for r in self.rows:
                 t.add_row(Text(r["name"]), Text(r["status"], style="green" if r["running"] else "dim"),
                           Text(r["cards"]), Text(str(r["needs_you"]), style="bold red" if r["needs_you"] > 0 else "bold"),
                           Text(str(r["live_agents"])), Text(r["oldest_wait"]), Text(str(r["alerts"])))
-            if self.rows:
-                t.move_cursor(row=min(max(keep, 0), len(self.rows) - 1))
+            t.move_cursor(row=min(1, len(rows)) if first else min(max(keep, 0), len(rows)))
 
     def action_select(self):
         """Enter opens the pipeline: this profile's board, or another profile's console (as ctrl+k does)."""
@@ -111,11 +118,24 @@ class HomeView(Widget):
                 self.app.action_tab("cards")
             else:
                 self.app.switch_to(r["name"])
+        elif self.query_one(DataTable).cursor_row == 0:   # the "+ New pipeline" row
+            self.action_new()
+
+    def action_new(self):
+        from pl.tui.newpipeline import NewPipelineScreen
+        self.app.push_screen(NewPipelineScreen(), lambda name: name and self.app.switch_to(name, tab="cards"))
 
     def on_data_table_row_selected(self, _):
         self.action_select()
 
+    def action_copy(self):
+        if self.query_one(DataTable).cursor_row == 0:
+            copy_text(self.app, NEW_PIPELINE)
+            self.app.notify("copied", markup=False)
+
     def action_details(self):
         from pl.tui.details import DetailsScreen
+        if self.query_one(DataTable).cursor_row == 0:
+            return
         r = self.selected()
         self.app.push_screen(DetailsScreen((r or {}).get("name") or self.selected_profile or C.PROFILE_NAME or "default"))
