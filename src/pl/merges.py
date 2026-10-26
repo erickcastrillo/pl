@@ -5,7 +5,7 @@ import json
 import re
 import urllib.parse
 
-from pl import agents, board, events, jsonout, merge_check, rework
+from pl import agents, board, events, jsonout, judgment, merge_check, rework
 from pl import config as C
 from pl.board import col_name, sections
 from pl.trackers import github
@@ -99,9 +99,10 @@ def rule_deps(card, all_cards):
     return {"ok": not waiting, "why": f"waiting for {', '.join(map(short_id, waiting))}" if waiting else "all dependencies are merged"}
 
 
-def judge(card, pr, all_cards, base):
+def judge(card, pr, all_cards, base, write=False):
     rules = [{"rule": "size", **rule_size(pr)}, {"rule": "sensitive", **rule_sensitive(card, pr, settings()["sensitive"])},
              {"rule": "dependencies", **rule_deps(card, all_cards)}, *merge_check.check(pr, base)]
+    rules += judgment.rules(card, pr, write, asked=all(r["ok"] is True for r in rules))
     failed = [r["rule"] for r in rules if r["ok"] is False]
     not_run = [r["rule"] for r in rules if r["ok"] is None]
     action = "would merge" if not failed and not not_run else \
@@ -225,7 +226,7 @@ def run_pass(all_cards, dry):
             break
         repo, n = C.TRACKER["repo"], pr["number"]
         base = defaults.setdefault(repo, merge_check.default_branch(repo))
-        if not passes(judge(card, pr, all_cards, base)):
+        if not passes(judge(card, pr, all_cards, base, write=not dry)):
             continue
         if pr["baseRefName"] != base:
             msg = f"#{n} targets {pr['baseRefName']}, not the default branch {base}: not merged"
@@ -260,7 +261,7 @@ def cmd_merges(a):
     base = merge_check.default_branch(C.TRACKER["repo"]) if found else None
     judged = []
     for c, pr in found:
-        v = judge(c, pr, all_cards, base)
+        v = judge(c, pr, all_cards, base, write=not a.dry_run)
         act(pr, v, a.dry_run)
         judged.append(v)
     rank = 0

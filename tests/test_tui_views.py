@@ -2672,6 +2672,23 @@ def _loops_log(name, lines):
     (d / f"{name}.log").write_text("\n".join(lines) + "\n")
 
 
+async def test_loop_log_hides_secrets(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    _loops_log("invoices", ["token ghp_" + "a" * 36])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LogScreen)
+        assert "ghp_" not in screen_text(app)
+
+
 async def test_enter_on_a_loop_opens_its_log(monkeypatch):
     from pl.tui import loops as tui_loops
     C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}

@@ -440,7 +440,7 @@ class LoopsView(Widget):
             if text is None:
                 self.app.call_from_thread(self.app.notify, f"no log yet for {name}: it has not run headless", markup=False)
                 return
-            self.app.call_from_thread(self.app.push_screen, LogScreen(name, text))
+            self.app.call_from_thread(self.app.push_screen, LogScreen(name, util.mask(text)))
         self.run_worker(run, thread=True, group="loops-log")
 
     def _change(self, done, fn, *args, **kw):
