@@ -85,6 +85,7 @@ NAV = {
     "open_window",
     "jump",
     "live_view",
+    "open_log",
     "open_card",
     "open",
     "view_card",
