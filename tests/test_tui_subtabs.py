@@ -55,7 +55,9 @@ async def test_ac3_sub_tab_letters_never_collide():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        assert app.sub_keys == {"assistant": {"b": "brain"}, "work": {"b": "cards"}, "automate": {"l": "loops"}}
+        assert app.sub_keys == {"assistant": {"b": "brain"}, "work": {"b": "cards"}, "automate": {"l": "loops"},
+                                "review": {"p": "prs", "w": "waiting"},
+                                "extend": {"c": "connectors", "m": "models", "p": "pods"}}
         for gid, letters in app.sub_keys.items():
             own = {k for k in letters if all(b.action.startswith("sub_letter") for b in app._bindings.key_to_bindings[k])}
             assert own == set(letters)

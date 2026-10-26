@@ -2359,9 +2359,10 @@ async def test_help_panel_lists_every_bound_action_with_a_command(tab, key, monk
         assert isinstance(app.screen, HelpScreen)
         text = " ".join(app.screen.body().plain.split())
         under = app.screen_stack[-2]
+        shadowed = {b.key for bs in app._bindings.key_to_bindings.values() for b in bs if b.priority}
         for b_key, active in under.active_bindings.items():
-            if active.enabled and active.binding.description:
-                assert active.binding.description in text, b_key
+            if active.enabled and active.binding.description and (b_key not in shadowed or active.node is app):
+                assert active.binding.description in text, b_key   # a priority app key (left/right views) hides the widget's own
         assert app.screen.rows and all(command for _, _, _, command in app.screen.rows)
         if tab == "cards":
             assert any(what == "drop" and command == "pl drop <id>" for _, _, what, command in app.screen.rows)
