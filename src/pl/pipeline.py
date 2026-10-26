@@ -188,13 +188,14 @@ def _add(name, p, a):
         return
     p = {k: v for k, v in {**p, "name": name}.items() if v is not None}
     chosen = getattr(a, "accounts", None)
+    known = chosen if isinstance(chosen, dict) else C.ACCOUNTS
     for n in chosen or ():
-        if n not in C.ACCOUNTS:
+        if n not in known:
             _fail(f"unknown account {n!r}")
-    acc = {n: C.ACCOUNTS[n] for n in chosen} if chosen else C.ACCOUNTS
-    account = a.account or (chosen[0] if chosen and len(chosen) == 1 else None)
+    acc = {n: dict(known[n]) for n in chosen} if chosen else C.ACCOUNTS
+    account = a.account or (next(iter(chosen)) if chosen and len(chosen) == 1 else None)
     if account:
-        if account not in C.ACCOUNTS:
+        if account not in known:
             _fail(f"unknown account {account!r}")
         p["stages"] = {n: {"account": account, **s} for n, s in p["stages"].items()}
     tracker = getattr(a, "tracker", None) or _tracker(a.board)

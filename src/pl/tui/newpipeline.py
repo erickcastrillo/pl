@@ -99,6 +99,37 @@ def board_label(tracker):
     return f"mcp {tracker['server']}" if tracker["type"] == "mcp" else "local"
 
 
+def source(choices):
+    """The pipeline the wizard copies or starts from."""
+    return pipeline._pipeline_of(choices["copy"]) if choices["copy"] else pipeline.templates()[choices["template"]]
+
+
+def stages_using(p, name):
+    """Stages of pipeline p the account NAME may run: pinned to it, listing it, or open to any account."""
+    return [n for n, s in p["stages"].items()
+            if s.get("account") == name or name in (s.get("accounts") or ()) or not (s.get("account") or s.get("accounts"))]
+
+
+def accounts_problem(rows, picked, p):
+    """The first reason the picked account rows cannot be used, or None."""
+    names = [r["name"] for r in picked]
+    if not picked:
+        return "pick at least one account"
+    for n in names:
+        if names.count(n) > 1:
+            return f"two accounts named {n}; uncheck one"
+    for stage, s in p["stages"].items():
+        if s.get("account") and s["account"] not in names:
+            return f"stage {stage} uses {s['account']}, which is unchecked"
+    return None
+
+
+def account_label(row, p):
+    harness = row["settings"].get("harness") or "claude"
+    stages = ", ".join(stages_using(p, row["name"])) or "not used by this pipeline"
+    return f"{row['name']} ({harness}) {row['dir']} from {', '.join(row['profiles'])}: {stages}"
+
+
 def create(choices, dry_run):
     """Make the profile (or print what it would write) with `pl pipelines add`'s code, which is private to pipeline.py.
     Returns (ok, text); a failure removes the folder it made."""
@@ -111,8 +142,7 @@ def create(choices, dry_run):
     problem = None
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            source = pipeline._pipeline_of(choices["copy"]) if choices["copy"] else pipeline.templates()[choices["template"]]
-            pipeline._add(name, source, ns)
+            pipeline._add(name, source(choices), ns)
     except SystemExit:
         problem = err.getvalue().strip() or "stopped"
     except Exception as e:
@@ -140,6 +170,7 @@ class NewPipelineScreen(ModalScreen):
         super().__init__()
         self.step = 1
         self.templates = pipeline.templates()
+        self.rows, self.skipped = profiles.all_accounts()
         self.profile_names = [r["name"] for r in profiles.list_profiles(check_lock=False)]
         self._projects = []
         self._gh_loaded = False
@@ -172,7 +203,9 @@ class NewPipelineScreen(ModalScreen):
                     yield Static("", id="np-board-note")
                 with Vertical(id="np-step-4", classes="np-step"):
                     yield Static("Which accounts do the work? Accounts are never created or signed in here.")
-                    yield SelectionList(*[(n, n, True) for n in C.ACCOUNTS], id="np-accounts")
+                    yield SelectionList(*[(r["name"], i, C.PROFILE_NAME in r["profiles"] or (not C.PROFILE_NAME and "-" in r["profiles"]))
+                                          for i, r in enumerate(self.rows)], id="np-accounts")
+                    yield Static("\n".join(self.skipped), classes="dim")
                     yield Static("", id="np-accounts-note")
                 with Vertical(id="np-step-5", classes="np-step"):
                     yield Static("", id="np-summary")
@@ -200,7 +233,19 @@ class NewPipelineScreen(ModalScreen):
         return None, list(self.templates)[max(i, 0)]
 
     def _selected_accounts(self):
-        return list(self.query_one("#np-accounts", SelectionList).selected)
+        return [self.rows[i] for i in self.query_one("#np-accounts", SelectionList).selected]
+
+    def _pipeline(self):
+        copy, template = self._kind()
+        return source({"copy": copy, "template": template})
+
+    def _fill_accounts(self):
+        sel = self.query_one("#np-accounts", SelectionList)
+        keep = set(sel.selected)
+        p = self._pipeline()
+        sel.clear_options()
+        sel.add_options([(account_label(r, p), i, i in keep) for i, r in enumerate(self.rows)])
+        self._account_note()
 
     def _valid(self):
         if self.step == 1:
@@ -211,7 +256,7 @@ class NewPipelineScreen(ModalScreen):
         if self.step == 3:
             return self._board_valid()
         if self.step == 4:
-            return bool(self._selected_accounts()) or not C.ACCOUNTS
+            return not self.rows or accounts_problem(self.rows, self._selected_accounts(), self._pipeline()) is None
         return True
 
     def _board(self):
@@ -271,6 +316,7 @@ class NewPipelineScreen(ModalScreen):
         self.query_one("#np-board-note", Static).update(Text(f"board check failed: {problem}" if problem else ""))
         if problem is None:
             self.step = 4
+            self._fill_accounts()
         self._show()
 
     def _show(self):
@@ -290,7 +336,7 @@ class NewPipelineScreen(ModalScreen):
     def _choices(self):
         copy, template = self._kind()
         return {"copy": copy, "template": template, "name": self.query_one("#np-name", Input).value,
-                "accounts": self._selected_accounts(), "tracker": self._tracker_choice()}
+                "accounts": {r["name"]: r["settings"] for r in self._selected_accounts()}, "tracker": self._tracker_choice()}
 
     def on_radio_set_changed(self, m):
         if m.radio_set.id == "np-kind":
@@ -307,11 +353,13 @@ class NewPipelineScreen(ModalScreen):
         self.query_one("#np-name-note", Static).update(Text(problem or f"will create ~/.pl-{m.value}"))
         self._show()
 
+    def _account_note(self):
+        picked = self._selected_accounts()
+        problem = accounts_problem(self.rows, picked, self._pipeline())
+        self.query_one("#np-accounts-note", Static).update(Text(problem or ", ".join(r["name"] for r in picked)))
+
     def on_selection_list_selected_changed(self, _):
-        only = self._selected_accounts()
-        note = "runs every stage" if len(only) == 1 else "runs any stage"
-        self.query_one("#np-accounts-note", Static).update(Text(
-            ", ".join(f"{n} ({C.ACCOUNTS[n].get('harness') or 'claude'}) {note}" for n in only) or "pick at least one account"))
+        self._account_note()
         self._show()
 
     def on_button_pressed(self, m):
@@ -323,6 +371,8 @@ class NewPipelineScreen(ModalScreen):
                 self._check_board()
                 return
             self.step += 1
+            if self.step == 4:
+                self._fill_accounts()
         elif i in ("np-create", "np-dry"):
             self._run(dry_run=i == "np-dry")
             return
