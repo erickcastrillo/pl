@@ -235,6 +235,8 @@ ENTRIES = [
     _e("2026-10-25.46", "? lists every action on a screen with its pl command", "any screen: press ?", "pl --help"),
     _e("2026-10-25.47", "The Dashboard leads with what needs you; Health moved to a panel",
        "Dashboard: the first row, Enter on Health or palette: Health", "pl"),
+    _e("2026-10-25.48", "Loops read in plain words: what each does, when it runs, how its last run went",
+       "Loops tab: does, schedule, last result; Enter opens the log", "pl loops list"),
 ]
 
 

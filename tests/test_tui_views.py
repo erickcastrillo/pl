@@ -2653,8 +2653,8 @@ def test_loops_tab_shows_next_run_last_result_and_week_tokens():
     C.LOOPS_OFF = {"stale": {"prompt": "find stale cards", "every": "daily 09:00", "enabled": False}}
     data = {"snapshot": {"rows": []}, "usage": {"loops": {"invoices": {"tokens_1h": 0, "tokens_7d": 12_500, "context": None, "dead": False}}}}
     rows = {r["name"]: r for r in tui_loops.loop_rows(data)}
-    assert rows["invoices"]["next"] == soon.replace("T", " ")[:16]
-    assert rows["invoices"]["output"] == "3 invoices overdue"
+    assert rows["invoices"]["next"] == tui_loops.when(soon, datetime.now())
+    assert rows["invoices"]["output"] == "ok, 3 invoices overdue"
     assert rows["invoices"]["tokens7d"] == "12.5k"
     assert rows["triage"]["tokens7d"] == "-" and rows["triage"]["next"] == "-"
     assert rows["stale"]["state"] == "paused" and rows["stale"]["next"] == "-"
@@ -2785,3 +2785,113 @@ async def test_picking_a_skill_after_a_template_drops_the_template_prompt(monkey
         await pilot.press("ctrl+s")
         await settle(pilot)
     assert added[0][1]["skill"] == "pl-billing-chase" and added[0][1]["prompt"] is None
+
+
+def test_loop_row_reads_in_plain_words():
+    from pl.tui import loops as tui_loops
+    soon = (datetime.now() + timedelta(minutes=5)).replace(microsecond=0).isoformat()
+    _loops_state(soon, None)
+    C.SERVICES = {"invoices": {"prompt": "Review the open pull requests that wait for review: label them", "profile": "acme",
+                               "every": "30m", "writes": False},
+                  "triage": {"skill": "triage", "prompt": "/triage", "profile": "acme", "every": "daily 09:00", "writes": True},
+                  "watch": {"prompt": "/loop 30m check the board", "profile": "acme"}}
+    C.LOOPS_OFF = {}
+    rows = {r["name"]: r for r in tui_loops.loop_rows({"snapshot": {"rows": []}})}
+    assert rows["invoices"]["does"] == "Review the open pull requests that wait for review"
+    assert rows["invoices"]["schedule"] == "every 30 minutes" and rows["invoices"]["read_only"] is True
+    assert rows["invoices"]["next"] == tui_loops.when(soon, datetime.now())
+    assert rows["triage"]["does"] == "runs /triage" and rows["triage"]["read_only"] is False
+    assert rows["watch"]["does"] == "check the board" and rows["watch"]["schedule"] == "every 30 minutes"
+    assert rows["watch"]["read_only"] is False
+
+
+def test_loop_sentence():
+    from pl.tui import loops as tui_loops
+    row = {"does": "Review the open pull requests that wait for review", "schedule": "every 30 minutes",
+           "next": "16:30", "output": "ok, 3 PRs"}
+    assert tui_loops.sentence(row) == ("Review the open pull requests that wait for review every 30 minutes; "
+                                       "next at 16:30; last run ok, 3 PRs")
+    assert "next at" not in tui_loops.sentence({**row, "next": "-"})
+
+
+def test_failed_last_run_says_what_failed():
+    from pl.tui import loops as tui_loops
+    assert tui_loops.last_result({"exit": 1, "result": "gh: not logged in"}) == "failed: gh: not logged in (exit 1)"
+    assert tui_loops.last_result({"exit": 2}) == "failed: no output (exit 2)"
+    assert tui_loops.last_result({"exit": 0, "result": "3 PRs"}) == "ok, 3 PRs"
+    assert tui_loops.last_result({"result": "3 PRs"}) == "ok, 3 PRs"
+    assert tui_loops.last_result({"exit": 0}) == "ok"
+    assert tui_loops.last_result(None) == "not run yet"
+    assert tui_loops.last_result({}) == "not run yet"
+    assert tui_loops.last_result({"exit": -1, "result": "unreadable run record"}) == "unreadable run record"
+
+
+def test_when_formats_a_next_run_short():
+    from pl.tui import loops as tui_loops
+    now = datetime(2026, 10, 25, 12, 0)
+    assert tui_loops.when("2026-10-25T16:30:00", now) == "16:30"
+    assert tui_loops.when("2026-10-26T09:00:00", now) == "tomorrow 09:00"
+    assert tui_loops.when("2026-10-30T09:00:00", now) == "Fri 09:00"
+    assert tui_loops.when("-", now) == "-" and tui_loops.when("in ~5m", now) == "in ~5m"
+
+
+def _loops_log(name, lines):
+    d = C.STATE_DIR / "loops"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.log").write_text("\n".join(lines) + "\n")
+
+
+async def test_loop_log_hides_secrets(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    _loops_log("invoices", ["token ghp_" + "a" * 36])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LogScreen)
+        assert "ghp_" not in screen_text(app)
+
+
+async def test_enter_on_a_loop_opens_its_log(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    _loops_log("invoices", [f"line {i} [bold]" for i in range(300)])
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, tui_loops.LogScreen)
+        text = screen_text(app)
+        assert "line 299 [bold]" in text and "line 99 " not in text
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LogScreen)
+
+
+async def test_enter_without_a_log_says_so(monkeypatch):
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    notes = []
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert not isinstance(app.screen, tui_loops.LogScreen)
+        assert any("no log yet for invoices" in n for n in notes)

@@ -9,7 +9,7 @@ from datetime import datetime
 
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
@@ -24,8 +24,12 @@ TAIL_LINES = 40
 ACTIVE_RE = re.compile(r"active (\d+)([mhd]) ago")
 UNIT = {"m": 60, "h": 3600, "d": 86400}
 HINT = "n/a: no Claude turn seen yet · an idle loop restarts fresh over max_context (80% unless set; 0 = off)"
-COLUMNS = (("loop", "name"), ("state", "state"), ("context", "context"), ("tokens 1h", "tokens"), ("tokens 7d", "tokens7d"),
-           ("account", "account"), ("prompt", "prompt"), ("last active", "last"), ("next run", "next"), ("last result", "output"))
+COLUMNS = (("loop", "label"), ("state", "state"), ("context", "context"), ("tokens 1h", "tokens"), ("tokens 7d", "tokens7d"),
+           ("account", "account"), ("does", "does"), ("schedule", "schedule"), ("last active", "last"), ("next run", "next"),
+           ("last result", "output"))
+LOG_LINES = 200
+DOES_CHARS = 60
+LOOP_PREFIX_RE = re.compile(r"/loop (\d+)([mhd]) ")
 
 
 COPIERS = (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"])
@@ -53,6 +57,47 @@ def event_text(e):
     return head + ("\n" + rest if rest else "")
 
 
+def what_it_does(svc):
+    """A loop in a few words: its skill, else the first clause of its prompt."""
+    if svc.get("skill"):
+        return f"runs /{svc['skill']}"
+    prompt = LOOP_PREFIX_RE.sub("", (svc.get("prompt") or "") + " ", count=1).strip()
+    first = (prompt.splitlines() or [""])[0]
+    first = re.split(r":|\. ", first, maxsplit=1)[0].strip()
+    return first if len(first) <= DOES_CHARS else first[:DOES_CHARS - 1].rstrip() + "…"
+
+
+def last_result(run):
+    """The last run in words: ok with its result, or what failed."""
+    if not run:
+        return "not run yet"
+    result = run.get("result")
+    code = run.get("exit")
+    if code in (0, None):
+        return f"ok, {result}" if result else "ok"
+    if code == -1 and result:
+        return result
+    return f"failed: {result or 'no output'} (exit {code})"
+
+
+def when(at, now):
+    """A next-run ISO time as HH:MM today, tomorrow HH:MM, else Mon HH:MM; anything else as it is."""
+    try:
+        t = datetime.fromisoformat(at)
+    except (TypeError, ValueError):
+        return at
+    days = (t.date() - now.date()).days
+    if days == 0:
+        return t.strftime("%H:%M")
+    return t.strftime("tomorrow %H:%M" if days == 1 else "%a %H:%M")
+
+
+def sentence(row):
+    """The loop as one sentence for the top of the right pane."""
+    nxt = f"; next at {row['next']}" if row["next"] != "-" else ""
+    return f"{row['does']} {row['schedule']}{nxt}; last run {row['output']}"
+
+
 def _short(sec):
     return f"{sec // 60}m" if sec < 3600 else f"{sec // 3600}h"
 
@@ -62,7 +107,7 @@ def _next_run(name, svc, runs):
     at = (runs.get(name) or {}).get("next_at")
     if not at:
         at = schedule.next_run(schedule.parse_every(svc["every"]), datetime.now()).isoformat()
-    return at.replace("T", " ")[:16]
+    return at
 
 
 def loop_rows(data):
@@ -71,22 +116,23 @@ def loop_rows(data):
     by_name = {r["loop"]: r for r in rows if r.get("loop")}
     prs = [r["pr"] for r in rows if r.get("pr")]
     runs = load_state().get("services") or {}
+    now = datetime.now()
     out = []
     for name, svc in C.SERVICES.items():
         r = by_name.get(name) or {}
         w = r.get("worker") or {}
         state = {"loop_busy": "working", "loop_off": "off"}.get(r.get("kind"), "on" if w else "off")
         m = ACTIVE_RE.search(str(r.get("text") or ""))
-        every = re.match(r"/loop (\d+)([mhd]) ", svc["prompt"] + " ")
+        every = LOOP_PREFIX_RE.match(svc["prompt"] + " ")
         nxt = "-"
         if svc.get("every"):
-            nxt = _next_run(name, svc, runs)
+            nxt = when(_next_run(name, svc, runs), now)
         elif every and m and state != "off":
             left = int(every[1]) * UNIT[every[2]] - int(m[1]) * UNIT[m[2]]
             nxt = f"in ~{_short(left)}" if left > 0 else "due now"
-        last_result = (runs.get(name) or {}).get("last_run", {}).get("result")
-        if svc.get("every") and last_result:
-            output = last_result
+        run = (runs.get(name) or {}).get("last_run")
+        if svc.get("every") and run:
+            output = last_result(run)
         elif name == "auto-review":
             output = f"{sum(p['state'] == 'decide' for p in prs)} need your decision, {sum(p['state'] != 'decide' for p in prs)} reviewed"
         elif name == "merge-gate":
@@ -101,17 +147,25 @@ def loop_rows(data):
         ctx = f"{u['context']}%" if claude and u.get("context") is not None else "n/a"
         tok = human(u["tokens_1h"]) if claude and u else "n/a"
         week = human(u["tokens_7d"]) if svc.get("every") and u.get("tokens_7d") is not None else "-"
-        out.append({"name": name, "state": state, "prompt": svc["prompt"], "account": svc.get("profile") or "-",
+        words = svc.get("every") or (f"{int(every[1]) * UNIT[every[2]] // 60}m" if every else "")
+        out.append({"name": name, "state": state, "prompt": svc["prompt"], "does": what_it_does(svc),
+                    "schedule": schedule.in_words(words), "read_only": bool(svc.get("every") or "writes" in svc) and not svc.get("writes"),
+                    "account": svc.get("profile") or "-",
                     "context": ctx, "tokens": tok, "tokens7d": week,
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
                     "pane": w.get("pane"), "window": w.get("window")})
     for name, v in C.LOOPS_OFF.items():
+        run = (runs.get(name) or {}).get("last_run")
         out.append({"name": name, "state": "paused", "prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""),
+                    "does": what_it_does(v), "schedule": schedule.in_words(v.get("every")),
+                    "read_only": bool(v.get("every") or "writes" in v) and not v.get("writes"),
                     "account": v.get("account") or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-", "last": "-",
-                    "next": "-", "output": ((runs.get(name) or {}).get("last_run") or {}).get("result") or "not reported",
+                    "next": "-", "output": last_result(run) if run else "not reported",
                     "pane": None, "window": None})
     if C.TRACKER.get("type") == "github-project":
         out.append(_auto_merge_row())
+    for r in out:
+        r["label"] = r["name"] + (" · read-only" if r["read_only"] else "")
     return out
 
 
@@ -177,7 +231,8 @@ def _auto_merge_row():
     last, nxt = (s.get("last_run") or {}), s.get("next_at")
     on, waits = C.AUTO_MERGE.get("enabled") is True, s.get("waits")
     return {"name": "auto-merge", "state": "waiting" if on and waits else "on" if on else "off",
-            "prompt": "built in: merges what passes every rule", "account": merges.account() or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-",
+            "prompt": "built in: merges what passes every rule", "does": "built in: merges what passes every rule",
+            "schedule": schedule.in_words(C.AUTO_MERGE.get("every", "15m")), "read_only": False, "account": merges.account() or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-",
             "last": util.ago(last.get("at")), "next": nxt[11:16] if nxt else "-",
             "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
 
@@ -268,6 +323,45 @@ class LoopForm(ModalScreen):
         self.dismiss(None)
 
 
+def read_log_tail(path, lines=LOG_LINES):
+    """The last lines of a loop's log, or None when it has none; only the end of the file is read."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - lines * 4096))
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    return "\n".join(text.splitlines()[-lines:])
+
+
+class LogScreen(ModalScreen):
+    """A loop's last run log; the text is shown as written, never as markup."""
+    DEFAULT_CSS = """
+    LogScreen { align: center middle; }
+    LogScreen > Vertical { width: 120; height: 90%; border: round $accent; padding: 1 2; background: $surface; }
+    LogScreen VerticalScroll { height: 1fr; }
+    """
+    BINDINGS = [Binding("escape", "close", "close")]
+
+    def __init__(self, name, text):
+        super().__init__()
+        self.loop_name = name
+        self.text = text
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"{self.loop_name}: last run log (esc closes)", style="bold"))
+            with VerticalScroll():
+                yield Static(Text(self.text))
+
+    def on_mount(self):
+        self.call_after_refresh(self.query_one(VerticalScroll).scroll_end, animate=False)
+
+    def action_close(self):
+        self.dismiss(None)
+
+
 class LoopsView(Widget):
     DEFAULT_CSS = """
     LoopsView { height: 1fr; }
@@ -330,9 +424,24 @@ class LoopsView(Widget):
         x = self.selected()
         if x is None or x["name"] != name:
             return
-        body = Text(f"{name} loop\n" if pane else f"{name} loop is off; showing the dispatcher\n", style="bold")
+        body = Text(sentence(x) + "\n", style="bold")
+        body.append(f"{name} loop\n" if pane else f"{name} loop is off; showing the dispatcher\n")
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
+
+    def on_data_table_row_selected(self, _):
+        x = self.selected()
+        if x is None:
+            return
+        name = x["name"]
+
+        def run():   # the log can be large: read it off the UI thread
+            text = read_log_tail(C.STATE_DIR / "loops" / f"{name}.log")
+            if text is None:
+                self.app.call_from_thread(self.app.notify, f"no log yet for {name}: it has not run headless", markup=False)
+                return
+            self.app.call_from_thread(self.app.push_screen, LogScreen(name, util.mask(text)))
+        self.run_worker(run, thread=True, group="loops-log")
 
     def _change(self, done, fn, *args, **kw):
         def run():
