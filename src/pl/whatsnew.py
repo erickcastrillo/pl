@@ -267,6 +267,8 @@ ENTRIES = [
        "Home (H): B, C, I, V, Y open each step; G collapses, Z dismisses", "pl setup"),
     _e("2026-10-26.62", "Alerts for stuck agents: waiting, unmoved or blocked",
        "Alerts tab; pl alerts", "pl alerts"),
+    _e("2026-10-26.63", "Notifications for PR opened, merged and done",
+       "[notify] events in the profile config; chat connectors routed for alerts", "pl chat route alerts <name>"),
 ]
 
 

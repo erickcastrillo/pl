@@ -105,3 +105,141 @@ def test_outbox_line_is_private_json(desktop):
     path = machine_dir() / "chat-outbox.jsonl"
     assert json.loads(path.read_text()) == {"key": "notify", "headline": "Done: card0001: x", "route": "alerts"}
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+# --- the dispatcher's move check ---
+
+import argparse  # noqa: E402
+
+from pl import commands, dispatch  # noqa: E402
+
+
+def _card(n, col, **meta):
+    return {"id": f"card000{n}", "title": f"Title {n}", "description": "", "list_id": col,
+            "metadata": {"pipeline_mode": "auto", **meta}}
+
+
+class Board:
+    """Cards whose column is their list_id; a pass over them runs nothing real."""
+
+    def __init__(self, monkeypatch, *cards):
+        self.cards = list(cards)
+        monkeypatch.setattr(dispatch, "registry", lambda: {})
+        monkeypatch.setattr(dispatch, "cards", lambda: self.cards)
+        monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+        monkeypatch.setattr(dispatch, "stage_for", lambda c, col: None)
+        monkeypatch.setattr(dispatch, "mirror_to_product", lambda *a, **k: None)
+        monkeypatch.setattr(dispatch, "ensure_services", lambda *a, **k: None)
+        monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "")
+        monkeypatch.setattr(dispatch, "sweep_untracked", lambda *a, **k: None)
+
+    def move(self, n, col):
+        self.cards[n - 1]["list_id"] = col
+
+    def run(self):
+        dispatch.dispatch_once(1, False, pull=False)
+
+
+def test_pr_open_move_sends_one_pr_opened_with_pr_number(desktop, monkeypatch):
+    b = Board(monkeypatch, _card(1, "In progress", pr_urls=["https://github.com/o/r/pull/77"]))
+    b.run()
+    b.move(1, "PR open")
+    b.run()
+    b.run()
+    assert len(desktop) == 1
+    assert "card0001" in desktop[0][0] and "#77" in desktop[0][0]
+
+
+def test_one_merge_sends_one_merged_and_no_done(desktop, monkeypatch):
+    b = Board(monkeypatch, _card(1, "PR open", pr_urls=["https://github.com/o/r/pull/77"]))
+    b.run()
+    b.move(1, "Done")
+    b.run()
+    assert [t for t, _ in desktop] == ["Merged: card0001 #77"]
+
+
+def test_three_merges_in_one_pass_send_one_notification(desktop, monkeypatch):
+    b = Board(monkeypatch, *[_card(n, "PR open", pr_urls=[f"https://github.com/o/r/pull/{70 + n}"]) for n in (1, 2, 3)])
+    b.run()
+    for n in (1, 2, 3):
+        b.move(n, "Done")
+    b.run()
+    assert len(desktop) == 1
+    title, message = desktop[0]
+    assert title == "Merged: 3 PRs"
+    assert all(f"#{70 + n}" in message for n in (1, 2, 3))
+
+
+def test_pl_done_move_is_seen_once(desktop, monkeypatch):
+    b = Board(monkeypatch, _card(1, "PR open", pr_urls=["https://github.com/o/r/pull/77"]))
+    b.run()
+    monkeypatch.setattr(commands, "card", lambda cid: b.cards[0])
+    monkeypatch.setattr(commands, "col_id", lambda name: name)
+    monkeypatch.setattr(commands, "col_name", lambda lid: lid)
+    monkeypatch.setattr(commands, "update", lambda cid, list_id=None, **k: b.move(1, list_id))
+    monkeypatch.setattr(commands, "pick", lambda ref, cs, what: b.cards[0])
+    commands.done("card0001", cs=b.cards)
+    assert desktop == []          # pl done only moves the card
+    b.run()
+    b.run()
+    assert [t for t, _ in desktop] == ["Merged: card0001 #77"]
+
+
+def test_done_without_pr_sends_done(desktop, monkeypatch):
+    b = Board(monkeypatch, _card(1, "Approved"))
+    b.run()
+    b.move(1, "Done")
+    b.run()
+    assert [t for t, _ in desktop] == ["Done: card0001"]
+
+
+def test_dropped_card_sends_nothing(desktop, monkeypatch):
+    b = Board(monkeypatch, _card(1, "Approved", dropped_at="2026-10-26T00:00:00+00:00"))
+    b.run()
+    b.move(1, "Done")
+    b.run()
+    assert desktop == []
+
+
+def test_a_failing_notifier_does_not_stop_the_pass(monkeypatch, capsys):
+    def boom(title, message):
+        raise OSError("no such command")
+    monkeypatch.setattr(notifications, "notify", boom)
+    b = Board(monkeypatch, _card(1, "Approved"))
+    b.run()
+    b.move(1, "Done")
+    b.run()
+    assert "notification" in capsys.readouterr().err
+    assert json.loads(C.STATE_FILE.read_text())["last_col"] == {"card0001": "Done"}
+
+
+def test_plan_ready_names_the_card_and_obeys_the_event_list(desktop, monkeypatch):
+    b = Board(monkeypatch, _card(1, "Plan for review"))
+    b.run()
+    assert desktop and desktop[0][0].startswith("Plan ready: card0001")
+    desktop.clear()
+    C.NOTIFY = {"events": ["merged"]}
+    b = Board(monkeypatch, _card(2, "Plan for review"))
+    b.run()
+    assert desktop == []
+
+
+def test_approved_obeys_the_event_list(desktop, monkeypatch):
+    c = _card(1, "Plan for review")
+    for name, val in (("fresh_next", lambda: None), ("find_card", lambda ref: c), ("col_name", lambda lid: lid),
+                      ("update", lambda *a, **k: None), ("col_id", lambda n: n), ("edited_plan", lambda *a: None),
+                      ("plan_path", lambda c: None)):
+        monkeypatch.setattr(commands, name, val)
+    monkeypatch.setattr(commands.pods, "learn", lambda *a: None)
+    monkeypatch.setattr(commands.recall, "note", lambda *a: None)
+    monkeypatch.setattr(commands.audit, "append", lambda *a, **k: None)
+    monkeypatch.setattr(commands.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(commands.confirm, "agent_session", lambda: False)
+    monkeypatch.setattr(commands.pipeline, "is_config", lambda: False)
+    a = argparse.Namespace(id="card0001", force=False)
+    commands.cmd_approve(a)
+    assert desktop and desktop[0][0].startswith("Approved: card0001")
+    desktop.clear()
+    C.NOTIFY = {"events": ["merged"]}
+    commands.cmd_approve(a)
+    assert desktop == []

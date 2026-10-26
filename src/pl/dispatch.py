@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, alerts, backup, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, alerts, backup, board, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -994,14 +994,20 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         gate_sections = {"Plan for review": "PLAN", "Spec ready": "SPEC"}
         dropped = {c["id"] for c in all_cards if (c.get("metadata") or {}).get("dropped_at")}   # pl drop: not finished
         by_id = {c["id"]: c for c in all_cards}
+        moved = []
         for cid, col in now_col.items():
             if cid in last and last[cid] != col:   # first sighting records without emitting
+                moved.append((by_id[cid], last[cid], col))
                 events.emit("moved", cid, **{"from": last[cid], "to": col}, **({"dropped": True} if col == "Done" and cid in dropped else {}))
                 if done := finished_stage(by_id[cid], col):
                     record_finished_run(by_id[cid], *done)
                 if col in gate_sections and (c := by_id.get(cid)):
                     sec = gate_sections[col]
                     pods.save_draft(cid, sec, sections(c.get("description")).get(sec) or "")
+        try:
+            notifications.moves(moved)
+        except Exception as e:  # noqa: BLE001 - a notification never stops the pass
+            print(f"notifications skipped this pass: {e}", file=sys.stderr)
         for c in all_cards:   # a design stage ends without a column move: its DESIGN section appears
             w = (c.get("metadata") or {}).get("worker") or {}
             if w.get("stage") == "design" and has_design(c):
@@ -1183,7 +1189,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if key not in st["notified"]:
                 st["notified"][key] = time.time()
                 print(f"{short_id(c['id'])}  plan ready for review: {c['title'][:50]}")
-                notify(f"Plan ready: {c['title'][:50]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
+                notifications.send("plan_ready", f"Plan ready: {short_id(c['id'])} {c['title'][:40]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
             continue
         if m.get("run_retry_at") and not dry and (on := release_key(c)) != m.get("run_released_on") and \
                 (not w or on.split(":")[0] != str(m.get("run_released_on") or "").split(":")[0]):
