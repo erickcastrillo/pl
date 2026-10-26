@@ -43,6 +43,15 @@ MEANING = {
     "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
     "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
+    "sub_tab": "switch view", "sub_letter": "switch view",
+}
+
+# The bound actions a view shows first in the footer, so the console-wide keys are the ones cut at 80x24.
+MAIN_KEYS = {
+    "cards": ["review('approve')", "move_column", "retry"], "ideas": ["new", "edit_brief"], "dashboard": ["standup", "copy"],
+    "assistant": ["mode", "file_idea"], "brain": ["mode", "undo"], "prs": ["merge"], "loops": ["pause", "run_now", "edit"],
+    "subagents": ["copy"], "activity": ["next_filter", "copy"], "alerts": ["ack"], "settings": ["save", "test"],
+    "home": ["select"],
 }
 
 NEW_ROW = "+new"   # the row key of every list's "+ New <thing>" row
@@ -72,6 +81,14 @@ HELP = {
     "brain": "One read-only brain session per machine, for questions across your pipelines.",
     "home": "Your pipelines, one row each. Press Enter to open one.",
 }
+
+
+def sub_label(text, letter):
+    """A sub-tab label with its first character underlined when that letter switches to the tab."""
+    label = Text(text)
+    if letter:
+        label.stylize("underline", 0, 1)
+    return label
 
 
 def skip_headings(t, is_item, last=None):

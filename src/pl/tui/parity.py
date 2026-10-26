@@ -65,6 +65,8 @@ NAV = {
     "pick",
     # Tab and focus navigation
     "tab",
+    "sub_tab",
+    "sub_letter",
     "focus_next",
     "focus_previous",
     "app.focus_next",
