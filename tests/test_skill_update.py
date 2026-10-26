@@ -279,7 +279,7 @@ async def select_review(app, pilot):
 
 
 def note(app):
-    return str(app.query_one("#skills-update-note").render())
+    return str(app.query_one("#skills-reasons").render())
 
 
 def confirm_text(app):

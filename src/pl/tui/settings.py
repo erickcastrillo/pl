@@ -11,7 +11,7 @@ from pl import config as C
 from pl import harnesses, stage_models, trackers
 from pl.trackers import github
 from pl.tui.extensions import missing_skill
-from pl.tui.panels import make_chat_panel
+from pl.tui.panels import make_chat_panel, make_triggers_panel
 from pl.tui.review import ConfirmScreen
 
 SUBSCRIPTION_LINE = ("pl runs the harness CLIs you already have installed and signed in, on your own subscription. "
@@ -248,6 +248,8 @@ class SettingsView(Widget):
                                                options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
             with self._panel("Chat"):
                 yield make_chat_panel()
+            with self._panel("Triggers"):
+                yield make_triggers_panel()
             with self._panel("Loops"):
                 for name, svc in C.SERVICES.items():
                     yield from self._field(f"{name} prompt", ("loops", name, "prompt"), svc["prompt"])
