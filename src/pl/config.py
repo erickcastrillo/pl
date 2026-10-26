@@ -439,6 +439,15 @@ def validate(doc) -> list[str]:
                 errs.append(f"{kind}.owner must not be empty")
             if "number" in t and not str(t["number"]).strip():
                 errs.append(f"{kind}.number must not be empty")
+        if t.get("type") == "vikunja":
+            if not str(t.get("url") or "").startswith(("http://", "https://")):
+                errs.append(f"{kind}.url must start with http:// or https://")
+            for key in ("project_id", "view_id"):
+                if isinstance(t.get(key), bool) or not isinstance(t.get(key), int):
+                    errs.append(f"{kind}.{key} must be a whole number")
+            from pl.trackers import mcp   # imported here: trackers import this module
+            if not mcp.VAR_RE.fullmatch(str(t.get("token") or "")):
+                errs.append(f"{kind}.token must be a ${{VAR}} reference to an environment variable")
     for table in ("loops", "stages"):
         for name, v in doc.get(table, {}).items():
             if table == "loops" and not NAME_RE.match(name):

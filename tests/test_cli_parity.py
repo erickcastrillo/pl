@@ -180,7 +180,7 @@ def test_every_loops_tab_key_has_a_pl_loops_command(monkeypatch, tmp_path):
     keys = {b.key: b.action for b in LoopsView.BINDINGS}
     for key, action in keys.items():
         assert key in LOOPS_KEYS or action in NAV, f"Loops tab key {key} ({action}) has no pl loops command"
-    assert {"e", "p", "g", "d"} <= set(LOOPS_KEYS)
+    assert {"e", "p", "g", "d", "n"} <= set(LOOPS_KEYS)
     prof = tmp_path / ".pl-fake"
     prof.mkdir()
     (prof / "config.toml").write_text("")
