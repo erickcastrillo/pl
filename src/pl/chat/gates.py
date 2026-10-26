@@ -95,7 +95,7 @@ def post_outbox() -> int:
     alert_conns = [
         (name, cfg)
         for name, cfg in conns.items()
-        if "alerts" in cfg.get("routes", [])
+        if {"alerts", "gates"} & set(cfg.get("routes", []))
     ]
     if not alert_conns:
         return 0
@@ -107,7 +107,10 @@ def post_outbox() -> int:
         except Exception:
             continue
         text = chat.safe_text(entry.get("headline", ""))
+        route = entry.get("route", "alerts")
         for name, cfg in alert_conns:
+            if route not in cfg.get("routes", []):
+                continue
             try:
                 ad = chat.adapter(name)
                 for chat_id in cfg.get("allow", []):

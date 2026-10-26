@@ -10,11 +10,12 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Markdown, OptionList, Static
 
 from pl import config as C
-from pl import move_agent, trackers
+from pl import confirm, move_agent, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import show_first_heading, skip_headings
+from pl.tui.live import LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
@@ -230,7 +231,8 @@ class CardScreen(Screen):
     def action_approve(self):
         if self.card:
             kind = "spec" if self.col == "Spec ready" else "plan"
-            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close)
+            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close,
+                                agent_pending=bool(confirm.pending(self.card)))
 
     def action_send_back(self):
         if self.card:
@@ -279,8 +281,20 @@ class CardScreen(Screen):
 
 class CardActions:
     """The card keys of the Pipeline list. The view gives _row(): the selected row, or None."""
-    CARD_BINDINGS = [Binding("w", "jump", "agent window"), Binding("c", "open_card", "card in browser"),
+    CARD_BINDINGS = [Binding("w", "live_view", "agent screen"), Binding("W", "jump", "agent window (tmux)"),
+                     Binding("c", "open_card", "card in browser"),
                      Binding("t", "retry", "try again"), Binding("m", "move_agent", "move to account")]
+
+    def action_live_view(self):
+        r = self._row()
+        if r is None:
+            return
+        w = r.get("worker") or {}
+        if not w.get("pane"):
+            self.app.notify("this card has no agent window", markup=False)
+            return
+        c = r.get("card") or {}
+        self.app.push_screen(LiveScreen(w["pane"], f"{short_id(c.get('id'))}  {str(c.get('title') or '')[:50]} · {w.get('stage') or ''} agent"))
 
     def action_jump(self):
         r = self._row()

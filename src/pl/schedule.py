@@ -53,6 +53,31 @@ def parse_every(text) -> dict:
     raise _bad("every", text)
 
 
+def _plural(n: int, unit: str) -> str:
+    return f"{n} {unit}" + ("" if n == 1 else "s")
+
+
+def in_words(text) -> str:
+    """A schedule as a person would say it; text that is not a schedule comes back as it is."""
+    text = str(text or "").strip()
+    if not text:
+        return "always on"
+    try:
+        spec = parse_every(text)
+    except ValueError:
+        return text
+    kind = spec["kind"]
+    if kind == "minutes":
+        n = spec["minutes"]
+        if n == 60:
+            return "every hour"
+        return f"every {_plural(n // 60, 'hour')}" if n % 60 == 0 else f"every {_plural(n, 'minute')}"
+    if kind == "cron":
+        return "custom: " + text[5:].strip()
+    hour, minute = spec["at"]
+    return f"{'every day' if kind == 'daily' else 'weekdays'} at {hour:02d}:{minute:02d}"
+
+
 def _cron_matches(fields, dt: datetime) -> bool:
     minute, hour, dom, mon, dow = fields
     return (dt.minute in minute and dt.hour in hour and dt.day in dom and dt.month in mon

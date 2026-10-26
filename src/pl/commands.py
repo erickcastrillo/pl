@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, confirm, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
                       render, sections, share, update)
@@ -287,15 +287,37 @@ def _approve_gate(c):
     approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0)}
     gates = {**(m.get("gates") or {}), name: approval}
     target = pipeline.approved_column(stage)
-    update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None})
+    update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None, "approval_pending": None})
     events.emit("gate_approved", c["id"])
     audit.append("gate_approved", card=c["id"], stage=name)
     print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
 
 
+def _hold_for_owner(c):
+    """An agent session's outward approval: record it pending, send the owner a one-time code, move nothing."""
+    update(c["id"], metadata={"approval_pending": {"by": "agent session", "at": now_iso()}})
+    events.emit("approval_pending", c["id"])
+    audit.append("approval_pending", card=c["id"])
+    code = confirm.new_code(c)
+    title = f"An agent approved: {c['title'][:50]}"
+    notify(title, f"confirm? code {code} (10 minutes)")
+    confirm.send_to_chat(f"{title}; confirm? code {code}")
+    print("pending: the owner confirms in the console, the chat app, or with pl approve <id> --code")
+
+
 def cmd_approve(a):
     fresh_next()   # it writes what it read: never from a copy that may be minutes old
     c = find_card(a.id)
+    code = getattr(a, "code", None)
+    if code is not None:
+        if os.environ.get("PL_SOURCE") or os.environ.get("PL_ASSISTANT"):
+            raise BadInput("pl approve: --code is for the owner; an agent session cannot confirm its own approval")
+        if not confirm.check(c, code):
+            raise BadInput("pl approve: that code is wrong or expired")
+    elif confirm.agent_session():
+        from pl import outward
+        if outward.is_outward(c):
+            return _hold_for_owner(c)
     if pipeline.is_config():
         return _approve_gate(c)
     col = col_name(c["list_id"])
@@ -308,7 +330,7 @@ def cmd_approve(a):
         draft = draft_p.read_text() if draft_p.is_file() else (sections(c.get("description")).get("SPEC") or "")
         approved = sections(c.get("description")).get("SPEC") or ""
         pods.learn(c["id"], "SPEC", draft, approved)
-        update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL})
+        update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL, "approval_pending": None})
         events.emit("spec_approved", c["id"])
         audit.append("spec_approved", card=c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
@@ -337,7 +359,7 @@ def cmd_approve(a):
     approved = parts.get("PLAN") or ""
     pods.learn(c["id"], "PLAN", draft, approved)
     update(c["id"], list_id=col_id("Approved"),
-           metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
+           metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None, "approval_pending": None})
     if outbound.has_reply(c):
         outbound.enqueue(c)
     events.emit("approved", c["id"])

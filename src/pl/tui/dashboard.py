@@ -1,4 +1,4 @@
-"""Dashboard: six tiles for the chosen window, 14-day throughput, where work waits, decide next, health."""
+"""Dashboard: six tiles for the chosen window, 14-day throughput, where work waits, decide next. Health opens in a panel."""
 import shutil
 import statistics
 import time
@@ -76,8 +76,17 @@ DECIDE_TARGET = {"merge": ("prs", None), "specs": ("cards", "specs"), "plans": (
                  "rework": ("prs", None), "decide": ("prs", None), "manual": ("cards", "manual")}
 
 
-def decide_next(rows):
-    """(key, headline, sub line, colour, count) for every Decide-next row; a row with count 0 is still listed."""
+def decide_rows(data):
+    """(key, count, headline, sub line, colour) for the Decide-next list: "Needs you" first, then every group with
+    something in it, then the Health row that opens the details panel."""
+    rows = data["snapshot"]["rows"]
+    total = needs_you_count(data)
+    lead = ("needs", total, f"Needs you · {total}" if total else "Nothing needs you",
+            "gates, manual tasks, PRs to decide or merge" if total else "agents work on their own", "#e0a040")
+    return [lead, *(r for r in _groups(rows) if r[1]), ("health", 0, "Health", "agents, loops, errors, tokens", "dim")]
+
+
+def _groups(rows):
     g, p = needs_groups(rows), pr_groups(rows)
     plans = sorted(parse_iso(r["card"].get("updated_at") or "") for r in g["plans"])
     return [("merge", len(p["merge"]), f"{len(p['merge'])} PRs pass the merge check", "merge them, oldest first", "green"),
@@ -200,14 +209,12 @@ class DashboardView(Vertical):
             decide = DataTable(id="decide", cursor_type="row", show_header=False, classes="panel")
             decide.add_columns("what", "then")
             yield decide
-            yield Static(Text(""), id="health", classes="panel")
             yield StandupPanel(id="standup-panel", classes="panel")
 
     def on_mount(self):
         self.query_one("#throughput").border_title = "Throughput · last 14 days"
         self.query_one("#waits").border_title = "Where work waits"
         self.query_one("#decide").border_title = "Decide next"
-        self.query_one("#health").border_title = "Health"
 
     def show(self, data, window):
         bar = Text("Window  ", style="dim")
@@ -254,25 +261,53 @@ class DashboardView(Vertical):
             waits.clear()
             for col, n, oldest, median in rows:
                 waits.add_row(Text(col), Text(str(n), style="bold"), Text(oldest), Text(median, style="dim"))
-        items = decide_next(data["snapshot"]["rows"])
+        self.data, self.window = data, window
+        items = decide_rows(data)
         if items != getattr(self, "_decide", None):   # an unchanged table is not rebuilt; the cursor stays put
             self._decide = items
             table = self.query_one("#decide", DataTable)
             keep = table.cursor_row
             table.clear()
             for key, n, head, sub, colour in items:
-                table.add_row(Text(f"› {head}", style=f"bold {colour}" if n else "dim"), Text(sub, style="dim"), key=key)
+                table.add_row(Text(f"› {head}", style=f"bold {colour}" if n or key == "needs" else "dim"), Text(sub, style="dim"), key=key)
             table.move_cursor(row=keep)
-        self.query_one("#health", Static).update(health(data, window))
         self.query_one(StandupPanel).update_for(data["snapshot"])
 
     def on_data_table_row_selected(self, e):
         if e.data_table.id != "decide":
             return
+        if e.row_key.value == "health":
+            self.app.action_health()
+            return
+        if e.row_key.value not in DECIDE_TARGET:
+            return
         tab, group = DECIDE_TARGET[e.row_key.value]
         self.app.action_tab(tab)
         if group:
             self.app.query_one(CardsView).show_attention(True, group)
+
+
+class HealthScreen(ModalScreen):
+    """The Health lines in a details panel; esc closes."""
+    DEFAULT_CSS = """
+    HealthScreen { align: center middle; }
+    HealthScreen > Vertical { width: 100%; max-width: 100; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    #health-body { height: 1fr; }
+    """
+    BINDINGS = [Binding("escape", "close", "close")]
+
+    def __init__(self, data, window):
+        super().__init__()
+        self.data, self.window = data, window
+
+    def compose(self):
+        with Vertical():
+            with VerticalScroll(id="health-body"):
+                yield Static(health(self.data, self.window), id="health")
+            yield Static(Text("esc close", style="dim"))
+
+    def action_close(self):
+        self.dismiss(None)
 
 
 class StandupScreen(ModalScreen):
