@@ -399,10 +399,11 @@ def _print_changes(old, new, hashes, inv, out):
         print(skills.diff(before, after, rel) or f"{rel}: binary or empty", file=out)
 
 
-def update(name, yes, out):
+def update(name, yes, out, dry_run=False, sha=None):
     """Show what the pinned commit's upstream changed in an installed skill, ask, then apply it. An edited copy moves
-    to <library>/.pl-edited/ first. Returns the exit code."""
-    if not yes and not sys.stdin.isatty():
+    to <library>/.pl-edited/ first. dry_run prints the changes and stops; sha applies only that commit.
+    Returns the exit code."""
+    if not yes and not dry_run and not sys.stdin.isatty():
         return _fail("no terminal to confirm on; add --yes")
     root = stage = None
     try:
@@ -410,18 +411,23 @@ def update(name, yes, out):
         if not rec:
             return _fail(f"{name!r} was not installed from GitHub")
         src, lib = _src_of(rec), skills.library()
-        sha = resolve(src)
-        if sha == rec["sha"]:
+        latest = resolve(src)
+        if latest == rec["sha"]:
             print(f"{name} is up to date", file=out)
             return 0
-        root = fetch(src, sha)
+        if sha and latest != sha:
+            raise RuntimeError("upstream changed since the diff was shown; check again")
+        root = fetch(src, latest)
         inv = inventory(root, rec["path"])
         new = Path(root) / rec["path"] if rec["path"] else Path(root)
         _print_changes(lib / name, new, rec["files"], inv, out)
+        if dry_run:
+            print(f"would update {name} to {rec['repo']}@{latest}", file=out)
+            return 0
         edited = _hashes(lib / name) != rec["files"]
         if not yes:
             try:
-                ok = ask("skills update", f"Update {name} to {rec['repo']}@{sha[:7]}? [y/N]: ")
+                ok = ask("skills update", f"Update {name} to {rec['repo']}@{latest[:7]}? [y/N]: ")
             except EOFError:
                 ok = ""
             if ok.strip().lower() not in ("y", "yes"):
@@ -442,7 +448,7 @@ def update(name, yes, out):
             else:
                 shutil.rmtree(lib / name)
             os.replace(stage / name, lib / name)
-        _record(lib, name, {**rec, "sha": sha, "files": _hashes(lib / name)})
+        _record(lib, name, {**rec, "sha": latest, "files": _hashes(lib / name)})
     except Refused as e:
         return _fail(str(e))
     except RuntimeError as e:
@@ -452,7 +458,7 @@ def update(name, yes, out):
         for d in (root, stage):
             if d:
                 shutil.rmtree(d, ignore_errors=True)
-    print(f"updated {name} to {sha[:7]}", file=out)
+    print(f"updated {name} to {latest[:7]}", file=out)
     return 0
 
 

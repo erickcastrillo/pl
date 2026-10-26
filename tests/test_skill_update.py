@@ -171,3 +171,35 @@ def test_update_replaces_a_skill_folder_that_has_become_a_link(env, tmp_path):
     assert not (env["lib"] / "review").is_symlink()
     assert "Better body" in (env["lib"] / "review" / "SKILL.md").read_text()
     assert (target / "SKILL.md").read_text().endswith("Body\n")
+
+
+def test_dry_run_prints_the_diff_and_changes_nothing(env, monkeypatch):
+    publish(env)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("asked"))
+    before, rec = tree(env["lib"]), S.records()["review"]["sha"]
+    out = io.StringIO()
+    assert S.update("review", False, out, dry_run=True) == 0
+    assert "New or changed code" in out.getvalue() and "Better body" in out.getvalue()
+    assert f"would update review to acme/kit@{NEW}" in out.getvalue()
+    assert tree(env["lib"]) == before and S.records()["review"]["sha"] == rec
+
+
+def test_update_with_the_shown_sha_applies_it(env):
+    publish(env)
+    assert S.update("review", True, io.StringIO(), sha=NEW) == 0
+    assert S.records()["review"]["sha"] == NEW
+
+
+def test_update_refuses_when_upstream_moved_after_the_diff(env, capsys):
+    publish(env)
+    before = tree(env["lib"])
+    assert S.update("review", True, io.StringIO(), sha="e" * 40) == 1
+    assert "upstream changed" in capsys.readouterr().err
+    assert S.records()["review"]["sha"] == OLD and tree(env["lib"]) == before
+
+
+def test_cli_update_accepts_dry_run_and_sha():
+    from pl import cli
+    a = cli.build_parser().parse_args(["skills", "update", "review", "--dry-run", "--sha", "abc"])
+    assert a.dry_run is True and a.sha == "abc"

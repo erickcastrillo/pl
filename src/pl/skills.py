@@ -796,7 +796,7 @@ def _cmd_disable(a):
 
 
 def cmd_skills(a):
-    """pl skills list [--json] | install SOURCE | update --check | update NAME [--yes] | remove NAME [--yes] | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
+    """pl skills list [--json] | install SOURCE | update --check | update NAME [--yes] [--dry-run] [--sha SHA] | remove NAME [--yes] | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
     if a.skills_cmd == "enable":
         return _cmd_enable(a)
     if a.skills_cmd == "disable":
@@ -813,7 +813,7 @@ def cmd_skills(a):
         if not a.name:
             print("pl skills update: name a skill, or use --check", file=sys.stderr)
             return 2
-        return skill_sources.update(a.name, a.yes, sys.stdout)
+        return skill_sources.update(a.name, a.yes, sys.stdout, dry_run=a.dry_run, sha=a.sha)
     if a.skills_cmd == "remove":
         from pl import skill_sources
         return skill_sources.remove(a.name, a.yes, sys.stdout)

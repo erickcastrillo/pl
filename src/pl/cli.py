@@ -160,7 +160,7 @@
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
                           and a rollback saves an earlier version's exact text as a new version
-  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | update --check [--json] | update NAME [--yes] | remove NAME [--yes] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
+  pl skills list [--json] | install SOURCE [--yes] [--dry-run] [--name N] [--plugin P] | update --check [--json] | update NAME [--yes] [--dry-run] [--sha SHA] | remove NAME [--yes] | share NAME [--account A] | link NAME ACCOUNT | reset NAME [--yes]
                           every account's skills, agents and commands; share moves a skill into the shared
                           library (~/.local/share/pl/skills, or [skills] library) and leaves a link; link adds a
                           library skill to another Claude or Codex account (Extend: Skills, or ctrl+p "Skills");
@@ -484,6 +484,7 @@ def build_parser():
     q = pk.add_parser("update"); q.add_argument("name", nargs="?", help="the installed skill to update")
     q.add_argument("--check", action="store_true", help="list skills with a newer upstream commit and change nothing")
     q.add_argument("--json", action="store_true", help="with --check: machine-readable"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q.add_argument("--dry-run", action="store_true", help="show the diff and change nothing"); q.add_argument("--sha", help="apply only this upstream commit")
     q = pk.add_parser("share"); q.add_argument("name"); q.add_argument("--account", choices=list(C.PROFILES)); q.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     q = pk.add_parser("link"); q.add_argument("name"); q.add_argument("account", nargs="?", default="all"); q.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     q = pk.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
