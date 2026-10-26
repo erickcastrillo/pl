@@ -235,6 +235,23 @@ def test_a_finished_run_keeps_its_masked_output_and_log(profile, tmux_calls, mon
     assert len(kept) == 1
 
 
+def test_a_run_log_that_cannot_be_kept_still_ends_the_run(profile, tmux_calls, monkeypatch):
+    from pl import events, loops
+    calls, panes = tmux_calls
+    _loop()
+    st = {}
+    dispatch.ensure_services(st, [], {}, False, None)
+    record = C.STATE_DIR / "loops" / "invoices.run.json"
+    record.write_text(json.dumps(_run_record()))
+    panes["text"] = "@7 %9 sh invoices\n"
+    emitted = []
+    monkeypatch.setattr(loops, "keep_run", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(events, "emit", lambda kind, card_id=None, **d: emitted.append((kind, d)))
+    dispatch.ensure_services(st, [], {}, False, None)
+    assert not record.exists() and st["services"]["invoices"]["last_run"]["exit"] == 0
+    assert emitted and emitted[0][0] == "error" and "disk full" in emitted[0][1]["message"]
+
+
 def test_run_log_keeps_the_last_20_runs(profile):
     from pl import loops
     h = harnesses.BUILTINS["codex"]
