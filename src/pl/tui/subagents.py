@@ -15,12 +15,14 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Static
 
+from pl import agent_screen
 from pl import config as C
 from pl import harnesses
 from pl.trackers import mcp
 from pl.tui.chrome import empty_state
+from pl.tui.live import LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
-from pl.util import PEM_RE, TOKEN_RE, _nofollow, mask, short_id  # noqa: F401  (shared with pl.usage, which must not load Textual)
+from pl.util import PEM_RE, TOKEN_RE, _nofollow, age, mask, parse_iso, short_id  # noqa: F401  (shared with pl.usage, which must not load Textual)
 
 RECENT = 6 * 3600          # transcripts modified longer ago are hidden
 IDLE = 120                 # seconds without a write before an agent counts as stopped
@@ -219,10 +221,38 @@ def scan(data=None):
     return rows, notes
 
 
+NO_WINDOW = "no agent window"
+WINDOW_LINES = 20
+
+
+def window_rows(data):
+    """One row per card whose worker names a tmux window, each pane read once; NO_WINDOW rows where it cannot be read."""
+    rows = []
+    for r in ((data or {}).get("snapshot") or {}).get("rows") or []:
+        card, w = r.get("card"), r.get("worker") or {}
+        if not (card and w.get("window")):
+            continue
+        pane, status, last = w.get("pane"), NO_WINDOW, ""
+        if r.get("win") and pane:
+            try:
+                text, word, why = agent_screen.read(pane, lines=WINDOW_LINES)
+            except OSError:
+                text, word, why = None, NO_WINDOW, ""
+            status = f"{word}: {why}" if why else word
+            if text is not None:
+                last = next((ln for ln in reversed([x.strip() for x in agent_screen.plain(text).splitlines()]) if ln), "")
+        rows.append({"pane": pane, "card": short_id(card.get("id")), "stage": w.get("stage") or "",
+                     "who": "/".join(x for x in (w.get("profile"), w.get("model")) if x),
+                     "age": age(parse_iso(w["started_at"])) if w.get("started_at") else "",
+                     "status": status, "last": last})
+    return rows or [{"pane": None, "card": "-", "stage": "", "who": "", "age": "", "status": NO_WINDOW, "last": ""}]
+
+
 class SubagentsView(Widget):
     DEFAULT_CSS = """
     SubagentsView { height: 1fr; }
     #subagents-status { height: 1; margin: 0 1; }
+    #agentwin-table { height: auto; max-height: 12; border: round $panel-lighten-2; }
     #subagents-table { width: 90; height: 1fr; border: round $panel-lighten-2; }
     #subagents-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
@@ -232,28 +262,31 @@ class SubagentsView(Widget):
         super().__init__()
         self.data, self.rows, self.lines, self.redraws = None, [], [], 0
         self._shown, self._tail_key = None, None
+        self.wins, self._wins_shown = [], None
 
     def compose(self):
         with Vertical():
             yield Static(id="subagents-status")
+            yield DataTable(id="agentwin-table", cursor_type="row")
             with Horizontal():
                 yield DataTable(id="subagents-table", cursor_type="row", zebra_stripes=True)
                 yield Static(Text("select a background agent", style="dim"), id="subagents-screen", markup=False)
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("parent", "card", "agent", "state", "last active")
+        self.query_one("#agentwin-table", DataTable).add_columns("card", "stage", "account/model", "age", "status", "last line")
+        self.query_one("#subagents-table", DataTable).add_columns("parent", "card", "agent", "state", "last active")
         self.set_interval(REFRESH, self.tick)
 
     def show(self, data):
         self.data = data
 
     def selected(self):
-        t = self.query_one(DataTable)
+        t = self.query_one("#subagents-table", DataTable)
         return self.rows[t.cursor_row] if self.rows and 0 <= t.cursor_row < len(self.rows) else None
 
     def tick(self):
         """Scan and read the selected tail off the UI thread, only while this tab is visible."""
-        if getattr(self.app, "active_tab", None) != "subagents":
+        if getattr(self.app, "active_tab", None) != "subagents" or self.app.screen is not self.screen:
             return
         sel = self.selected()
         want, data, last_key = sel and sel["path"], self.data, self._tail_key
@@ -261,6 +294,7 @@ class SubagentsView(Widget):
         def run():
             try:
                 rows, notes = scan(data)
+                wins = window_rows(data)
                 pick = next((r for r in rows if r["path"] == want), rows[0] if rows else None)
                 lines = None
                 if pick and (pick["path"], pick["key"], pick["state"]) != last_key:   # state also moves with time
@@ -268,15 +302,16 @@ class SubagentsView(Widget):
             except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
                 self.app.call_from_thread(self.app.notify, f"could not list background agents: {e}", severity="error", markup=False)
                 return
-            self.app.call_from_thread(self._apply, rows, notes, pick, lines)
+            self.app.call_from_thread(self._apply, rows, notes, pick, lines, wins)
         self.run_worker(run, thread=True, group="subagents", exclusive=True)
 
-    def _apply(self, rows, notes, pick, lines):
+    def _apply(self, rows, notes, pick, lines, wins):
         status = Text(f"{len(rows)} background agents active in the last 6 h", style="dim")
         for n in notes:
             status.append(f"   {n}", style="dim")
         self.query_one("#subagents-status", Static).update(status)
-        t = self.query_one(DataTable)
+        self._apply_windows(wins)
+        t = self.query_one("#subagents-table", DataTable)
         shown = [(r["parent"], r["card"], r["what"], r["state"], _age(r["age"])) for r in rows]
         self.rows = rows
         if shown != self._shown:   # an unchanged table is not rebuilt
@@ -296,7 +331,32 @@ class SubagentsView(Widget):
             self.query_one("#subagents-screen", Static).update(body)
             self.redraws += 1
 
-    def on_data_table_row_highlighted(self, _):
+    def _apply_windows(self, wins):
+        t = self.query_one("#agentwin-table", DataTable)
+        cur = self.wins[t.cursor_row]["pane"] if 0 <= t.cursor_row < len(self.wins) else None
+        self.wins = wins
+        shown = [(w["card"], w["stage"], w["who"], w["age"], w["status"], w["last"]) for w in wins]
+        if shown == self._wins_shown:
+            return
+        self._wins_shown = shown
+        t.clear()
+        for x in shown:
+            t.add_row(*(Text(v) for v in x))
+        if cur is not None:
+            t.move_cursor(row=next((i for i, w in enumerate(wins) if w["pane"] == cur), 0))
+
+    def on_data_table_row_selected(self, event):
+        if event.data_table.id != "agentwin-table":
+            return
+        win = self.wins[event.cursor_row] if 0 <= event.cursor_row < len(self.wins) else None
+        if win is None or not win["pane"]:
+            self.app.notify(NO_WINDOW, markup=False)
+            return
+        self.app.push_screen(LiveScreen(win["pane"], f"{win['card']} · {win['stage']} agent"))
+
+    def on_data_table_row_highlighted(self, event):
+        if event.data_table.id != "subagents-table":
+            return
         sel = self.selected()
         if sel is not None and (self._tail_key or (None,))[0] != sel["path"]:
             self.tick()

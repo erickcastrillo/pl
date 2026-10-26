@@ -1,14 +1,17 @@
 """WP30: the Background tab lists a harness session's sub-agents and shows the selected one's transcript tail."""
 import json
 import os
+import subprocess
 import time
 
 import pytest
 
 from pl import config as C
+from pl import harnesses
 from pl.tui import loops
 from pl.tui import subagents as sa
 from pl.tui.app import PlApp
+from pl.tui.live import LiveScreen
 
 SESSION = "11111111-2222-4333-8444-555555555555"
 TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
@@ -217,6 +220,7 @@ async def test_tab_lists_agents_shows_tail_and_skips_unchanged_redraw(fake_home,
         app.action_tab("subagents")
         await settle(pilot)
         view = app.query_one(sa.SubagentsView)
+        app.query_one("#subagents-table").focus()
         assert [r["state"] for r in view.rows] == ["running", "waiting", "error"]
         text = _screen(app)
         assert "tool Bash" in text and TOKEN not in text and "***" in text
@@ -262,6 +266,161 @@ async def test_hidden_tab_does_not_scan(fake_home, monkeypatch):
         app.query_one(sa.SubagentsView).tick()
         await settle(pilot)
         assert calls == []
+
+
+class FakeTmux:
+    """Per pane id: screen text and foreground command; a pane missing from `screens` answers code 1."""
+
+    def __init__(self, screens=None, cmds=None, raises=None):
+        self.screens, self.cmds, self.raises, self.calls = screens or {}, cmds or {}, raises, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(argv)
+        if self.raises:
+            raise self.raises
+        pane = argv[argv.index("-t") + 1]
+        if pane not in self.screens:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        out = self.screens[pane] if argv[1] == "capture-pane" else self.cmds.get(pane, "claude") + "\n"
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    def captures(self):
+        return [a for a in self.calls if a[1] == "capture-pane"]
+
+
+def _worker(pane, stage="run", started=None):
+    return {"pane": pane, "window": "@" + pane[1:], "stage": stage, "profile": "acct", "model": "sonnet",
+            "started_at": started or time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 7200))}
+
+
+def _wrow(card_id, pane, win="x", **kw):
+    return {"kind": "card", "card": {"id": card_id, "title": "t"}, "worker": _worker(pane, **kw), "win": win}
+
+
+def _wdata(*rows):
+    return {"snapshot": {"rows": list(rows)}}
+
+
+def test_window_rows_one_per_agent_window_with_fields(monkeypatch):
+    monkeypatch.setattr(harnesses, "_run", FakeTmux({"%1": "● Reading\n● Editing a.py\n", "%2": "thinking\nlast two\n"}))
+    rows = sa.window_rows(_wdata(_wrow("aaaaaaaa1111", "%1", stage="plan"), _wrow("bbbbbbbb2222", "%2")))
+    assert [(r["pane"], r["card"], r["stage"], r["who"], r["age"], r["status"], r["last"]) for r in rows] == [
+        ("%1", "aaaaaaaa", "plan", "acct/sonnet", "2h", "working", "● Editing a.py"),
+        ("%2", "bbbbbbbb", "run", "acct/sonnet", "2h", "working", "last two")]
+
+
+def test_window_rows_mask_secrets_in_last_line(monkeypatch):
+    token = "ghp_" + "a" * 36
+    monkeypatch.setattr(harnesses, "_run", FakeTmux({"%1": f"working\nexport GITHUB_TOKEN={token}\n"}))
+    (row,) = sa.window_rows(_wdata(_wrow("aaaaaaaa1111", "%1")))
+    assert "***" in row["last"] and token not in row["last"]
+
+
+def test_window_rows_finished_waiting_limit_prereq(monkeypatch):
+    monkeypatch.setattr(harnesses, "_run", FakeTmux(
+        {"%1": "All done.\n", "%2": "Which file?\n", "%3": "Claude usage limit reached\n", "%4": "zsh: command not found: uv\n"},
+        {"%1": "zsh"}))
+    rows = sa.window_rows(_wdata(*(_wrow(f"c{i}000000aaaa", f"%{i}") for i in range(1, 5))))
+    assert [r["status"] for r in rows] == [
+        "finished: All done.", "waiting for you: Which file?", "stopped: usage limit",
+        "stopped: missing prerequisite: zsh: command not found: uv"]
+
+
+def test_window_rows_no_window_cases(monkeypatch):
+    tmux = FakeTmux({"%1": "x\n"})
+    monkeypatch.setattr(harnesses, "_run", tmux)
+    rows = sa.window_rows(_wdata(_wrow("aaaaaaaa1111", "%1", win=""), _wrow("bbbbbbbb2222", "%9")))
+    assert [r["status"] for r in rows] == ["no agent window", "no agent window"]
+    assert [a[a.index("-t") + 1] for a in tmux.captures()] == ["%9"]
+    monkeypatch.setattr(harnesses, "_run", FakeTmux(raises=FileNotFoundError("tmux")))
+    assert sa.window_rows(_wdata(_wrow("aaaaaaaa1111", "%1")))[0]["status"] == "no agent window"
+    for data in (_wdata(), None):
+        (row,) = sa.window_rows(data)
+        assert (row["pane"], row["status"]) == (None, "no agent window")
+
+
+def test_window_rows_only_rows_with_worker_window(monkeypatch):
+    tmux = FakeTmux({"%1": "x\n"})
+    monkeypatch.setattr(harnesses, "_run", tmux)
+    no_window = _wrow("bbbbbbbb2222", "%2")
+    del no_window["worker"]["window"]
+    rows = sa.window_rows(_wdata({"kind": "loop_idle", "card": None, "worker": {}, "win": ""}, no_window, _wrow("aaaaaaaa1111", "%1")))
+    assert [r["card"] for r in rows] == ["aaaaaaaa"]
+
+
+def _table_cells(app):
+    t = app.query_one("#agentwin-table")
+    return [[str(c) for c in t.get_row_at(i)] for i in range(t.row_count)]
+
+
+async def _open_background(pilot, app, data):
+    await settle(pilot)
+    app.action_tab("subagents")
+    app.query_one(sa.SubagentsView).show(data)
+    app.query_one(sa.SubagentsView).tick()
+    await settle(pilot)
+
+
+def _bg_app(monkeypatch):
+    app = PlApp(snapshot_provider=lambda: {"snapshot": {"rows": []}}, interval=3600, autostart=False)
+    monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
+    return app
+
+
+async def test_background_view_lists_agent_windows(fake_home, monkeypatch):
+    monkeypatch.setattr(harnesses, "_run", FakeTmux({"%1": "● Reading\n", "%2": "Which file?\n"}))
+    app = _bg_app(monkeypatch)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_background(pilot, app, _wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
+        cells = _table_cells(app)
+        assert [(c[0], c[4]) for c in cells] == [("aaaaaaaa", "working"), ("bbbbbbbb", "waiting for you: Which file?")]
+
+
+async def test_hidden_background_view_runs_no_capture(fake_home, monkeypatch):
+    tmux = FakeTmux({"%1": "x\n", "%2": "y\n"})
+    monkeypatch.setattr(harnesses, "_run", tmux)
+    app = _bg_app(monkeypatch)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        view = app.query_one(sa.SubagentsView)
+        view.show(_wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
+        view.tick()
+        await settle(pilot)
+        assert tmux.captures() == []
+        app.action_tab("subagents")
+        await settle(pilot)
+        tmux.calls.clear()
+        view.tick()
+        await settle(pilot)
+        assert sorted(a[a.index("-t") + 1] for a in tmux.captures()) == ["%1", "%2"]
+
+
+async def test_enter_opens_live_view_and_esc_returns_to_same_row(fake_home, monkeypatch):
+    tmux = FakeTmux({"%1": "one\n", "%2": "two\n"})
+    monkeypatch.setattr(harnesses, "_run", tmux)
+    app = _bg_app(monkeypatch)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_background(pilot, app, _wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
+        app.query_one("#agentwin-table").focus()
+        await pilot.press("down", "enter")
+        await settle(pilot)
+        assert isinstance(app.screen, LiveScreen) and app.screen.pane == "%2"
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, LiveScreen)
+        assert app.query_one("#agentwin-table").cursor_row == 1
+    assert not any("send-keys" in a for a in tmux.calls)
+
+
+async def test_background_view_without_tmux_shows_no_agent_window(fake_home, monkeypatch):
+    monkeypatch.setattr(harnesses, "_run", FakeTmux(raises=FileNotFoundError("tmux")))
+    app = _bg_app(monkeypatch)
+    notes = []
+    monkeypatch.setattr(PlApp, "notify", lambda self, *a, **k: notes.append(a))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_background(pilot, app, _wdata())
+        assert [c[4] for c in _table_cells(app)] == ["no agent window"]
+        assert notes == []
 
 
 async def _noop():
