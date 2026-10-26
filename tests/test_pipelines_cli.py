@@ -166,6 +166,32 @@ def test_add_copies_the_accounts_of_the_current_profile(fake_home):
     assert list(C.ACCOUNTS) == ["main"]
 
 
+def test_add_with_accounts_writes_only_those_accounts(fake_home):
+    _profile(fake_home, "dev", '[accounts.main]\nconfig_dir = "~/.claude"\n[accounts.alt]\nconfig_dir = "~/.claude-alt"\n')
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "accounts": ["alt"]}))
+    C.load("sales")
+    assert list(C.ACCOUNTS) == ["alt"]
+    assert {s.get("account") for s in C.PIPELINE["stages"].values()} == {"alt"}
+
+
+def test_add_with_an_unknown_account_in_accounts_exits_2(fake_home):
+    _profile(fake_home, "dev", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    C.load("dev")
+    with pytest.raises(SystemExit) as e:
+        pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "accounts": ["ghost"]}))
+    assert e.value.code == 2
+    assert not (fake_home / ".pl-sales").exists()
+
+
+def test_add_without_accounts_still_copies_every_account(fake_home):
+    _profile(fake_home, "dev", '[accounts.main]\nconfig_dir = "~/.claude"\n[accounts.alt]\nconfig_dir = "~/.claude-alt"\n')
+    C.load("dev")
+    pipeline.cmd_pipelines(_add_args())
+    C.load("sales")
+    assert list(C.ACCOUNTS) == ["main", "alt"]
+
+
 def test_export_then_import_gives_the_same_columns_stages_gates_and_skills(fake_home, capsys, tmp_path):
     _profile(fake_home, "dev")
     C.load("dev")
