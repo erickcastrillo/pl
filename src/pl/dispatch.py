@@ -1242,7 +1242,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
     if not dry:
-        agent_alerts.check(all_cards, st, {t[0]["id"] for t in todo})
+        try:
+            agent_alerts.check(all_cards, st, {t[0]["id"] for t in todo})
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed check never stops the pass
+            print(f"agent alerts skipped this pass: {e}", file=sys.stderr)
+            events.emit("error", message=f"agent alerts: {e}")
     prep_alive += sweep_untracked(all_cards, reg, dry, st) or 0
     st["screens"] = {p: r for p, r in (st.get("screens") or {}).items() if time.time() - r.get("seen", 0) < 3600}   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)

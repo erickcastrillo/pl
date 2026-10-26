@@ -343,3 +343,45 @@ def test_dispatch_once_runs_agent_alerts(monkeypatch):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     dispatch.dispatch_once(1, False, pull=False)
     assert calls == [(cs, {"o/r#1"})]
+
+
+def test_unreadable_pane_keeps_open_alert_and_notifies_once(clock, sent, screen, monkeypatch):
+    _finished(screen)
+    c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
+    _pass([c])
+    assert len(sent) == 1
+    monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (None, "", ""))
+    _pass([c])
+    assert _open_keys() == ["agent_unmoved:o/r#7"]
+    monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (screen["text"], screen["word"], screen["why"]))
+    _pass([c])
+    assert _open_keys() == ["agent_unmoved:o/r#7"] and len(sent) == 1
+
+
+def test_unreadable_pane_opens_nothing_new(clock, sent, monkeypatch):
+    monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (None, "", ""))
+    _pass([_card("o/r#7", worker=_worker(), pr_urls=[PR])])
+    assert _open_keys() == [] and sent == []
+
+
+def test_dispatch_pass_survives_a_failing_agent_check(monkeypatch, capsys):
+    events_seen = []
+    cs = [{"id": "o/r#1", "title": "t", "list_id": "Inbox", "updated_at": "2026-10-01", "metadata": {"pipeline_mode": "auto"}}]
+
+    def boom(*a):
+        raise RuntimeError("tmux hiccup")
+
+    monkeypatch.setattr(agent_alerts, "check", boom)
+    monkeypatch.setattr(dispatch.events, "emit", lambda kind, **d: events_seen.append((kind, d)))
+    monkeypatch.setattr(dispatch, "registry", lambda: {})
+    monkeypatch.setattr(dispatch, "cards", lambda: cs)
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "start_worker", lambda *a, **k: None)
+    seen = []
+    monkeypatch.setattr(dispatch, "sweep_untracked", lambda *a, **k: seen.append(1) or 0)
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
+    for name in ("mirror_to_product", "ensure_services"):
+        monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+    dispatch.dispatch_once(1, False, pull=False)
+    assert seen and any(k == "error" and "tmux hiccup" in d["message"] for k, d in events_seen)

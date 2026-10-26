@@ -35,7 +35,8 @@ def check(all_cards, st, restarting):
         if not w.get("pane") or w.get("stage") != d.stage_for(c, col):
             continue
         text, word, why = agent_screen.read(w["pane"])
-        if text is None:
+        if text is None:   # an unreadable pane keeps its alerts: resolving them would notify again on the next good read
+            active.update(k for k in (f"{p}{c['id']}" for p in KINDS) if alerts.get(k))
             continue
         lines = agent_screen.plain(text).splitlines()
         for found in (_waiting(c, w, text, word, why, waits, seen), _unmoved(c, w, col, word),
