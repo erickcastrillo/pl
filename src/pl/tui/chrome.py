@@ -9,19 +9,20 @@ from pl import config as C
 from pl.tui.needs import needs_you_count
 
 
-class _TabsList(list):
-    """Tabs list that yields the standard 0-9 keyed tabs during iteration, while retaining Home."""
-    def __iter__(self):
-        return (t for t in super().__iter__() if t[0] != "home")
-
-
-TABS = _TabsList([("home", "Home"), ("dashboard", "Dashboard"), ("assistant", "Assistant"),
-                  ("ideas", "Ideas"), ("cards", "Pipeline"), ("prs", "Pull requests"),
-                  ("loops", "Loops"), ("alerts", "Alerts"), ("activity", "Activity"),
-                  ("settings", "Settings"), ("subagents", "Background"), ("brain", "Brain")])
-# tab key = position in this list: 0 Dashboard, 1 Assistant, 2 Ideas, 3 Pipeline, ... 9 Background.
-# Keys stay fixed when tabs() hides the Assistant.
-TAB_KEYS = {"home": "H", **{tid: str(i) for i, (tid, _) in enumerate(TABS) if tid != "brain"}, "brain": "b"}   # brain uses b
+GROUPS = [
+    ("dashboard", "Dashboard", [("dashboard", "Dashboard")]),
+    ("assistant", "Assistant", [("assistant", "Assistant"), ("brain", "Brain")]),
+    ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
+    ("review", "Review", [("prs", "Pull requests")]),
+    ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
+    ("extend", "Extend", []),
+    ("activity", "Activity", [("activity", "Activity"), ("alerts", "Alerts")]),
+    ("settings", "Settings", [("settings", "Settings")]),
+    ("home", "Home", [("home", "Home")]),
+]
+# Keys never shift: Extend keeps 6 while it has no views, the Assistant keeps 2 while it is off.
+GROUP_KEYS = {**{gid: str(i + 1) for i, (gid, _, _) in enumerate(g for g in GROUPS if g[0] != "home")}, "home": "H"}
+TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 
 # What each bound action means to the person at the keys. A key may serve several actions only when they share a meaning;
 # tests/test_tui_views.py fails on a key with two, and on a binding whose action is missing here.
@@ -33,7 +34,8 @@ MEANING = {
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
     "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
-    "open_window": "open window", "jump": "open window", "drop": "remove", "discard": "remove", "delete": "remove",
+    "open_window": "open window", "jump": "open window", "live_view": "open window",
+    "page_up": "page up", "page_down": "page down", "drop": "remove", "discard": "remove", "delete": "remove",
     "revoke": "remove", "retry": "try again", "move_agent": "move to account", "move_column": "move to column",
     "only_mine": "filter", "plan_filter": "filter", "next_filter": "filter", "done": "done", "show_done": "show done", "undrop": "undo",
     "undo": "undo", "adopt": "to pipeline", "hand_off": "to Manual", "answer": "answer", "edit": "edit",
@@ -53,7 +55,9 @@ HELP = {
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, models, skills and the other settings of this profile.",
-    "subagents": "Agents running in the background and what each is doing.",
+    "subagents": "Running: agents working in the background and what each is doing.",
+    "brain": "One read-only brain session per machine, for questions across your pipelines.",
+    "home": "Your pipelines, one row each. Press Enter to open one.",
 }
 
 
@@ -85,10 +89,26 @@ def show_first_heading(t, is_item):
 
 
 def tabs():
-    """The tabs this console shows: Home when >= 2 profiles have config.toml, less Assistant when disabled."""
+    """The views this console shows: Home when >= 2 profiles have config.toml, less Assistant when disabled."""
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
-    res = [("home", "Home")] if count >= 2 else []
-    return res + [t for t in TABS if t[0] != "assistant" or C.ASSISTANT.get("enabled", True) is not False]
+    return [(vid, name) for vid, name in TABS
+            if (vid != "home" or count >= 2) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+
+
+def groups():
+    """The groups with at least one visible view: (gid, label, [(view_id, sub_label), ...])."""
+    shown = {vid for vid, _ in tabs()}
+    shown_groups = ((gid, label, [v for v in views if v[0] in shown]) for gid, label, views in GROUPS)
+    return [g for g in shown_groups if g[2]]
+
+
+def resolve(name):
+    """(gid, view_id) for a visible view id, (gid, None) for a group id (its first view), else None."""
+    shown = groups()
+    for gid, _, views in shown:
+        if any(vid == name for vid, _ in views):
+            return gid, name
+    return next(((gid, None) for gid, _, _ in shown if gid == name), None)
 
 
 def stopped_at(data):

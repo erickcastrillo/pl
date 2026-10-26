@@ -21,11 +21,12 @@ from textual.css.query import NoMatches
 from pl import board, dispatch, manager, update, whatsnew
 from pl import config as C
 from pl.trackers.github import RateLimited
+from pl.tui import parity
 from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.brain import BrainView
 from pl.tui.cards import CardsView, card_count
-from pl.tui.chrome import HELP, TABS, TAB_KEYS, header_text, tabs
+from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, groups, header_text, resolve, tabs
 from pl.tui.needs import needs_you_count, review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
@@ -137,15 +138,26 @@ class HelpScreen(ModalScreen):
     """
     BINDINGS = [Binding("escape", "close", "close"), Binding("question_mark", "help", "close", show=False)]
 
-    def __init__(self, title, about, keys):
+    def __init__(self, title, about, rows):
         super().__init__()
-        self.title_text, self.about, self.keys = title, about, keys
+        self.title_text, self.about, self.rows = title, about, rows
+
+    def body(self):
+        text = Text(self.about + "\n")
+        for group in parity.GROUPS:
+            rows = [r for r in self.rows if r[0] == group]
+            if rows:
+                text.append(f"\n{group}\n", style="bold")
+            for _, key, what, command in rows:
+                text.append(f"  {key:<14} {what:<28} ")
+                text.append(command + "\n", style="dim")
+        return text
 
     def compose(self):
         with Vertical():
             yield Static(Text(f"Help: {self.title_text}", style="bold"))
             with VerticalScroll(id="help-body"):
-                yield Static(Text(self.about + "\n\n" + "\n".join(f"{k}  {what}" for k, what in self.keys)))
+                yield Static(self.body())
             yield Static(Text("esc close · the palette (ctrl+p) has What's new", style="dim"))
 
     def action_help(self):
@@ -209,10 +221,11 @@ NARROW_BELOW = 120   # columns: below this the list fills the width and the deta
 class PlApp(App):
     CSS_PATH = "app.tcss"
     TITLE = "pl"
-    BINDINGS = [Binding(TAB_KEYS[tid], f"tab('{tid}')", "views" if i == 0 else name, show=i == 0, key_display="0-9")
-                for i, (tid, name) in enumerate(TABS)] + [
-        Binding(f"{mod}+{TAB_KEYS[tid]}", f"tab('{tid}')", name, show=False)   # work even while the Assistant box has focus
-        for mod in ("ctrl", "alt") for tid, name in TABS] + [
+    BINDINGS = [Binding(GROUP_KEYS[gid], f"tab('{gid}')", "views" if i == 0 else name, show=i == 0, key_display="1-8")
+                for i, (gid, name, _) in enumerate(g for g in GROUPS if g[0] != "home")] + [
+        Binding(f"{mod}+{GROUP_KEYS[gid]}", f"tab('{gid}')", name, show=False)   # work even while the Assistant box has focus
+        for mod in ("ctrl", "alt") for gid, name, _ in GROUPS if gid != "home"] + [
+        Binding("H", "tab('home')", "pipelines", show=False),
         Binding("left_square_bracket", "cycle_window(-1)", "earlier window", key_display="["),
         Binding("right_square_bracket", "cycle_window(1)", "later window", key_display="]"), Binding("s", "standup", "standup"),
         Binding("a", "review('approve')", "approve"), Binding("x", "review('send_back')", "send back"),
@@ -242,15 +255,16 @@ class PlApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(header_text(None), id="header")
-        shown_tabs = tabs()
-        initial = "home" if any(t[0] == "home" for t in shown_tabs) else "dashboard"
-        with TabbedContent(id="tabs", initial=initial):
-            for tid, name in shown_tabs:
-                with TabPane(f"{TAB_KEYS.get(tid, '')} {name}".strip(), id=tid):
-                    if tid in VIEWS:
-                        yield VIEWS[tid]()
-                    else:
-                        yield Static(Text(LATER[tid], style="dim"))
+        with TabbedContent(id="tabs", initial="g-dashboard"):
+            for gid, label, views in groups():
+                with TabPane(f"{GROUP_KEYS[gid]} {label}" if gid != "home" else label, id=f"g-{gid}"):
+                    with TabbedContent(id=f"{gid}-views", classes="-single" if len(views) == 1 else ""):
+                        for vid, sub_label in views:
+                            with TabPane(sub_label, id=vid):
+                                if vid in VIEWS:
+                                    yield VIEWS[vid]()
+                                else:
+                                    yield Static(Text(LATER[vid], style="dim"))
         yield Footer()
 
     def on_resize(self, event):
@@ -274,6 +288,8 @@ class PlApp(App):
         if self.open_card:
             from pl.tui.cards import CardScreen
             self.push_screen(CardScreen(self.open_card, None))
+        if self.query("#home-views"):
+            self.query_one("#tabs", TabbedContent).hide_tab("g-home")
         if self.initial_tab:
             self.action_tab(self.initial_tab)
 
@@ -353,14 +369,19 @@ class PlApp(App):
     def action_help(self):
         if isinstance(self.screen, HelpScreen):
             return
-        keys, seen = [], set()
+        rows, seen = [], set()
         for key, active in self.screen.active_bindings.items():
             b = active.binding
-            if active.enabled and b.show and b.description and b.description not in seen:
+            if active.enabled and b.description and b.description not in seen:
                 seen.add(b.description)
-                keys.append((b.key_display or key, b.description))
-        title = dict(tabs()).get(self.active_tab, self.active_tab)
-        self.push_screen(HelpScreen(title, HELP.get(self.active_tab, ""), keys))
+                command = parity.command_for(type(active.node).__name__, b.action, key)
+                rows.append((parity.group_of(b.action, command), b.key_display or key, b.description, command or "console only"))
+        if self.screen is self.screen_stack[0]:
+            title, about = dict(tabs()).get(self.active_tab, self.active_tab), HELP.get(self.active_tab, "")
+        else:
+            title = type(self.screen).__name__.removesuffix("Screen")
+            about = (type(self.screen).__doc__ or "").strip().partition("\n")[0]
+        self.push_screen(HelpScreen(title, about, rows))
 
     def action_switcher(self):
         from pl.tui.switcher import SwitcherScreen
@@ -397,7 +418,7 @@ class PlApp(App):
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)
-        yield SystemCommand("Brain: ask questions across pipelines", "one read-only brain session per machine (b)",
+        yield SystemCommand("Brain: ask questions across pipelines", "one read-only brain session per machine",
                             self.action_brain)
 
     def action_brain(self):
@@ -534,23 +555,29 @@ class PlApp(App):
         failed = (self.error or "").splitlines()[0] if self.error else ""
         for table in ("#cards-table", "#prs-table"):
             self.query_one(table).border_subtitle = failed if failed.startswith("refresh failed") else ""
-        tabs = self.query_one(TabbedContent)
         n_prs = sum(1 for r in rows if r.get("pr"))
         mine = needs_you_count(self.data)
-        for tid, label in (("cards", f"Pipeline {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
-                           ("prs", f"Pull requests {n_prs}"), ("alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
-            tabs.get_tab(tid).label = f"{TAB_KEYS[tid]} {label}"
+        for group, tid, label in (("work", "cards", f"Board {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
+                                  ("review", "prs", f"Pull requests {n_prs}"),
+                                  ("activity", "alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
+            self.query_one(f"#{group}-views", TabbedContent).get_tab(tid).label = label
 
     @property
     def active_tab(self):
         try:
-            return self.query_one(TabbedContent).active
+            outer = self.query_one("#tabs", TabbedContent).active
+            return self.query_one(f"#{outer.removeprefix('g-')}-views", TabbedContent).active
         except NoMatches:
             return None
 
-    def action_tab(self, tid):
-        self.query_one(TabbedContent).active = tid
-        pane = self.query_one(f"#{tid}", TabPane)
+    def action_tab(self, name):
+        if (place := resolve(name)) is None:
+            return
+        gid, view = place
+        self.query_one("#tabs", TabbedContent).active = f"g-{gid}"
+        if view:
+            self.query_one(f"#{gid}-views", TabbedContent).active = view
+        pane = self.query_one(f"#{self.active_tab}", TabPane)
         target = next((w for w in pane.query("*") if w.focusable), None)
         if target is not None:
             target.focus()
@@ -580,7 +607,7 @@ class PlApp(App):
 
     def check_action(self, action, parameters):
         if action == "tab":
-            return any(t[0] == parameters[0] for t in tabs())
+            return resolve(parameters[0]) is not None
         if action == "cycle_window":
             return self.active_tab == "dashboard"
         if action == "standup":

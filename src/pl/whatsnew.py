@@ -232,7 +232,8 @@ ENTRIES = [
        "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs", "pl merges --dry-run"),
     _e("2026-10-25.45", "Skills are grouped: pl's stage skills, your library, each account",
        "Settings tab, Skills section: origin and used by on every row", "pl skills list"),
-    _e("2026-10-25.46", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
+    _e("2026-10-25.46", "? lists every action on a screen with its pl command", "any screen: press ?", "pl --help"),
+    _e("2026-10-25.47", "New pipeline from Home", "Home: + New pipeline or n", "pl watch"),
 ]
 
 

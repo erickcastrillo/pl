@@ -769,3 +769,35 @@ def test_pl_titles_writes_ask_first_but_check_and_next_do_not(tmux):
     p = _perms(tmux)
     assert all(any(_hits(p["ask"], c) for c in (cmd,)) for cmd in ("pl titles set x --plan 1 --slice 1", "pl titles check --fix"))
     assert not any(_hits(p["ask"], c) for c in ("pl titles check", "pl titles check --json", "pl titles next"))
+
+
+# ---------- Brain's tools in the assistant ----------
+
+def test_claude_assistant_gets_the_brain_server_and_its_tools_run_without_asking(tmux):
+    from pl import manager
+    assistant.ensure()
+    argv = _exec_argv(tmux)
+    assert argv[argv.index("--mcp-config") + 1] == str(manager.machine_dir() / "brain-mcp.json")
+    assert "--strict-mcp-config" not in argv
+    assert argv[1] == "--add-dir" and argv.index("--add-dir") < argv.index("--mcp-config") < argv.index("--permission-mode")
+    assert "mcp__pl-brain__*" in _perms(tmux)["allow"]
+
+
+def test_filing_a_card_through_the_brain_tools_asks_first(tmux):
+    assistant.ensure()
+    assert "mcp__pl-brain__pl_file_card" in _perms(tmux)["ask"]
+
+
+def test_codex_assistant_gets_the_brain_server(tmux):
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "codex"}
+    assistant.ensure()
+    argv = _exec_argv(tmux)
+    server = next(a for a in argv if a.startswith("mcp_servers.pl-brain="))
+    assert argv[argv.index(server) - 1] == "-c"
+    assert json.loads(server.split("=", 1)[1]) == {"command": "pl", "args": ["mcp", "serve", "--brain"]}
+    assert "--ask-for-approval on-request --sandbox read-only" in " ".join(argv)
+
+
+def test_assistant_guide_has_brains_answer_rules():
+    text = GUIDE.read_text()
+    assert "pl_memory_search" in text and "Sources:" in text and "I don't know" in text

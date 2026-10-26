@@ -646,7 +646,9 @@ def counting(monkeypatch):
 
 async def open_pipeline(pilot):
     await settle(pilot)
-    await pilot.press("3")   # the Pipeline tab: the first card is selected
+    pilot.app.action_tab("cards")   # the Board tab: the first card is selected
+    await settle(pilot)
+    await pilot.pause(0.5)
     await settle(pilot)
 
 
