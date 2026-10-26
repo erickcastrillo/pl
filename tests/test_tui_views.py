@@ -3917,7 +3917,7 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
                 "update check"} <= _footer_keys(app)
 
 
-# ---------- empty states on Loops, Activity, Background, Home, Dashboard and Brain ----------
+# ---------- empty states on Loops, Activity, Background, Home and Dashboard ----------
 
 async def _open_tab(pilot, app, tab):
     await settle(pilot)
@@ -4059,7 +4059,7 @@ async def test_an_empty_background_tab_says_what_it_is_for(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         view = await _background_view(pilot, app, monkeypatch)
-        view._apply([], [], None, None)
+        view._apply([], [], None, None, [])
         await settle(pilot)
         assert all(line in screen_text(app) for line in empty_state("subagents"))
         told = []
@@ -4083,10 +4083,10 @@ async def test_the_first_background_task_replaces_the_empty_state(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         view = await _background_view(pilot, app, monkeypatch)
-        view._apply([], [], None, None)
+        view._apply([], [], None, None, [])
         await settle(pilot)
         assert "? learn more" in screen_text(app)
-        view._apply([_TASK], [], None, None)
+        view._apply([_TASK], [], None, None, [])
         await settle(pilot)
         text = screen_text(app)
     assert "abcd1234" in text and "? learn more" not in text
@@ -4147,7 +4147,7 @@ async def test_decide_next_on_an_empty_board_says_how_to_start():
     from pl.tui.chrome import empty_state
     app = PlApp(snapshot_provider=Provider(_empty_board()))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await _open_tab(pilot, app, "dashboard")
         table = app.query_one("#decide", DataTable)
         assert table.row_count == 3
         text = screen_text(app)
@@ -4163,7 +4163,7 @@ async def test_decide_next_with_a_card_keeps_its_rows():
     data["snapshot"]["rows"] = [_card("d0000004aaaa", "objective_outcome recorded succeeded", "PR open")]
     app = PlApp(snapshot_provider=Provider(data))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await _open_tab(pilot, app, "dashboard")
         assert [r.key.value for r in app.query_one("#decide", DataTable).ordered_rows] == ["needs", "health"]
         assert "? learn more" not in screen_text(app)
 
@@ -4172,7 +4172,7 @@ async def test_the_first_card_replaces_the_decide_next_empty_state():
     prov = Provider(_empty_board())
     app = PlApp(snapshot_provider=prov)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await _open_tab(pilot, app, "dashboard")
         assert "? learn more" in screen_text(app)
         prov.data = fake_data()
         app.refresh_data()
@@ -4182,27 +4182,6 @@ async def test_the_first_card_replaces_the_decide_next_empty_state():
         assert app.query_one("#decide", DataTable).row_count > 3
 
 
-class FakeBrain:
-    """Stands in for pl.brain in the Brain tab: a screen that is empty until lines are set."""
-
-    def __init__(self, monkeypatch):
-        from pl import brain
-        self.lines = []
-        monkeypatch.setattr(brain, "pane", lambda st=None: "%9")
-        monkeypatch.setattr(brain, "ensure", lambda: "brain running")
-        monkeypatch.setattr(brain, "screen", lambda n: self.lines)
-        monkeypatch.setattr(brain, "load", lambda: {"window": "@9", "pane": "%9", "mode": "chat"})
-
-
-async def test_an_empty_brain_screen_says_what_it_is_for(monkeypatch):
-    from pl.tui.chrome import empty_state
-    FakeBrain(monkeypatch)
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await _open_tab(pilot, app, "brain")
-        assert str(app.query_one("#brain-screen").render()) == "\n".join(empty_state("brain"))
-
-
 async def test_the_assistant_keeps_its_empty_screen_text(monkeypatch):
     fa = FakeAssistant(monkeypatch)
     fa.lines = []
@@ -4210,20 +4189,6 @@ async def test_the_assistant_keeps_its_empty_screen_text(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
         assert _chat_text(app) == "the assistant's screen is empty"
-
-
-async def test_the_first_brain_line_replaces_the_empty_state(monkeypatch):
-    from pl.tui.brain import BrainView
-    fb = FakeBrain(monkeypatch)
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await _open_tab(pilot, app, "brain")
-        assert "? learn more" in str(app.query_one("#brain-screen").render())
-        fb.lines = ["hello"]
-        app.query_one(BrainView).tick()
-        await settle(pilot)
-        text = str(app.query_one("#brain-screen").render())
-    assert "hello" in text and "? learn more" not in text
 
 
 # ---------- waiting for you (plan 40, slice 4) ----------
