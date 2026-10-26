@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from pl import activity, cli, trackers
+from pl import activity, cli, events, trackers
 from pl import config as C
 from pl.tui import loops
 from pl.util import BadInput
@@ -147,3 +147,57 @@ async def test_tab_filter_bar_shows_counts_and_level_column_colours(fixed_log):
         assert by_kind["runaway"][1].style == "red" and by_kind["held"][1].style == "yellow"
         assert by_kind["started"][1].style == ""
         assert "demo" in by_kind["demo_error demo"][2].plain
+
+
+EV_NOW = datetime(2026, 9, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _rows(*evs):
+    path = C.STATE_DIR / "events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        for kind, when, extra in evs:
+            f.write(json.dumps({"ts": when.isoformat(), "profile": "t", "kind": kind, "card": "c1", **extra}) + "\n")
+    return path
+
+
+def _lines():
+    return [json.loads(x) for x in (C.STATE_DIR / "events.jsonl").read_text().splitlines()]
+
+
+def test_emit_stores_the_level_from_the_table_by_kind():
+    for kind in ("error", "runaway", "held", "loop_restart", "moved"):
+        events.emit(kind, "c1")
+    assert [(e["kind"], e["level"]) for e in _lines()] == [
+        ("error", "error"), ("runaway", "error"), ("held", "warning"), ("loop_restart", "warning"), ("moved", "info")]
+
+
+def test_emit_keeps_a_valid_caller_level_and_ignores_a_bad_one():
+    events.emit("moved", "c1", level="warning")
+    events.emit("moved", "c1", level="fatal")
+    assert [e["level"] for e in _lines()] == ["warning", "info"]
+
+
+def test_an_old_entry_without_level_gets_it_from_the_table():
+    path = _rows(("runaway", EV_NOW, {}), ("moved", EV_NOW, {}))
+    before = path.read_text()
+    assert [events.level(e) for e in events._read()] == ["error", "info"]
+    assert events.level({"kind": "moved", "level": "bogus"}) == "info"
+    assert path.read_text() == before
+
+
+def test_counting_readers_skip_demo_entries():
+    _rows(("error", EV_NOW, {"demo": True, "level": "error"}), ("error", EV_NOW, {}))
+    assert [e.get("demo") for e in events._read()] == [None]
+    assert len(events._read(demo=True)) == 2
+    assert events.metrics(3600, now=EV_NOW + timedelta(minutes=1))["errors_last"].get("demo") is None
+
+
+def test_clear_demo_removes_only_demo_lines_in_order():
+    path = _rows(("moved", EV_NOW, {"n": 1}), ("demo_error", EV_NOW, {"demo": True}), ("runaway", EV_NOW, {"n": 2}),
+                  ("demo_info", EV_NOW, {"demo": True}), ("held", EV_NOW, {"n": 3, "level": "warning"}))
+    with open(path, "a") as f:
+        f.write("not json\n")
+    keep = [ln for ln in path.read_text().splitlines() if '"demo"' not in ln]
+    assert events.clear_demo() == 2
+    assert path.read_text().splitlines() == keep
