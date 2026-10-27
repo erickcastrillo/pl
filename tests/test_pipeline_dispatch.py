@@ -295,6 +295,49 @@ def test_a_stage_without_an_agent_passes_no_agent_keywords(monkeypatch, tmp_path
 
 def test_with_model_override_wins_only_for_a_valid_model_name(monkeypatch):
     h = dispatch.harnesses.get("claude")
-    flags = lambda model: dispatch.harnesses._with_model(h.interactive, h, "claude", None, model=model)[1]["model"]
-    assert flags("haiku") == "haiku"
-    assert flags("bad name;") != "bad name;"
+
+    def picked(model):
+        return dispatch.harnesses._with_model(h.interactive, h, "claude", None, model=model)[1]["model"]
+
+    assert picked("haiku") == "haiku"
+    assert picked("bad name;") != "bad name;"
+
+
+def _two_stage_sales(monkeypatch, tmp_path, agents):
+    _agent_stage(monkeypatch, tmp_path, None, name="ghost")
+    other = {"column": "Working", "done": "Review", "skill": "pl-stage", "section": "PROPOSAL", "gate": "owner", "next": "Done"}
+    C.PIPELINE = {**C.PIPELINE, "stages": {**C.PIPELINE["stages"], "review": other}}
+    C.STAGES = {**C.STAGES, "review": {}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: agents)
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda *a, **k: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda *a: None)
+
+
+def _alert_log(monkeypatch):
+    log = {"open": [], "sweep": []}
+    monkeypatch.setattr(dispatch.alerts, "open", lambda key, sev, title, fix, **kw: log["open"].append((key, title, kw)))
+    monkeypatch.setattr(dispatch.alerts, "sweep", lambda prefix, keys, notify: log["sweep"].append((prefix, set(keys))))
+    return log
+
+
+def test_ac7_unknown_agent_starts_nothing_and_opens_alert(monkeypatch, tmp_path):
+    _two_stage_sales(monkeypatch, tmp_path, {})
+    log = _alert_log(monkeypatch)
+    started = _pass(monkeypatch, [_card(1, "Inbox"), _card(2, "Working")])
+    assert started == [("o/r#2", "review")]
+    assert [(t, kw["cards"]) for _, t, kw in log["open"] if t.startswith("stage prepare")] == [
+        ("stage prepare names unknown agent ghost", ["o/r#1"])]
+    assert ("agent_unknown:", {"agent_unknown:o/r#1:prepare"}) in log["sweep"]
+
+
+def test_ac7_restored_agent_starts_and_clears_the_alert(monkeypatch, tmp_path):
+    _two_stage_sales(monkeypatch, tmp_path, {"ghost": {**COPYWRITER, "name": "ghost"}})
+    log = _alert_log(monkeypatch)
+    assert _pass(monkeypatch, [_card(1, "Inbox")]) == [("o/r#1", "prepare")]
+    assert ("agent_unknown:", set()) in log["sweep"] and not log["open"]
+
+
+def test_ac8_dry_run_line_names_agent_and_model(monkeypatch, tmp_path, capsys):
+    _agent_stage(monkeypatch, tmp_path)
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: pytest.fail("tmux called"))
+    assert "agent marketing-copywriter model sonnet (agent marketing-copywriter)" in _dry_line(capsys, "prepare")

@@ -1,0 +1,3 @@
+title = "A stage runs the agent it names"
+where = "agent = \"<name>\" on a pipeline stage"
+try = "pl dispatch --dry-run"
