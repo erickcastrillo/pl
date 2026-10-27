@@ -77,16 +77,16 @@ def test_the_file_is_private_and_written_by_rename(clock):
 
 def test_sweep_resolves_what_cleared_and_notifies_only_escalations(clock):
     sent = []
-    alerts.open("loop_stale:a", "warn", "Card a: PR waits", "review it")
-    alerts.open("loop_stale:b", "warn", "Card b: PR waits", "review it")
+    alerts.open("memory_low:a", "warn", "Card a: PR waits", "review it")
+    alerts.open("memory_low:b", "warn", "Card b: PR waits", "review it")
     alerts.open("other:x", "warn", "t", "f")
-    alerts.sweep("loop_stale:", {"loop_stale:a", "loop_stale:b"}, lambda t, m: sent.append(t))
+    alerts.sweep("memory_low:", {"memory_low:a", "memory_low:b"}, lambda t, m: sent.append(t))
     assert sent == []                                        # no escalation yet
     clock["now"] += 3601
-    alerts.sweep("loop_stale:", {"loop_stale:a"}, lambda t, m: sent.append(t))
+    alerts.sweep("memory_low:", {"memory_low:a"}, lambda t, m: sent.append(t))
     assert sent == ["Still open after 1 h: Card a: PR waits"]
-    assert alerts.get("loop_stale:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
-    alerts.sweep("loop_stale:", {"loop_stale:a"}, lambda t, m: sent.append(t))
+    assert alerts.get("memory_low:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
+    alerts.sweep("memory_low:", {"memory_low:a"}, lambda t, m: sent.append(t))
     assert len(sent) == 1                                    # one notification per escalation
 
 
@@ -124,6 +124,14 @@ def _card(cid, col, **meta):
             "metadata": {"pipeline_mode": "auto", "profile": "acme", **meta}}
 
 
+@pytest.fixture(autouse=True)
+def sent(monkeypatch):
+    """Every notification that went through pl.notifications, as (title, message): the DESKTOP list."""
+    DESKTOP.clear()
+    monkeypatch.setattr(notifications, "notify", lambda t, m: DESKTOP.append((t, m)))
+    return DESKTOP
+
+
 def _pass(monkeypatch, cs, status="none", screen=None, parked=(), healthy="acme", loops=None):
     """One dispatcher pass with the board, tmux, the registry and accounts faked. Returns the notifications."""
     notes = []
@@ -154,22 +162,26 @@ def _open(key):
     return bool(a) and not a.get("resolved_at")
 
 
-def test_an_account_parked_opens_once_and_resolves_when_it_is_back(monkeypatch):
+def test_an_account_parked_opens_once_and_resolves_when_it_is_back(monkeypatch, sent):
     w = {"stage": "spec", "session_id": "s", "pane": "%1", "window": "@1", "started_at": "2020-01-01T00:00:00+00:00"}
     c = _card("card0001aaaa", "Inbox", worker=w)
-    notes = _pass(monkeypatch, [c], status="alive", screen="You've hit your limit", parked={"acme"}, healthy="acme2")
-    assert _open("account_parked:acme") and [t for t, _ in notes] == ["Profile acme hit its usage limit"]
+    assert _pass(monkeypatch, [c], status="alive", screen="You've hit your limit", parked={"acme"}, healthy="acme2") == []
+    assert _open("account_parked:acme") and len(sent) == 1
+    assert "warn" in sent[0][0] and "Account acme is parked: usage limit" in sent[0][0]
     c["metadata"].update(worker=dict(w), profile="acme")      # the same account hits the limit again
     assert _pass(monkeypatch, [c], status="alive", screen="You've hit your limit", parked={"acme"}, healthy="acme2") == []
+    assert len(sent) == 1
     _pass(monkeypatch, [c], status="alive", parked=())
     assert not _open("account_parked:acme")
 
 
-def test_all_accounts_out_opens_and_resolves(monkeypatch):
+def test_all_accounts_out_opens_and_resolves(monkeypatch, sent):
     c = _card("card0001aaaa", "Inbox")
-    notes = _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None)
-    assert _open("accounts_all_out") and [t for t, _ in notes] == ["Every Claude profile is out of credits"]
-    assert _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None) == []   # a repeat: no second note
+    assert _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None) == []
+    out = [t for t, _ in sent if "Every account is out of credits" in t]
+    assert _open("accounts_all_out") and len(out) == 1 and "high" in out[0]
+    before = len(sent)
+    assert _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None) == [] and len(sent) == before   # a repeat: no second note
     _pass(monkeypatch, [c], parked=())
     assert not _open("accounts_all_out")
 
@@ -187,22 +199,22 @@ def test_a_stage_that_failed_3_times_opens_and_resolves_on_retry(monkeypatch):
     assert not _open("stage_failed:card0001aaaa:spec")
 
 
-def test_a_dead_loop_opens_and_resolves(monkeypatch):
+def test_a_dead_loop_opens_and_resolves(monkeypatch, sent):
     C.SERVICES = {"merge-check": {"prompt": "/loop 30m /merge-check", "profile": "acme"}}
-    notes = _pass(monkeypatch, [], loops={"merge-check": {"dead": True}})
-    assert _open("loop_dead:merge-check") and len(notes) == 1
+    assert _pass(monkeypatch, [], loops={"merge-check": {"dead": True}}) == []
+    assert _open("loop_dead:merge-check") and len(sent) == 1
     _pass(monkeypatch, [], loops={"merge-check": {"dead": False}})
     assert not _open("loop_dead:merge-check")
 
 
-def test_a_loop_failing_three_runs_in_a_row_opens_an_alert_and_a_good_run_clears_it(monkeypatch):
+def test_a_loop_failing_three_runs_in_a_row_opens_an_alert_and_a_good_run_clears_it(monkeypatch, sent):
     C.SERVICES = {"invoices": {"prompt": "/pl-billing-chase", "profile": "acme", "every": "daily 09:00"}}
     runs = [{"exit": 0}, {"exit": 1}, {"exit": 2}, {"exit": 1}]
     C.STATE_FILE.parent.mkdir(exist_ok=True)
     C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs}}}))
-    notes = _pass(monkeypatch, [])
-    assert _open("loop_failed:invoices") and len(notes) == 1
     assert _pass(monkeypatch, []) == []
+    assert _open("loop_failed:invoices") and len(sent) == 1
+    assert _pass(monkeypatch, []) == [] and len(sent) == 1
     C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs + [{"exit": 0}]}}}))
     _pass(monkeypatch, [])
     assert not _open("loop_failed:invoices")
@@ -220,9 +232,8 @@ def _ago(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - seconds))
 
 
-def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatch):
-    notes = []
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append((t, m)))
+def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatch, sent):
+    notes = sent
     monkeypatch.setattr(dispatch, "paused", lambda: None)
     monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
@@ -244,7 +255,6 @@ def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatc
 
 
 def test_a_stale_loop_is_not_alerted_while_paused(monkeypatch):
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
     monkeypatch.setattr(dispatch, "paused", lambda: {"since": "x"})
     monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
@@ -287,9 +297,8 @@ def test_alert_titles_name_a_github_card_by_repo_and_number(monkeypatch):
     assert alerts.get("stage_failed:your-org/your-repo#44:spec")["title"] == "Card your-repo#44: the spec agent died 3 times"
 
 
-def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(monkeypatch):
-    notes = []
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append(t))
+def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(monkeypatch, sent):
+    notes = sent
     a = argparse.Namespace(dry_run=True, once=True, interval=None, max_runs=None, max_prep=None, no_pull=True)
 
     def limited(*_a, **_k):
