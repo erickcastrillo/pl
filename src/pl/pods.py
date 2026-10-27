@@ -15,7 +15,7 @@ BUDGETS = {"knowledge": 2000, "pod": 1500, "client": 1500}   # tokens; the role 
 ENGINEERING_SKILLS = ["pl-spec", "pl-design", "pl-plan", "pl-run", "pl-review"]
 SALES_SKILLS = ["pl-sales-proposal", "pl-sales-follow-up"]
 SUPPORT_SKILLS = ["pl-support-reply", "pl-support-triage"]
-BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"], "sales": SALES_SKILLS,
+BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"], "sales": [*SALES_SKILLS, "pl-stage"],
                   "support": SUPPORT_SKILLS}
 BUILTIN_ROLES = {"sales": ["contacts", "email"], "support": ["tickets", "email"]}   # connector roles a built-in pod works with
 OWN_SKILLS_ONLY = ("marketing",)   # built-in pods that limit a launch to their own skills
