@@ -2,6 +2,7 @@
 for alerts. Only events listed in [notify] events are sent. Text carries card ids, PR numbers and short titles only."""
 import json
 import os
+import time
 
 from pl import config as C
 from pl import manager, trackers
@@ -51,3 +52,29 @@ def moves(cards_moved):
         send("merged", f"Merged: {short_id(c['id'])} {pr_ref(c)}".rstrip(), c["title"][:50])
     elif merged:
         send("merged", f"Merged: {len(merged)} PRs", ", ".join(f"{short_id(c['id'])} {pr_ref(c)}".rstrip() for c in merged))
+
+
+def review_passed(all_cards, now_col, st):
+    """now_col: card id -> column name. One review_passed per card for the PRs that newly carry the ready label (and neither rework nor failed).
+    The sent record is st["notified"]["review_passed:<url>"], kept even when the event is off."""
+    from pl import rework   # rework imports commands, which imports dispatch
+    lab = rework.labels()
+    notified = st.setdefault("notified", {})
+    live = {u for c in all_cards if now_col[c["id"]] != "Done" for u in (c.get("metadata") or {}).get("pr_urls") or []}
+    for key in [k for k in notified if k.startswith("review_passed:") and k[len("review_passed:"):] not in live]:
+        del notified[key]
+    if not lab["ready"]:
+        return
+    for c in all_cards:
+        if now_col[c["id"]] != "PR open" or (c.get("metadata") or {}).get("dropped_at"):
+            continue
+        new = []
+        for _, num, url in rework._prs(c):
+            names = rework.SEEN.get(url) or frozenset()
+            if lab["ready"] in names and not names & {lab["rework"], lab["failed"]} and f"review_passed:{url}" not in notified:
+                new.append((num, url))
+        if not new:
+            continue
+        send("review_passed", f"Review passed: {short_id(c['id'])} " + ", ".join(f"#{n}" for n, _ in new), c["title"][:50])
+        for _, url in new:
+            notified[f"review_passed:{url}"] = time.time()

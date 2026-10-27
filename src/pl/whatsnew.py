@@ -297,6 +297,8 @@ ENTRIES = [
        "Loops tab: select a scheduled loop and press l, or Enter on an earlier run", "l"),
     _e("2026-10-26.77", "Stalled work raises an alert and a notification",
        "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
+    _e("2026-10-26.78", "Notifications when a review passes or sends a PR back",
+       "[notify] events: review_passed, review_rework", "pl rework"),
 ]
 
 

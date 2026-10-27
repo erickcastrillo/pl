@@ -12,7 +12,7 @@ import time
 import urllib.parse
 
 from pl import config as C
-from pl import events, jobs
+from pl import events, jobs, notifications
 from pl.board import col_name, update
 from pl.trackers import github
 from pl.util import now_iso, short_id
@@ -89,6 +89,8 @@ def _send_back(c, todo, n, dry):
     update(c["id"], metadata={"rework": {"round": n, "prs": [u for _, _, u in todo], "at": now_iso(), "active": True}})
     move_to(c["id"], "In progress", c["id"])
     events.emit("rework", c["id"], prs=[u for _, _, u in todo], round=n)
+    notifications.send("review_rework", f"Rework: {head} {', '.join(f'#{num}' for _, num, _ in todo)}",
+                       f"round {n}: {c['title'][:50]}")
 
 
 def sweep(all_cards, dry, force=False):

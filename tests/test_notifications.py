@@ -243,3 +243,91 @@ def test_approved_obeys_the_event_list(desktop, monkeypatch):
     C.NOTIFY = {"events": ["merged"]}
     commands.cmd_approve(a)
     assert desktop == []
+
+
+# --- the review result ---
+
+from pl import rework  # noqa: E402
+from pl.util import load_state, save_state  # noqa: E402
+
+P7, P8 = "https://github.com/o/r/pull/7", "https://github.com/o/r/pull/8"
+
+
+@pytest.fixture
+def labeled(monkeypatch):
+    C.CODE_HOST = {**C.CODE_HOST, "labels": {"ready": "pl:ready", "rework": "pl:rw", "failed": "pl:bad"}}
+    rework.SEEN.clear()
+    yield rework.SEEN
+    rework.SEEN.clear()
+
+
+def _cols():
+    return {"card0001": "PR open"}
+
+
+def _pr_card(col="PR open", *urls):
+    return _card(1, col, pr_urls=list(urls or [P7]))
+
+
+def test_passed_label_sends_one_review_passed_naming_card_and_pr(desktop, labeled):
+    labeled[P7] = frozenset({"pl:ready"})
+    notifications.review_passed([_pr_card()], _cols(), {})
+    assert len(desktop) == 1
+    assert "card0001" in desktop[0][0] and "#7" in desktop[0][0]
+
+
+def test_second_pass_and_restart_send_nothing(desktop, labeled):
+    labeled[P7] = frozenset({"pl:ready"})
+    st = {"notified": {}}
+    notifications.review_passed([_pr_card()], _cols(), st)
+    notifications.review_passed([_pr_card()], _cols(), st)
+    save_state(st)
+    notifications.review_passed([_pr_card()], _cols(), load_state())
+    assert len(desktop) == 1
+
+
+def test_two_prs_passing_in_one_pass_send_one_listing_both(desktop, labeled):
+    labeled[P7] = labeled[P8] = frozenset({"pl:ready"})
+    st = {}
+    notifications.review_passed([_pr_card("PR open", P7, P8)], _cols(), st)
+    assert len(desktop) == 1 and "#7" in desktop[0][0] and "#8" in desktop[0][0]
+    notifications.review_passed([_pr_card("PR open", P7, P8)], _cols(), st)
+    assert len(desktop) == 1
+
+
+@pytest.mark.parametrize("other", ["pl:rw", "pl:bad"])
+def test_ready_with_rework_or_failed_is_not_a_pass(desktop, labeled, other):
+    labeled[P7] = frozenset({"pl:ready", other})
+    notifications.review_passed([_pr_card()], _cols(), {})
+    assert desktop == []
+
+
+def test_review_events_switched_off_send_nothing(desktop, labeled):
+    labeled[P7] = frozenset({"pl:ready"})
+    C.NOTIFY = {"events": ["review_rework"]}
+    st = {}
+    notifications.review_passed([_pr_card()], _cols(), st)
+    assert desktop == [] and not (machine_dir() / "chat-outbox.jsonl").exists()
+    assert f"review_passed:{P7}" in st["notified"]
+    C.NOTIFY = {"events": ["review_passed"]}
+    notifications.review_passed([_pr_card()], _cols(), st)
+    assert desktop == []
+    labeled[P8] = frozenset({"pl:ready"})
+    notifications.review_passed([_pr_card("PR open", P8)], _cols(), st)
+    assert len(desktop) == 1
+
+
+def test_without_a_ready_label_nothing_is_sent(desktop, labeled):
+    C.CODE_HOST = {**C.CODE_HOST, "labels": {}}
+    labeled[P7] = frozenset({"pl:ready"})
+    notifications.review_passed([_pr_card()], _cols(), {})
+    assert desktop == []
+
+
+def test_keys_of_done_cards_are_pruned(desktop, labeled):
+    labeled[P7] = frozenset({"pl:ready"})
+    st = {}
+    notifications.review_passed([_pr_card()], _cols(), st)
+    assert f"review_passed:{P7}" in st["notified"]
+    notifications.review_passed([_pr_card("Done")], {"card0001": "Done"}, st)
+    assert not [k for k in st["notified"] if k.startswith("review_passed:")]
