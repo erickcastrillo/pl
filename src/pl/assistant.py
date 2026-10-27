@@ -40,7 +40,7 @@ READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl al
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry", "caps", "loops",
              "restart", "hold", "unhold", "rework", "merges", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
-             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit", "models", "memory", "pipelines", "activity")   # move also covers move-agent
+             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit", "models", "memory", "pipelines", "activity", "notify")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
           "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",
           "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable",
@@ -273,10 +273,17 @@ def ask_first(h, acct=None):
 def ensure():
     """Show the running assistant, or start one: resume the saved conversation when the harness can. A status line."""
     with _locked(LOCK_WAIT):
-        return _ensure()
+        tried = {}
+        try:
+            return _ensure(tried)
+        except SystemExit as e:   # no free account, no interactive template, a tmux error: logged, then shown as before
+            events.failure("harness_start_failed", "error", str(e), account=tried.get("account"),
+                           harness=tried.get("harness"), stage="assistant")
+            raise
 
 
-def _ensure():
+def _ensure(tried=None):
+    tried = {} if tried is None else tried
     st = load()
     pane_ = pane(st)
     if pane_:
@@ -288,9 +295,11 @@ def _ensure():
     if acct is None:
         raise SystemExit("pl: no account can run the assistant: each one is parked or on a harness that cannot ask before "
                          "each action; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
+    tried["account"] = acct
     h = None
     try:
         h = harnesses.account_harness(acct)
+        tried["harness"] = h.name
         if not h.interactive:
             raise SystemExit(f"pl: harness {h.name} has no interactive template for the assistant")
         h = ask_first(h, acct)

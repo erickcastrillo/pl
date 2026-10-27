@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, confirm, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, confirm, events, harnesses, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
                       render, sections, share, update)
@@ -86,6 +86,8 @@ def _list_json(a):
                 "age_seconds": int(time.time() - parse_iso(c.get("updated_at") or "")) if c.get("updated_at") else 0}
     reg = registry()
     share("read")
+    if getattr(a, "fresh", False):
+        fresh_next()
     pipeline = cards()
     plan = getattr(a, "plan", None)
     rows = {"pipeline": [], "intake": []}
@@ -125,6 +127,8 @@ def cmd_list(a):
     if getattr(a, "json", False):
         return _list_json(a)
     share("read")   # the dispatcher's board read, while it is young
+    if getattr(a, "fresh", False):
+        fresh_next()
     pipeline = cards()   # before any output: a held read leaves stdout empty
     reg = registry()
     bad = exhausted_profiles()
@@ -281,8 +285,19 @@ def _at_gate(c, verb):
     return gate
 
 
-def _approve_gate(c):
+def _at_outward_gate(c):
+    gate = pipeline.is_config() and pipeline.gate_for(col_name(c["list_id"]))
+    return bool(gate) and gate[1].get("outward") is True
+
+
+def _approve_gate(c, a):
     name, stage = _at_gate(c, "approve")
+    send = stage.get("section") if stage.get("outward") is True else None
+    if send:
+        if not outbound.parse_reply(c, send)["to"]:
+            raise BadInput(f"pl approve: no recipient in {send}: add a To: line")
+        if (outside := outbound.flagged_recipients(c, send)) and not getattr(a, "confirm", False):
+            raise BadInput(f"pl approve: outside recipient {', '.join(outside)}; pass --confirm to approve")
     m = c.get("metadata") or {}
     approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0)}
     gates = {**(m.get("gates") or {}), name: approval}
@@ -290,7 +305,13 @@ def _approve_gate(c):
     update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None, "approval_pending": None})
     events.emit("gate_approved", c["id"])
     audit.append("gate_approved", card=c["id"], stage=name)
-    print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
+    if not send:
+        print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
+        return
+    outbound.enqueue(c, send)
+    waits = "approved; its outward action waits: the kill switch is on" if outward.state().get("on") \
+        else f"moved to {target}\n  queued to send after the undo window"
+    print(f"approved {short_id(c['id'])}  {c['title']}\n  {waits}")
 
 
 def _hold_for_owner(c):
@@ -315,11 +336,10 @@ def cmd_approve(a):
         if not confirm.check(c, code):
             raise BadInput("pl approve: that code is wrong or expired")
     elif confirm.agent_session():
-        from pl import outward
-        if outward.is_outward(c):
+        if outward.is_outward(c) or _at_outward_gate(c):
             return _hold_for_owner(c)
     if pipeline.is_config():
-        return _approve_gate(c)
+        return _approve_gate(c, a)
     col = col_name(c["list_id"])
     if spec_gated(col):
         at = (c.get("metadata") or {}).get("spec_approved_at")
@@ -335,7 +355,6 @@ def cmd_approve(a):
         audit.append("spec_approved", card=c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
         return
-    from pl import outbound
     if outbound.has_reply(c):
         outside = getattr(outbound, "flagged_recipients", lambda _: [])(c)
         if outside and not getattr(a, "confirm", False) and not a.force:
@@ -365,13 +384,12 @@ def cmd_approve(a):
     events.emit("approved", c["id"])
     audit.append("approved", card=c["id"])
     recall.note((getattr(a, "reason", None) or "approved").strip(), "approval", f"approval:{c['id']}", c["id"])
-    from pl import outward
     if outward.is_outward(c) and outward.state().get("on"):
         print(f"approved {short_id(c['id'])}  {c['title']}\n  approved; its outward action waits: the kill switch is on")
-        notify(f"Approved: {c['title'][:50]}", "its outward action waits: the kill switch is on")
+        notifications.send("approved", f"Approved: {short_id(c['id'])} {c['title'][:40]}", "its outward action waits: the kill switch is on")
     else:
         print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
-        notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
+        notifications.send("approved", f"Approved: {short_id(c['id'])} {c['title'][:40]}", "the run starts on the next dispatcher pass")
 
 
 def cmd_reject(a):
@@ -613,6 +631,8 @@ def _caps_line(used):
 
 
 def cmd_card(a):
+    if getattr(a, "fresh", False):
+        fresh_next()
     c = find_card(a.id)
     if a.delete:
         trackers.get("tracker").delete(c["id"])
@@ -713,6 +733,8 @@ def cmd_section(a):
     An approved PLAN or SPEC is refused unless --force (a person's yes)."""
     name = " ".join(a.name.split()).upper()
     if a.from_ is None:
+        if getattr(a, "fresh", False):
+            fresh_next()
         c = find_card(a.id)
         text = sections(c.get("description")).get(name)
         if text is None:
@@ -1152,12 +1174,23 @@ def cmd_worktrees_bootstrap(a):
             print(note)
     except ValueError as e:
         raise SystemExit(f"pl worktrees bootstrap: {e}")
+    if a.card and not a.dry_run:
+        record_worktree(a.card, str(Path(a.path).expanduser().resolve()))
     for failure in failures:
         print(f"{failure['reason']}:\n{failure['output']}", file=sys.stderr)
         if a.card:
             record_bootstrap_failure(a.card, failure)
     if a.card and not failures and not a.dry_run:
         clear_bootstrap_failure(a.card)
+
+
+def record_worktree(card_ref, path):
+    try:
+        c = find_card(card_ref)
+        if (c.get("metadata") or {}).get("worktree") != path:
+            update(c["id"], metadata={"worktree": path})
+    except Exception as e:
+        print(f"pl worktrees bootstrap: could not record the worktree on the card: {e}", file=sys.stderr)
 
 
 def record_bootstrap_failure(card_ref, failure):

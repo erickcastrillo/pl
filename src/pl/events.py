@@ -15,7 +15,7 @@ KEEP_DAYS = 30          # the Dashboard needs 14 days; never prune younger than 
 ERROR_CHARS = 200
 LEVELS = ("info", "warning", "error")
 ERROR_KINDS = {"error", "rework_gave_up", "runaway"}
-WARNING_KINDS = {"github_budget_wait", "github_budget_gap", "alert_opened", "agent_restarted", "loop_restart", "held"}
+WARNING_KINDS = {"github_budget_wait", "github_budget_gap", "alert_opened", "agent_restarted", "loop_restart", "held", "worktree_removed"}
 
 
 def _now():
@@ -68,6 +68,13 @@ def emit(kind, card_id=None, level=None, **detail):
             os.close(lock)                            # closing releases the lock
     except OSError:
         pass
+
+
+def failure(kind, level, message, card_id=None, **detail):
+    """A failure pl detected, as an entry with a level (error: the work stopped; warning: skipped or retried).
+    The message is masked and cut to ERROR_CHARS: it may quote an exception that holds a ${VAR} value."""
+    from pl import util   # imported here, like trackers in emit
+    emit(kind, card_id=card_id, level=level, message=util.mask(message)[:ERROR_CHARS], **detail)
 
 
 def _read(demo=False):

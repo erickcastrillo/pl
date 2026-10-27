@@ -125,7 +125,7 @@ def _funnel(monkeypatch):
 def _events():
     p = C.STATE_DIR / "events.jsonl"
     rows = [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
-    return [r for r in rows if not r["kind"].startswith("alert_")]
+    return [r for r in rows if not r["kind"].startswith(("alert_", "pass_step_skipped"))]
 
 
 def test_low_memory_holds_every_start_and_notifies_once_per_episode(monkeypatch, capsys):

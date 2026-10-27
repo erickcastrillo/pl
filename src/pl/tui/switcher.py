@@ -217,13 +217,15 @@ class PipelinesScreen(ModalScreen):
 
     def compose(self):
         with Vertical():
-            yield OptionList(*(Option(self._line(r)) for r in self.rows), id="pipeline-options")
-            yield Static(Text("↑↓ choose · enter switch · esc close", style="dim"))
+            yield OptionList(*(Option(self._line(i, r)) for i, r in enumerate(self.rows)),
+                             Option(Text("+ New pipeline", style="bold"), id="new-pipeline"), id="pipeline-options")
+            yield Static(Text("↑↓ choose · enter switch · alt+1-9 jump (macOS: set Option as Meta) · esc close", style="dim"))
 
     @staticmethod
-    def _line(r):
+    def _line(i, r):
+        key = f"alt+{i + 1}  " if i < 9 else " " * 7
         state = "running" if r["running"] else "stopped"
-        return (f"{'●' if r['current'] else ' '} {r['name']:<12} {r['type']:<14} {state:<8} "
+        return (f"{key}{'●' if r['current'] else ' '} {r['name']:<12} {r['type']:<14} {state:<8} "
                 f"{r['live_agents']} working   {r['needs_you']} need you")
 
     def on_mount(self):
@@ -232,10 +234,15 @@ class PipelinesScreen(ModalScreen):
         ol.focus()
 
     def on_option_list_option_selected(self, event):
+        app = self.app
         self.dismiss(None)
+        if event.option.id == "new-pipeline":
+            from pl.tui.newpipeline import NewPipelineScreen
+            app.push_screen(NewPipelineScreen(), lambda name: name and app.switch_to(name, tab="cards"))
+            return
         row = self.rows[event.option_index]
         if not row["current"]:
-            self.app.switch_to(row["name"], tab=self.app.active_tab)
+            self.app.choose_pipeline(row)
 
     def action_cancel(self):
         self.dismiss(None)

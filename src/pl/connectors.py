@@ -17,7 +17,7 @@ from pl import config as C
 from pl import connectors_oauth, manager, secrets
 from pl.util import ask
 
-ROLES = ("payments", "contacts", "email", "calendar", "messaging", "memory")
+ROLES = ("payments", "contacts", "email", "calendar", "messaging", "memory", "tickets")
 AUTHS = ("oauth", "token", "none")
 ACCESS = ("read", "read-write")
 TIERS = ("vendor", "community", "adapter")

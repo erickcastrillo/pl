@@ -12,9 +12,42 @@ from pl.util import age
 
 ESCALATE = (3600, 4 * 3600)   # seconds after first seen: the two escalations
 STEP = {1: "1 h", 2: "4 h"}
+URGENT = {"high", "error"}    # these bypass quiet hours when they open
 KEEP = 7 * 86400              # a resolved alert stays this long for pl alerts --all
 FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards"}
 _clock = time.time
+# these keys notify as agent_waiting, every other key as alert_opened
+WAITING = ("permission_wait:", "agent_waiting:")
+# transitional: these call sites still notify themselves; plan 51 slices 6-8 empty it
+DIRECT = (
+    "near_cap:",
+    "api_error:",
+    "stage_failed:",
+    "stage_unsafe:",
+    "exited_window:",
+    "dep_broken:",
+    "pr_person:",
+    "pr_waiting:",
+    "auto_merge_off:",
+    "account_parked:",
+    "accounts_all_out",
+    "trust:",
+    "gh_hold",
+    "tmp_full",
+    "github_rate_limited",
+    "loop_stale:",
+    "loop_failed:",
+    "loop_dead:",
+    "memory_low",
+    "runaway:",
+    "send_spike:",
+    "chat_unknown:",
+    "connector_new_place:",
+    "agent_move_failed:",
+    "send_cap:",
+    "stalled:",
+    "ci_not_running:",
+)
 
 
 def _path():
@@ -68,22 +101,48 @@ def _step(a, now):
     return None if a.get("acked") else STEP[level]
 
 
+def _notify(key, why, severity, title, fix):
+    """Tell the owner of an alert that opened or escalated, under agent_waiting or alert_opened. It never fails the alert."""
+    try:
+        from pl import notifications   # imported here: the alerts module stays light
+        if key.startswith(WAITING):
+            notifications.send("agent_waiting", headline(why, title), fix)
+        else:
+            notifications.send("alert_opened", f"{severity}: {headline(why, title)}", fix)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _offer(key, why, title):
-    """Queue an alert that opened or escalated for the Assistant and chat. It never fails the alert."""
+    """Queue an alert that opened or escalated for the Assistant, and for chat when its site still notifies itself.
+    It never fails the alert."""
     hl = headline(why, title)
     try:
         from pl import assistant   # imported here: the alerts module stays light
         assistant.offer(key, hl)
     except (SystemExit, Exception):  # noqa: BLE001 - a tmux refusal raises SystemExit
         pass
+    if not key.startswith(DIRECT):
+        return
     try:
+        from pl import notifications
         from pl.manager import machine_dir
+        if notifications.holding():   # the site's own notify put it in the held file
+            return
         mdir = machine_dir()
         mdir.mkdir(parents=True, exist_ok=True, mode=0o700)
         outbox = mdir / "chat-outbox.jsonl"
         fd = os.open(outbox, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as f:
             f.write(json.dumps({"key": key, "headline": hl}) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _urgent(on):
+    try:
+        from pl import notifications
+        notifications.urgent(on)
     except Exception:  # noqa: BLE001
         pass
 
@@ -123,10 +182,13 @@ def open(key, severity, title, fix, cards=()):
             a.update(severity=severity, title=title, fix=fix, cards=cards, last_seen=now,
                      count=int(a.get("count") or 0) + 1)
             why = _step(a, now)
+    _urgent(bool(why) and severity in URGENT)
     if why == "open":
         _logged("alert_opened", key=key, severity=severity, title=title, cards=cards)
     if why:
         _offer(key, why, title)
+        if not key.startswith(DIRECT):
+            _notify(key, why, severity, title, fix)
     return why
 
 
@@ -164,11 +226,14 @@ def sweep(prefix, active, send):
                 a.update(resolved_at=now, duration=now - a["first_seen"])
                 closed.append((key, a["title"], int(a["duration"])))
             elif why := _step(a, now):
-                out.append((key, why, a["title"], a["fix"]))
+                out.append((key, why, a["severity"], a["title"], a["fix"]))
     for key, title, duration in closed:
         _logged("alert_resolved", key=key, title=title, duration=duration)
-    for key, why, title, fix in out:
-        send(headline(why, title), fix)
+    for key, why, severity, title, fix in out:
+        if key.startswith(DIRECT):
+            send(headline(why, title), fix)
+        else:
+            _notify(key, why, severity, title, fix)
         _offer(key, why, title)
 
 
@@ -207,6 +272,7 @@ WATCHES = {
     "loop_dead": "loops that burn no tokens",
     "loop_failed": "loops that keep failing",
     "loop_stale": "loops that stopped firing",
+    "main_checkout_dirty": "stray changes in the main checkout",
     "near_cap": "cards near their token or time cap",
     "permission_wait": "waiting agents",
     "pr_person": "PRs that need a person",

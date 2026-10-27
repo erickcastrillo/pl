@@ -1,0 +1,41 @@
+[pipeline]
+name = "marketing"
+template = "marketing"
+columns = ["Brief", "Brief review", "Draft", "Draft review", "Publish", "Publish review", "Report", "Done"]
+
+[pipeline.stages.brief]
+column = "Brief"
+done = "Brief review"
+next = "Draft"
+skill = "pl-stage"
+section = "BRIEF"
+gate = "owner"
+instructions = "Write the campaign brief from the idea on the card: audience, goal, channels, key message and success measure."
+
+[pipeline.stages.draft]
+column = "Draft"
+done = "Draft review"
+next = "Publish"
+skill = "pl-stage"
+section = "DRAFT"
+gate = "owner"
+instructions = "Write the copy for each channel named in the brief, ready to review."
+
+[pipeline.stages.publish]
+column = "Publish"
+done = "Publish review"
+next = "Report"
+skill = "pl-stage"
+section = "PUBLISH"
+gate = "owner"
+outward = true
+connectors = []
+instructions = "Prepare the post or send for each channel from the approved draft. Prepare only: do not post or send. A person approves it before anything goes out."
+
+[pipeline.stages.report]
+column = "Report"
+done = "Done"
+skill = "pl-stage"
+section = "REPORT"
+gate = "owner"
+instructions = "Report the campaign's results from what is on the card, measured against the brief's success measure."

@@ -9,6 +9,8 @@ import tomllib
 
 from pl import schedule
 
+NOTIFY_EVENTS = ("plan_ready", "approved", "pr_opened", "review_passed", "review_rework", "merged", "done", "alert_opened",
+                 "agent_waiting")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
@@ -79,6 +81,8 @@ def _defaults():
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
                 "release_waiting_after": 30, "stall_minutes": 20, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
     GATES = {"spec": False}
+    # [notify] events: the moments pl tells the owner about (desktop attention_cmd and chat connectors routed for alerts)
+    NOTIFY = {"events": list(NOTIFY_EVENTS)}
     PIPELINE = None       # [pipeline]: columns, stages and gates; the engineering pipeline when absent
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
@@ -224,6 +228,7 @@ def _apply(g, t):
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
+    g["NOTIFY"] = {**g["NOTIFY"], **t.get("notify", {})}
     from pl import pipeline
     g["PIPELINE"] = pipeline.from_toml(t.get("pipeline"))
     if t.get("pipeline"):
@@ -358,6 +363,9 @@ def validate(doc) -> list[str]:
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
+    ev = doc.get("notify", {}).get("events")
+    if ev is not None and not (isinstance(ev, list) and all(e in NOTIFY_EVENTS for e in ev)):
+        errs.append(f"notify.events must be a list of: {', '.join(NOTIFY_EVENTS)}")
     if not isinstance(doc.get("permissions", {}).get("unattended", True), bool):
         errs.append("permissions.unattended must be true or false")
     if "cleanup" in doc.get("worktrees", {}) and not isinstance(doc.get("worktrees", {}).get("cleanup"), bool):

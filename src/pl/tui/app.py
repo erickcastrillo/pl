@@ -10,12 +10,13 @@ import time
 
 from rich.text import Text
 from textual import work
-from textual.app import App, ComposeResult, SystemCommand
+from textual.app import App, ComposeResult, ScreenStackError, SystemCommand
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Input, Static, Tabs, TabbedContent, TabPane, TextArea
+from textual.widgets import DataTable, Footer, Input, Static, Tabs, TabbedContent, TabPane, TextArea
+from textual.widgets.data_table import RowDoesNotExist
 from textual.widgets._footer import FooterKey
 from textual.css.query import NoMatches
 
@@ -27,8 +28,9 @@ from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.connectors import ConnectorsPanel
+from pl.tui.extend import ExtendView
 from pl.tui.extensions import ExtensionsView
-from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, MAIN_KEYS, groups, header_text, resolve, sub_label, tabs
+from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, MAIN_KEYS, UNUSED, groups, header_text, resolve, sub_label, tabs, unused
 from pl.tui.needs import needs_you_count, review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, HealthScreen, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
@@ -54,10 +56,43 @@ def _titled(title, make):
     return build
 
 
+PLACE = "console-place.json"
+
+
+def place_path():
+    return None if C.STATE_DIR is None else C.STATE_DIR / PLACE
+
+
+def save_place(tab, row):
+    """Record the tab and row this console is left on, in this profile's own state folder. A switch never fails over it."""
+    if (path := place_path()) is None:
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"tab": tab, "row": row}))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def read_place():
+    """(tab, row) from the record, or None when it is missing or not usable."""
+    if (path := place_path()) is None:
+        return None
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(d, dict) and isinstance(d.get("tab"), str) and d["tab"] and isinstance(d.get("row"), (str, type(None))):
+        return d["tab"], d["row"]
+    return None
+
+
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
          "waiting": WaitingView,
+         "extend": ExtendView,
          "skills": _titled("Skills, agents and commands (every account)", SkillsView),
          "connectors": _titled("Connectors", ConnectorsPanel),
          "pods": _titled("Pods", make_pods_panel),
@@ -235,6 +270,30 @@ class DispatcherChoice(ModalScreen):
         self.dismiss(what)
 
 
+class StoppedScreen(ModalScreen):
+    """Choosing a pipeline whose dispatcher is stopped: enter starts it and switches, s switches, esc cancels."""
+    DEFAULT_CSS = """
+    StoppedScreen { align: center middle; }
+    StoppedScreen > Vertical { width: 80; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    """
+    BINDINGS = [Binding("enter", "pick('start')", "start its dispatcher and switch"),
+                Binding("s", "pick('switch')", "switch without starting"), Binding("escape", "pick(None)", "cancel")]
+
+    def __init__(self, name):
+        super().__init__()
+        self.pipeline = name
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"{self.pipeline} is stopped"))
+            yield Static(Text("enter start its dispatcher and switch · s switch without starting · esc cancel", style="dim"))
+
+    def action_pick(self, what):
+        self.dismiss(what)
+
+
+SWITCH_AFTER_ERROR = 2   # seconds: the switch replaces the process, so a failed start's error needs time to be read
+
 NARROW_BELOW = 120   # columns: below this the list fills the width and the details pane gives way
 
 
@@ -265,7 +324,9 @@ class PlApp(App):
     BINDINGS = [Binding(GROUP_KEYS[gid], f"tab('{gid}')", "views" if i == 0 else name, show=i == 0, key_display="1-8")
                 for i, (gid, name, _) in enumerate(g for g in GROUPS if g[0] != "home")] + [
         Binding(f"{mod}+{GROUP_KEYS[gid]}", f"tab('{gid}')", name, show=False)   # work even while the Assistant box has focus
-        for mod in ("ctrl", "alt") for gid, name, _ in GROUPS if gid != "home"] + [
+        for mod in ("ctrl",) for gid, name, _ in GROUPS if gid != "home"] + [
+        Binding(f"alt+{n}", f"pipeline({n})", "pipelines 1-9" if n == 1 else "", show=False, key_display="alt+1-9")
+        for n in range(1, 10)] + [
         Binding("H", "tab('home')", "pipelines", show=False),
         Binding("b", "brain", show=False),
         Binding("left_square_bracket", "cycle_window(-1)", "earlier window", key_display="["),
@@ -283,7 +344,7 @@ class PlApp(App):
         Binding("q", "quit", "quit")]
 
     def __init__(self, snapshot_provider=None, interval=None, autostart=None, whatsnew=None, updates=None,
-                 restarts=None, open_card=None, tab=None):
+                 restarts=None, open_card=None, tab=None, back=False):
         super().__init__()
         self.autostart = snapshot_provider is None if autostart is None else autostart   # real console: start the dispatcher
         self.show_whatsnew = snapshot_provider is None if whatsnew is None else whatsnew   # real console: new entries pop up
@@ -295,6 +356,7 @@ class PlApp(App):
         self.interval = interval or default_interval()
         self.open_card = open_card
         self.initial_tab = tab
+        self.back, self.pending_row = back, None   # pending_row: (tab, row key) to select on the first refresh with data
         self.sub_keys, self.subtabs = {}, {}
         self.data, self.error, self.last_good_at, self.window = None, None, None, 1   # window: index into WINDOWS, 24 hours first
 
@@ -345,7 +407,12 @@ class PlApp(App):
         for gid, letters in self.sub_keys.items():
             for letter, vid in letters.items():
                 self.query_one(f"#{gid}-views", TabbedContent).get_tab(vid).label = sub_label(dict(self.view_names())[vid], letter)
-        if self.initial_tab:
+        place = read_place() if self.back else None
+        if place and resolve(place[0]) is not None:
+            self.action_tab(place[0])
+            if place[1]:
+                self.pending_row = place
+        elif self.initial_tab:
             self.action_tab(self.initial_tab)
 
     @staticmethod
@@ -420,7 +487,20 @@ class PlApp(App):
         self.restart_into = b
         self.exit()
 
+    def selected_row(self):
+        """The key of the selected item on a list tab; None on other tabs and on a heading row."""
+        view = VIEWS.get(self.active_tab)
+        if view is None or not hasattr(view, "_current"):
+            return None
+        try:
+            key, row = self.query_one(view)._current()
+        except NoMatches:
+            return None
+        return key if row is not None else None
+
     def switch_to(self, profile, card=None, tab=None):
+        if self.active_tab:
+            save_place(self.active_tab, self.selected_row())
         self.restart_into = ("profile", profile, card, tab)
         self.exit()
 
@@ -481,6 +561,45 @@ class PlApp(App):
         if not isinstance(self.screen, PipelinesScreen):
             self.push_screen(PipelinesScreen(self.data))
 
+    def action_pipeline(self, n):
+        from pl.tui.switcher import picker_rows
+        if isinstance(self.screen, StoppedScreen):
+            return
+        rows = picker_rows(self.data)
+        if n > len(rows):
+            self.notify(f"no pipeline {n}", markup=False)
+        elif not rows[n - 1]["current"]:
+            self.choose_pipeline(rows[n - 1])
+
+    def choose_pipeline(self, row):
+        name, tab = row["name"], self.active_tab
+        if row["running"]:
+            self.switch_to(name, tab=tab)
+            return
+
+        def answered(what):
+            if what == "switch":
+                self.switch_to(name, tab=tab)
+            elif what == "start":
+                self.start_and_switch(name, tab)
+        self.push_screen(StoppedScreen(name), answered)
+
+    @work(thread=True, group="dispatcher")
+    def start_and_switch(self, name, tab):
+        """The start D does inside a stopped pipeline; with the manager off, that pipeline's own console starts it on mount."""
+        try:
+            if manager.enabled():
+                if manager.restart(name, "restart", source="console-D") is None:
+                    raise RuntimeError("the manager did not answer")
+                if not manager.running():
+                    manager.start()
+        except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+            self.call_from_thread(self.notify, f"{name}: failed to start its dispatcher — {e}",
+                                  severity="error", timeout=10, markup=False)
+            self.call_from_thread(self.set_timer, SWITCH_AFTER_ERROR, lambda: self.switch_to(name, tab=tab))
+            return
+        self.call_from_thread(self.switch_to, name, tab=tab)
+
     def on_click(self, event):
         if getattr(event.widget, "id", None) == "header" and len(self.screen_stack) == 1:
             self.action_pipelines()
@@ -534,7 +653,7 @@ class PlApp(App):
     def action_skills(self):
         """Extend tab, the Skills sub-tab, its list focused."""
         self.action_tab("skills")
-        self.query_one(SkillsView).focus_table()
+        self.query_one("#skills").query_one(SkillsView).focus_table()
 
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
@@ -653,20 +772,30 @@ class PlApp(App):
             self.query_one(HomeView).show(self.data)
         self.query_one(DashboardView).show(self.data, self.window)
         self.query_one(WaitingView).show(self.data)
-        self.query_one(PrsView).show(self.data)
+        for v in self.query(PrsView):
+            v.show(self.data)
         self.query_one(LoopsView).show(self.data)
         self.query_one(ActivityView).show(self.data)
         self.query_one(SubagentsView).show(self.data)
         self.query_one(AlertsView).show(self.data)
         self.query_one(CardsView).show(self.data)
+        if self.pending_row:
+            (tab, key), self.pending_row = self.pending_row, None
+            t = self.query_one(VIEWS[tab]).query_one(DataTable)
+            try:
+                t.move_cursor(row=t.get_row_index(key))
+            except RowDoesNotExist:
+                pass
         failed = (self.error or "").splitlines()[0] if self.error else ""
-        for table in ("#cards-table", "#prs-table"):
-            self.query_one(table).border_subtitle = failed if failed.startswith("refresh failed") else ""
+        for table in self.query("#cards-table, #prs-table"):
+            table.border_subtitle = failed if failed.startswith("refresh failed") else ""
         n_prs = sum(1 for r in rows if r.get("pr"))
         mine = needs_you_count(self.data)
         for group, tid, label in (("work", "cards", f"Board {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
                                   ("review", "prs", f"Pull requests {n_prs}"),
                                   ("activity", "alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
+            if tid == "prs" and not self.query("#prs"):
+                continue
             self.query_one(f"#{group}-views", TabbedContent).get_tab(tid).label = sub_label(label, tid in self.sub_keys.get(group, {}).values())
 
     @property
@@ -674,10 +803,13 @@ class PlApp(App):
         try:
             outer = self.query_one("#tabs", TabbedContent).active
             return self.query_one(f"#{outer.removeprefix('g-')}-views", TabbedContent).active
-        except NoMatches:
+        except (NoMatches, ScreenStackError):
             return None
 
     def action_tab(self, name):
+        if unused(name):
+            self.notify(UNUSED, markup=False)
+            return
         if (place := resolve(name)) is None:
             return
         gid, view = place
@@ -730,7 +862,7 @@ class PlApp(App):
 
     def check_action(self, action, parameters):   # APP_TABS repeats the tab each gated action below needs
         if action == "tab":
-            return resolve(parameters[0]) is not None
+            return resolve(parameters[0]) is not None or unused(parameters[0])
         if action == "sub_tab":
             return len(self.screen_stack) == 1 and not self._typing() and len(self.active_group_views()) > 1
         if action == "sub_letter":
@@ -770,6 +902,7 @@ class PlApp(App):
         self.query_one(CardsView).review(what)
 
     def action_refresh(self):
-        self.query_one(PrsView).clear_cache()
+        for v in self.query(PrsView):
+            v.clear_cache()
         board.fresh_next()
         self.refresh_data()

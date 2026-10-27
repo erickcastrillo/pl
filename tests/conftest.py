@@ -32,10 +32,29 @@ def no_real_screen_reads(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_reconcile_in_dispatch_passes(monkeypatch):
+    """A dispatcher pass in a test does not reconcile finished agents (it would read fake panes and open alerts the
+    test does not expect); tests/test_reconcile.py calls reconcile.sweep itself."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "reconcile", types.SimpleNamespace(sweep=lambda *a, **k: None))
+
+
+@pytest.fixture(autouse=True)
+def no_real_idle_clock(monkeypatch):
+    """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
+    from pl import agents
+    monkeypatch.setattr(agents, "idle_seconds", lambda w, reg, st=None: None)
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
+    # a test run inside a pl agent inherits the real profile and worktrees folder: never let a test load or touch them
+    for var in ("PL_CONFIG_DIR", "PL_WORKTREES_DIR", "PL_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
     from pl import local_model
 
     def no_model(url, payload, timeout):

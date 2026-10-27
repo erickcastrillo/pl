@@ -6,7 +6,11 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
+from pl import pipeline
 
+
+UNUSED = "not used in this pipeline"
+CODE_VIEWS = ("prs",)   # engineering-only views, hidden when the pipeline has no code stage
 
 GROUPS = [
     ("dashboard", "Dashboard", [("dashboard", "Dashboard")]),
@@ -14,7 +18,7 @@ GROUPS = [
     ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
     ("review", "Review", [("waiting", "Waiting"), ("prs", "Pull requests")]),
     ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
-    ("extend", "Extend", [("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
+    ("extend", "Extend", [("extend", "Active pod"), ("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
                           ("extensions", "Extensions")]),
     ("activity", "Activity", [("activity", "Activity"), ("alerts", "Alerts")]),
     ("settings", "Settings", [("settings", "Settings")]),
@@ -29,10 +33,11 @@ TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 MEANING = {
     "tab": "go to tab", "brain": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
     "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
-    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines",
+    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines", "pipeline": "switch pipeline",
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
+    "inbox_approve": "approve", "inbox_send_back": "send back", "all_pipelines": "all pipelines",
     "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
     "open_window": "open window", "jump": "open window", "live_view": "open window",
     "page_up": "page up", "page_down": "page down", "drop": "remove", "discard": "remove", "delete": "remove",
@@ -42,7 +47,7 @@ MEANING = {
     "edit_brief": "edit", "edit_input": "edit", "external_edit": "edit in $EDITOR", "ack": "acknowledge",
     "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
-    "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
+    "link": "link", "open_log": "full log", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
     "sub_tab": "switch view", "sub_letter": "switch view",
     "get_started": "get started step", "collapse_start": "collapse", "dismiss_start": "dismiss",
 }
@@ -56,6 +61,13 @@ MAIN_KEYS = {
 }
 
 NEW_ROW = "+new"   # the row key of every list's "+ New <thing>" row
+
+
+def close(screen):
+    """Close a full-screen view only while it is the top screen. A second close (a quick double Esc) or one for a
+    screen with another opened on top of it does nothing, instead of popping the wrong screen or the last one."""
+    if screen.is_attached and screen.app.screen is screen:
+        screen.app.pop_screen()
 
 
 def new_row(thing):
@@ -73,6 +85,7 @@ HELP = {
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",
+    "extend": "The skills this pipeline's pod gives its agents and the stage that runs each, its connector roles, then every skill and connector on the machine.",
     "skills": "Every account's skills, agents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
     "connectors": "The services agents can reach. n adds a connector, t tests it, R revokes it.",
     "pods": "Pods hold the rules agents follow. r adds a rule to the pod, Enter shows it.",
@@ -142,7 +155,7 @@ def tabs():
     from pl.tui import getstarted
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
     return [(vid, name) for vid, name in TABS
-            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid not in CODE_VIEWS or pipeline.has_code()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
 
 
 def groups():
@@ -150,6 +163,11 @@ def groups():
     shown = {vid for vid, _ in tabs()}
     shown_groups = ((gid, label, [v for v in views if v[0] in shown]) for gid, label, views in GROUPS)
     return [g for g in shown_groups if g[2]]
+
+
+def unused(name):
+    """True for a view this pipeline hides, so opening it gives the UNUSED notice."""
+    return name in CODE_VIEWS and not pipeline.has_code()
 
 
 def resolve(name):
@@ -187,7 +205,8 @@ def status_sentence(snap, stopped=None):
     parts = ["Running"]
     if working:
         parts.append(f"{_plural(working, 'agent')} working")
-    parts.append(f"{_plural(waiting, 'card')} waiting" if waiting else "no cards waiting")
+    words = pipeline.ui()
+    parts.append(f"{_plural(waiting, words['item'])} waiting" if waiting else f"no {words['items']} waiting")
     sentence = ", ".join(parts)
     if snap.get("parked") and (out := re.search(r"(\S+): PARKED until (.+?)(?:,| \(\d+ running|$)", snap["prof"])):
         sentence += f"; account {out[1]} is out of credits until {out[2]}"

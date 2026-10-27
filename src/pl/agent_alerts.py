@@ -2,7 +2,7 @@
 import re
 import time
 
-from pl import agent_screen, agents, alerts
+from pl import agent_screen, agents, alerts, events
 from pl import config as C
 from pl.util import cmd_id, short_id
 
@@ -12,6 +12,9 @@ SLICE_RE = re.compile(r"slice (\d+)", re.I)
 DEFAULT_WAIT = 30   # minutes; [dispatch] release_waiting_after = 0 turns release off, not the alert
 BLOCK_LINES = 8
 TITLE_WIDTH = 80
+NUDGE = "pl: this stage looks stalled. Finish it now, or write one line saying what blocks you."
+STALL_RETRIES = 2   # restarts of a stalled stage per card per day, then the alert only
+NUDGE_ECHO_SLACK = 60   # idle this close to the time since the nudge means only the nudge's own echo moved the pane
 KINDS = ("agent_waiting:", "agent_unmoved:", "agent_blocked_dep:")
 
 
@@ -39,7 +42,7 @@ def check(all_cards, st, restarting):
             active.update(k for k in (f"{p}{c['id']}" for p in KINDS) if alerts.get(k))
             continue
         lines = agent_screen.plain(text).splitlines()
-        for found in (_waiting(c, w, text, word, why, waits, seen), _unmoved(c, w, col, word),
+        for found in (_waiting(c, w, text, word, why, waits, seen), _unmoved(c, w, col, word) if not alerts.get(f"stalled:{c['id']}") else None,
                       _blocked(c, w, all_cards, lines)):
             if found:
                 active.add(found)
@@ -49,8 +52,7 @@ def check(all_cards, st, restarting):
 
 
 def _raise(key, severity, title, fix, cards):
-    if why := alerts.open(key, severity, title, fix, cards=cards):
-        _dispatch().notify(alerts.headline(why, title), fix)
+    alerts.open(key, severity, title, fix, cards=cards)
     return key
 
 
@@ -117,3 +119,55 @@ def _blocked(c, w, all_cards, lines):
     return _raise(f"agent_blocked_dep:{cid}", "warn",
                   f"Card {short_id(cid)}: its {w['stage']} agent is blocked on unmerged {', '.join(map(short_id, unmerged))}",
                   f"merge {', '.join(map(cmd_id, unmerged))} or pl depends {cmd_id(cid)} --clear", [cid, *unmerged])
+
+
+def _excused(c, w, word):
+    """True when the agent waits on a person or a reset, or has finished (agent_unmoved covers that): not a stall."""
+    d = _dispatch()
+    if (c.get("metadata") or {}).get("question") or w.get("limit_hit") or w.get("permission_wait") or w.get("trust_wait"):
+        return True
+    text = agent_screen.read(w["pane"])[0]
+    gate = any(g in d.HUMAN_GATES for g in agents.GATE_RE.findall(agent_screen.plain(text or "")))
+    return gate or word in ("waiting for you", "finished")
+
+
+def stall(c, w, reg, st, seen):
+    """Watch a live agent of the card's current stage that is idle. Past [dispatch] stall_minutes it gets one nudge;
+    idle that long again after the nudge, it is stopped so its stage starts again (at most STALL_RETRIES a day).
+    The stalled alert and its notification are dispatch.check_stalled's. Returns True when it stopped the agent."""
+    d = _dispatch()
+    cid, stage, now = c["id"], w.get("stage"), time.time()
+    rec = (st.get("stalls") or {}).get(cid) or {}
+    if rec.get("session") != w.get("session_id"):
+        rec = {"session": w.get("session_id")}
+    seen[cid] = rec
+    idle, limit = agents.idle_seconds(w, reg, st), (C.DISPATCH.get("stall_minutes") or 0) * 60
+    if not limit or idle is None or _excused(c, w, agent_screen.read(w["pane"])[1]) or (
+            idle < limit and idle < now - rec.get("nudged_at", now) - NUDGE_ECHO_SLACK):
+        rec.pop("nudged_at", None)   # working or waiting again: the next stall starts with a fresh nudge
+        rec.pop("reported", None)
+        return False
+    if idle < limit:
+        return False
+    if not rec.get("reported"):
+        rec["reported"] = True
+        events.emit("stalled", cid, stage=stage, minutes=int(idle // 60))
+    if not rec.get("nudged_at"):
+        d.tmux("send-keys", "-t", w["pane"], "-l", "--", NUDGE)
+        d.tmux("send-keys", "-t", w["pane"], "Enter")
+        rec["nudged_at"] = now
+        events.emit("stall_nudged", cid, stage=stage)
+        return False
+    if now - rec["nudged_at"] < limit:
+        return False
+    times = [t for t in (st.setdefault("stall_retries", {}).get(cid) or []) if isinstance(t, (int, float)) and now - t < 86400]
+    if len(times) >= STALL_RETRIES:
+        return False
+    if no := d.stop_worker(c, w):
+        print(f"{short_id(cid)}  {stage} agent stalled; could not stop it ({no})")
+        return False
+    st["stall_retries"][cid] = times + [now]
+    seen.pop(cid, None)
+    events.emit("agent_restarted", cid, stage=stage, reason="stalled")
+    print(f"{short_id(cid)}  {stage} agent idle after a nudge; stopped it, its stage starts again")
+    return True

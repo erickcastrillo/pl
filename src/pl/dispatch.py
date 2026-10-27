@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -97,6 +97,7 @@ def record_finished_run(c, stage, worker):
         recall.record_run(c, stage, worker)
     except Exception as e:   # a store problem prints and goes on, like rework.sweep
         print(f"memory: run summary for {short_id(c['id'])} not saved: {e}", file=sys.stderr)
+        events.failure("memory_not_saved", "warning", f"run summary not saved: {e}", c["id"])
 
 
 def _gh_env_args():
@@ -284,6 +285,68 @@ def release_run(c, w, why, dry):
     return True
 
 
+def _prompt_has_text(pane):
+    """True when the agent's prompt line (after > or ❯) holds unsent text."""
+    screen = tmux("capture-pane", "-p", "-t", pane, "-S", "-20", check=False) or ""
+    lines = [agents.BOX_RE.sub(" ", ln).strip() for ln in screen.splitlines()]
+    marked = [ln for ln in lines if ln[:1] in (">", "❯")]
+    return bool(marked and marked[-1][1:].strip())
+
+
+def _type_into(pane, text):
+    """Clear the prompt box (Ctrl-U), type text literally and press Enter."""
+    tmux("send-keys", "-t", pane, "C-u", check=False)
+    tmux("send-keys", "-t", pane, "-l", "--", harnesses._typeable(text), check=False)
+    tmux("send-keys", "-t", pane, "Enter", check=False)
+
+
+def rework_live(c, w, why, reg, dry):
+    """A card sent back for rework whose run agent is still alive: type the review message into it once it is idle
+    (once per round); restart it fresh, with no backoff, when it has not gone busy within [dispatch] stall_minutes.
+    Returns "sent", "waiting", "restarted", or None when normal handling applies."""
+    rw = (c.get("metadata") or {}).get("rework") or {}
+    if not rw.get("active") or why == "exited" or w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit"):
+        return None
+    n, head = int(rw.get("round") or 1), short_id(c["id"])
+
+    def record(**more):
+        full = {**rw, **more}
+        update(c["id"], metadata={"rework": full})
+        c["metadata"] = {**(c.get("metadata") or {}), "rework": full}
+
+    if rw.get("sent_round") != n:
+        if why is None:
+            return None
+        if dry:
+            print(f"{head}  would type the rework message into the run agent")
+            return None
+        cleared = _prompt_has_text(w["pane"])
+        _type_into(w["pane"], rework.live_message(c))
+        record(sent_round=n, sent_at=now_iso(), started=False)
+        events.emit("rework_sent", c["id"], round=n, cleared=cleared)
+        print(f"{head}  typed the rework message (round {n}) into the run agent")
+        return "sent"
+    if rw.get("started"):
+        return None
+    rec = reg.get(w.get("session_id"))
+    if (rec.get("status") == "busy") if rec else why is None:
+        if not dry:
+            record(started=True)
+        return None
+    limit = C.DISPATCH.get("stall_minutes", 20)
+    if not limit:
+        return None
+    sent = parse_iso(rw["sent_at"]) if rw.get("sent_at") else time.time()
+    if time.time() - sent < limit * 60 or dry:
+        return "waiting"
+    if no := stop_worker(c, w, {"rework": {**rw, "started": True, "restarted_at": now_iso()}}):
+        print(f"{head}  rework agent has not started; could not stop it ({no})")
+        return "waiting"
+    events.emit("rework_restarted", c["id"], round=n)
+    print(f"{head}  run agent did not start the rework within {limit} min; restarted it")
+    return "restarted"
+
+
 def stage_servers(team, stage):
     """The connector names a stage agent of this team gets; [stages.<stage>] connectors can only narrow them."""
     from pl import connectors
@@ -392,6 +455,14 @@ def untrusted_folder(h, account):
     if h.name != "claude":
         return None
     return None if harnesses.folder_trust(account, str(C.WORK_DIR))[0] else C.WORK_DIR
+
+
+def _start_who(stage, c):
+    try:
+        h, profile = harnesses.harness_for(stage, c)
+    except (SystemExit, Exception):   # the start failed because of this very lookup: log without it
+        return {}
+    return {"account": profile, "harness": h.name}
 
 
 def start_worker(c, stage, attempts, dry):
@@ -509,6 +580,7 @@ def _check_auto_merge(name, svc):
     key, allowed = f"auto_merge_off:{repo}", github.auto_merge_allowed(repo)
     if allowed is None:
         print(f"auto-review: could not read allow_auto_merge for {repo}; check skipped", file=sys.stderr)
+        events.failure("auto_review_check_skipped", "warning", f"could not read allow_auto_merge for {repo}")
     elif allowed:
         alerts.resolve(key)
     elif why := alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
@@ -639,6 +711,9 @@ def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):
         except ValueError:
             run = {"result": "unreadable run record", "exit": -1}
         print(f"{name} loop run ended: exit {run.get('exit')}, {run.get('result')}")
+        if not dry and run.get("exit") not in (0, None):
+            events.failure("loop_failed", "error", f"{name} loop run exited {run.get('exit')}: {run.get('result')}",
+                           loop=name, exit=run.get("exit"))
         if not dry:
             try:
                 run = loops.keep_run(name, run, runs_dir / f"{name}.log", harnesses.account_harness(s.get("profile")))
@@ -968,20 +1043,28 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             rework.sweep(all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:   # a failed look never stops the pass; the next pass tries again
             print(f"auto-rework skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"auto-rework skipped this pass: {e}", step="rework")
         try:
             _auto_merge(st, all_cards, dry)
         except (RateLimited, OverBudget, SystemExit) as e:
             print(f"auto-merge skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"auto-merge skipped this pass: {e}", step="auto-merge")
         try:
             from pl import triggers
             triggers.run_due(dry=dry)
         except Exception as e:
             print(f"triggers skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"triggers skipped this pass: {e}", step="triggers")
         try:
             from pl import outbound
             outbound.send_due(dry=dry)
         except Exception as e:
             print(f"outbound send skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"outbound send skipped this pass: {e}", step="outbound")
         try:   # daily retention pass for cards created from email (retention.py)
             from pl import retention
             retention.sweep(all_cards, dry)
@@ -992,24 +1075,45 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             worktrees.sweep(all_cards, dry)
         except Exception as e:
             print(f"worktrees cleanup skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"worktrees cleanup skipped this pass: {e}", step="worktrees")
+        if not dry:
+            try:
+                worktrees.check_missing(all_cards)
+            except Exception as e:
+                print(f"worktree check skipped this pass: {e}", file=sys.stderr)
+    if not dry and not paused():
+        try:   # a finished agent whose card, PR link or labels lag its output: pl applies those writes (reconcile.py)
+            reconcile.sweep(all_cards, reg, st)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed reconcile never stops the pass
+            print(f"reconcile skipped this pass: {e}", file=sys.stderr)
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
         gate_sections = {"Plan for review": "PLAN", "Spec ready": "SPEC"}
         dropped = {c["id"] for c in all_cards if (c.get("metadata") or {}).get("dropped_at")}   # pl drop: not finished
         by_id = {c["id"]: c for c in all_cards}
+        moved = []
         for cid, col in now_col.items():
             if cid in last and last[cid] != col:   # first sighting records without emitting
+                moved.append((by_id[cid], last[cid], col))
                 events.emit("moved", cid, **{"from": last[cid], "to": col}, **({"dropped": True} if col == "Done" and cid in dropped else {}))
                 if done := finished_stage(by_id[cid], col):
                     record_finished_run(by_id[cid], *done)
+                    slowwork.record_length(st, *done)
                 if col in gate_sections and (c := by_id.get(cid)):
                     sec = gate_sections[col]
                     pods.save_draft(cid, sec, sections(c.get("description")).get(sec) or "")
+        try:
+            notifications.moves(moved)
+            notifications.review_passed(all_cards, now_col, st)
+        except Exception as e:  # noqa: BLE001 - a notification never stops the pass
+            print(f"notifications skipped this pass: {e}", file=sys.stderr)
         for c in all_cards:   # a design stage ends without a column move: its DESIGN section appears
             w = (c.get("metadata") or {}).get("worker") or {}
             if w.get("stage") == "design" and has_design(c):
                 record_finished_run(c, "design", w)
+                slowwork.record_length(st, "design", w)
         st["last_col"] = now_col
     runs_alive = 0
     runs_live = 0   # every live run agent, waiting ones included
@@ -1018,6 +1122,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     failed = set()   # stage_failed and permission_wait alert keys seen this pass
     waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
     slow = {}        # slow-work conditions seen this pass (slowwork.py)
+    holders = {"run": [], "prep": []}   # short ids of the cards counted in runs_alive / prep_alive
+    seen_stalls = {}
     waits, seen_waits = st.get("run_waits") or {}, {}   # card id -> when its run agent was first seen waiting
     for c in all_cards:
         if c.get("unreadable"):
@@ -1034,6 +1140,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             wh = harnesses.get(w.get("harness") or "claude") if w else None
         except SystemExit as e:   # one card's bad harness must not stop the pass
             print(f"{short_id(c['id'])}  skipped: {e}", file=sys.stderr)
+            events.failure("card_skipped", "warning", str(e), c["id"])
             continue
         status, sid = ("none", None) if not w else worker_status(w, reg)
         if w and status == "alive" and sid and sid != w.get("session_id") and not dry:
@@ -1044,6 +1151,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if w:
             busy = move_agent.locked(c["id"])   # pl move-agent is stopping and relaunching it right now
         live = w and status in ("alive", "starting")   # after a resume the screen replays the old banner: the transcript counts
+        if live and w.get("stage") == stage:
+            slow.update(slowwork.stage_slow(st, c, w))
         screen = (move_agent.limit_screen(c, w, wh) if w.get("resume") else screen_hit_limit(w.get("pane"), wh)) if live and not busy else None
         if screen and not dry:   # the whole limit handling runs under the card's move lock: a hand move waits, or wins
             held = move_agent.lock(c["id"])
@@ -1052,8 +1161,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if w.get("stage") == "run":         # it still holds its slot
                 runs_live += 1
                 runs_alive += 1
+                holders["run"].append(short_id(c["id"]))
             else:
                 prep_alive += 1
+                holders["prep"].append(short_id(c["id"]))
             continue
         if screen:
             try:
@@ -1121,9 +1232,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
                 fix = harnesses.trust_command(wh, w.get("profile"), trust)
-                if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
-                                      f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt"):
-                    notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: run {fix} and answer once")
+                alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
+                            f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt", cards=[c["id"]])
             if trust and w.get("window"):
                 waiting.append(w["window"])
             if bool(trust) != bool(w.get("trust_wait")):
@@ -1142,9 +1252,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
-                if why := alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
-                                      f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions"):
-                    notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
+                alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
+                            f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions", cards=[c["id"]])
             if bool(ask) != bool(w.get("permission_wait")):
                 if ask and not hooks.hook_permission(w):
                     events.emit("state_transition", c["id"], source="screen", transition="permission_wait")
@@ -1153,6 +1262,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
                 and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
                 and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh
+            m, w, status = c["metadata"], {}, "none"
+        if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
+                and agent_alerts.stall(c, w, reg, st, seen_stalls):   # idle with its stage unfinished: nudged, then restarted
             m, w, status = c["metadata"], {}, "none"
         if w and status == "alive" and not busy and not dry and w.get("stage") == stage and (C.CAPS or m.get("caps")) \
                 and (note := _check_caps(c, w, st, time.time())) and stop_at_cap(c, w, note):
@@ -1194,7 +1306,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if key not in st["notified"]:
                 st["notified"][key] = time.time()
                 print(f"{short_id(c['id'])}  plan ready for review: {c['title'][:50]}")
-                notify(f"Plan ready: {c['title'][:50]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
+                notifications.send("plan_ready", f"Plan ready: {short_id(c['id'])} {c['title'][:40]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
             continue
         if m.get("run_retry_at") and not dry and (on := release_key(c)) != m.get("run_released_on") and \
                 (not w or on.split(":")[0] != str(m.get("run_released_on") or "").split(":")[0]):
@@ -1210,7 +1322,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
                 why = ("waiting (usage limit)" if w.get("limit_hit") else run_waiting(w, reg, st)) if status == "alive" else None
-                if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
+                rw_state = rework_live(c, w, why, reg, dry) if status == "alive" else None
+                if rw_state == "restarted":
+                    seen_waits.pop(c["id"], None)
+                    todo.append((c, stage, 1, col))   # start_worker adds rework.prompt_arg
+                    continue
+                if why and rw_state is None and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
                 gate = f"GATE: {why[9:-1]}" if why and why.startswith("waiting (") and GATE_RE.fullmatch(f"GATE: {why[9:-1]}") else None
@@ -1222,8 +1339,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     print(f"{short_id(c['id'])}  run agent {why}; its slot is free")   # its window stays: no second agent
                 else:
                     runs_alive += 1
+                    holders["run"].append(short_id(c["id"]))
             else:
                 prep_alive += not w.get("limit_hit")   # an agent on a limit screen waits for its reset: no slot
+                if not w.get("limit_hit"):
+                    holders["prep"].append(short_id(c["id"]))
             continue
         if stage == "run" and (blocked := run_blocked(c)):   # released: held back, no slot, not live
             print(f"{short_id(c['id'])}  run {blocked}")
@@ -1257,12 +1377,15 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
     if not dry:
+        st["stalls"] = seen_stalls
+    if not dry:
         try:
             agent_alerts.check(all_cards, st, {t[0]["id"] for t in todo})
         except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"agent alerts skipped this pass: {e}", file=sys.stderr)
             events.emit("error", message=f"agent alerts: {e}")
-    prep_alive += sweep_untracked(all_cards, reg, dry, st) or 0
+    swept = sweep_untracked(all_cards, reg, dry, st) or 0
+    prep_alive += swept
     st["screens"] = {p: r for p, r in (st.get("screens") or {}).items() if time.time() - r.get("seen", 0) < 3600}   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
@@ -1274,6 +1397,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             accounts.check_parked()
         except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"account check failed: {e}", file=sys.stderr)
+            events.failure("account_check_failed", "warning", f"account check failed: {e}")
         _sync_pass()
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
@@ -1306,6 +1430,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if stage == "run":
             if runs_live >= LIVE_RUN_CAP * max_runs:
                 print(f"{short_id(c['id'])}  run waits ({runs_live} live, cap {LIVE_RUN_CAP * max_runs})")
+                slow[f"wait:{c['id']}"] = ("slot_wait_long", c["id"], "wait_minutes", {"slot": "run", "stage": stage, "holders": holders["run"]})
                 continue
             if runs_alive >= max_runs:
                 key = f"{c['id']}:queued"
@@ -1313,9 +1438,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     st["notified"][key] = time.time()
                     notify("Pipeline queue", f"{c['title'][:40]} waits: {runs_alive} runs already in flight (max {max_runs})")
                 print(f"{short_id(c['id'])}  run waits ({runs_alive}/{max_runs} in flight)")
+                slow[f"wait:{c['id']}"] = ("slot_wait_long", c["id"], "wait_minutes", {"slot": "run", "stage": stage, "holders": holders["run"]})
                 continue
         elif prep_alive >= max_prep:
             print(f"{short_id(c['id'])}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
+            slow[f"wait:{c['id']}"] = ("slot_wait_long", c["id"], "wait_minutes", {"slot": "prep", "stage": stage,
+                                       "holders": holders["prep"] + ([f"{swept} untracked window(s)"] if swept else [])})
             continue
         # one account for the log, the card and the launch: the stage's own account when it sets one; with an
         # accounts pool, the least loaded of the pool not parked (this card not counted); else the card's, else the
@@ -1356,8 +1484,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if stage == "run":
             runs_alive += 1
             runs_live += 1
+            holders["run"].append(short_id(c["id"]))
         else:
             prep_alive += 1
+            holders["prep"].append(short_id(c["id"]))
         if prof != (c.get("metadata") or {}).get("profile"):
             if want and prof != want:
                 print(f"{short_id(c['id'])}  profile {want} is parked; using {prof}")
@@ -1365,7 +1495,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 update(c["id"], metadata={"profile": prof})
             c["metadata"] = {**(c.get("metadata") or {}), "profile": prof}
         print(f"{short_id(c['id'])}  {col} -> {stage} agent (attempt {attempts}): {c['title'][:50]}")
-        start_worker(c, stage, attempts, dry)
+        try:
+            start_worker(c, stage, attempts, dry)
+        except (SystemExit, Exception) as e:   # logged, then the pass fails as before
+            if not dry:
+                events.failure("harness_start_failed", "error", str(e), c["id"], stage=stage, **_start_who(stage, c))
+            raise
         if attempts <= 1 and room is not None:
             room -= 1
         prev = ((c.get("metadata") or {}).get("worker") or {})
@@ -1389,7 +1524,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         slowwork.observe(slow)
         check_alerts(all_cards, failed, st)
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
+        notifications.release()    # the summary of what quiet hours held
         summary.write(summary.build(all_cards, reg, time.time()))
+    try:
+        checkout_watch.check(all_cards, reg, st, dry, notify)
+    except (Exception, SystemExit) as e:
+        print(f"main checkout check skipped this pass: {e}", file=sys.stderr)
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
 
@@ -1932,6 +2072,7 @@ def _passes(a):
                 print(line)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - a bad library folder or config never stops the dispatcher
             print(f"built-in skills not installed: {e}", file=sys.stderr)
+            events.failure("skills_not_installed", "warning", str(e))
     if lock:
         backup.check()
         with contextlib.suppress(ValueError):   # only the main thread can install a handler

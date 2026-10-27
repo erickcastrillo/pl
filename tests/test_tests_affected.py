@@ -34,10 +34,14 @@ def repo(tmp_path):
     return tmp_path
 
 
-def fake_git(monkeypatch, root, changed=(), untracked=(), fail=False, calls=None):
-    def run(argv, cwd=None):
+def fake_git(monkeypatch, root, changed=(), untracked=(), fail=False, calls=None, cmd=None, cwds=None):
+    def run(argv, cwd=None, timeout=None):
         if calls is not None:
             calls.append(argv)
+        if cwds is not None:
+            cwds.append(cwd)
+        if cmd is not None and argv[0] != "git":
+            return cmd
         if fail:
             return 128, "", "fatal: not a git repository"
         if "rev-parse" in argv:
@@ -157,3 +161,103 @@ def test_pl_tests_runs_without_a_profile(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["pl", "tests", "affected", "--json"])
     assert cli.main() == 0
     assert seen == [["affected", "--json"]]
+
+
+def settings(repo, text):
+    f = repo / ".pl" / "tests.toml"
+    f.parent.mkdir(exist_ok=True)
+    f.write_text(text)
+
+
+TS_TOOL = (0, "tests/a_test.ts\ntests/b_test.ts\n", "")
+
+
+def test_affected_cmd_list_replaces_the_python_finder(repo, monkeypatch):
+    settings(repo, '[tests]\naffected_cmd = ["tool", "--x"]\n')
+    calls, cwds = [], []
+    r = result(monkeypatch, repo, ["src/app/core.py"], cmd=TS_TOOL, calls=calls, cwds=cwds)
+    assert ["tool", "--x", "abc"] in calls
+    assert cwds[calls.index(["tool", "--x", "abc"])] == repo
+    assert r["tests"] == ["tests/a_test.ts", "tests/b_test.ts"]
+    assert set(r["reasons"].values()) == {"from affected_cmd"}
+    assert "tests/test_direct.py" not in r["tests"]
+
+
+def test_affected_cmd_string_is_split_and_output_cleaned(repo, monkeypatch):
+    settings(repo, '[tests]\naffected_cmd = "scripts/affected.sh --fast"\n')
+    calls = []
+    r = result(monkeypatch, repo, ["x.py"], cmd=(0, "a\n\n  \nb\na\n", ""), calls=calls)
+    assert ["scripts/affected.sh", "--fast", "abc"] in calls
+    assert r["tests"] == ["a", "b"]
+
+
+@pytest.mark.parametrize("cmd_line", ["", 'affected_cmd = ["tool"]\n'])
+def test_always_is_listed_with_the_finder_and_with_affected_cmd(repo, monkeypatch, cmd_line):
+    settings(repo, f'[tests]\n{cmd_line}always = ["tests/test_x.py"]\n')
+    r = result(monkeypatch, repo, ["src/app/other.txt"], cmd=(0, "", ""))
+    assert r["reasons"]["tests/test_x.py"] == "always rule"
+    assert "tests/test_x.py" in r["tests"]
+
+
+@pytest.mark.parametrize("changed, patterns, full", [
+    ("src/App/App.csproj", '["*.csproj"]', True),
+    ("package.json", '["*.csproj", "package.json"]', True),
+    ("web/package.json", '["package.json"]', False),
+])
+def test_full_on_matches_changed_paths_with_fnmatch(repo, monkeypatch, changed, patterns, full):
+    settings(repo, f"[tests]\nfull_on = {patterns}\n")
+    r = result(monkeypatch, repo, [changed])
+    assert r["full"] is full
+    if full:
+        assert changed in r["full_reason"]
+
+
+def test_non_python_repo_works_from_settings_alone(tmp_path, monkeypatch, capsys):
+    (tmp_path / "README.md").write_text("hi\n")
+    settings(tmp_path, '[tests]\nfull_on = ["*.csproj"]\n')
+    assert result(monkeypatch, tmp_path, ["A.csproj"])["full"] is True
+    settings(tmp_path, '[tests]\naffected_cmd = ["tool"]\n')
+    fake_git(monkeypatch, tmp_path, ["Program.cs"], cmd=TS_TOOL)
+    assert T.cmd_tests(["affected", "--json"]) == 0
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["tests"] == ["tests/a_test.ts", "tests/b_test.ts"] and out["full"] is False
+    assert "Python" not in cap.err
+
+
+@pytest.mark.parametrize("cmd", [
+    (2, "", "boom"),
+    (1, "", "timed out after 120 seconds"),
+    (1, "", "[Errno 2] No such file or directory: 'tool'"),
+])
+def test_failing_affected_cmd_falls_back_to_full(repo, monkeypatch, capsys, cmd):
+    settings(repo, '[tests]\naffected_cmd = ["tool"]\nalways = ["tests/test_x.py"]\n')
+    fake_git(monkeypatch, repo, ["src/app/core.py"], cmd=cmd)
+    assert T.cmd_tests(["affected", "--json"]) == 0
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["full"] is True and out["tests"] == ["tests/test_x.py"]
+    assert cap.err.startswith("pl tests: affected_cmd failed:") and len(cap.err.splitlines()) == 1
+
+
+@pytest.mark.parametrize("text", ["[tests\nbroken", '[tests]\nalways = "tests/a.py"\n'])
+def test_bad_settings_file_falls_back_to_full(repo, monkeypatch, capsys, text):
+    settings(repo, text)
+    fake_git(monkeypatch, repo, ["src/app/core.py"])
+    assert T.cmd_tests(["affected", "--json"]) == 0
+    cap = capsys.readouterr()
+    assert json.loads(cap.out)["full"] is True
+    assert ".pl/tests.toml" in cap.err
+
+
+def test_no_settings_or_no_tests_table_matches_slice_1(repo, monkeypatch):
+    plain = result(monkeypatch, repo, ["src/app/core.py"])
+    settings(repo, "[other]\nx = 1\n")
+    assert result(monkeypatch, repo, ["src/app/core.py"]) == plain
+
+
+def test_pl_repo_settings_list_the_always_tests():
+    from pathlib import Path
+    always = T._settings(Path(__file__).parents[1])["always"]
+    for name in ("tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"):
+        assert name in always

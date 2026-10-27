@@ -135,7 +135,8 @@
   pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
-  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the [tracker] and [intake] boards, the assistant's account)
+  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the [tracker] and [intake] boards, the assistant's account, notifications)
+  pl notify test [--chat NAME]  send one test notification; says whether attention_cmd (and NAME) got it
   pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
@@ -363,6 +364,7 @@ def _main():
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
+     "notify": lambda a: __import__("pl.notifications").notifications.cmd_notify(a),
      "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
      "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
@@ -389,7 +391,7 @@ def build_parser():
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
+    p = sub.add_parser("list"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")
     p.add_argument("--reason", help="why you approve; saved to memory with the card"); p.add_argument("--code", help="the 6-digit code from the owner's notification, to confirm an agent's outward approval"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
@@ -425,8 +427,8 @@ def build_parser():
     p.add_argument("--from", dest="from_", metavar="DIR", help="restore: the backup clone holding board.json")
     p.add_argument("--dry-run", action="store_true", help="migrate: print what would be copied and write nothing")
     p.add_argument("--skip-check", action="store_true", help="migrate: do not run pl board check on the target first (for a board you already checked)")
-    p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("section"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("card"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("section"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
     p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
@@ -459,6 +461,7 @@ def build_parser():
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     p.add_argument("--open", metavar="CARD", help="open this card on start")
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
+    p.add_argument("--back", action="store_true", help="open on this pipeline's last tab and row (a pipeline switch passes it)")
     for verb in ("pause", "resume"):
         sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("activity"); p.add_argument("action", nargs="?", choices=["demo", "thresholds"]); p.add_argument("--clear", action="store_true", help="with demo: remove the demo entries")
@@ -479,7 +482,7 @@ def build_parser():
     p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
-    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
+    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage, or with --github each account's callers and outside-pl points")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller, beside GitHub's own reading")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
@@ -558,6 +561,7 @@ def build_parser():
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
+    p = sub.add_parser("notify"); p.add_argument("action", choices=["test"]); p.add_argument("--chat", metavar="NAME", help="also send the test to this chat connector")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
@@ -568,7 +572,7 @@ def build_parser():
     q = pm.add_parser("set-stage"); q.add_argument("stage"); q.add_argument("harness")
     q.add_argument("model", help='a model id, or "" to remove the key')
     q.add_argument("--small", action="store_true", help="the small-change model ([stages.<stage>.small.models])")
-    p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
+    p = sub.add_parser("inbox"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
     p = sub.add_parser("triggers"); pt = p.add_subparsers(dest="triggers_cmd")

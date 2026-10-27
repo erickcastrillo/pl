@@ -1,6 +1,9 @@
 """Dashboard: six tiles for the chosen window, 14-day throughput, where work waits, decide next. Health opens in a panel."""
+import json
 import shutil
 import statistics
+import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -8,18 +11,21 @@ from rich.text import Text
 from textual import work
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Digits, Label, Sparkline, Static
 
 from pl import config as C
-from pl import standup
+from pl import pipeline, standup
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.cards import CardsView
 from pl.tui.chrome import empty_state
-from pl.tui.needs import needs_groups, needs_you_count
+from pl.tui.needs import needs_groups, needs_you_count, send_groups
 from pl.tui.prs import pr_groups
 from pl.usage import human
-from pl.util import age, parse_iso
+from pl.util import age, parse_iso, short_id
+
+_run = subprocess.run   # the one subprocess runner here; tests fake it
 
 WINDOWS = [("1h", "last hour", 3600), ("24h", "last 24 hours", 86400), ("7d", "last 7 days", 604800)]
 TILES = [("specs", "SPECS WRITTEN"), ("plans", "PLANS WRITTEN"), ("opened", "PRS OPENED"), ("merged", "PRS MERGED"),
@@ -89,6 +95,10 @@ def decide_rows(data):
 
 def _groups(rows):
     g, p = needs_groups(rows), pr_groups(rows)
+    sends = [(key, len(g[key]), f"{title} · {len(g[key])}", "read the draft; approve queues it to send", "#e0a040")
+             for key, title in send_groups()]
+    if pipeline.is_config():
+        return sends
     plans = sorted(parse_iso(r["card"].get("updated_at") or "") for r in g["plans"])
     return [("merge", len(p["merge"]), f"{len(p['merge'])} PRs pass the merge check", "merge them, oldest first", "green"),
             ("specs", len(g["specs"]), f"{len(g['specs'])} specs wait for your review", "approve, or send back with notes", "#e0a040"),
@@ -97,6 +107,40 @@ def _groups(rows):
             ("rework", len(p["rework"]), f"{len(p['rework'])} PRs need rework", "pl sends them back to a run agent (pl rework)", "red"),
             ("decide", len(p["decide"]), f"{len(p['decide'])} PRs stopped for your call", "auto-review gave up on purpose", "#e0a040"),
             ("manual", len(g["manual"]), f"{len(g['manual'])} manual tasks", "no agent runs these", "#5f9fff")]
+
+
+def _first_line(*texts):
+    return next((ln.strip() for t in texts for ln in (t or "").splitlines() if ln.strip()), "")
+
+
+def inbox_items():
+    """(items, None) from `pl inbox --json`, or (None, first error line) when it cannot be read."""
+    try:
+        r = _run([sys.executable, "-m", "pl", "inbox", "--json"], capture_output=True, text=True, timeout=15)
+        if r.returncode:
+            return None, _first_line(r.stderr, r.stdout) or f"exit code {r.returncode}"
+        got = json.loads(r.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as e:
+        return None, str(e)
+    if not isinstance(got, dict) or not isinstance(got.get("items"), list):
+        return None, "unexpected output"
+    return got["items"], None
+
+
+def inbox_items_sorted(items, done):
+    return sorted((i for i in items if (i["pipeline"], i["card"]) not in done), key=lambda i: -i["age_seconds"])
+
+
+def inbox_rows(items, done):
+    """(label, summary) cells for the all-pipelines list, oldest first across pipelines; stale rows are dimmed."""
+    out = []
+    for it in inbox_items_sorted(items, done):
+        stale = it.get("stale")
+        style = "dim" if stale else "bold #e0a040"
+        when = age(time.time() - it["age_seconds"]) + (" (stale)" if stale else "")
+        out.append((Text(f"› {it['pipeline']}  {short_id(it['card'])}  {it['gate']}", style=style),
+                    Text(f"{it['summary']} · {when}", style="dim")))
+    return out
 
 
 def health_tokens(data, window=1):
@@ -189,6 +233,12 @@ class StandupPanel(VerticalScroll, can_focus=True):
 
 
 class DashboardView(Vertical):
+    BINDINGS = [Binding("A", "all_pipelines", "all pipelines"), Binding("a", "inbox_approve", "approve"),
+                Binding("x", "inbox_send_back", "send back")]
+    all_on = False
+    _inbox = ()
+    _done = frozenset()
+
     def compose(self):
         yield Static(Text(""), id="window-bar")
         with Horizontal(id="tiles"):
@@ -223,6 +273,7 @@ class DashboardView(Vertical):
             bar.append(f" {label} ", style="bold #e0a040 reverse" if i == window else "")
             bar.append("  ")
         bar.append(f"   profile {C.PROFILE_NAME or 'legacy'} · [ ] change the window · r refresh", style="dim")
+        bar.append("  A all pipelines", style="bold #e0a040 reverse" if self.all_on else "dim")
         mem = data.get("memory")
         if mem:
             bar.append(f"   memory: {mem['free'] / 1024 ** 3:.1f} GB free", style="bold red" if mem["low"] else "dim")
@@ -264,7 +315,7 @@ class DashboardView(Vertical):
                 waits.add_row(Text(col), Text(str(n), style="bold"), Text(oldest), Text(median, style="dim"))
         self.data, self.window = data, window
         items = decide_rows(data) if any(r.get("card") or r.get("pr") for r in data["snapshot"]["rows"]) else []
-        if items != getattr(self, "_decide", None):   # an unchanged table is not rebuilt; the cursor stays put
+        if not self.all_on and items != getattr(self, "_decide", None):   # an unchanged table is not rebuilt; the cursor stays put
             self._decide = items
             table = self.query_one("#decide", DataTable)
             keep = table.cursor_row
@@ -277,15 +328,118 @@ class DashboardView(Vertical):
             table.move_cursor(row=keep)
         self.query_one(StandupPanel).update_for(data["snapshot"])
 
+    def check_action(self, action, parameters):
+        if action in ("inbox_approve", "inbox_send_back"):
+            return self.all_on and self._selected_item() is not None
+        return True
+
+    def action_all_pipelines(self):
+        table = self.query_one("#decide", DataTable)
+        self.all_on = not self.all_on
+        if self.all_on:
+            self._keep_cursor, self._done = table.cursor_row, frozenset()
+            table.border_title = "Needs you · all pipelines"
+            self.load_inbox()
+            if hasattr(self, "data"):
+                self.show(self.data, self.window)
+        else:
+            table.border_title = "Decide next"
+            self._decide = None
+            self.show(self.data, self.window)
+            table.move_cursor(row=self._keep_cursor)
+        self.refresh_bindings()
+
+    @work(thread=True, exclusive=True, group="all-pipelines")
+    def load_inbox(self):
+        items, err = inbox_items()
+        self.app.call_from_thread(self.show_inbox, items, err)
+
+    def show_inbox(self, items, err):
+        if not self.all_on:
+            return
+        table = self.query_one("#decide", DataTable)
+        keep = table.cursor_row
+        table.clear()
+        self._inbox = [] if err else inbox_items_sorted(items, self._done)
+        if err or not self._inbox:
+            msg = f"Could not read the inbox: {err}" if err else "Nothing needs you in any pipeline"
+            table.add_row(Text(f"› {msg}", style="bold red" if err else "dim"), Text(""), key="inbox-none")
+        for i, cells in enumerate(inbox_rows(self._inbox, self._done)):
+            table.add_row(*cells, key=f"inbox-{i}")
+        table.move_cursor(row=keep)
+        self.refresh_bindings()
+
+    def _item_at(self, key):
+        if self.all_on and key and key.startswith("inbox-") and key[6:].isdigit() and int(key[6:]) < len(self._inbox):
+            return self._inbox[int(key[6:])]
+        return None
+
+    def _selected_item(self):
+        table = self.query_one("#decide", DataTable)
+        if not table.row_count:
+            return None
+        return self._item_at(table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key.value)
+
+    def on_data_table_row_highlighted(self, e):
+        self.refresh_bindings()
+
+    def action_inbox_approve(self):
+        if not (it := self._selected_item()):
+            return
+        from pl.tui.review import ConfirmScreen
+
+        def answered(yes):
+            if yes:
+                self.run_gate(it, ["approve", it["card"]])
+        self.app.push_screen(ConfirmScreen(f"Approve {short_id(it['card'])} in {it['pipeline']}?"), answered)
+
+    def action_inbox_send_back(self):
+        if not (it := self._selected_item()):
+            return
+        from pl.tui.panels import InputModal   # panels imports this module
+
+        def done(notes):
+            if notes:
+                self.run_gate(it, ["reject", it["card"], notes])
+        self.app.push_screen(InputModal(f"Send back {short_id(it['card'])} ({it['pipeline']}): notes"), done)
+
+    @work(thread=True, group="all-pipelines-gate")
+    def run_gate(self, it, args):
+        try:
+            r = _run([sys.executable, "-m", "pl", "--profile", it["pipeline"], *args],
+                     capture_output=True, text=True, timeout=60)
+            err = _first_line(r.stderr, r.stdout) or f"exit code {r.returncode}" if r.returncode else None
+        except (OSError, subprocess.SubprocessError) as e:
+            err = str(e)
+        self.app.call_from_thread(self.gate_done, it, args[0], err)
+
+    def gate_done(self, it, verb, err):
+        if err:
+            self.app.notify(err, severity="error", markup=False)
+            return
+        self._done |= {(it["pipeline"], it["card"])}
+        self.app.notify(f"{'approved' if verb == 'approve' else 'sent back'} {short_id(it['card'])} ({it['pipeline']})",
+                        markup=False)
+        self.load_inbox()
+
     def on_data_table_row_selected(self, e):
         if e.data_table.id != "decide":
+            return
+        if self.all_on:
+            if it := self._item_at(e.row_key.value):
+                if it["pipeline"] != C.PROFILE_NAME:
+                    self.app.switch_to(it["pipeline"], card=it["card"])
+                else:
+                    from pl.tui.cards import CardScreen
+                    self.app.push_screen(CardScreen(it["card"], None))
             return
         if e.row_key.value == "health":
             self.app.action_health()
             return
-        if e.row_key.value not in DECIDE_TARGET:
+        key = e.row_key.value
+        if not (target := DECIDE_TARGET.get(key) or (("cards", key) if key.startswith("send:") else None)):
             return
-        tab, group = DECIDE_TARGET[e.row_key.value]
+        tab, group = target
         self.app.action_tab(tab)
         if group:
             self.app.query_one(CardsView).show_attention(True, group)

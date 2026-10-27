@@ -256,7 +256,7 @@ class SubagentsView(Widget):
     #subagents-table { width: 90; height: 1fr; border: round $panel-lighten-2; }
     #subagents-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
-    BINDINGS = [Binding("y", "copy", "copy")]
+    BINDINGS = [Binding("y", "copy", "copy"), Binding("w", "live_view", "live view")]
 
     def __init__(self):
         super().__init__()
@@ -348,7 +348,13 @@ class SubagentsView(Widget):
     def on_data_table_row_selected(self, event):
         if event.data_table.id != "agentwin-table":
             return
-        win = self.wins[event.cursor_row] if 0 <= event.cursor_row < len(self.wins) else None
+        self._open_live(event.cursor_row)
+
+    def action_live_view(self):
+        self._open_live(self.query_one("#agentwin-table", DataTable).cursor_row)
+
+    def _open_live(self, row):
+        win = self.wins[row] if 0 <= row < len(self.wins) else None
         if win is None or not win["pane"]:
             self.app.notify(NO_WINDOW, markup=False)
             return

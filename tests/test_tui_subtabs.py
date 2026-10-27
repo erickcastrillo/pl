@@ -41,19 +41,18 @@ async def test_ac2_a_free_letter_opens_its_sub_tab():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        await pilot.press("5", "l")
+        await pilot.press("6", "m")   # Extend: m opens Models (Loops lost its l to the full-log key, Plan 42 slice 2)
         await settle(pilot)
-        assert app.active_tab == "loops"
-        label = app.query_one("#automate-views").get_tab("loops").label
-        assert label.plain.startswith("Loops") and label.spans[0].style.underline and label.spans[0].start == 0
+        assert app.active_tab == "models"
+        label = app.query_one("#extend-views").get_tab("models").label
+        assert label.plain.startswith("Models") and label.spans[0].style.underline and label.spans[0].start == 0
 
 
 async def test_ac3_sub_tab_letters_never_collide():
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        assert app.sub_keys == {"automate": {"l": "loops"},
-                                "review": {"p": "prs", "w": "waiting"},
+        assert app.sub_keys == {"review": {"p": "prs", "w": "waiting"},   # Loops' l is its full-log key now
                                 "extend": {"c": "connectors", "m": "models", "p": "pods"}}
         for gid, letters in app.sub_keys.items():
             own = {k for k in letters if all(b.action.startswith("sub_letter") for b in app._bindings.key_to_bindings[k])}

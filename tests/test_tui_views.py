@@ -17,6 +17,7 @@ from pl.tui import app as tui_app
 from pl.tui import cards as tui_cards
 from pl.tui import prs as tui_prs
 from pl.tui.app import PlApp
+from tui_wait import settle, view_app, wait_for_screen, wait_until
 
 NOW = datetime.now(timezone.utc)
 
@@ -130,12 +131,6 @@ def screen_text(app):
     return console.export_text()
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
-
-
 def tile(app, name):
     return app.query_one(f"#tile-{name} Digits").value
 
@@ -158,7 +153,7 @@ async def test_pull_requests_groups():
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         app.action_tab("prs")
-        await pilot.pause()
+        await wait_until(pilot, lambda: "NEED YOUR DECISION 1" in screen_text(app), "the PRs tab")
         text = screen_text(app)
         for s in ("NEED YOUR DECISION 1", "READY TO MERGE 2", "NEED REWORK 1", "AWAITING MERGE CHECK 1",
                   "frontend#1200  feat: merge me first", "api#1300  feat: waiting for the gate"):
@@ -176,7 +171,7 @@ async def test_refresh_failure_keeps_numbers_and_shows_the_error():
         assert tile(app, "specs") == "12"
         assert "Rate exceeded" in str(app.query_one("#header").render())
         await pilot.press("]")          # data must still be there: the next window shows its own fake value
-        await pilot.pause()
+        await wait_until(pilot, lambda: tile(app, "specs") == "71", "the next window")
         assert tile(app, "specs") == "71"
         prov.fail = None
         app.refresh_data()
@@ -191,11 +186,11 @@ async def test_brackets_cycle_the_window():
         seen = [(tile(app, "specs"), tile(app, "opened"))]
         for _ in range(3):
             await pilot.press("]")
-            await pilot.pause()
+            await wait_until(pilot, lambda: (tile(app, "specs"), tile(app, "opened")) != seen[-1], "the next window")
             seen.append((tile(app, "specs"), tile(app, "opened")))
         assert seen == [("12", "2"), ("71", "5"), ("3", "1"), ("12", "2")]
         await pilot.press("[")
-        await pilot.pause()
+        await wait_until(pilot, lambda: tile(app, "specs") == "3", "the previous window")
         assert tile(app, "specs") == "3"
 
 
@@ -261,7 +256,7 @@ async def test_small_terminal_every_tab():
         await settle(pilot)
         for key in "123456789":
             await pilot.press(key)
-            await pilot.pause()
+            await settle(pilot)
         assert app.is_running and "render failed" not in str(app.query_one("#header").render())
 
 
@@ -287,7 +282,7 @@ async def test_card_markup_is_shown_as_plain_text(monkeypatch):
         assert "[bold]x[/bold]" in table_line.split("││")[0]      # the list, not only the detail pane
         assert "[bold]x[/bold]" in str(app.query_one("#cards-detail").render())        # card detail pane
         app.action_tab("prs")
-        await pilot.pause()
+        await wait_until(pilot, lambda: "[red]pr[/red] [link=https://evil.example]z[/link]" in screen_text(app), "the PRs tab")
         assert "[red]pr[/red] [link=https://evil.example]z[/link]" in screen_text(app)
 
 
@@ -395,7 +390,7 @@ async def test_odd_card_ids_none_titles_duplicates_and_render_errors_do_not_kill
         table = app.query_one("#cards-table")
         for i in range(table.row_count):
             table.move_cursor(row=i)
-            await pilot.pause()
+            await settle(pilot)
         assert app.is_running and "render failed" not in str(app.query_one("#header").render())
         assert "epoch card" in screen_text(app)
         assert "repo#12" in screen_text(app) and "repo#13" in screen_text(app)   # GitHub ids show as repo#n
@@ -407,23 +402,27 @@ async def test_odd_card_ids_none_titles_duplicates_and_render_errors_do_not_kill
         assert "boom" in str(app.query_one("#header").render())
 
 
+async def _dashboard_text(data):
+    from pl.tui.dashboard import DashboardView
+    view = DashboardView()
+    async with view_app(lambda: view).run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        view.show(data, 2)
+        await settle(pilot)
+        return screen_text(pilot.app)
+
+
 async def test_empty_sparklines_draw_a_baseline_not_a_solid_block():
     data = fake_data()
     data["daily"] = {"specs": [0], "plans": []}
     data["pr_activity"] = {"opened": [], "merged": []}
-    app = PlApp(snapshot_provider=Provider(data))
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        text = screen_text(app)
-        assert "█" not in text
-        assert "no data yet" in text
+    text = await _dashboard_text(data)
+    assert "█" not in text
+    assert "no data yet" in text
 
 
 async def test_real_sparkline_series_still_draws_bars():
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        assert "█" in screen_text(app)
+    assert "█" in await _dashboard_text(fake_data())
 
 
 async def test_other_views_skip_the_redraw_when_their_data_is_unchanged(monkeypatch):
@@ -742,13 +741,13 @@ async def test_t_on_a_failed_card_asks_then_retries_it_off_the_ui_thread(monkeyp
         assert got == [] and len(app.screen_stack) == 1
         await _open_cards(pilot, app, "dead0001aaaa")
         await pilot.press("t")
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(app.screen_stack) == 2, "the confirm line")
         assert len(app.screen_stack) == 2   # the confirm line
         await pilot.press("n")
         await settle(pilot)
         assert got == []
         await pilot.press("t")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
     assert [g[0] for g in got] == ["dead0001aaaa"] and got[0][1] is not threading.main_thread()
@@ -771,13 +770,13 @@ async def test_m_on_a_live_agent_asks_then_moves_it_off_the_ui_thread(monkeypatc
         assert got == [] and len(app.screen_stack) == 1
         await _open_cards(pilot, app, "live0001aaaa")
         await pilot.press("m")
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(app.screen_stack) == 2, "the confirm line")
         assert len(app.screen_stack) == 2   # the confirm line
         await pilot.press("n")
         await settle(pilot)
         assert got == []
         await pilot.press("m")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
     assert [(g[0], g[1]) for g in got] == [("live0001aaaa", None)] and got[0][2] is not threading.main_thread()
@@ -822,17 +821,17 @@ async def test_alerts_tab_a_acknowledges_and_hides(monkeypatch):
         assert "ALERTS" not in screen_text(app)   # the Pipeline lists only cards; alerts live on their own tab
         assert str(app.query_one("#activity-views", TabbedContent).get_tab("alerts").label) == "Alerts 2"
         app.action_tab("alerts")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab == "alerts", "the Alerts tab")
         assert app.active_tab == "alerts"
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
         assert app.query_one(tui_alerts.AlertsView)._current()[0] == "stage_failed:abcd1234:spec"
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: acked == ["stage_failed:abcd1234:spec"], "the alert to be acknowledged")
         assert acked == ["stage_failed:abcd1234:spec"] and any("hidden until" in m for m in told)
         assert "title of stage_failed" not in screen_text(app) and "Alerts 1" in screen_text(app)
         assert "Approve" not in screen_text(app)
         await pilot.press("k")                    # the hidden alias
-        await pilot.pause()
+        await wait_until(pilot, lambda: acked[-1:] == ["pr_waiting:abcd1234"], "the alert to be acknowledged")
         assert acked[-1] == "pr_waiting:abcd1234" and "Alerts 0" in screen_text(app)
 
 
@@ -862,7 +861,7 @@ async def test_alerts_enter_shows_detail():
         await settle(pilot)
         app.query_one(AlertsView).query_one("DataTable").focus()
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: "seen 4 times" in screen_text(app), "the alert detail")
         text = screen_text(app)
     for s in ("high", "seen 4 times", "r#7", "the agent exited twice", "fix for k1"):
         assert s in text, s
@@ -893,7 +892,7 @@ async def test_a_still_approves_outside_alerts(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "4a000001aaaa")
         await pilot.press("a")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "Approve the plan for 4a000001" in screen_text(app)
 
 
@@ -930,7 +929,7 @@ async def test_pipeline_filter_with_nothing_waiting_says_so_and_keys_only_notify
         assert "PR OPEN" not in text
         for key in ("a", "x", "o", "enter", "down", "up"):
             await pilot.press(key)
-            await pilot.pause()
+            await settle(pilot)
         assert len(app.screen_stack) == 1 and app.is_running
         assert any("select a spec" in str(n.message) for n in app._notifications)
 
@@ -1032,18 +1031,18 @@ async def test_pipeline_a_and_x_review_only_specs_and_plans(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "d0000004aaaa")   # PR open: nothing to review
         await pilot.press("a")
-        await pilot.pause()
+        await settle(pilot)
         assert len(app.screen_stack) == 1
         t = app.query_one("#cards-table")
         t.move_cursor(row=t.get_row_index("4a000001aaaa"))
         await settle(pilot)
         await pilot.press("a")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "Approve the plan for 4a000001" in screen_text(app)
         await pilot.press("n")
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(app.screen_stack) == 1, "the confirm line to close")
         await pilot.press("x")
-        await pilot.pause()
+        await wait_until(pilot, lambda: pushed, "the review screen to open")
         assert pushed and pushed[0][0][:2] == ("plan", "4a000001aaaa") and pushed[0][1]["notes_first"]
         assert ReviewScreen is not None
 
@@ -1058,14 +1057,14 @@ async def test_pipeline_v_moves_a_card_to_another_column_after_asking(monkeypatc
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "c0000003aaaa")   # Manual
         await pilot.press("v")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ColumnPicker")
         assert isinstance(app.screen, tui_cards.ColumnPicker)
         assert "Manual" not in app.screen.columns and "Done" in app.screen.columns   # not its own column
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(app.screen_stack) == 1, "the picker to close")
         assert len(app.screen_stack) == 1 and moved == []
         await pilot.press("v")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ColumnPicker")
         await pilot.press("down", "enter")   # Inbox, Spec ready: the second one
         await settle(pilot)
         assert isinstance(app.screen, ConfirmScreen), app.screen
@@ -1085,12 +1084,12 @@ async def test_pipeline_t_retries_and_enter_opens_the_whole_card(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "dead0001aaaa")
         await pilot.press("t")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
         assert got == ["dead0001aaaa"]
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_for_screen(pilot, "CardScreen")
         assert isinstance(app.screen, tui_cards.CardScreen)
 
 
@@ -1193,25 +1192,25 @@ async def test_d_asks_for_a_reason_then_confirms_then_drops_off_the_ui_thread(mo
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "c0000003aaaa")
         await pilot.press("d")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ReasonScreen")
         assert isinstance(app.screen, tui_cards.ReasonScreen)
         await pilot.press("escape")      # esc: nothing dropped, no confirm
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(app.screen_stack) == 1, "the reason line to close")
         assert len(app.screen_stack) == 1 and got == []
         await pilot.press("d")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ReasonScreen")
         for ch in "not needed":
             await pilot.press("space" if ch == " " else ch)
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "Drop c0000003" in app.screen.message
         assert "not needed" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
         await pilot.press("d")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ReasonScreen")
         await pilot.press("enter")       # no reason given: None
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
     assert [g[0] for g in got] == [("c0000003aaaa", "not needed"), ("c0000003aaaa", None)]
@@ -1229,9 +1228,9 @@ async def test_d_shows_a_refusal_and_the_console_runs_on(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "c0000003aaaa")
         await pilot.press("d")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ReasonScreen")
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
         assert app.is_running and any("not dropped: pl drop: its run agent" in str(n.message) for n in app._notifications)
@@ -1250,7 +1249,7 @@ async def test_h_hands_a_card_to_manual_after_asking_and_refuses_one_already_the
         assert any("already in Manual" in str(n.message) for n in app._notifications)
         await _open_cards(pilot, app, "spec0001aaaa")
         await pilot.press("h")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "from Spec ready to Manual" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -1265,13 +1264,13 @@ async def test_F_marks_a_card_done_after_asking(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "d0000004aaaa")
         await pilot.press("F")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "done" in app.screen.message.lower()
         await pilot.press("n")
         await settle(pilot)
         assert got == []
         await pilot.press("F")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
     assert [g[0] for g in got] == [("d0000004aaaa",)] and got[0][1] is not threading.main_thread()
@@ -1320,7 +1319,7 @@ async def test_u_undoes_a_drop_only_on_a_dropped_card(monkeypatch):
             assert len(app.screen_stack) == 1
         await _open_cards(pilot, app, "f0000002aaaa")
         await pilot.press("u")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "back to Spec ready" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -1587,7 +1586,7 @@ async def test_ctrl_r_asks_then_starts_a_new_conversation(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
         await pilot.press("ctrl+r")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert type(app.screen).__name__ == "ConfirmScreen" and "new assistant conversation" in app.screen.message
         app.screen.dismiss(True)
         await settle(pilot)
@@ -1596,7 +1595,7 @@ async def test_ctrl_r_asks_then_starts_a_new_conversation(monkeypatch):
 
 async def _ctrl_r_confirmed(app, pilot):
     await pilot.press("ctrl+r")
-    await pilot.pause()
+    await wait_for_screen(pilot, "ConfirmScreen")
     app.screen.dismiss(True)
     await settle(pilot)
 
@@ -1699,14 +1698,14 @@ async def test_a_ready_idea_is_filed_only_after_the_confirm(monkeypatch):
         await settle(pilot)
         assert "Idea ready: Faster page" in str(app.query_one("#assistant-status").render())
         await pilot.press("ctrl+f")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert type(app.screen).__name__ == "ConfirmScreen" and "Faster page" in app.screen.message
         assert "Pages load slowly" in app.screen.message
         app.screen.dismiss(False)
         await settle(pilot)
         assert filed == []
         await pilot.press("ctrl+f")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         app.screen.dismiss(True)
         await settle(pilot)
         assert filed == ["abcdefabcdef"]
@@ -1729,7 +1728,7 @@ async def test_ctrl_f_refuses_a_draft_changed_since_the_dialog_showed_it(monkeyp
         for change in ({"version": 3}, {"version": 2, "ready_to_file": False}):
             disk.update(change)                      # saved again (or unmarked) after the snapshot was taken
             await pilot.press("ctrl+f")
-            await pilot.pause()
+            await wait_for_screen(pilot, "ConfirmScreen")
             app.screen.dismiss(True)
             await settle(pilot)
         assert filed == []
@@ -1859,7 +1858,7 @@ async def test_esc_leaves_the_assistant_box_and_then_a_digit_switches_tab(monkey
         assert app.active_tab == "dashboard"
         await pilot.press("2")
         await settle(pilot)
-        await pilot.press("alt+1")
+        await pilot.press("ctrl+1")
         await settle(pilot)
         assert app.active_tab == "dashboard"
 
@@ -2098,10 +2097,10 @@ async def test_a_slow_read_says_still_reading_and_lets_a_new_read_start(monkeypa
         monkeypatch.setattr(assistant, "screen", slow)
         try:
             view.tick()
-            await pilot.pause(0.2)
+            await pilot.pause(0.2)   # the read is held in its thread on purpose: waiting for workers would wait for the gate
             view._read_started -= 10                         # this read has run for 10 s
             view._poll()
-            await pilot.pause(0.2)
+            await pilot.pause(0.2)   # same: the second read is held too
             assert "still reading" in str(app.query_one("#assistant-status").render()) and len(calls) == 2
         finally:
             gate.set()
@@ -2204,7 +2203,7 @@ async def test_ctrl_r_works_after_clicking_the_tab(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _click_assistant_tab(pilot)
         await pilot.press("ctrl+r")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert type(app.screen).__name__ == "ConfirmScreen"
 
 
@@ -2241,7 +2240,7 @@ async def test_a_reset_that_fails_shows_a_notice(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
         await pilot.press("ctrl+r")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         app.screen.dismiss(True)
         await settle(pilot)
         assert any("kill-window" in n for n in notes), notes
@@ -2297,7 +2296,7 @@ async def test_i_adopts_a_manual_card_after_a_confirm(monkeypatch):
         assert len(app.screen_stack) == 1 and "already in the pipeline" in _notes(app)
         await _open_cards(pilot, app, "e0000005aaaa")
         await pilot.press("i")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "pl adopt" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -2316,7 +2315,7 @@ async def test_R_restarts_the_agent_of_a_card_after_a_confirm(monkeypatch):
         assert len(app.screen_stack) == 1 and "R restarts" in _notes(app)
         await _open_cards(pilot, app, "e0000006aaaa")
         await pilot.press("R")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "plan agent" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -2332,18 +2331,18 @@ async def test_p_holds_a_card_with_a_reason_and_releases_a_held_one(monkeypatch)
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_cards(pilot, app, "e0000006aaaa")
         await pilot.press("p")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ReasonScreen")
         assert isinstance(app.screen, tui_cards.ReasonScreen)
         for ch in "legal":
             await pilot.press(ch)
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "Hold" in app.screen.message and "legal" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
         await _open_cards(pilot, app, "e0000007aaaa")
         await pilot.press("p")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "Release the hold" in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -2375,21 +2374,21 @@ async def test_K_asks_then_turns_it_on_and_off(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         await pilot.press("K")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "kill switch" in app.screen.message.lower()
         await pilot.press("n")
         await settle(pilot)
         assert not outward.state()["on"] and len(app.screen_stack) == 1
 
         await pilot.press("K")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("y")
         await settle(pilot)
         assert outward.state()["on"] and len(app.screen_stack) == 1
 
         await pilot.press("K")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         assert isinstance(app.screen, ConfirmScreen) and "off" in app.screen.message.lower()
         await pilot.press("y")
         await settle(pilot)
@@ -2488,7 +2487,7 @@ async def test_footer_on_a_running_card_hides_approve_and_send_back(monkeypatch)
 
 
 @pytest.mark.parametrize("tab,key", [("dashboard", "1"), ("cards", "3"), ("prs", "4"), ("loops", "5"),
-                                     ("alerts", "7"), ("ideas", "3"), ("settings", "8"), ("home", "H")])
+                                     ("alerts", "7"), ("ideas", "3"), ("settings", "8"), ("home", "H"), ("extend", "6")])
 async def test_question_mark_opens_this_screens_help(tab, key, monkeypatch, tmp_path):
     from pl.tui.app import HelpScreen
     from pl.tui.chrome import HELP
@@ -2637,6 +2636,8 @@ async def test_palette_runs_an_action_on_the_current_tab(monkeypatch):
 
 async def test_palette_switches_tab_then_runs_the_action(monkeypatch):
     _fake_card_read(monkeypatch, [])
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 80)) as pilot:
         await settle(pilot)
@@ -2803,17 +2804,18 @@ def _every_binding():
 def test_no_key_has_two_meanings_across_every_view_and_screen():
     from pl.tui.chrome import MEANING
     from pl.tui.review import ConfirmScreen
-    from pl.tui.app import DispatcherChoice
+    from pl.tui.app import DispatcherChoice, StoppedScreen
     meanings = {}
     for cls, b in _every_binding():
-        if issubclass(cls, (ConfirmScreen, DispatcherChoice)):   # y / n / enter / esc answer the dialog's own question
+        if issubclass(cls, (ConfirmScreen, DispatcherChoice, StoppedScreen)):   # y / n / enter / esc answer the dialog's own question
             continue
         assert b.action in MEANING or b.action.split("(")[0] in MEANING, f"{cls.__name__}: {b.action} has no MEANING"
         meaning = MEANING.get(b.action) or MEANING[b.action.split("(")[0]]
         meanings.setdefault(b.key, {}).setdefault(meaning, []).append(cls.__name__)
     # H: the Ideas view's own harness key wins while it has focus; elsewhere H opens Home
     # a: acknowledges while focus is in the Alerts tab; everywhere else it approves
-    assert {k: m for k, m in meanings.items() if len(m) > 1 and k not in ("H", "a")} == {}
+    # A: Ideas approves, Dashboard toggles all pipelines; each view only sees its own while it has focus
+    assert {k: m for k, m in meanings.items() if len(m) > 1 and k not in ("H", "a", "A")} == {}
 
 
 # ---------- one "needs you" count ----------
@@ -2849,7 +2851,7 @@ def _with_plan():
 
 async def _filter_plan(pilot, text):
     await pilot.press("L")
-    await pilot.pause()
+    await wait_for_screen(pilot, "ReasonScreen")
     await pilot.press(*text, "enter")
     await settle(pilot)
 
@@ -2905,7 +2907,7 @@ async def test_P_rejects_bad_numbers_and_esc_changes_nothing(monkeypatch, typed)
         assert view.plan is None and list(view._rows) == rows
         assert any("whole number from 1" in str(n.message) for n in app._notifications)
         await pilot.press("L")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ReasonScreen")
         await pilot.press("escape")
         await settle(pilot)
         assert view.plan is None and list(view._rows) == rows and len(app.screen_stack) == 1
@@ -2948,9 +2950,9 @@ async def test_card_keys_act_on_the_selected_plan_card(monkeypatch):
         t.move_cursor(row=t.get_row_index("spec0001aaaa"))
         await settle(pilot)
         await pilot.press("v")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ColumnPicker")
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_for_screen(pilot, "ConfirmScreen")
         await pilot.press("y")
         await settle(pilot)
     assert [g[0][0] for g in got] == ["spec0001aaaa"]
@@ -3059,7 +3061,7 @@ async def test_question_mark_on_an_empty_tab_opens_its_help(monkeypatch):
         app.action_tab("ideas")
         await settle(pilot)
         await pilot.press("question_mark")
-        await pilot.pause()
+        await wait_for_screen(pilot, "HelpScreen")
         assert isinstance(app.screen, HelpScreen)
         assert HELP["ideas"] in " ".join(screen_text(app).replace("│", " ").split())
 
@@ -3091,7 +3093,7 @@ async def test_an_empty_alerts_tab_says_how_alerts_arrive(monkeypatch):
         told = []
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: told == ["select an alert to acknowledge"], "the notice")
         assert told == ["select an alert to acknowledge"]
 
 
@@ -3227,16 +3229,18 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await pilot.press("5")
         await settle(pilot)
         assert [r["name"] for r in app.query_one(tui_loops.LoopsView).loops] == ["invoices"]
+        await pilot.press("down")
+        await settle(pilot)
         await pilot.press("p")
         await settle(pilot)
-        assert calls == []   # the cursor starts on the "+ New" row, so p does nothing there
-        await pilot.press("down")
+        assert calls == []   # the template row is last, so p does nothing there
+        await pilot.press("up")
         await settle(pilot)
         await pilot.press("p")
         await settle(pilot)
         await pilot.press("g")
         await settle(pilot)
-        await pilot.press("W")
+        await pilot.press("w")
         await settle(pilot)
         await pilot.press("d")
         await settle(pilot)
@@ -3405,7 +3409,6 @@ async def _open_edit_form(app, pilot, monkeypatch, edit=None):
     await settle(pilot)
     await pilot.press("5")
     await settle(pilot)
-    await pilot.press("down")
     await pilot.press("e")
     await settle(pilot)
     assert isinstance(app.screen, tui_loops.LoopForm)
@@ -3749,7 +3752,7 @@ async def test_loop_log_hides_secrets(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down", "enter")   # row 0 is + New loop
+        await pilot.press("enter")   # the cursor starts on the first loop
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LogScreen)
         assert "ghp_" not in screen_text(app)
@@ -3766,7 +3769,7 @@ async def test_enter_on_a_loop_opens_its_log(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down", "enter")   # row 0 is + New loop
+        await pilot.press("enter")   # the cursor starts on the first loop
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LogScreen)
         text = screen_text(app)
@@ -3788,7 +3791,7 @@ async def test_enter_without_a_log_says_so(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down", "enter")   # row 0 is + New loop
+        await pilot.press("enter")   # the cursor starts on the first loop
         await settle(pilot)
         assert not isinstance(app.screen, tui_loops.LogScreen)
         assert any("no log yet for invoices" in n for n in notes)
@@ -3801,10 +3804,12 @@ def test_new_row_reads_plus_new_thing_and_is_dim():
     assert NEW_ROW == "+new"
 
 
-async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(monkeypatch):
+async def test_loops_view_lists_heading_loops_and_template_row(monkeypatch):
     from pl import loops
     from pl.tui import loops as tui_loops
-    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    from pl.tui.chrome import NEW_ROW
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False},
+                  "triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
     C.LOOPS_OFF = {}
     monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
     app = PlApp(snapshot_provider=Provider(fake_data()))
@@ -3813,14 +3818,16 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         await pilot.press("5")
         await settle(pilot)
         t = app.query_one("#loops-table", DataTable)
-        assert t.get_row_at(0)[0].plain == "+ New loop" and t.row_count == 2
+        assert [r.key.value for r in t.ordered_rows] == ["head:loops", "loop:invoices", "loop:triage", NEW_ROW]
+        assert t.get_row_at(3)[0].plain == f"+ New loop from a template ({len(loops.TEMPLATES)})"
+        assert app.query_one(tui_loops.LoopsView).selected()["name"] == "invoices"
+        await pilot.press("up")
+        await settle(pilot)
+        assert t.cursor_row == 1   # the heading is skipped
+        await pilot.press("down", "down")
         await pilot.press("enter")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.TemplateGallery)
-        await pilot.press("escape")
-        await settle(pilot)
-        await pilot.press("n")
-        await settle(pilot)
         app.screen.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
         await pilot.press("enter")
         await settle(pilot)
@@ -3828,11 +3835,89 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         assert app.screen.query_one("#loop-kind").value is Select.NULL
         await pilot.press("escape")
         await settle(pilot)
-        assert not isinstance(app.screen, tui_loops.LoopForm)
-        await pilot.press("down")
+        await pilot.press("up")
         await pilot.press("n")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.TemplateGallery)
+
+
+def test_loop_sentence_names_schedule_next_and_last_result():
+    from pl.tui import loops as tui_loops
+    soon = (datetime.now() + timedelta(minutes=90)).replace(microsecond=0).isoformat()
+    _loops_state(soon, {"result": "3 invoices overdue", "exit": 0, "tokens": 900})
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False},
+                  "triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
+    C.LOOPS_OFF = {"stale": {"prompt": "find stale cards", "every": "daily 09:00", "enabled": False}}
+    rows = {r["name"]: r for r in tui_loops.loop_rows({"snapshot": {"rows": []}})}
+    invoices = tui_loops.loop_sentence(rows["invoices"]).plain
+    assert invoices.startswith("invoices runs every hour") and "; next " in invoices
+    assert invoices.endswith("; last result: ok, 3 invoices overdue")
+    assert invoices.count("(") == 1 and "(off)" in invoices   # no worker in the fake snapshot: a state that is not "on" is said
+    assert "(" not in tui_loops.loop_sentence({**rows["invoices"], "state": "on"}).plain
+    assert tui_loops.loop_sentence(rows["triage"]).plain == "triage runs every 30 minutes (off); last result: not reported"
+    assert tui_loops.loop_sentence(rows["stale"]).plain == "stale is paused (every day at 09:00); last result: not reported"
+    assert tui_loops.loop_sentence({**rows["invoices"], "state": "dead?"}).plain.startswith("invoices runs every hour (dead?)")
+
+
+async def test_loop_keys_are_hidden_and_inert_on_the_template_row(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    for name in ("edit", "set_enabled", "run", "remove"):
+        monkeypatch.setattr(loops, name, lambda *a, **kw: pytest.fail("a loop key acted on the template row"))
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        view = app.query_one(tui_loops.LoopsView)
+        assert view.check_action("pause", ()) is True
+        await pilot.press("down")
+        await settle(pilot)
+        assert view.check_action("pause", ()) is False and view.check_action("new", ()) is True
+        depth = len(app.screen_stack)
+        await pilot.press("e", "p", "g", "d", "w", "R")
+        await settle(pilot)
+        assert len(app.screen_stack) == depth
+
+
+async def test_loops_view_with_no_loops_shows_no_loops_and_the_template_row():
+    from pl import loops
+    from pl.tui.chrome import NEW_ROW, empty_state
+    from pl.tui.loops import LoopsView
+    _no_loops()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "loops")
+        t = app.query_one("#loops-table", DataTable)
+        keys = [r.key.value for r in t.ordered_rows]
+        assert keys[0] == "head:loops" and keys[-1] == NEW_ROW and len(keys) == len(empty_state("loops")) + 2
+        assert all(k.startswith("none:loops") for k in keys[1:-1])
+        assert t.cursor_row == len(keys) - 1 and app.query_one(LoopsView).selected() is None
+        assert f"+ New loop from a template ({len(loops.TEMPLATES)})" in screen_text(app)
+
+
+async def test_loop_pane_shows_tokens_and_context_and_the_template_row_lists_templates(monkeypatch):
+    from pl import agents, loops
+    C.SERVICES = {"triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
+    C.LOOPS_OFF = {}
+    monkeypatch.setattr(agents, "pane_tail", lambda *a, **k: ["hello"])
+    data = fake_data()
+    data["usage"] = {"loops": {"triage": {"tokens_1h": 1200, "tokens_7d": 12_500, "context": 40, "dead": False}}}
+    data["snapshot"]["rows"].append({"loop": "triage", "kind": "loop_idle", "worker": {"pane": "%1", "window": "@7"}})
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        text = str(app.query_one("#loops-screen").visual)
+        assert "account acme · context 40% · tokens 1h 1200" in text and "hello" in text
+        await pilot.press("down")
+        await settle(pilot)
+        text = str(app.query_one("#loops-screen").visual)
+        assert all(name in text for name in loops.TEMPLATES) and "hello" not in text
 
 
 async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stays_open(monkeypatch, tmp_path):
@@ -3863,7 +3948,7 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
     assert "chase" not in (profile / "config.toml").read_text()
 
 
-EXTEND_VIEWS = ["skills", "connectors", "pods", "models", "extensions"]
+EXTEND_VIEWS = ["extend", "skills", "connectors", "pods", "models", "extensions"]
 
 
 def _fake_extend_cli(monkeypatch):
@@ -3882,11 +3967,11 @@ def _fake_extend_cli(monkeypatch):
     return calls
 
 
-def test_extend_tab_lists_its_five_sub_tabs_in_order():
+def test_extend_tab_lists_its_six_sub_tabs_in_order():
     from pl.tui.chrome import GROUP_KEYS, GROUPS
     views = next(g[2] for g in GROUPS if g[0] == "extend")
     assert [v[0] for v in views] == EXTEND_VIEWS
-    assert [v[1] for v in views] == ["Skills", "Connectors", "Pods", "Models", "Extensions"]
+    assert [v[1] for v in views] == ["Active pod", "Skills", "Connectors", "Pods", "Models", "Extensions"]
     assert GROUP_KEYS["extend"] == "6"
 
 
@@ -3895,7 +3980,7 @@ def test_a_chat_view_id_does_not_resolve():
     assert chrome.resolve("chat") is None
 
 
-async def test_six_opens_extend_on_skills(monkeypatch):
+async def test_six_opens_extend_on_the_pod(monkeypatch):
     from pl.tui.skills import SkillsView
     _fake_extend_cli(monkeypatch)
     app = PlApp(snapshot_provider=Provider())
@@ -3903,8 +3988,8 @@ async def test_six_opens_extend_on_skills(monkeypatch):
         await settle(pilot)
         await pilot.press("6")
         await settle(pilot)
-        assert app.active_tab == "skills"
-        assert app.query_one("#extend-views").query_one(SkillsView)
+        assert app.active_tab == "extend"
+        assert app.query_one("#skills").query_one(SkillsView)
 
 
 @pytest.mark.parametrize("vid,panel", [("skills", "SkillsView"), ("connectors", "ConnectorsPanel"), ("pods", "CommandPanel"),
@@ -3996,11 +4081,11 @@ async def test_skills_moved_line_opens_extend_skills(monkeypatch, how):
         await settle(pilot)
         if how == "enter":
             app.query_one("#skills-moved").focus()
-            await pilot.pause()
+            await wait_until(pilot, lambda: app.focused is app.query_one("#skills-moved"), "the skills link to take focus")
             await pilot.press("enter")
         else:
             app.query_one("#skills-moved").scroll_visible(animate=False)
-            await pilot.pause()
+            await settle(pilot)
             await pilot.click("#skills-moved")
         await settle(pilot)
         assert app.active_tab == "skills"
@@ -4069,7 +4154,7 @@ async def test_an_empty_loops_tab_says_what_it_is_for():
         await _open_tab(pilot, app, "loops")
         text = screen_text(app)
         assert all(line in text for line in empty_state("loops"))
-        assert str(app.query_one("#loops-screen").render()) == "select a loop"
+        assert "New loop from a template" in str(app.query_one("#loops-screen").visual)
 
 
 async def test_the_first_loop_replaces_the_empty_state():
@@ -4099,15 +4184,16 @@ async def test_empty_loops_row_keys_do_nothing(monkeypatch):
         await _open_tab(pilot, app, "loops")
         table = app.query_one("#loops-table", DataTable)
         table.focus()
-        table.move_cursor(row=1)   # row 0 is "+ New loop"
+        table.move_cursor(row=1)   # a line of the empty state: the cursor moves on to the template row
+        await settle(pilot)
+        assert table.cursor_row == table.row_count - 1
         depth = len(app.screen_stack)
         told = []
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
-        await pilot.press("e", "p", "g", "d", "enter", "W", "R")
+        await pilot.press("e", "p", "g", "d", "w", "R")
         await settle(pilot)
         assert len(app.screen_stack) == depth and app.query_one(LoopsView).selected() is None
-        assert told == ["this loop has no window: the dispatcher restarts stopped loops",
-                        "this loop is not running: the dispatcher starts it on its next pass"]
+        assert told == []
 
 
 async def test_question_mark_on_an_empty_loops_tab_opens_its_help():
@@ -4118,7 +4204,7 @@ async def test_question_mark_on_an_empty_loops_tab_opens_its_help():
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_tab(pilot, app, "loops")
         await pilot.press("question_mark")
-        await pilot.pause()
+        await wait_for_screen(pilot, "HelpScreen")
         assert isinstance(app.screen, HelpScreen)
         assert HELP["loops"] in " ".join(screen_text(app).replace("│", " ").split())
 
@@ -4139,7 +4225,7 @@ async def test_an_empty_activity_log_says_what_it_is_for(monkeypatch):
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
         app.query_one("#activity-table", DataTable).focus()
         await pilot.press("y")
-        await pilot.pause()
+        await wait_until(pilot, lambda: told == ["select an event first"], "the notice")
         assert told == ["select an event first"]
 
 
@@ -4198,7 +4284,7 @@ async def test_an_empty_background_tab_says_what_it_is_for(monkeypatch):
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
         app.query_one("#subagents-table", DataTable).focus()
         await pilot.press("y")
-        await pilot.pause()
+        await wait_until(pilot, lambda: told == ["select a background agent first"], "the notice")
         assert told == ["select a background agent first"]
 
 
@@ -4443,7 +4529,8 @@ def test_loop_detail_shows_last_run_output_and_earlier_runs():
     plain = tui_loops.run_detail(row, runs).plain
     assert "What it does: list overdue invoices" in plain and "Account acme" in plain
     assert f"Last run {first:%H:%M} · ok · 2m 5s" in plain
-    assert "3 invoices overdue" in plain and "Earlier runs" in plain and "failed: usage limit" in plain
+    assert "3 invoices overdue" in plain and "Earlier runs" not in plain
+    assert tui_loops.run_line(runs[1]).endswith("failed: usage limit")
 
 
 def test_loop_detail_with_no_runs_says_when_it_runs():
@@ -4471,7 +4558,129 @@ async def test_loops_view_shows_run_detail_for_a_scheduled_loop(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down")
-        await settle(pilot)
         await settle(pilot)
         assert "Last run" in str(app.query_one("#loops-screen").visual)
+
+
+def _kept_runs(*names):
+    """Two kept runs of the scheduled loop `invoices` (newest first on screen), with their log files."""
+    first = datetime(2026, 10, 26, 9, 0).astimezone()
+    folder = C.STATE_DIR / "loops" / "invoices"
+    folder.mkdir(parents=True)
+    runs = [{"started_at": (first - timedelta(days=1)).isoformat(), "ended_at": (first - timedelta(days=1)).isoformat(), "ok": False,
+             "reason": "timeout", "output": ["stopped"], "log": "20261025090000.log"},
+            {"started_at": first.isoformat(), "ended_at": first.isoformat(), "ok": True, "reason": "", "output": ["fine"],
+             "log": "20261026090000.log"}]
+    for r, text in zip(runs, ("OLDER-RUN-TEXT", "NEWEST-RUN-TEXT")):
+        if r["log"] not in names:
+            (folder / r["log"]).write_text(text)
+    (folder / "runs.json").write_text(json.dumps(runs))
+    return first, runs
+
+
+def _scheduled_invoices():
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+
+
+async def _open_loops(pilot, rows=1):
+    await settle(pilot)
+    await pilot.press("5")
+    await settle(pilot)
+    await pilot.press(*["down"] * (rows - 1))
+    await settle(pilot)
+    await settle(pilot)
+
+
+async def test_l_opens_the_last_runs_log():
+    from pl.tui import runlog
+    _scheduled_invoices()
+    _kept_runs()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        await pilot.press("l")
+        await settle(pilot)
+        assert isinstance(app.screen, runlog.RunLogScreen)
+        body = str(app.screen.query_one("#runlog-body").render())
+        assert "NEWEST-RUN-TEXT" in body and "OLDER-RUN-TEXT" not in body
+
+
+async def test_esc_from_the_log_keeps_the_loop_selected():
+    from pl.tui import loops as tui_loops
+    from pl.tui import runlog
+    C.SERVICES = {"alpha": {"prompt": "a", "profile": "acme", "every": "hourly"},
+                  "invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly"}}
+    C.LOOPS_OFF = {}
+    _kept_runs()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot, rows=2)
+        view = app.query_one(tui_loops.LoopsView)
+        assert view.selected()["name"] == "invoices"
+        await pilot.press("l")
+        await settle(pilot)
+        assert isinstance(app.screen, runlog.RunLogScreen)
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, runlog.RunLogScreen) and view.selected()["name"] == "invoices"
+
+
+async def test_enter_on_an_earlier_run_opens_that_run():
+    from pl.tui import runlog
+    _scheduled_invoices()
+    first, _ = _kept_runs()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        runs = app.query_one("#loops-runs")
+        assert runs.display and runs.option_count == 1
+        runs.focus()
+        runs.highlighted = 0
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, runlog.RunLogScreen)
+        head = str(app.screen.query_one("#runlog-head").render())
+        assert f"{first - timedelta(days=1):%Y-%m-%d %H:%M}" in head and "failed" in head
+        assert "OLDER-RUN-TEXT" in str(app.screen.query_one("#runlog-body").render())
+
+
+async def test_l_on_a_pruned_run_says_it_is_no_longer_kept():
+    from pl.tui import runlog
+    _scheduled_invoices()
+    _kept_runs("20261026090000.log")
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        await pilot.press("l")
+        await settle(pilot)
+        assert runlog.MISSING in str(app.screen.query_one("#runlog-body").render())
+
+
+async def test_l_on_a_loop_that_never_ran_only_notifies(monkeypatch):
+    from pl.tui import runlog
+    _scheduled_invoices()
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    notes = []
+    monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        screen = app.screen
+        await pilot.press("l")
+        await settle(pilot)
+        assert app.screen is screen and not isinstance(app.screen, runlog.RunLogScreen)
+        assert notes == ["This loop has not run yet."]
+
+
+async def test_l_is_hidden_for_a_persistent_loop_and_background_agents():
+    from pl.tui import loops as tui_loops
+    from pl.tui import subagents
+    C.SERVICES = {"watcher": {"prompt": "watch", "profile": "acme"}}
+    C.LOOPS_OFF = {}
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_loops(pilot)
+        view = app.query_one(tui_loops.LoopsView)
+        assert view.selected() and not view.selected().get("every")
+        assert view.check_action("open_log", ()) is False
+    assert all(b.key != "l" for b in subagents.SubagentsView.BINDINGS)
