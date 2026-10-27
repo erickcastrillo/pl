@@ -295,6 +295,8 @@ ENTRIES = [
        "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
     _e("2026-10-26.76", "Open a loop run's full log",
        "Loops tab: select a scheduled loop and press l, or Enter on an earlier run", "l"),
+    _e("2026-10-26.73", "Stalled work raises an alert and a notification",
+       "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
 ]
 
 
