@@ -1,0 +1,4 @@
+id = "2026-10-26.63"
+title = "Switch pipelines from anywhere with P; the plan filter moved to L"
+where = "console header shows the pipeline and who else needs you; P lists every pipeline, Enter switches"
+try = "pl"

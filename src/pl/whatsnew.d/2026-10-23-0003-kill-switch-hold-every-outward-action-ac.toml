@@ -1,0 +1,4 @@
+id = "2026-10-23.03"
+title = "Kill switch: hold every outward action across profiles"
+where = "pl kill-switch on pauses runs with outward actions; pl kill-switch off releases them"
+try = "pl kill-switch status"

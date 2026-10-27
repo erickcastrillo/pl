@@ -1,0 +1,4 @@
+id = "2026-10-25.10"
+title = "Plan cards: pl idea --plan N --slice M titles the card 'Plan N slice M: ...'"
+where = "pl idea"
+try = "pl idea \"...\" --plan 3 --slice 2 --title \"...\""

@@ -1,0 +1,4 @@
+id = "2026-10-07.01"
+title = "Spread a stage over several accounts, of any harness, to use each subscription"
+where = "[stages.<stage>] accounts = [\"main\", \"agy\"]; Settings shows the pool"
+try = "pl accounts"

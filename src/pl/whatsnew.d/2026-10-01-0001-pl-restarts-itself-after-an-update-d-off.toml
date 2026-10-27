@@ -1,0 +1,4 @@
+id = "2026-10-01.01"
+title = "pl restarts itself after an update; D offers restart or stop"
+where = "the manager and dispatchers pick up a new install within a minute (the first time: open a new console, or pl manager stop then pl manager start, once); D: r restart, s stop"
+try = "pl manager status"

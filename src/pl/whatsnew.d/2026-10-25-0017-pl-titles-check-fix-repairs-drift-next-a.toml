@@ -1,0 +1,4 @@
+id = "2026-10-25.17"
+title = "pl titles check --fix repairs drift; next and set number plan cards"
+where = "pl titles next, pl titles set"
+try = "pl titles check --fix --dry-run"

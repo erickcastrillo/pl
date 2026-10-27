@@ -1,0 +1,4 @@
+id = "2026-09-30.11"
+title = "pl retry starts a card's failed agent fresh"
+where = "Needs you: cards whose agent died"
+try = "pl retry <id|all>"
