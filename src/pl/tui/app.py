@@ -93,7 +93,7 @@ VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs"
          "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
          "waiting": WaitingView,
          "extend": ExtendView,
-         "skills": _titled("Skills, agents and commands (every account)", SkillsView),
+         "skills": _titled("Skills, subagents and commands (every account)", SkillsView),
          "connectors": _titled("Connectors", ConnectorsPanel),
          "pods": _titled("Pods", make_pods_panel),
          "agents": _titled("Agents", AgentsView),
@@ -641,7 +641,7 @@ class PlApp(App):
         yield SystemCommand("What's new", "the features added to pl, where to see them and a command to try",
                             self.action_whatsnew)
         yield SystemCommand("Health", "agents, loops, last error and tokens", self.action_health)
-        yield SystemCommand("Skills: view, edit, create", "every account's skills, agents and commands (Extend tab)",
+        yield SystemCommand("Skills: view, edit, create", "every account's skills, subagents and commands (Extend tab)",
                             self.action_skills)
         yield SystemCommand("Kill switch", "turn the machine-wide kill switch on or off (holds all outward actions)",
                             self.action_kill_switch)

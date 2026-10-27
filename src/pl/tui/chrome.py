@@ -86,7 +86,7 @@ HELP = {
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",
     "extend": "The skills this pipeline's pod gives its agents and the stage that runs each, its connector roles, then every skill and connector on the machine.",
-    "skills": "Every account's skills, agents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
+    "skills": "Every account's skills, subagents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
     "connectors": "The services agents can reach. n adds a connector, t tests it, R revokes it.",
     "pods": "Pods hold the rules agents follow. r adds a rule to the pod, Enter shows it.",
     "agents": "Named workers a stage can use. Enter shows one; edit with pl agents edit.",

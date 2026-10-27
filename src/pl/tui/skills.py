@@ -1,4 +1,4 @@
-"""Settings section "Skills": every account's skills, agents and commands, a read-only Markdown preview, an in-app
+"""Settings section "Skills": every account's skills, subagents and commands, a read-only Markdown preview, an in-app
 editor (backup + diff confirm before saving), new from a template, delete to .pl-trash, and the shared library."""
 import io
 import os
@@ -23,6 +23,7 @@ from pl.tui.review import ConfirmScreen
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 HINT = ("e edit · E $EDITOR · n new (install or write) · d remove (a skill: its users are shown first) · S share to the library · l link a library skill "
         "to an account · I install from GitHub · u update check · plugin files are read-only")
+KIND_LABEL = {"agent": "subagent"}
 DIFF_LINES = 30
 PINNED_RE = re.compile(r"^Source: (github:\S+@[0-9a-f]{40})$", re.M)
 INSTALL_PROMPT = "Install from GitHub: github:owner/repo[/path][@ref] or a github.com URL"
@@ -382,7 +383,7 @@ class SkillsView(Widget):
             self.rows.append(None)
             for it in rows:
                 lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
-                t.add_row(Text(it["name"]), Text(it["kind"]), Text(it["origin_label"]), Text(it["used_by"]), Text(lib),
+                t.add_row(Text(it["name"]), Text(KIND_LABEL.get(it["kind"], it["kind"])), Text(it["origin_label"]), Text(it["used_by"]), Text(lib),
                           Text(it["description"][:80]), key=f"r{len(self.rows)}")
                 self.rows.append(it)
         self.items = [r for r in self.rows if r]
