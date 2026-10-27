@@ -12,7 +12,7 @@ from pl import config as C
 from pl import alerts, events, harnesses
 from pl.agents import pane_exists
 from pl.board import lists
-from pl.util import mask, notify, now_iso, parse_iso
+from pl.util import mask, now_iso, parse_iso
 
 
 def profile_state():
@@ -303,8 +303,7 @@ def _check(name):
     until = parking(name).get("until") or ""
     fix = f"parked until {until[11:16]} UTC; {check_note(name)}; pl accounts --reset {name} un-parks it"
     print(f"account {name} checked: {result}")
-    if why := alerts.open(f"account_parked:{name}", "warn", f"Account {name} is parked: usage limit", fix):
-        notify(alerts.headline(why, f"Account {name} is still parked"), check_note(name))
+    alerts.open(f"account_parked:{name}", "warn", f"Account {name} is parked: usage limit", fix)
     return kind
 
 

@@ -47,6 +47,7 @@ def clock(monkeypatch):
 def sent(monkeypatch):
     out = []
     monkeypatch.setattr(dispatch, "notify", lambda title, fix="": out.append((title, fix)))
+    monkeypatch.setattr(notifications, "notify", lambda title, fix="": out.append((title, fix)))
     return out
 
 
