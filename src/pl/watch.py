@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from pl import config as C
+from pl import ghquota
 from pl.accounts import exhausted_profiles, parking
 from pl.agents import died_label, hold_reason, pane_tail, person_wait, registry, run_blocked, worker_status, worker_view
 from pl.board import cards, col_name, sections
@@ -277,11 +278,11 @@ def pr_counts():
             return saved
     if github.limited("search"):
         return _pr_cache["counts"]
-    search = ["gh", "search", "prs", *_owner_args(), "--state", "open", "--label"]
+    search = ["search", "prs", *_owner_args(), "--state", "open", "--label"]
     tail = ["--assignee", "@me", "--limit", "300", "--json", "labels,number,repository,title,url,updatedAt"]
-    r = subprocess.run([*search, lab["ready"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env())
-    f = subprocess.run([*search, lab["failed"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env()) if lab.get("failed") else None
-    a = subprocess.run([*search[:-1], "--author", "@me", "--limit", "300", *tail[-2:]], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    r = ghquota.gh(subprocess.run, [*search, lab["ready"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    f = ghquota.gh(subprocess.run, [*search, lab["failed"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env()) if lab.get("failed") else None
+    a = ghquota.gh(subprocess.run, [*search[:-1], "--author", "@me", "--limit", "300", *tail[-2:]], capture_output=True, text=True, timeout=30, env=C.gh_env())
     if any(x is not None and x.returncode and github.back_off(x.stderr, resource="search") for x in (r, f, a)):
         return _pr_cache["counts"]
     authored = json.loads(a.stdout) if a.returncode == 0 and a.stdout.strip() else []
@@ -396,7 +397,7 @@ def _gh(args):
     """gh with argv only and a 30 s timeout; the parsed JSON list. Raises OSError on a gh error or while rate limited."""
     if hit := github.limited("search"):
         raise OSError(str(hit))
-    r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    r = ghquota.gh(subprocess.run, args, capture_output=True, text=True, timeout=30, env=C.gh_env())
     if r.returncode:
         raise OSError(str(github.back_off(r.stderr, resource="search") or r.stderr.strip()[:200]))
     return json.loads(r.stdout or "[]")
