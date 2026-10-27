@@ -179,7 +179,7 @@ def record(points=1, rate=None):
             else:
                 return   # no reading this window: nothing to count against yet
             if led.get("window") != led.get("reset") or (led.get("reset") or 0) <= _clock():
-                led.update(window=led.get("reset"), spent={}, by={}, subs={})
+                led.update(window=led.get("reset"), spent={}, by={}, subs={}, rest={})
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
             spent[prof] = spent.get(prof, 0) + points
             by[f"{prof} {role}"] = by.get(f"{prof} {role}", 0) + points
@@ -188,14 +188,14 @@ def record(points=1, rate=None):
         pass
 
 
-def record_agent(acct, caller, sub, points, remaining, reset):
-    """Count an agent's gh call under its caller key and subcommand, against the reading taken after it. A reading of
+def record_agent(acct, caller, sub, points, remaining, reset, rest=False):
+    """Count an agent's gh call under its caller key and subcommand, against the reading taken after it; `rest` also counts it as answered through REST. A reading of
     another window starts the counts over. A failure to write never fails the call."""
     try:
         with _locked():
             led = ledger(acct)
             if led.get("window") != reset or (led.get("reset") or 0) <= _clock():
-                led.update(window=reset, spent={}, by={}, subs={})
+                led.update(window=reset, spent={}, by={}, subs={}, rest={})
             led.update(remaining=remaining, reset=reset, at=_clock(), limit=led.get("limit") or 5000)
             prof = C.PROFILE_NAME or "-"
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
@@ -203,6 +203,9 @@ def record_agent(acct, caller, sub, points, remaining, reset):
             by[caller] = by.get(caller, 0) + points
             subs = led.setdefault("subs", {}).setdefault(caller, {})
             subs[sub] = subs.get(sub, 0) + points
+            if rest:
+                counts = led.setdefault("rest", {}).setdefault(caller, {})
+                counts[sub] = counts.get(sub, 0) + 1
             _write(_path(acct), led)
     except OSError:
         pass
@@ -226,7 +229,7 @@ def refresh(remaining, reset):
                             profile=C.PROFILE_NAME, folder=_folder(),
                             token_env=bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")))
             if led.get("window") != reset:
-                led.update(window=reset, spent={}, by={}, subs={})
+                led.update(window=reset, spent={}, by={}, subs={}, rest={})
             led.update(limit=limit, remaining=remaining, reset=reset, at=_clock())
             _write(_path(), led)
     except OSError:
@@ -239,7 +242,7 @@ def exhausted(until):
         with _locked():
             led = ledger()
             if (led.get("reset") or 0) <= _clock():   # a new window: what was spent before it no longer counts
-                led.update(spent={}, by={}, subs={})
+                led.update(spent={}, by={}, subs={}, rest={})
             led.update(remaining=0, reset=until, window=until, at=_clock(), limit=led.get("limit") or 5000)
             _write(_path(), led)
     except OSError:

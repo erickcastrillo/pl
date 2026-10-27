@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 from pl import config as C
-from pl import ghquota
+from pl import ghquota, ghrest
 from pl.trackers import github
 
 ESTIMATE = 1   # points for a GraphQL call when no reading can say what it cost
@@ -51,6 +51,26 @@ def _record(args):
         ghquota.record_agent(acct, caller, sub, ESTIMATE, max(0, led["remaining"] - ESTIMATE), led["reset"])
 
 
+def _answer_through_rest(real, args):
+    """Below the write reserve, print the REST answer to a pr view/list and count it as REST; False when it cannot."""
+    try:
+        acct = os.environ["PL_GH_LEDGER"]
+        led = ghquota.ledger(acct)
+        if not ghrest.below_reserve(led, github._clock()):
+            return False
+        out = ghrest.answer(real, args, dict(os.environ))
+        if out is None:
+            return False
+    except Exception:
+        return False
+    print(out)
+    try:
+        ghquota.record_agent(acct, _caller(), " ".join(args[:2]), 0, led["remaining"], led["reset"], rest=True)
+    except Exception:
+        pass   # counting never changes what the agent's gh call returned
+    return True
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     shim = os.environ.get("PL_GH_SHIM_DIR")
@@ -65,6 +85,9 @@ def main(argv=None):
     if not real:
         print("pl: gh is not installed: https://cli.github.com", file=sys.stderr)
         return 127
+    if counting and os.environ.get("PL_GH_LEDGER") and args[:2] in (["pr", "view"], ["pr", "list"]):
+        if _answer_through_rest(real, args):
+            return 0
     code = _run([real, *args], dict(os.environ))
     if counting and kind(args) == "graphql":
         try:
