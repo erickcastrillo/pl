@@ -22,7 +22,7 @@ from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, boa
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
-from pl.board import card, cards, col_name, sections, update
+from pl.board import card, cards, col_name, sections
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
 from pl.trackers.github import OverBudget, RateLimited, limited
@@ -193,6 +193,19 @@ def _warn_near_cap(c, w, spent):
     if why := alerts.open(f"near_cap:{c['id']}:{stage}", "warn", title, f"pl caps set {cmd_id(c['id'])} --minutes M --tokens T raises it"):
         if why == "open":
             notify(alerts.headline(why, f"Near its cap: {c['title'][:40]}"), f"the {stage} agent has used {spent}")
+
+
+def update(cid, **fields):
+    """board.update. A move, label or link refused by pl's GitHub budget hold is queued for after the reset
+    (heldwrites) and the pass goes on; any other write (an agent's bookkeeping) still stops the pass."""
+    try:
+        return board.update(cid, **fields)
+    except OverBudget as e:
+        if not ({"column", "tags"} & set(fields) or "pr_urls" in (fields.get("metadata") or {})):
+            raise
+        heldwrites.add(cid, "update", fields, e.until)
+        print(f"{short_id(cid)}  queued: {heldwrites.target({'op': 'update', 'args': fields})}; GitHub budget held, "
+              f"resets {time.strftime('%H:%M', time.localtime(e.until))}")
 
 
 def stop_at_cap(c, w, note):

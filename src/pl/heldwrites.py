@@ -93,11 +93,36 @@ def _drop(seq):
         _write([e for e in entries() if e["seq"] != seq])
 
 
+def target(entry) -> str:
+    """What a queued write does to its card, in words: the doctor line and the line the dispatcher prints."""
+    a = entry["args"]
+    if entry["op"] == "rework":
+        return f"In progress (round {a['round']})"
+    if entry["op"] == "give_up":
+        return "failed label on " + ", ".join(f"#{u.rsplit('/', 1)[-1]}" for u in a["prs"])
+    if a.get("column"):
+        return a["column"]
+    if a.get("tags"):
+        return "labels " + ", ".join(a["tags"])
+    if urls := (a.get("metadata") or {}).get("pr_urls"):
+        return f"link {urls[-1]}"
+    return "update"
+
+
 def _apply(entry):
-    """True when the write landed, False when it was skipped because the card moved after it was queued."""
-    from pl import board, commands   # commands imports the dispatcher, which imports this module
-    if entry["op"] != "move":
-        raise ValueError(f"unknown queued write {entry['op']!r}")
+    """True when the write landed; False, or a reason, when it was skipped: the card moved, or the rework no longer applies."""
+    from pl import board, commands, rework   # commands imports the dispatcher, which imports this module
+    op = entry["op"]
+    if op == "update":
+        board.update(entry["card"], **entry["args"])
+        return True
+    if op == "rework":
+        return rework.replay_send_back(entry) or True
+    if op == "give_up":
+        rework.replay_give_up(entry)
+        return True
+    if op != "move":
+        raise ValueError(f"unknown queued write {op!r}")
     if entry.get("was") is not None and board.card(entry["card"])["list_id"] != entry["was"]:
         return False
     commands.move_card(entry["card"], entry["args"]["column"], entry["args"].get("pr"))
@@ -119,19 +144,20 @@ def replay(notify):
             err = str(e)[:300]
             _drop(entry["seq"])
             events.emit("queued_write_failed", card, op=op, args=args, error=err)
-            title = f"Card {short_id(card)}: queued {op} to {args.get('column')} failed on replay"
+            title = f"Card {short_id(card)}: queued {op} to {target(entry)} failed on replay"
             if why := alerts.open(f"queued_write_failed:{card}:{entry['seq']}", "warn", title,
                                   f"error: {err}; redo it by hand with pl move", [card]):
                 notify(alerts.headline(why, title), err)
             continue
         _drop(entry["seq"])
-        if landed:
+        if landed is True:
             events.emit("write_replayed", card, op=op, args=args)
         else:
-            events.emit("write_replay_skipped", card, op=op, args=args, why="the card was moved after the write was queued")
+            events.emit("write_replay_skipped", card, op=op, args=args,
+                        why=landed or "the card was moved after the write was queued")
 
 
 def doctor_lines() -> list[str]:
     rows = entries()
-    return [f"{short_id(e['card'])}  {e['op']} -> {e['args'].get('column')}  queued {e['at']}  "
+    return [f"{short_id(e['card'])}  {e['op']} -> {target(e)}  queued {e['at']}  "
             f"waits for reset {_hhmm(e['until'])}" for e in rows] or ["none"]
