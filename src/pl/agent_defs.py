@@ -128,9 +128,9 @@ def validate(name: str, d: dict) -> list[str]:
 
 def problems_in_profile() -> list[str]:
     """Problems of every agent folder in the profile, including folders that fail to load."""
-    root = C.CONFIG_DIR / "agents"
+    root = C.CONFIG_DIR and C.CONFIG_DIR / "agents"
     found = []
-    for folder in sorted(root.iterdir()) if root.is_dir() else []:
+    for folder in sorted(root.iterdir()) if root and root.is_dir() else []:
         try:
             front, _ = _parse((folder / "agent.md").read_text())
         except (OSError, ValueError) as e:
