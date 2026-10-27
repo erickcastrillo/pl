@@ -51,6 +51,10 @@ def no_real_idle_clock(monkeypatch):
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    from pl import config as C
+    vars(C).update(C._defaults())   # pl.config's globals start from the defaults under this HOME: none leak from an earlier test, none point at the real ~/.pl
+    from pl import board
+    monkeypatch.setattr(board, "_SHARE", {"mode": None})   # no shared board save unless a test turns one on: an empty one means "read", and a fresh worker would write board-cache.json
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
     # a test run inside a pl agent inherits the real profile and worktrees folder: never let a test load or touch them
     for var in ("PL_CONFIG_DIR", "PL_WORKTREES_DIR", "PL_PROFILE"):
