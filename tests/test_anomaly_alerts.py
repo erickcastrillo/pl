@@ -25,6 +25,19 @@ def fake_home(tmp_path, monkeypatch):
         setattr(C, k, v)
 
 
+class _Sent(list):
+    direct = None
+
+
+@pytest.fixture(autouse=True)
+def sent(monkeypatch):
+    out, direct = _Sent(), []
+    monkeypatch.setattr("pl.notifications.notify", lambda t, m: out.append((t, m)))
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: direct.append((t, m)))
+    out.direct = direct
+    return out
+
+
 @pytest.fixture
 def clock(monkeypatch):
     t = {"now": 1_000_000.0}
@@ -66,9 +79,7 @@ def test_an_unknown_chat_user_opens_an_alert(clock):
     assert "Unknown chat user in slack" in a["title"]
 
 
-def test_two_unknown_senders_on_one_channel_open_one_alert(clock, monkeypatch):
-    sent = []
-    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: sent.append(a))
+def test_two_unknown_senders_on_one_channel_open_one_alert(clock, sent):
     _write_machine_audit(_unknown_sender(clock["now"], "U1"))
     _write_machine_audit(_unknown_sender(clock["now"], "U2"))
     dispatch.check_alerts([], set())
@@ -178,3 +189,58 @@ def test_reading_the_machine_log_leaves_the_profile_chain_verified(clock):
     assert audit.verify()
     assert [e["kind"] for e in audit.read_machine_entries()] == [audit.CHAT_UNKNOWN_SENDER]
     assert [e["action"] for e in audit.read_entries()] == ["card.move", "card.move"]
+
+
+def _spike(now):
+    for h in range(1, 168, 2):
+        _write_audit(_write_call(now - h * 3600))
+    for _ in range(4):
+        _write_audit(_write_call(now - 60))
+
+
+def _new_place(now):
+    _write_audit({"action": "oauth.sign_in", "connector": "github", "host": "office-laptop", "when": now - 3600 * 24})
+    _write_audit({"action": "oauth.sign_in", "connector": "github", "host": "foreign-vps", "when": now - 60})
+
+
+def _unknown(now):
+    _write_machine_audit(_unknown_sender(now))
+
+
+def test_an_unknown_chat_user_sends_one_alert_opened(clock, sent):
+    _unknown(clock["now"])
+    dispatch.check_alerts([], set())
+    assert len(sent) == 1 and "Unknown chat user in slack" in sent[0][0]
+    assert sent.direct == []
+
+
+def test_a_send_spike_sends_one_alert_opened(clock, sent):
+    _spike(clock["now"])
+    dispatch.check_alerts([], set())
+    assert len(sent) == 1 and "slack" in sent[0][0]
+    assert sent.direct == []
+
+
+def test_a_new_place_sign_in_sends_one_alert_opened(clock, sent):
+    _new_place(clock["now"])
+    dispatch.check_alerts([], set())
+    assert len(sent) == 1 and "github" in sent[0][0]
+    assert sent.direct == []
+
+
+@pytest.mark.parametrize("write", [_unknown, _spike, _new_place])
+def test_a_second_pass_on_an_open_anomaly_alert_sends_nothing(clock, sent, write):
+    write(clock["now"])
+    dispatch.check_alerts([], set())
+    clock["now"] += 600
+    dispatch.check_alerts([], set())
+    assert len(sent) == 1
+
+
+def test_alert_opened_off_sends_nothing_but_keeps_the_alert(clock, sent):
+    C.NOTIFY = {"events": ["merged"]}
+    _unknown(clock["now"])
+    dispatch.check_alerts([], set())
+    assert sent == [] and sent.direct == []
+    assert not (audit.manager.machine_dir() / "chat-outbox.jsonl").exists()
+    assert alerts.get("chat_unknown:slack") is not None

@@ -201,13 +201,6 @@ def send_due(dry: bool = False, now: float | None = None) -> list[dict]:
                         from pl import alerts
                         alerts.open(f"send_cap:{conn}", "warning", f"Daily send cap ({cap}) reached for {conn}",
                                     fix="wait for daily reset or increase send_cap in config")
-                    with contextlib.suppress(Exception):
-                        from pl.util import notify
-                        notify(f"Send cap reached: {conn}", f"Reached daily send cap ({cap}) for {conn}.")
-                    with contextlib.suppress(Exception):
-                        from pl import chat
-                        if hasattr(chat, "route"):
-                            chat.route(f"send_cap:{conn}", f"Reached daily send cap ({cap}) for {conn}.")
                     continue
                 if dry:
                     sent.append(it)
