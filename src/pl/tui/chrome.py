@@ -43,7 +43,7 @@ MEANING = {
     "edit_brief": "edit", "edit_input": "edit", "external_edit": "edit in $EDITOR", "ack": "acknowledge",
     "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
-    "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
+    "link": "link", "open_log": "full log", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
     "sub_tab": "switch view", "sub_letter": "switch view",
     "get_started": "get started step", "collapse_start": "collapse", "dismiss_start": "dismiss",
 }
