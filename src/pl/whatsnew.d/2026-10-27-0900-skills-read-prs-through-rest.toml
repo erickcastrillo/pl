@@ -1,0 +1,3 @@
+title = "Built-in skills read pull requests through REST"
+where = "pl-run, pl-review and pl-stage skills"
+try = "pl skills reset pl-review"

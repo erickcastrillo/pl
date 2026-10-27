@@ -11,7 +11,8 @@ from collections import deque
 from pathlib import Path
 
 from pl import config as C
-from pl.agents import registry, worker_status
+from pl import events
+from pl.agents import registry, run_blocked, worker_status
 from pl.board import cards, col_name
 from pl.util import mask, slug_of
 
@@ -26,15 +27,26 @@ def _card_for(name, cs):
     return next((c for c in cs if (s := slug_of(c)) and name and (s.startswith(name) or name.startswith(s))), None)
 
 
+def agent_hold(c):
+    """("held", why) while the card's agent waits at the trust prompt or a released run is held back,
+    ("running", None) while its agent is alive, else None. Both cleanup paths keep the worktree then."""
+    w = (c.get("metadata") or {}).get("worker")
+    if w and w.get("trust_wait"):
+        return "held", "trust the folder"
+    if not w:
+        why = run_blocked(c)
+        return ("held", why) if why else None
+    return ("running", None) if worker_status(w, registry())[0] in ("alive", "starting") else None
+
+
 def _inspect(path, c):
     """(action, reason) for one worktree folder and the card it belongs to, if any."""
     if c:
+        if hold := agent_hold(c):
+            return "keep", f"agent {hold[0]}"
         column = col_name(c["list_id"])
         if column != "Done":
             return "keep", f"card {column}"
-        w = (c.get("metadata") or {}).get("worker")
-        if w and worker_status(w, registry())[0] in ("alive", "starting"):
-            return "keep", "agent running"
     if _git(["-C", str(path), "status", "--porcelain"])[1].strip():
         return "keep", "uncommitted changes"
     if _git(["-C", str(path), "log", "HEAD", "--not", "--remotes", "--oneline"])[1].strip():
@@ -76,6 +88,7 @@ def _remove(rows):
             failed += 1
             print(f"pl worktrees: could not remove {r['name']}: {out.strip() or 'git worktree remove failed'}")
             continue
+        events.emit("worktree_cleanup", r["card"], path=r["path"], by="gc")
         removed, freed = removed + 1, freed + size
         commons.add(common)
     for common in commons:
@@ -185,26 +198,6 @@ def _has_unpushed(path: Path, branch: str | None) -> bool:
     return r_diff.returncode != 0 or int(r_diff.stdout.strip() or "0") > 0
 
 
-def _has_live_agent(c: dict) -> bool:
-    m = c.get("metadata") or {}
-    w = m.get("worker")
-    if not w:
-        return False
-    if w.get("status") in ("alive", "starting"):
-        return True
-    pane = w.get("pane")
-    if pane:
-        r = _run(["tmux", "display-message", "-p", "-t", pane, "#S"], capture_output=True, text=True)
-        if r.returncode == 0:
-            return True
-    win = w.get("window")
-    if win:
-        r = _run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id}"], capture_output=True, text=True)
-        if r.returncode == 0 and win in r.stdout.splitlines():
-            return True
-    return False
-
-
 def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
     wt_path = wt["path"].resolve()
     branch = wt.get("branch") or ""
@@ -268,8 +261,13 @@ def sweep(all_cards: list[dict], dry: bool = False) -> None:
         if not card:
             continue
 
+        if hold := agent_hold(card):
+            why = f" ({hold[1]})" if hold[1] else ""
+            print(f"worktree {wt_path} {card['id']} skipped: agent {hold[0]}{why}")
+            continue
+
         col = card.get("column") or (col_name(card.get("list_id")) if card.get("list_id") else None)
-        if col != "Done" or _has_live_agent(card):
+        if col != "Done":
             continue
 
         meta = card.get("metadata") or {}
@@ -305,8 +303,26 @@ def sweep(all_cards: list[dict], dry: bool = False) -> None:
         try:
             _run(["git", "worktree", "remove", str(wt_path)], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
             _run(["git", "worktree", "prune"], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
+            events.emit("worktree_cleanup", card["id"], path=str(wt_path), by="sweep")
         except (subprocess.CalledProcessError, OSError) as e:
             print(f"worktree {wt_path.name}: cleanup failed: {e}", file=sys.stderr)
+
+
+def check_missing(all_cards: list[dict]) -> None:
+    """One worktree_removed event for each unfinished card whose recorded worktree folder is gone."""
+    gone = [(c, p) for c in all_cards
+            if (p := (c.get("metadata") or {}).get("worktree")) and not Path(p).exists()
+            and not (c.get("metadata") or {}).get("dropped_at")
+            and (c.get("column") or col_name(c["list_id"])) != "Done"]
+    if not gone:
+        return
+    log = events._read()
+    for c, p in gone:
+        if any(e["kind"] == "worktree_removed" and e.get("card") == c["id"] and e.get("path") == p for e in log):
+            continue
+        cleanup = next((e for e in reversed(log) if e["kind"] == "worktree_cleanup" and e.get("path") == p), None)
+        events.emit("worktree_removed", c["id"], path=p,
+                    message=f"removed by pl cleanup at {cleanup['ts'][:16]}" if cleanup else "removed outside pl")
 
 
 LISTS = ("copy", "link")

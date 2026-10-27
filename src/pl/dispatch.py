@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agents, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1077,6 +1077,16 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"worktrees cleanup skipped this pass: {e}", file=sys.stderr)
             if not dry:
                 events.failure("pass_step_skipped", "warning", f"worktrees cleanup skipped this pass: {e}", step="worktrees")
+        if not dry:
+            try:
+                worktrees.check_missing(all_cards)
+            except Exception as e:
+                print(f"worktree check skipped this pass: {e}", file=sys.stderr)
+    if not dry and not paused():
+        try:   # a finished agent whose card, PR link or labels lag its output: pl applies those writes (reconcile.py)
+            reconcile.sweep(all_cards, reg, st)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed reconcile never stops the pass
+            print(f"reconcile skipped this pass: {e}", file=sys.stderr)
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}
@@ -1222,9 +1232,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
                 fix = harnesses.trust_command(wh, w.get("profile"), trust)
-                if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
-                                      f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt"):
-                    notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: run {fix} and answer once")
+                alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
+                            f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt", cards=[c["id"]])
             if trust and w.get("window"):
                 waiting.append(w["window"])
             if bool(trust) != bool(w.get("trust_wait")):
@@ -1243,9 +1252,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
-                if why := alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
-                                      f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions"):
-                    notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
+                alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
+                            f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions", cards=[c["id"]])
             if bool(ask) != bool(w.get("permission_wait")):
                 if ask and not hooks.hook_permission(w):
                     events.emit("state_transition", c["id"], source="screen", transition="permission_wait")
@@ -1518,6 +1526,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
         notifications.release()    # the summary of what quiet hours held
         summary.write(summary.build(all_cards, reg, time.time()))
+    try:
+        checkout_watch.check(all_cards, reg, st, dry, notify)
+    except (Exception, SystemExit) as e:
+        print(f"main checkout check skipped this pass: {e}", file=sys.stderr)
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
 

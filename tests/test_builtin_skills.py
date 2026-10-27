@@ -82,7 +82,7 @@ def test_every_pl_command_a_skill_names_exists_in_the_cli():
 
 def test_pl_stage_skill_ships_with_a_version_and_names_its_commands():
     text = (skills.BUILTIN_DIR / "pl-stage" / "SKILL.md").read_text()
-    assert re.search(r"^pl-builtin-version: 1$", text, re.M)
+    assert re.search(r"^pl-builtin-version: 2$", text, re.M)
     for cmd in ("pl pipelines show --json", "pl card <id>", "pl section <id> <SECTION> --from <file>", 'pl move <id> "<done>"'):
         assert cmd in text
 
@@ -742,10 +742,10 @@ def test_pl_review_has_one_merge_rule():
 
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     text = _shipped("pl-review")
-    for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
+    for phrase in ("depends on unmerged PR #N", "pulls?state=open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 6" in text
+    assert "pl-builtin-version: 7" in text
 
 
 def test_pl_run_assigns_the_pull_request_to_you():
@@ -808,12 +808,12 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v9_is_updated_to_v10(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 9, 10)
+def test_an_unedited_pl_run_v10_is_updated_to_v11(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 10, 11)
 
 
-def test_an_unedited_pl_review_v5_is_updated_to_v6(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 5, 6)
+def test_an_unedited_pl_review_v6_is_updated_to_v7(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 6, 7)
 
 
 def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
@@ -834,3 +834,65 @@ def test_pl_run_says_to_add_one_whatsnew_file():
     assert "src/pl/whatsnew.d/" in flat and "UTC" in flat and "never edit another entry" in flat
     step = (Path(__file__).parents[1] / "CLAUDE.md").read_text().split("## Releasing")[1]
     assert "src/pl/whatsnew.d/" in step and "src/pl/whatsnew.py" not in step
+
+
+GH_SKILLS = ["pl-review", "pl-run", "pl-stage"]
+GRAPHQL_READ = re.compile(r"gh pr (?:view|list|status|checks)\b|gh api graphql")
+
+
+def _raw(name):
+    return (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+
+
+def _graphql_reads(name, text):
+    return [(name, m.group(0)) for line in text.splitlines() if "Projects" not in line
+            for m in [GRAPHQL_READ.search(line)] if m]
+
+
+def _rest_commands(text):
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("gh api") and "-X" not in line]
+
+
+def test_skills_read_github_through_rest_only():
+    for n in GH_SKILLS:
+        assert _graphql_reads(n, _raw(n)) == []
+
+
+def test_graphql_scan_names_the_skill_and_command():
+    text = _raw("pl-review") + "\ngh pr list --json number\n"
+    assert _graphql_reads("pl-review", text) == [("pl-review", "gh pr list")]
+    assert _graphql_reads("pl-review", "gh api graphql -f query=... Projects\n") == []
+
+
+def test_skills_say_why_reads_use_rest():
+    for n in GH_SKILLS:
+        text = _shipped(n)
+        for phrase in ("gh api repos/...", "GraphQL points are shared with pl", "Projects"):
+            assert phrase in text, (n, phrase)
+
+
+def test_rest_reads_use_repos_paths_and_known_placeholders():
+    allowed = {"pl-review": {"repo", "review", "number", "headRefName"}, "pl-run": {"owner", "repo", "number", "label"}}
+    for n, names in allowed.items():
+        commands = _rest_commands(_raw(n))
+        assert commands, n
+        for line in commands:
+            assert "'repos/<" in line and "graphql" not in line, (n, line)
+            assert set(re.findall(r"<(\w+)>", line)) <= names, (n, line)
+    assert "https://github.com/<owner>/<repo>/pull/<number>" in _shipped("pl-run")
+
+
+def test_pl_review_lists_review_prs_through_rest():
+    listing = [x for x in _rest_commands(_raw("pl-review")) if "pulls?state=open" in x and '"<review>"' in x]
+    assert len(listing) == 1 and "--paginate" in listing[0]
+    assert all(f in listing[0] for f in (".head.ref", ".base.ref", ".html_url", "title"))
+    deps = re.findall(r"gh api [^`]*pulls\?state=open[^`]*", _raw("pl-review"))
+    assert len(deps) == 2 and ".number" in deps[1] and ".head.ref" in deps[1]
+
+
+def test_pl_run_rework_reads_the_pr_through_rest():
+    lines = _rest_commands(_raw("pl-run"))
+    pr = [x for x in lines if "pulls/<number>" in x]
+    assert len(pr) == 1 and "repos/<owner>/<repo>/pulls/<number>" in pr[0]
+    assert all(f in pr[0] for f in (".head.ref", ".base.ref", ".labels"))
+    assert any("issues/<number>/comments" in x for x in lines)

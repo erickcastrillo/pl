@@ -1,6 +1,7 @@
 [pipeline]
 name = "existing-client"
 template = "existing-client"
+pod = "sales"
 columns = ["Check-in", "Check-in review", "Renewal", "Renewal review", "Issues", "Issues review", "Done"]
 
 [pipeline.stages.check-in]

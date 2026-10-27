@@ -383,3 +383,10 @@ def test_each_migrated_file_is_named_from_its_id():
 def test_seen_state_at_the_newest_migrated_key_shows_nothing_old():
     whatsnew.mark_seen(NEWEST_MIGRATED)
     assert [e for e in whatsnew.unseen() if whatsnew._order(e["key"]) <= whatsnew._order(NEWEST_MIGRATED)] == []
+
+
+def test_whatsnew_has_one_sales_and_support_pods_entry():
+    hits = [e for e in whatsnew.ENTRIES if all(w in e["title"].lower() for w in ("sales", "support", "pod"))]
+    assert len(hits) == 1
+    text = hits[0]["where"] + " " + hits[0]["try"]
+    assert "pl pods" in text and "pl pipelines add" in text and "--template new-client" in text
