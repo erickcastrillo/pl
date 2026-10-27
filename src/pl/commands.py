@@ -1189,12 +1189,23 @@ def cmd_worktrees_bootstrap(a):
             print(note)
     except ValueError as e:
         raise SystemExit(f"pl worktrees bootstrap: {e}")
+    if a.card and not a.dry_run:
+        record_worktree(a.card, str(Path(a.path).expanduser().resolve()))
     for failure in failures:
         print(f"{failure['reason']}:\n{failure['output']}", file=sys.stderr)
         if a.card:
             record_bootstrap_failure(a.card, failure)
     if a.card and not failures and not a.dry_run:
         clear_bootstrap_failure(a.card)
+
+
+def record_worktree(card_ref, path):
+    try:
+        c = find_card(card_ref)
+        if (c.get("metadata") or {}).get("worktree") != path:
+            update(c["id"], metadata={"worktree": path})
+    except Exception as e:
+        print(f"pl worktrees bootstrap: could not record the worktree on the card: {e}", file=sys.stderr)
 
 
 def record_bootstrap_failure(card_ref, failure):

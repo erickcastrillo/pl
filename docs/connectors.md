@@ -7,7 +7,7 @@ pl code refers to roles, never to a product, so swapping the server behind a rol
 
 - Where the server is, exactly one of: `url`, `command` (with `args`, `env`), or `mcp_config` + `server` (an entry in a harness's MCP file, read as the tracker reads it).
 - `auth` (`oauth`, `token`, `none`), `token` (`"${VAR}"` or `"keychain"`, never a literal), `headers` (secret-looking ones must be `${VAR}`).
-- `role`: a list of `payments`, `contacts`, `email`, `calendar`, `messaging`, `memory`. A connector with no role is a plain tool set for its teams.
+- `role`: a list of `payments`, `contacts`, `email`, `calendar`, `messaging`, `memory`, `tickets`. A connector with no role is a plain tool set for its teams.
 - `teams`: pipeline names that may use it. `access`: `read` (default) or `read-write`. `tier`: `vendor`, `community` or `adapter`.
 - `tools`: maps a standard role tool name to the server's own tool name. `read_tools` / `write_tools` override the read-only guess.
 
