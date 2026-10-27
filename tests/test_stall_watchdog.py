@@ -5,7 +5,7 @@ import pytest
 
 from pl import agent_alerts, agent_screen, agents, alerts, dispatch, events, harnesses, move_agent
 from pl import config as C
-from pl.util import save_state
+from pl.util import load_state, save_state
 
 REAL_IDLE_SECONDS = agents.idle_seconds   # conftest fakes the attribute for every test
 W = {"stage": "run", "harness": "claude", "pane": "%1", "window": "@1", "session_id": "s1", "attempts": 1}
@@ -186,3 +186,106 @@ def test_real_activity_after_the_nudge_clears_it(fake):
     fake.idle = limit
     fake.run([_card()])
     assert not fake.stops and len(fake.nudges()) == 2
+
+
+def _stage_card(stage="plan", col="Spec ready", desc="# PIPELINE: SPEC\nthe spec", **meta):
+    c = _card(col=col, spec_approved_at="2026-10-26", **meta)
+    c["description"] = desc
+    c["metadata"]["worker"] = {**W, "stage": stage}
+    return c
+
+
+def test_a_finished_plan_agent_without_its_section_is_reported_then_restarted(fake):
+    fake.word = "finished"
+    fake.run([_stage_card()])
+    [(_, cid, d)] = fake.kinds("stalled")
+    assert cid == CID and d["stage"] == "plan" and d["section"] == "PLAN"
+    assert not fake.nudges() and not fake.stops
+    assert _open() and len(fake.notified) == 1
+    fake.now += 60
+    fake.run([_stage_card()])
+    assert fake.stops == [("%1", "s1")] and fake.started == [(CID, 1)]
+    assert [e[2].get("reason") for e in fake.kinds("agent_restarted")] == ["stalled"]
+    assert len(load_state()["stall_retries"][CID]) == 1
+    assert len(fake.kinds("stalled")) == 1
+
+
+def test_finished_turn_without_its_section_counts_too(fake):
+    card = _stage_card()
+    card["metadata"]["worker"]["finished_turn"] = True
+    fake.run([card])
+    fake.now += 60
+    fake.run([card])
+    assert fake.stops == [("%1", "s1")] and len(fake.kinds("stalled")) == 1
+
+
+def test_a_blank_section_counts_as_missing(fake):
+    fake.word = "finished"
+    card = _stage_card(desc="# PIPELINE: PLAN\n   \n")
+    fake.run([card])
+    fake.now += 60
+    fake.run([card])
+    assert fake.stops == [("%1", "s1")]
+
+
+def test_a_finished_agent_with_its_section_is_not_stalled(fake):
+    fake.word = "finished"
+    card = _stage_card(desc="# PIPELINE: PLAN\nWP1")
+    fake.run([card])
+    fake.now += 60
+    fake.run([card])
+    assert not fake.kinds("stalled") and not fake.stops and not _open()
+
+
+def test_a_finished_agent_under_the_limit_is_left_alone(fake):
+    fake.word = "finished"
+    fake.idle = 10 * 60
+    fake.run([_stage_card()])
+    fake.now += 60
+    fake.run([_stage_card()])
+    assert not fake.kinds("stalled") and not fake.stops and not _open()
+
+
+@pytest.mark.parametrize("how", ["question", "permission_wait", "gate"])
+def test_a_finished_agent_waiting_on_a_person_is_not_restarted(fake, monkeypatch, how):
+    fake.word = "finished"
+    card = _stage_card()
+    if how == "question":
+        card["metadata"]["question"] = True
+    elif how == "permission_wait":
+        monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: "Proceed?")
+    else:
+        monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: ("GATE: before-push", "finished", None))
+    fake.run([card])
+    fake.now += 60
+    fake.run([card])
+    assert not fake.kinds("stalled") and not fake.stops and not _open()
+
+
+def test_restarts_of_a_missing_section_stop_at_stall_retries(fake):
+    fake.word = "finished"
+    save_state({"notified": {}, "stall_retries": {CID: [fake.now - 3600, fake.now - 60]}})
+    for _ in range(3):
+        fake.run([_stage_card()])
+        fake.now += 60
+    assert not fake.stops and not fake.started
+    assert _open()
+
+
+def test_a_pl_stage_agent_without_its_section_is_restarted(fake, monkeypatch):
+    C.PIPELINE = {"stages": {"draft": {"column": "Drafting", "done": "Drafted", "section": "DRAFT"}}}
+    fake.word = "finished"
+    card = _stage_card(stage="draft", col="Drafting")
+    monkeypatch.setattr(dispatch, "stage_for", lambda c, col: "draft")
+    fake.run([card])
+    fake.now += 60
+    fake.run([card])
+    assert fake.stops == [("%1", "s1")]
+
+
+def test_a_finished_run_agent_is_not_restarted(fake):
+    fake.word = "finished"
+    fake.run([_card()])
+    fake.now += 60
+    fake.run([_card()])
+    assert not fake.stops and not fake.kinds("stalled")

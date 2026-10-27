@@ -1,8 +1,9 @@
-"""Alerts for stage agents that wait for a person, finish without moving their card, or are blocked on an unmerged card."""
+"""Alerts for stage agents that wait for a person, finish without moving their card, or are blocked on an unmerged card.
+The stall watchdog also restarts a finished stage agent that left its stage section missing."""
 import re
 import time
 
-from pl import agent_screen, agents, alerts, events, stuck_jobs
+from pl import agent_screen, agents, alerts, board, events, stuck_jobs
 from pl import config as C
 from pl.util import cmd_id, short_id
 
@@ -121,8 +122,17 @@ def _blocked(c, w, all_cards, lines):
                   f"merge {', '.join(map(cmd_id, unmerged))} or pl depends {cmd_id(cid)} --clear", [cid, *unmerged])
 
 
+def missing_section(c, w, word):
+    """The section a finished non-run stage agent left unwritten (absent or blank), else None."""
+    stage = w.get("stage")
+    sec = ((((C.PIPELINE or {}).get("stages") or {}).get(stage)) or {}).get("section")
+    if stage == "run" or not sec or not (word == "finished" or w.get("finished_turn")):
+        return None
+    return None if (board.sections(c.get("description")).get(sec) or "").strip() else sec
+
+
 def _excused(c, w, word):
-    """True when the agent waits on a person or a reset, or has finished (agent_unmoved covers that): not a stall."""
+    """True when the agent waits on a person or a reset, or has finished with its section written (agent_unmoved covers that): not a stall."""
     d = _dispatch()
     if (c.get("metadata") or {}).get("question") or w.get("limit_hit") or w.get("permission_wait") or w.get("trust_wait"):
         return True
@@ -155,13 +165,27 @@ def stall(c, w, reg, st, seen):
         idle = now - r.get("statusUpdatedAt", 0) / 1000
     else:
         idle = agents.idle_seconds(w, reg, st)
-    if not limit or idle is None or _excused(c, w, agent_screen.read(w["pane"])[1]) or (
+    if not limit or idle is None:
+        rec.pop("nudged_at", None)
+        rec.pop("reported", None)
+        rec.pop("missing", None)
+        return False
+    word = agent_screen.read(w["pane"])[1]
+    missing = missing_section(c, w, word)
+    if _excused(c, w, "" if missing else word) or (
             idle < limit and idle < now - rec.get("nudged_at", now) - NUDGE_ECHO_SLACK):
         rec.pop("nudged_at", None)   # working or waiting again: the next stall starts with a fresh nudge
         rec.pop("reported", None)
+        rec.pop("missing", None)
         return False
     if idle < limit:
         return False
+    if missing:   # a finished agent has ended its turn: no nudge, it is restarted on the pass after the alert opens
+        if rec.get("missing") != missing:
+            rec["missing"] = missing
+            events.emit("stalled", cid, stage=stage, minutes=int(idle // 60), section=missing)
+            return False
+        return _restart(c, w, st, seen, now)
     if stuck:
         rec["jobs"] = [stuck_jobs.describe(j) for j in stuck]
     if not rec.get("reported"):
@@ -175,6 +199,12 @@ def stall(c, w, reg, st, seen):
         return False
     if stuck or now - rec["nudged_at"] < limit:   # pl never stops an agent for jobs: that would end them; the alert re-notifies
         return False
+    return _restart(c, w, st, seen, now)
+
+
+def _restart(c, w, st, seen, now):
+    d = _dispatch()
+    cid, stage = c["id"], w.get("stage")
     times = [t for t in (st.setdefault("stall_retries", {}).get(cid) or []) if isinstance(t, (int, float)) and now - t < 86400]
     if len(times) >= STALL_RETRIES:
         return False
@@ -184,5 +214,5 @@ def stall(c, w, reg, st, seen):
     st["stall_retries"][cid] = times + [now]
     seen.pop(cid, None)
     events.emit("agent_restarted", cid, stage=stage, reason="stalled")
-    print(f"{short_id(cid)}  {stage} agent idle after a nudge; stopped it, its stage starts again")
+    print(f"{short_id(cid)}  {stage} agent stalled; stopped it, its stage starts again")
     return True

@@ -1,0 +1,3 @@
+title = "A stage agent that finishes without its section is restarted"
+where = "Needs you: Stalled"
+try = "Watch a spec or plan card whose agent ended without writing its section: pl opens a stalled alert and starts the stage again"
