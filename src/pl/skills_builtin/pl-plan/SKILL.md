@@ -1,7 +1,7 @@
 ---
 name: pl-plan
 description: Turn a pl card's approved SPEC (and DESIGN, if any) into a plan of small work packages with tests first and a minimum-change budget, write it as the card's PLAN section, and move the card to Plan for review. Use as the plan stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 6
+pl-builtin-version: 7
 ---
 
 # pl-plan: write the implementation plan for one card
@@ -35,7 +35,7 @@ record each decision you had to make in the plan, with the option you picked.
 
 3. Size the change into small, auto-mergeable chunks. Ask: what is the fewest files and lines that meet the criteria?
    - Aim at `target_lines` (<= 150 lines outside tests) and `target_files` (<= 6) so the pull request can merge by itself.
-   - If the spec cannot fit the target budget, split it into slices that each build and pass the tests on the default branch alone and can merge in any order. Each slice is vertical: the smallest complete behaviour through every layer it needs, with its tests. Never slice by layer (model, then API, then UI). This card builds the first slice; list the rest under "Later slices" and file each one yourself:
+   - If the spec cannot fit the target budget, split it into slices that each build and pass the tests on the default branch alone and can merge in any order, unless two slices change the same file (below). Each slice is vertical: the smallest complete behaviour through every layer it needs, with its tests. Never slice by layer (model, then API, then UI). This card builds the first slice; list the rest under "Later slices" and file each one yourself:
    1. Plan number N: the `plan` in `pl card <id>`, or the N of a "Plan N slice M:" title; continue after the
       highest slice of plan N on the board (`pl list --all`), normally M+1. A card with no plan number: `pl titles next`
       prints N; run `pl titles set <id> --plan N --slice 1` on this card, and file the later slices as 2 onward.
@@ -43,7 +43,6 @@ record each decision you had to make in the plan, with the option you picked.
    ```
    pl idea "Slice <k> of plan <N> (after <id>): <what this slice builds, in full>" --plan <N> --slice <k> --title "<what>"
    ```
-
    `--title` is a short "what this slice builds" phrase under 60 characters, so "Plan N slice k: " plus it fits
    pl's 80-character title. An independent slice has no "(after <id>)".
    3. `pl idea` prints `created <id>`: note it. Then record what that slice needs merged first:
@@ -51,8 +50,9 @@ record each decision you had to make in the plan, with the option you picked.
    if it refuses, note it under Decisions and go on.
    4. If `pl titles set` refuses (another card holds that plan and slice) or `pl idea` fails, stop filing: write
    the command and its error under Decisions, and never guess a number.
+   - Two slices that change the same file are built one after another. The smaller one goes first. File the other with "(after <id>)" in its idea text and run `pl depends <later id> --on <earlier id>`. Files that are only appended to (`src/pl/whatsnew.py`, `CHANGELOG*`) do not count. After filing, run `pl plan check <N>` and add a dependency for each pair it prints.
    - When two behaviours need the same new groundwork (a shared module, a config key), keep them in one slice, or put the groundwork alone in the first slice, at or under 60 lines, and say why in "Decisions". Groundwork over 60 lines means the split is by layer: redo it.
-   - A slice that still needs another is the exception. Name it in one `Depends on: <slice>` line under the plan's Summary. A dependency is one step: a slice never depends on a slice that itself depends on another. Record it in the filed idea's text as "(after <id>)".
+   - A slice that still needs another is the exception. Name it in one `Depends on: <slice>` line under the plan's Summary. A dependency is one step: a slice never depends on a slice that itself depends on another, except a chain of slices that share a file: each depends on the one before it. Record it in the filed idea's text as "(after <id>)".
    - **Isolate high-impact changes into dedicated slices**:
      - **Database Migrations / Schema**: Place EF Core migrations and SQL schema changes in their own dedicated slice. Tag it in the plan header: `Sensitivity: Migration (Requires Human Review)`. Never mix schema migrations with large business logic.
      - **Data Mutations / Backfills**: Isolate data migrations, backfill jobs, or destructive purge routines in their own slice. Tag it: `Sensitivity: Data Changes (Requires Human Review)`.
@@ -107,7 +107,7 @@ When it does not apply, write one line in its place, such as "No end-to-end test
 "No end-to-end tests: the repo has no Playwright suite".
 
 ## Later slices
-Only when the change is split: one line per later slice, `- Slice <k> (Plan <N>, <card id>): <independent | after <slice>>, what it builds`. Leave out otherwise.
+Only when the change is split: one line per later slice, `- Slice <k> (Plan <N>, <card id>): <independent | after <slice>>, what it builds; files: <path>, <path>`. Leave out otherwise.
 
 ## Decisions
 - Each choice you made that a person may want to change, with the option you picked.

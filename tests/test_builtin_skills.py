@@ -717,7 +717,18 @@ def test_pl_plan_splits_into_independent_slices():
                    "(after <id>)"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 6" in text
+    assert "pl-builtin-version: 7" in text
+
+
+def test_pl_plan_orders_slices_that_share_a_file():
+    text = _shipped("pl-plan")
+    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 7
+    later = text.split("## Later slices")[1].split("## Decisions")[0]
+    assert "files:" in later
+    for phrase in ("pl depends <later id> --on <earlier id>", "same file", "src/pl/whatsnew.py", "CHANGELOG",
+                   "pl plan check <N>"):
+        assert phrase in text
+    assert "can merge in any order." not in text
 
 
 def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
