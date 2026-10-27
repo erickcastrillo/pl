@@ -386,6 +386,28 @@ def mcp_flags(h, servers, profile, card_id, stage, window):
     return [f"--mcp-config={f}", "--strict-mcp-config"]
 
 
+def gh_shim():
+    """Write the gh wrapper agents find first on their PATH (the real gh stays behind it); returns its folder."""
+    folder = C.STATE_DIR / "bin"
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder.chmod(0o700)
+    tmp = folder / f".gh.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w") as f:
+        f.write(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -m pl.ghwrap "$@"\n')
+    os.replace(tmp, folder / "gh")
+    return folder
+
+
+def _ledger_account():
+    """The GitHub ledger key the wrapper records under (a login and a short token hash, never a token); None if unknown."""
+    from pl import ghquota
+    try:
+        return ghquota.account()
+    except (SystemExit, OSError):
+        return None
+
+
 def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
@@ -422,6 +444,13 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
         exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *argv]
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in exec_argv))
     else:
+        lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
+        if card := (hooks[0] if hooks else card_id):
+            lines.append(f"export PL_CARD={shlex.quote(_typeable(card))}")
+        if not stage:
+            lines.append(f"export PL_LOOP={shlex.quote(_typeable(label))}")
+        if ledger := _ledger_account():
+            lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(ledger))}")
         if stage:
             lines.append(f"export PL_STAGE={shlex.quote(str(stage))}")
         if h.env_var and d:
@@ -508,6 +537,9 @@ def headless_argv(h, account, prompt, stage=None):
         env[h.env_var] = str(d)
     if C.GH_CONFIG_DIR:
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
+    env["PATH"] = f"{gh_shim()}{os.pathsep}{env.get('PATH', '')}"
+    if ledger := _ledger_account():
+        env["PL_GH_LEDGER"] = ledger
     from pl import pods, skills
     pod = pods.launch_pod()
     pdir = skills.launch_plugin(h, pod=pod)
@@ -539,8 +571,11 @@ def headless_script(h, account, prompt, name, log_path, record_path, writes=True
     """The sh script a scheduled loop's window runs: the harness once, headless and unattended (read-only when writes
     is false), its output in a 0600 log, then a 0600 run record (start, end, result, tokens, exit status). It deletes
     itself first."""
-    argv, _ = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
+    argv, env = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
     lines = ["#!/bin/sh", 'rm -f -- "$0"', "umask 077"]
+    lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
+    if "PL_GH_LEDGER" in env:
+        lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(env['PL_GH_LEDGER']))}")
     lines += [f"export {k}={shlex.quote(v)}" for k, v in loop_env(name, writes).items()]
     if h.env_var and C.PROFILES.get(account):
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(C.PROFILES[account]))}")
