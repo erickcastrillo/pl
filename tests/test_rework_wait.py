@@ -26,7 +26,7 @@ def fake_home(tmp_path, monkeypatch):
     C.load("t")
     C.PROFILES = {"acme": tmp_path / ".claude"}
     C.ACCOUNTS = {"acme": {"harness": "claude"}}
-    monkeypatch.setattr(C, "WATCHDOG", {}, raising=False)
+    monkeypatch.setattr(C, "DISPATCH", {**C.DISPATCH})
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
     monkeypatch.setattr(rework, "col_name", lambda lid: lid)
     monkeypatch.setattr(time, "time", lambda: NOW)
@@ -136,6 +136,6 @@ def test_rework_wait_under_limit_is_quiet(fake):
 
 
 def test_rework_wait_minutes_setting_is_read(fake, monkeypatch):
-    monkeypatch.setattr(C, "WATCHDOG", {"rework_wait_minutes": 5})
+    monkeypatch.setattr(C, "DISPATCH", {**C.DISPATCH, "rework_wait_minutes": 5})
     _waiting_pass(fake, [_reworking("c1", 6)])
     assert alerts.get("rework_waiting:c1")

@@ -198,9 +198,9 @@ def cmd_rework(a):
 
 
 def check_waits(waiting, all_cards, st, send):
-    """A rework that has waited over [watchdog] rework_wait_minutes for a run slot: one Activity warning per wait and
+    """A rework that has waited over [dispatch] rework_wait_minutes for a run slot: one Activity warning per wait and
     an open rework_waiting alert, resolved once the card is no longer waiting. waiting: run cards still unstarted."""
-    limit = int(getattr(C, "WATCHDOG", {}).get("rework_wait_minutes", 30)) * 60
+    limit = int(C.DISPATCH.get("rework_wait_minutes", 30)) * 60
     seen, active = st.setdefault("rework_waits", {}), set()
     for c in waiting:
         rw = (c.get("metadata") or {}).get("rework") or {}

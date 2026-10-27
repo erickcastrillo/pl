@@ -359,7 +359,7 @@ def validate(doc) -> list[str]:
         errs.append("code_host.gh_config_dir must be a folder path (text)")
     errs += _pr_limit_errors({**_defaults()["PR_LIMITS"], **doc.get("code_host", {})})
     for key, low in (("max_runs", 0), ("max_prep", 0), ("interval", 1), ("max_agent_processes", 1),
-                     ("release_waiting_after", 0), ("stall_minutes", 0)):
+                     ("release_waiting_after", 0), ("stall_minutes", 0), ("rework_wait_minutes", 0)):
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
