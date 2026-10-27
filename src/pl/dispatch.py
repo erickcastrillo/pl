@@ -1028,6 +1028,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 events.emit("moved", cid, **{"from": last[cid], "to": col}, **({"dropped": True} if col == "Done" and cid in dropped else {}))
                 if done := finished_stage(by_id[cid], col):
                     record_finished_run(by_id[cid], *done)
+                    slowwork.record_length(st, *done)
                 if col in gate_sections and (c := by_id.get(cid)):
                     sec = gate_sections[col]
                     pods.save_draft(cid, sec, sections(c.get("description")).get(sec) or "")
@@ -1039,6 +1040,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             w = (c.get("metadata") or {}).get("worker") or {}
             if w.get("stage") == "design" and has_design(c):
                 record_finished_run(c, "design", w)
+                slowwork.record_length(st, "design", w)
         st["last_col"] = now_col
     runs_alive = 0
     runs_live = 0   # every live run agent, waiting ones included
@@ -1047,6 +1049,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     failed = set()   # stage_failed and permission_wait alert keys seen this pass
     waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
     slow = {}        # slow-work conditions seen this pass (slowwork.py)
+    holders = {"run": [], "prep": []}   # short ids of the cards counted in runs_alive / prep_alive
     waits, seen_waits = st.get("run_waits") or {}, {}   # card id -> when its run agent was first seen waiting
     for c in all_cards:
         if c.get("unreadable"):
@@ -1074,6 +1077,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if w:
             busy = move_agent.locked(c["id"])   # pl move-agent is stopping and relaunching it right now
         live = w and status in ("alive", "starting")   # after a resume the screen replays the old banner: the transcript counts
+        if live and w.get("stage") == stage:
+            slow.update(slowwork.stage_slow(st, c, w))
         screen = (move_agent.limit_screen(c, w, wh) if w.get("resume") else screen_hit_limit(w.get("pane"), wh)) if live and not busy else None
         if screen and not dry:   # the whole limit handling runs under the card's move lock: a hand move waits, or wins
             held = move_agent.lock(c["id"])
@@ -1082,8 +1087,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if w.get("stage") == "run":         # it still holds its slot
                 runs_live += 1
                 runs_alive += 1
+                holders["run"].append(short_id(c["id"]))
             else:
                 prep_alive += 1
+                holders["prep"].append(short_id(c["id"]))
             continue
         if screen:
             try:
@@ -1252,8 +1259,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     print(f"{short_id(c['id'])}  run agent {why}; its slot is free")   # its window stays: no second agent
                 else:
                     runs_alive += 1
+                    holders["run"].append(short_id(c["id"]))
             else:
                 prep_alive += not w.get("limit_hit")   # an agent on a limit screen waits for its reset: no slot
+                if not w.get("limit_hit"):
+                    holders["prep"].append(short_id(c["id"]))
             continue
         if stage == "run" and (blocked := run_blocked(c)):   # released: held back, no slot, not live
             print(f"{short_id(c['id'])}  run {blocked}")
@@ -1292,7 +1302,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"agent alerts skipped this pass: {e}", file=sys.stderr)
             events.emit("error", message=f"agent alerts: {e}")
-    prep_alive += sweep_untracked(all_cards, reg, dry, st) or 0
+    swept = sweep_untracked(all_cards, reg, dry, st) or 0
+    prep_alive += swept
     st["screens"] = {p: r for p, r in (st.get("screens") or {}).items() if time.time() - r.get("seen", 0) < 3600}   # a live window no card tracks (a restart left it) holds a slot too
     memory.guard_runaways(st, all_cards, dry)
     low = memory.check_starts(st) if not dry else None
@@ -1337,6 +1348,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if stage == "run":
             if runs_live >= LIVE_RUN_CAP * max_runs:
                 print(f"{short_id(c['id'])}  run waits ({runs_live} live, cap {LIVE_RUN_CAP * max_runs})")
+                slow[f"wait:{c['id']}"] = ("slot_wait_long", c["id"], "wait_minutes", {"slot": "run", "stage": stage, "holders": holders["run"]})
                 continue
             if runs_alive >= max_runs:
                 key = f"{c['id']}:queued"
@@ -1344,9 +1356,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     st["notified"][key] = time.time()
                     notify("Pipeline queue", f"{c['title'][:40]} waits: {runs_alive} runs already in flight (max {max_runs})")
                 print(f"{short_id(c['id'])}  run waits ({runs_alive}/{max_runs} in flight)")
+                slow[f"wait:{c['id']}"] = ("slot_wait_long", c["id"], "wait_minutes", {"slot": "run", "stage": stage, "holders": holders["run"]})
                 continue
         elif prep_alive >= max_prep:
             print(f"{short_id(c['id'])}  {stage} waits ({prep_alive}/{max_prep} spec/plan agents in flight)")
+            slow[f"wait:{c['id']}"] = ("slot_wait_long", c["id"], "wait_minutes", {"slot": "prep", "stage": stage,
+                                       "holders": holders["prep"] + ([f"{swept} untracked window(s)"] if swept else [])})
             continue
         # one account for the log, the card and the launch: the stage's own account when it sets one; with an
         # accounts pool, the least loaded of the pool not parked (this card not counted); else the card's, else the
@@ -1387,8 +1402,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if stage == "run":
             runs_alive += 1
             runs_live += 1
+            holders["run"].append(short_id(c["id"]))
         else:
             prep_alive += 1
+            holders["prep"].append(short_id(c["id"]))
         if prof != (c.get("metadata") or {}).get("profile"):
             if want and prof != want:
                 print(f"{short_id(c['id'])}  profile {want} is parked; using {prof}")
