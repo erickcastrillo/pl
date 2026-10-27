@@ -108,3 +108,33 @@ def test_a_stalled_alert_records_what_pl_tried(clock, sent):
 def test_a_stalled_alert_before_any_nudge_has_no_tried(clock, sent):
     dispatch.check_stalled([_card()], _idle(clock, 25))
     assert "tried" not in alerts.get("stalled:o/r#1")
+
+
+def _stage_card(desc="# PIPELINE: SPEC\nthe spec"):
+    c = _card(col="Spec ready", spec_approved_at="2026-10-26", worker={"stage": "plan"})
+    c["description"] = desc
+    return c
+
+
+def _missing(cid="o/r#1"):
+    return {"stalls": {cid: {"missing": "PLAN"}}}
+
+
+def test_a_finished_stage_agent_without_its_section_opens_one_alert(clock, sent):
+    for _ in range(2):
+        dispatch.check_alerts([_stage_card()], set(), _missing())
+    a = alerts.get("stalled:o/r#1")
+    assert alerts._live(a) and "plan" in a["title"] and "PLAN" in a["title"]
+    assert len(sent) == 1
+
+
+def test_the_missing_section_alert_resolves_when_the_section_appears(clock, sent):
+    dispatch.check_alerts([_stage_card()], set(), _missing())
+    dispatch.check_alerts([_stage_card("# PIPELINE: PLAN\nx")], set(), _missing())
+    assert not alerts._live(alerts.get("stalled:o/r#1"))
+
+
+def test_the_missing_section_alert_resolves_when_the_card_moves(clock, sent):
+    dispatch.check_alerts([_stage_card()], set(), _missing())
+    dispatch.check_alerts([_stage_card()], set(), {"stalls": {}})
+    assert not alerts._live(alerts.get("stalled:o/r#1"))

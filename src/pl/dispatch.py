@@ -1648,10 +1648,14 @@ def check_pr_person_alerts(all_cards):
 
 def _stall_tried(cid, st, now):
     """What pl did about a stalled card: the nudge agent_alerts sent and the restarts it made today, else None."""
-    if not (((st or {}).get("stalls") or {}).get(cid) or {}).get("nudged_at"):
+    rec = ((st or {}).get("stalls") or {}).get(cid) or {}
+    if not (rec.get("nudged_at") or rec.get("missing")):
         return None
     n = len([t for t in ((st or {}).get("stall_retries") or {}).get(cid) or [] if isinstance(t, (int, float)) and now - t < 86400])
-    return f"nudged, retried {n} time{'s' if n != 1 else ''} today" if n else "nudged"
+    lead = "nudged" if rec.get("nudged_at") else None
+    if not n:
+        return lead
+    return f"{lead + ', ' if lead else ''}retried {n} time{'s' if n != 1 else ''} today"
 
 
 def check_stalled(all_cards, st=None):
@@ -1670,6 +1674,11 @@ def check_stalled(all_cards, st=None):
             stage = (m.get("worker") or {}).get("stage") or "stage"
             title = f"Card {head}: its {stage} agent waits on jobs that cannot report: {'; '.join(jobs_left)}"
             fix = f"pl asked the agent to stop them and re-run in the foreground; pl card {cmd_id(c['id'])} shows the agent (pl never stops them itself)"
+            severity = "warn"
+        elif (sec := stall.get("missing")) and agent_alerts.missing_section(c, m.get("worker") or {}, "finished") == sec:
+            stage = (m.get("worker") or {}).get("stage")
+            title = f"Card {head}: its {stage} agent finished without writing {sec}"
+            fix = f"the watchdog starts the {stage} stage again (at most {agent_alerts.STALL_RETRIES} a day); pl retry {cmd_id(c['id'])} or pl drop {cmd_id(c['id'])}"
             severity = "warn"
         elif col_name(c.get("list_id")) not in building:
             continue
