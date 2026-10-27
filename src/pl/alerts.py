@@ -47,6 +47,7 @@ DIRECT = (
     "send_cap:",
     "stalled:",
     "ci_not_running:",
+    "rework_waiting:",
 )
 
 
