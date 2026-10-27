@@ -17,7 +17,7 @@ from pl import confirm, move_agent, pipeline, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
-from pl.tui.chrome import empty_state, show_first_heading, skip_headings
+from pl.tui.chrome import close, empty_state, show_first_heading, skip_headings
 from pl.tui.live import NO_WINDOW, LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
@@ -200,7 +200,7 @@ class CardScreen(Screen):
         self.query_one("#card-doc").focus()
 
     def action_close(self):
-        self.app.pop_screen()
+        close(self)
 
     def action_copy(self):
         if self.card is None:

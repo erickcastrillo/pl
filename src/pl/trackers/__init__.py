@@ -124,6 +124,8 @@ def _marked(write, name=None):
     """A board write that stops every process of the profile reusing a board read from before it (board.cards)."""
     def run(*a, **kw):
         from pl import audit, board
+        before = board.last_write() or 0
+        ok = False
         board.dirty()
         try:
             res = write(*a, **kw)
@@ -133,9 +135,12 @@ def _marked(write, name=None):
             if action_name == "move" and "column" not in fields:
                 fields.append("column")
             audit.append(f"card.{action_name}", card=card_id, detail=fields)
+            ok = True
             return res
         finally:
             board.dirty()
+            if ok:
+                board.patch(action_name, a, kw, res, before)
     return run
 
 
