@@ -136,7 +136,7 @@ def test_show_sales_has_a_package_pod_md_three_rules_its_skills_and_roles(fake_h
 
 def test_every_sales_skill_ships_and_every_role_is_a_connector_role(fake_home):
     pod = pods.find("sales")
-    assert all((pods.skill_dir(s) / "SKILL.md").is_file() for s in pod["skills"])
+    assert all((pods.skill_dir(s) / "SKILL.md").is_file() for s in pod["skills"] if s != "pl-stage")
     assert set(pod["roles"]) <= set(connectors.ROLES)
 
 
@@ -508,3 +508,10 @@ def test_an_engineering_launch_is_unchanged(fake_env):
     _library_skill(fake_env, "outside")
     assert pods.launch_pod() is None
     assert "/pl:outside" in harnesses.launch_script(harnesses.get("claude"), None, "/outside x", "sid", "label")
+
+
+def test_a_sales_launch_of_a_client_template_stage_keeps_pl_stage(fake_env, monkeypatch):
+    _library_skill(fake_env, "pl-stage")
+    monkeypatch.setattr(C, "POD", "sales")
+    monkeypatch.setattr(C, "WORK_DIR", str(fake_env["home"]))
+    assert "/pl:pl-stage" in harnesses.launch_script(harnesses.get("claude"), None, "/pl-stage x", "sid", "label")

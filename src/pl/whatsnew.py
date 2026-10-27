@@ -1,8 +1,11 @@
 """What's new: one entry per feature, oldest first. The console shows the entries newer than the last one it showed
 (kept in <profile>/state/whatsnew.json) once after an upgrade; the palette shows them all; `pl whatsnew` prints them.
-A new feature adds an entry here with a key greater than every other one."""
+A new feature adds one file to whatsnew.d named with the current UTC date and time (YYYY-MM-DD-HHMM-<slug>.toml)."""
 import json
 import os
+import re
+import tomllib
+from pathlib import Path
 
 from pl import config as C
 from pl import jsonout
@@ -12,7 +15,7 @@ def _e(key, title, where, try_):
     return {"key": key, "title": title, "where": where, "try": try_}
 
 
-ENTRIES = [
+_LEGACY = [
     _e("2026-09-30.01", "Standup panel with Slack copy", "Dashboard: press s; y copies it for Slack", "pl standup --slack"),
     _e("2026-09-30.02", "Token spend per card, account, model and loop", "Dashboard Health: tokens; Loops tab: tokens 1h",
        "pl usage --by card"),
@@ -300,23 +303,76 @@ ENTRIES = [
     _e("2026-10-26.78", "Extend shows your pipeline's pod first", "Extend tab (press 6): Active pod", "pl pods show"),
     _e("2026-10-26.79", "Add a chat connector from the console",
        "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
-    _e("2026-10-26.80", "Customer-support pipeline template: triage and owner-approved replies",
-       "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
-    _e("2026-10-26.81", "Tests to run can come from .pl/tests.toml (affected_cmd, always, full_on)",
-       ".pl/tests.toml", "pl tests affected --json"),
-    _e("2026-10-26.82", "Route and remove chat connectors in the console",
-       "Extend → Connectors: on a chat row, r picks what it receives and d removes it", "pl chat route"),
-    _e("2026-10-26.83", "Quiet hours hold notifications overnight and send one summary after",
-       '[notify] quiet = "22:00-07:00" in the profile config; high alerts still go out', "pl doctor"),
-    _e("2026-10-26.84", "Test that notifications reach you",
-       "pl notify test; pl doctor warns when nothing is set up", "pl notify test --chat <name>"),
-    _e("2026-10-26.85", "Stalled agents are nudged, then restarted", "Alerts tab: stalled; [dispatch] stall_minutes",
-       "pl alerts"),
-    _e("2026-10-26.86", "Notifications when a review passes or sends a PR back",
-       "[notify] events: review_passed, review_rework", "pl rework"),
-    _e("2026-10-26.87", "Built-in sales and support pods: rules and skills for client pipelines",
-       "pl pods list; pl pods show sales", "pl pipelines add sales --template new-client --board local"),
 ]
+
+
+DIR = Path(__file__).with_name("whatsnew.d")
+LAST_MIGRATED_FILE = "2026-10-26-0086"   # files up to this name carry their old <date>.<n> key as id
+NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.toml$")
+_FIELDS = ("title", "where", "try")
+
+
+def _entry(path):
+    """(entry, None) for a good entry file, else (None, what is wrong)."""
+    m = NAME_RE.match(path.name)
+    if not m:
+        return None, "name must be YYYY-MM-DD-HHMM-<slug>.toml"
+    date, hhmm = m.groups()
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        return None, f"does not parse ({e})"
+    for k in data:
+        if k not in (*_FIELDS, "id"):
+            return None, f"unknown key {k}"
+    for k in _FIELDS:
+        v = data.get(k)
+        if not isinstance(v, str) or not v.strip() or "\n" in v:
+            return None, f"{k} must be a non-empty one-line string"
+    if f"{date}-{hhmm}" <= LAST_MIGRATED_FILE:
+        want = f"{date}.{hhmm[2:]}"
+        if data.get("id") != want:
+            return None, f"a file named {LAST_MIGRATED_FILE} or earlier must carry id = \"{want}\""
+    else:
+        if "id" in data:
+            return None, "id is not allowed on a new file (the file name is the id)"
+        if int(hhmm[:2]) > 23 or int(hhmm[2:]) > 59:
+            return None, f"{hhmm} is not a time of day"
+    return _e(data.get("id", path.stem), data["title"], data["where"], data["try"]), None
+
+
+def _order(key):
+    """Sort key that puts an old <date>.<n> key before the files of that day that follow it."""
+    return re.sub(r"\.(\d+)$", lambda m: f"-{int(m[1]):04d}", key)
+
+
+def load(d=DIR):
+    """The entries of every good file in d, in file-name order. A bad file is skipped; problems() names it."""
+    out = [_entry(p)[0] for p in sorted(d.glob("*.toml"))]
+    return [e for e in out if e]
+
+
+def problems(d=DIR, legacy=None):
+    """One "<file name>: <problem>" per bad file, duplicate id or id out of order."""
+    seen = {e["key"] for e in (_LEGACY if legacy is None else legacy)}
+    previous = max(seen, key=_order, default="")
+    out = []
+    for p in sorted(d.glob("*.toml")):
+        e, problem = _entry(p)
+        if problem:
+            out.append(f"{p.name}: {problem}")
+        elif e["key"] in seen:
+            out.append(f"{p.name}: duplicate id {e['key']}")
+        elif _order(e["key"]) < _order(previous):
+            out.append(f"{p.name}: id {e['key']} sorts before {previous}")
+        else:
+            previous = e["key"]
+        if e:
+            seen.add(e["key"])
+    return out
+
+
+ENTRIES = _LEGACY + load()
 
 
 def _path():
@@ -334,7 +390,7 @@ def last_shown():
 
 def unseen():
     last = last_shown()
-    return [e for e in ENTRIES if last is None or e["key"] > last]
+    return [e for e in ENTRIES if last is None or _order(e["key"]) > _order(last)]
 
 
 def mark_seen(key=None):

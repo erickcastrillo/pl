@@ -1,0 +1,4 @@
+id = "2026-10-26.81"
+title = "Tests to run can come from .pl/tests.toml (affected_cmd, always, full_on)"
+where = ".pl/tests.toml"
+try = "pl tests affected --json"
