@@ -75,13 +75,13 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
                         lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
     code, out = run(capsys, json=True)
     assert code == 0
-    assert json.loads(out) == {"checks": [
+    assert json.loads(out)["checks"] == [
         {"name": "local_models", "ok": True,
          "lines": ["Ollama: up, 2 models", "route: r:1 is pulled", "summarise: s:1 is pulled"]},
         {"name": "tracker", "ok": True, "lines": ["[tracker] ok: fake"]},
         {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]},
         {"name": "notify_settings", "ok": True, "lines": ["quiet hours: off"]},
-        {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]}]}
+        {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]}]
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -205,3 +205,53 @@ def test_doctor_no_warning_with_attention_or_alerts_route(capsys, monkeypatch, t
     _, out = run(capsys, json=True)
     check = next(c for c in json.loads(out)["checks"] if c["name"] == "notifications")
     assert check["ok"] is True and not any(ln.startswith("warning:") for ln in check["lines"])
+
+
+def _checks_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = tmp_path / "attn.sh"
+    monkeypatch.setattr(local_model, "_request",
+                        lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
+
+
+def _open_each_kind(tmp_path, monkeypatch):
+    from pl import alerts
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    for mod in ("_offer", "_logged"):
+        monkeypatch.setattr(alerts, mod, lambda *a, **k: None)
+    monkeypatch.setattr(alerts, "_urgent", lambda on: None)
+    for kind in alerts.WATCHDOG:
+        alerts.open(f"{kind}:o/r#1", "warn", "Card r#1: pl could not move it", "f", cards=["o/r#1"])
+
+
+def test_doctor_lists_watchdog_alerts_under_needs_you(capsys, tmp_path, monkeypatch):
+    _open_each_kind(tmp_path, monkeypatch)
+    _, out = run(capsys)
+    section = out.split("Needs you", 1)[1]
+    assert len(section.strip().splitlines()) == 5
+    assert "r#1  stalled  0m  nothing yet" in section and "queued, replay failed" in section
+
+
+def test_doctor_needs_you_says_nothing_and_exit_is_unchanged(capsys, tmp_path, monkeypatch):
+    _checks_pass(tmp_path, monkeypatch)
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    code, out = run(capsys)
+    assert code == 0 and out.rstrip().endswith("Needs you\n  nothing")
+
+
+def test_doctor_exits_0_with_open_alerts_when_checks_pass(capsys, tmp_path, monkeypatch):
+    _checks_pass(tmp_path, monkeypatch)
+    _open_each_kind(tmp_path, monkeypatch)
+    code, _ = run(capsys)
+    assert code == 0
+
+
+def test_doctor_json_has_needs_you_and_unchanged_checks(capsys, tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    _, before = run(capsys, json=True)
+    _open_each_kind(tmp_path, monkeypatch)
+    _, after = run(capsys, json=True)
+    got = json.loads(after)
+    assert got["checks"] == json.loads(before)["checks"] and json.loads(before)["needs_you"] == []
+    assert len(got["needs_you"]) == 5
+    assert set(got["needs_you"][0]) == {"card", "kind", "opened_at", "age_seconds", "tried", "acked"}

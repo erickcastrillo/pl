@@ -3,7 +3,7 @@ import json
 from urllib.parse import urlsplit
 
 from pl import config as C
-from pl import local_model, trackers, util
+from pl import alerts, local_model, trackers, util
 
 NOT_A_BOARD_KEY = ("columns", "skip_tags", "repo_tags", "enabled")
 
@@ -79,12 +79,29 @@ def notifications():
 CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications]
 
 
+def _needs_you():
+    try:
+        return alerts.needs_you()
+    except Exception:  # noqa: BLE001 - an unreadable alerts file never fails doctor
+        return []
+
+
+def _needs_you_lines(rows):
+    return [f"  {util.short_id(r['card'])}  {r['kind']}  {util.age(r['opened_at'])}  {r['tried']}" + ("  acked" if r["acked"] else "")
+            for r in rows] or ["  nothing"]
+
+
 def cmd_doctor(a):
     results = [(check.__name__, *check()) for check in CHECKS]
+    rows = _needs_you()
     if getattr(a, "json", False):
-        print(json.dumps({"checks": [{"name": n, "ok": ok, "lines": lines} for n, ok, lines in results]}))
+        keys = ("card", "kind", "opened_at", "age_seconds", "tried", "acked")
+        print(json.dumps({"checks": [{"name": n, "ok": ok, "lines": lines} for n, ok, lines in results],
+                          "needs_you": [{k: r[k] for k in keys} for r in rows]}))
     else:
         for name, ok, lines in results:
             print(f"{'ok' if ok else 'FAIL'} {name}")
             print("\n".join(f"  {ln}" for ln in lines))
+        print("Needs you")
+        print("\n".join(_needs_you_lines(rows)))
     raise SystemExit(0 if all(ok for _, ok, _ in results) else 1)

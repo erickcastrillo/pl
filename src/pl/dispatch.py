@@ -1649,6 +1649,14 @@ def check_pr_person_alerts(all_cards):
     alerts.sweep("pr_person:", active, notify)
 
 
+def _stall_tried(cid, st, now):
+    """What pl did about a stalled card: the nudge agent_alerts sent and the restarts it made today, else None."""
+    if not (((st or {}).get("stalls") or {}).get(cid) or {}).get("nudged_at"):
+        return None
+    n = len([t for t in ((st or {}).get("stall_retries") or {}).get(cid) or [] if isinstance(t, (int, float)) and now - t < 86400])
+    return f"nudged, retried {n} time{'s' if n != 1 else ''} today" if n else "nudged"
+
+
 def check_stalled(all_cards, st=None):
     """Open an alert, and notify once, for work that stopped moving: a run agent idle stall_minutes while its card has
     not reached the run stage's done column, or a run agent the dispatcher released that waits out its retry (high after two
@@ -1676,7 +1684,7 @@ def check_stalled(all_cards, st=None):
         else:
             continue
         active.add(key)
-        if why := alerts.open(key, severity, title, fix, cards=[c["id"]]):
+        if why := alerts.open(key, severity, title, fix, cards=[c["id"]], tried=_stall_tried(c["id"], st, now)):
             notify(alerts.headline(why, f"Stalled: {c['title'][:40]}"), title)
     alerts.sweep("stalled:", active, notify)
 
