@@ -96,3 +96,17 @@ def test_stall_minutes_must_be_a_whole_number(fake_home):
     import tomlkit
     assert any("dispatch.stall_minutes" in e for e in C.validate(tomlkit.parse("[dispatch]\nstall_minutes = -1\n")))
     assert not any("stall_minutes" in e for e in C.validate(tomlkit.parse("[dispatch]\nstall_minutes = 0\n")))
+
+
+def test_a_stalled_alert_records_what_pl_tried(clock, sent):
+    st = {"stalls": {"o/r#1": {"nudged_at": clock["now"] - 60}}, "stall_retries": {"o/r#1": [clock["now"] - 30]}}
+    dispatch.check_stalled([_card()], {**st, **_idle(clock, 25)})
+    assert alerts.get("stalled:o/r#1")["tried"] == "nudged, retried 1 time today"
+    st["stall_retries"]["o/r#1"].append(clock["now"] - 10)
+    dispatch.check_stalled([_card()], {**st, **_idle(clock, 25)})
+    assert alerts.get("stalled:o/r#1")["tried"] == "nudged, retried 2 times today"
+
+
+def test_a_stalled_alert_before_any_nudge_has_no_tried(clock, sent):
+    dispatch.check_stalled([_card()], _idle(clock, 25))
+    assert "tried" not in alerts.get("stalled:o/r#1")
