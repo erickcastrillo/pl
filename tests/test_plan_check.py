@@ -99,6 +99,15 @@ def test_a_depends_link_in_either_direction_clears_the_pair(board, capsys, owner
     assert code == 0 and "no unordered overlaps" in out
 
 
+def test_a_chain_of_depends_links_orders_every_pair_in_it(board, capsys):
+    a, b, c = (slice_card(n, n, "src/pl/a.py") for n in (1, 2, 3))
+    b["metadata"]["depends_on"] = [a["id"]]
+    c["metadata"]["depends_on"] = [b["id"]]
+    board.items = [a, b, c]
+    code, out = run(board, capsys)
+    assert code == 0 and "no unordered overlaps" in out
+
+
 def test_no_overlap_prints_one_line_and_exits_0(board, capsys):
     board.items = [slice_card(1, 1, "src/pl/a.py"), slice_card(2, 2, "src/pl/b.py")]
     code, out = run(board, capsys)
@@ -107,7 +116,7 @@ def test_no_overlap_prints_one_line_and_exits_0(board, capsys):
 
 
 def test_whatsnew_and_changelog_do_not_count(board, capsys):
-    where = "src/pl/whatsnew.py, CHANGELOG.md, docs/CHANGELOG.md"
+    where = "src/pl/whatsnew.d/2026-10-27-0900-x.toml, CHANGELOG.md, docs/CHANGELOG.md"
     board.items = [slice_card(1, 1, where), slice_card(2, 2, where)]
     assert run(board, capsys)[0] == 0
 

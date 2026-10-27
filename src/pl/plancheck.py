@@ -6,13 +6,13 @@ from itertools import combinations
 from pl import board
 from pl.util import short_id
 
-APPEND_ONLY = ("src/pl/whatsnew.py",)
+APPEND_ONLY = ("src/pl/whatsnew.d/",)
 PATH_RE = re.compile(r"[\w.-]+(?:/[\w.-]+)+\.\w+")
 LATER_RE = re.compile(r"\(Plan\s+\d+,\s*([^)\s]+)\s*\)")
 
 
 def counts(path):
-    return path not in APPEND_ONLY and not path.rsplit("/", 1)[-1].startswith("CHANGELOG")
+    return not path.startswith(APPEND_ONLY) and not path.rsplit("/", 1)[-1].startswith("CHANGELOG")
 
 
 def _paths(text):
@@ -52,17 +52,30 @@ def files_by_card(cs):
     return files
 
 
-def _linked(a, b):
-    return b["id"] in ((a.get("metadata") or {}).get("depends_on") or [])
+def _depends_on(card):
+    return (card.get("metadata") or {}).get("depends_on") or []
+
+
+def _reaches(a, b, by_id):
+    seen, todo = set(), [a]
+    while todo:
+        for dep in _depends_on(todo.pop()):
+            if dep == b["id"]:
+                return True
+            if dep not in seen and dep in by_id:
+                seen.add(dep)
+                todo.append(by_id[dep])
+    return False
 
 
 def overlaps(cs):
     cs = sorted(cs, key=board.plan_order)
     files = files_by_card(cs)
+    by_id = {c["id"]: c for c in cs}
     rows = []
     for a, b in combinations(cs, 2):
         shared = sorted(f for f in files[a["id"]] & files[b["id"]] if counts(f))
-        if shared and not _linked(a, b) and not _linked(b, a):
+        if shared and not _reaches(a, b, by_id) and not _reaches(b, a, by_id):
             rows.append({"a": a["id"], "b": b["id"], "files": shared})
     return rows
 

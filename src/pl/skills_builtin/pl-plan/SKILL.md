@@ -50,7 +50,7 @@ record each decision you had to make in the plan, with the option you picked.
    if it refuses, note it under Decisions and go on.
    4. If `pl titles set` refuses (another card holds that plan and slice) or `pl idea` fails, stop filing: write
    the command and its error under Decisions, and never guess a number.
-   - Two slices that change the same file are built one after another. The smaller one goes first. File the other with "(after <id>)" in its idea text and run `pl depends <later id> --on <earlier id>`. Files that are only appended to (`src/pl/whatsnew.py`, `CHANGELOG*`) do not count. After filing, run `pl plan check <N>` and add a dependency for each pair it prints.
+   - Two slices that change the same file are built one after another. The smaller one goes first. File the other with "(after <id>)" in its idea text and run `pl depends <later id> --on <earlier id>`. Files that are only appended to (`src/pl/whatsnew.d/`, `CHANGELOG*`) do not count. After filing, run `pl plan check <N>` and add a dependency for each pair it prints.
    - When two behaviours need the same new groundwork (a shared module, a config key), keep them in one slice, or put the groundwork alone in the first slice, at or under 60 lines, and say why in "Decisions". Groundwork over 60 lines means the split is by layer: redo it.
    - A slice that still needs another is the exception. Name it in one `Depends on: <slice>` line under the plan's Summary. A dependency is one step: a slice never depends on a slice that itself depends on another, except a chain of slices that share a file: each depends on the one before it. Record it in the filed idea's text as "(after <id>)".
    - **Isolate high-impact changes into dedicated slices**:

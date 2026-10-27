@@ -47,7 +47,7 @@
                           show a card's sections, metadata and stage caps, or delete it
   pl plan check N [--json]
                           list slices of plan N that change the same file with no depends_on between them (append-only
-                          files, src/pl/whatsnew.py and CHANGELOG*, do not count); exits 1 when it finds any
+                          files, src/pl/whatsnew.d/ and CHANGELOG*, do not count); exits 1 when it finds any
                           (--json: a list of {a, b, files})
   pl titles check [--json] [--fix [--dry-run]]
                           list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss

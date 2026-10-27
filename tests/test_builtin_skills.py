@@ -725,7 +725,7 @@ def test_pl_plan_orders_slices_that_share_a_file():
     assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 7
     later = text.split("## Later slices")[1].split("## Decisions")[0]
     assert "files:" in later
-    for phrase in ("pl depends <later id> --on <earlier id>", "same file", "src/pl/whatsnew.py", "CHANGELOG",
+    for phrase in ("pl depends <later id> --on <earlier id>", "same file", "src/pl/whatsnew.d/", "CHANGELOG",
                    "pl plan check <N>"):
         assert phrase in text
     assert "can merge in any order." not in text
