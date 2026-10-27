@@ -81,7 +81,7 @@ HELP = {
     "cards": "Every card by column. A card that waits on you shows approve and send back in the footer; the details are on the right.",
     "waiting": "Everything that waits on you, oldest first. a approves, x sends back, Enter opens.",
     "prs": "Pull requests by what they need: a decision, a merge, a rework, or only a wait.",
-    "loops": "Running: the loops that keep the pipeline moving and the agents working in the background, with what each is doing and when it last ran.",
+    "loops": "Running: the loops that keep the pipeline moving and the agents working in the background.",
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",

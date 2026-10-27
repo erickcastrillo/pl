@@ -2610,8 +2610,8 @@ async def test_palette_finds_a_tab_by_name(monkeypatch):
     async with app.run_test(size=(176, 80)) as pilot:
         await settle(pilot)
         commands = _palette(app)
-        assert "Loops tab (5)" in commands
-        commands["Loops tab (5)"].callback()
+        assert "Running tab (5)" in commands
+        commands["Running tab (5)"].callback()
         await settle(pilot)
         assert app.active_tab == "loops"
 
@@ -2649,7 +2649,7 @@ async def test_palette_switches_tab_then_runs_the_action(monkeypatch):
         await settle(pilot)
         ran = []
         monkeypatch.setattr(PlApp, "run_action", lambda self, action, node: ran.append((self.active_tab, action)) or _done())
-        row = next(c for t, c in _palette(app).items() if t.startswith("pause") and "Loops" in c.help)
+        row = next(c for t, c in _palette(app).items() if t.startswith("pause") and "Running" in c.help)
         row.callback()
         await settle(pilot)
         assert app.active_tab == "loops" and ran and ran[0][0] == "loops"
@@ -2681,8 +2681,8 @@ async def test_palette_omits_an_action_disabled_on_another_tab(monkeypatch):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 80)) as pilot:
         await settle(pilot)
-        assert not [c for t, c in _palette(app).items() if t.startswith("pause") and "Loops" in c.help]
-        assert [c for t, c in _palette(app).items() if t.startswith("run now") and "Loops" in c.help]
+        assert not [c for t, c in _palette(app).items() if t.startswith("pause") and "Running" in c.help]
+        assert [c for t, c in _palette(app).items() if t.startswith("run now") and "Running" in c.help]
 
 
 async def test_palette_keeps_existing_entries(monkeypatch):
@@ -3824,8 +3824,8 @@ async def test_loops_view_lists_heading_loops_and_template_row(monkeypatch):
         await pilot.press("5")
         await settle(pilot)
         t = app.query_one("#loops-table", DataTable)
-        assert [r.key.value for r in t.ordered_rows] == ["head:loops", "loop:invoices", "loop:triage", NEW_ROW]
-        assert t.get_row_at(3)[0].plain == f"+ New loop from a template ({len(loops.TEMPLATES)})"
+        assert [r.key.value for r in t.ordered_rows] == ["head:loops", "loop:invoices", "loop:triage", "head:agents", "none:agents", NEW_ROW]
+        assert t.get_row_at(5)[0].plain == f"+ New loop from a template ({len(loops.TEMPLATES)})"
         assert app.query_one(tui_loops.LoopsView).selected()["name"] == "invoices"
         await pilot.press("up")
         await settle(pilot)
@@ -3899,8 +3899,8 @@ async def test_loops_view_with_no_loops_shows_no_loops_and_the_template_row():
         await _open_tab(pilot, app, "loops")
         t = app.query_one("#loops-table", DataTable)
         keys = [r.key.value for r in t.ordered_rows]
-        assert keys[0] == "head:loops" and keys[-1] == NEW_ROW and len(keys) == len(empty_state("loops")) + 2
-        assert all(k.startswith("none:loops") for k in keys[1:-1])
+        assert keys[0] == "head:loops" and keys[-1] == NEW_ROW and len(keys) == len(empty_state("loops")) + 4
+        assert all(k.startswith("none:loops") for k in keys[1:-3]) and keys[-3:-1] == ["head:agents", "none:agents"]
         assert t.cursor_row == len(keys) - 1 and app.query_one(LoopsView).selected() is None
         assert f"+ New loop from a template ({len(loops.TEMPLATES)})" in screen_text(app)
 
