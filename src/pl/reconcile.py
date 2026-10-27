@@ -8,6 +8,7 @@ from pl.trackers import github
 from pl.util import cmd_id, parse_iso, short_id
 
 PREFIX = "reconcile_failed:"
+RETRY_LOOKUP = 300   # seconds before a finished run agent with no PR is looked up again
 
 
 def _dispatch():
@@ -58,12 +59,16 @@ def _write(c, name, fn, active):
     except github.RateLimited:
         raise
     except (Exception, SystemExit):  # noqa: BLE001 - one card's failed write never stops the others
-        cid = c["id"]
-        active.add(f"{PREFIX}{cid}")
-        title, fix = f"Card {short_id(cid)}: pl could not {name}", f"do it by hand, then the alert clears; pl card {cmd_id(cid)}"
-        if why := alerts.open(f"{PREFIX}{cid}", "warn", title, fix, [cid]):
-            _dispatch().notify(alerts.headline(why, title), fix)
+        _fail(c, name, active)
         return False
+
+
+def _fail(c, name, active):
+    cid = c["id"]
+    active.add(f"{PREFIX}{cid}")
+    title, fix = f"Card {short_id(cid)}: pl could not {name}", f"do it by hand, then the alert clears; pl card {cmd_id(cid)}"
+    if why := alerts.open(f"{PREFIX}{cid}", "warn", title, fix, [cid]):
+        _dispatch().notify(alerts.headline(why, title), fix)
 
 
 def _move(c, col, changes, active):
@@ -98,7 +103,20 @@ def _fix_labels(c, url, changes, active):
     return True
 
 
-def _card(c, reg, done, active):
+def _lookup(c, col, empty):
+    """The PR found by branch for a card not yet in its done column, asking GitHub at most once per RETRY_LOOKUP when there is none."""
+    now = alerts._clock()
+    if col == C.STAGE_DONE_AT["run"] or now - empty.get(c["id"], -RETRY_LOOKUP) < RETRY_LOOKUP:
+        return None
+    url = _branch_pr(c)
+    if url:
+        empty.pop(c["id"], None)
+    else:
+        empty[c["id"]] = now
+    return url
+
+
+def _card(c, reg, done, active, empty):
     """Apply the missing writes of one finished stage agent. True when the card reached its done state."""
     d, m = _dispatch(), c.get("metadata") or {}
     w, cid = m.get("worker") or {}, c["id"]
@@ -111,7 +129,7 @@ def _card(c, reg, done, active):
             return
         ok = _finished(w, reg) and _move(c, C.STAGE_DONE_AT[stage], changes, active)
     elif stage == "run" and col in ("Approved", "In progress", C.STAGE_DONE_AT["run"]):
-        if not _finished(w, reg) or not (url := (m.get("pr_urls") or [None])[-1] or (_branch_pr(c) if col != C.STAGE_DONE_AT["run"] else None)):
+        if not _finished(w, reg) or not (url := (m.get("pr_urls") or [None])[-1] or _lookup(c, col, empty)):
             return
         ok = _link(c, url, changes, active)
         if ok and col != C.STAGE_DONE_AT["run"]:
@@ -129,13 +147,19 @@ def sweep(all_cards, reg, st):
     """One pass over the cards with a finished stage agent: make the board and the PR match the stage's done state."""
     if pipeline.is_config():
         return
-    done, active = st.get("reconciled") or {}, set()
+    done, active, empty = st.get("reconciled") or {}, set(), st.get("reconcile_empty") or {}
     try:
         for c in all_cards:
-            _card(c, reg, done, active)
+            try:
+                _card(c, reg, done, active, empty)
+            except github.RateLimited:
+                raise
+            except (Exception, SystemExit):  # noqa: BLE001 - one card's failed GitHub read never stops the others
+                _fail(c, "read its pull request from GitHub", active)
     except github.RateLimited as e:
         print(f"reconcile: waiting for the GitHub budget ({e})", file=sys.stderr)
         active.update(a["key"] for a in alerts.listing() if a["key"].startswith(PREFIX))   # a hold resolves nothing
     ids = {c["id"] for c in all_cards}
     st["reconciled"] = {k: v for k, v in done.items() if k in ids}
+    st["reconcile_empty"] = {k: v for k, v in empty.items() if k in ids}
     alerts.sweep(PREFIX, active, _dispatch().notify)

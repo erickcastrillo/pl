@@ -150,6 +150,36 @@ def test_failed_label_write_opens_alert_once_then_resolves(world):
     assert _keys() == [] and len(world.sent) == 1
 
 
+def test_failing_github_read_on_one_card_does_not_stop_the_others(world, monkeypatch):
+    world.word = "finished"
+    real = github._gh
+
+    def gh(args):
+        if args[:2] == ["pr", "view"] and args[2] == PR:
+            raise SystemExit("gh: not found")
+        return real(args)
+    monkeypatch.setattr(github, "_gh", gh)
+    other = "https://github.com/o/r/pull/10"
+    cs = [_card("o/r#1", col="PR open", pr_urls=[PR]), _card("o/r#2", col="In progress", pr_urls=[other])]
+    reconcile.sweep(cs, {}, {})
+    assert world.moves == [("o/r#2", "PR open")]
+    assert _keys() == ["reconcile_failed:o/r#1"] and len(world.sent) == 1
+
+
+def test_empty_branch_lookup_is_retried_only_after_a_few_minutes(world):
+    world.word, world.listed = "finished", []
+    world.trees = [{"path": Path("/w/x"), "branch": "pl/add-widget"}]
+    st = {}
+    c = _card()
+    reconcile.sweep([c], {}, st)
+    reconcile.sweep([c], {}, st)
+    lists = lambda: [a for a in world.gh if a[:2] == ["pr", "list"]]   # noqa: E731
+    assert len(lists()) == 1
+    world.now += 600
+    reconcile.sweep([c], {}, st)
+    assert len(lists()) == 2
+
+
 def test_budget_hold_opens_no_alert(world):
     world.word, world.budget = "finished", True
     st = {}

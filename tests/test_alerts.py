@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from pl import accounts, alerts, dispatch, memory, usage
+from pl import accounts, alerts, dispatch, memory, reconcile, usage
 from pl import config as C
 from pl.trackers.github import RateLimited
 
@@ -140,6 +140,7 @@ def _pass(monkeypatch, cs, status="none", screen=None, parked=(), healthy="acme"
     for name in ("sweep_untracked", "mirror_to_product", "ensure_services"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append((t, m)))
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": loops or {}})
     dispatch.dispatch_once(1, False, pull=False)
@@ -219,6 +220,7 @@ def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatc
     notes = []
     monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append((t, m)))
     monkeypatch.setattr(dispatch, "paused", lambda: None)
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     C.SERVICES = {"review": {"prompt": "/loop 30m /pl-review", "profile": "acme"},
@@ -240,6 +242,7 @@ def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatc
 def test_a_stale_loop_is_not_alerted_while_paused(monkeypatch):
     monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
     monkeypatch.setattr(dispatch, "paused", lambda: {"since": "x"})
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     C.SERVICES = {"review": {"prompt": "/loop 30m /pl-review", "profile": "acme"}}
@@ -366,6 +369,7 @@ def test_a_spec_agent_stuck_on_a_weekly_limit_moves_to_the_other_account(monkeyp
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: calls.append(("tmux", *a)) or "")
     for name in ("sweep_untracked", "mirror_to_product", "ensure_services", "notify"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     dispatch.dispatch_once(1, False, pull=False)
