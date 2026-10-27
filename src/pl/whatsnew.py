@@ -300,6 +300,8 @@ ENTRIES = [
     _e("2026-10-26.78", "Extend shows your pipeline's pod first", "Extend tab (press 6): Active pod", "pl pods show"),
     _e("2026-10-26.79", "Add a chat connector from the console",
        "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
+    _e("2026-10-26.80", "Customer-support pipeline template: triage and owner-approved replies",
+       "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
 ]
 
 
