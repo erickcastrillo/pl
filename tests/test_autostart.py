@@ -13,6 +13,7 @@ from pl.tui.app import PlApp
 from pl.tui.review import ConfirmScreen
 from textual.worker import WorkerCancelled
 from test_tui_views import fake_data
+from tui_wait import wait_until
 
 FAKE_TMUX = """#!{py}
 import json, os, sys
@@ -76,11 +77,21 @@ async def drain(pilot):
             pass
 
 
-async def settle(pilot):
+async def settle(pilot, condition=None, what="the console to settle"):
     await drain(pilot)
-    await pilot.pause()
-    await drain(pilot)
-    await pilot.pause()
+    if condition is None:
+        # nothing to observe here: the test checks that something did NOT happen (no tmux call, no stop); one queue drain after the workers are done
+        await pilot.pause()
+    else:
+        await wait_until(pilot, condition, what)
+
+
+def ready(app):
+    return app.query("#header")
+
+
+def window_bar(app):
+    return str(app.query_one("#window-bar").render())
 
 
 def header(app):
@@ -91,7 +102,7 @@ async def test_not_running_starts_one_detached_dispatcher_with_the_profile_env(t
     monkeypatch.setattr(dispatch, "dispatcher_running", lock_taken_by_fake_tmux(tmp_path))
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: starts(tmp_path) and "dispatcher: started" in header(app), "the dispatcher to be started and said so")
         got = starts(tmp_path)
         assert got == [["new-session", "-d", "-s", "pl-work", "-n", "dispatch", "-e", f"PL_CONFIG_DIR={profile}",
                         "--", sys.executable, "-m", "pl", "dispatch"]]
@@ -103,7 +114,7 @@ async def test_session_exists_opens_a_window_not_a_session(tmp_path, profile, mo
     C.GH_CONFIG_DIR = profile / "gh"
     monkeypatch.setattr(dispatch, "dispatcher_running", lock_taken_by_fake_tmux(tmp_path))
     async with PlApp(snapshot_provider=fake_data, autostart=True).run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: starts(tmp_path), "tmux to be asked for a window")
         assert starts(tmp_path) == [["new-window", "-d", "-t", "=pl-work:", "-n", "dispatch",
                                      "-e", f"PL_CONFIG_DIR={profile}", "-e", f"GH_CONFIG_DIR={profile / 'gh'}",
                                      "--", sys.executable, "-m", "pl", "dispatch"]]
@@ -137,7 +148,7 @@ async def test_start_failure_shows_the_reason_and_the_app_lives(tmp_path, profil
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "dispatcher: failed to start" in header(app), "the start failure in the header")
         assert app.is_running
         assert "dispatcher: failed to start" in header(app) and "no server running" in header(app)
         assert "Traceback" not in header(app)
@@ -147,7 +158,7 @@ async def test_started_but_lock_never_taken_is_a_failure(tmp_path, profile, monk
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "dispatcher: failed to start" in header(app), "the start failure in the header")
         assert len(starts(tmp_path)) == 1
         assert "dispatcher: failed to start" in header(app)
 
@@ -157,7 +168,7 @@ async def test_paused_profile_starts_anyway_and_says_paused(tmp_path, profile, m
     monkeypatch.setattr(dispatch, "dispatcher_running", lock_taken_by_fake_tmux(tmp_path))
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "dispatcher: started" in header(app) and "paused" in header(app), "the started and paused note in the header")
         assert len(starts(tmp_path)) == 1
         assert "dispatcher: started" in header(app) and "paused" in header(app)
 
@@ -167,25 +178,26 @@ async def test_stop_key_asks_then_sends_ctrl_c_to_this_profiles_dispatch_window_
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: not any(c[0] == "send-keys" for c in calls(tmp_path)))
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the stop confirmation")
         assert isinstance(app.screen, ConfirmScreen) and "work" in app.screen.message
         assert calls(tmp_path) == []            # nothing sent before the answer
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: "dispatcher: stopped" in header(app), "the stopped note in the header")
         assert calls(tmp_path) == [["send-keys", "-t", "=pl-work:dispatch", "C-c"]]
         assert "dispatcher: stopped" in header(app)
 
 
 async def test_stop_key_answered_no_sends_nothing(tmp_path, profile, monkeypatch):
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
-    async with PlApp(snapshot_provider=fake_data, autostart=False).run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+    app = PlApp(snapshot_provider=fake_data, autostart=False)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: ready(app), "the console to mount")
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the stop confirmation")
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: len(app.screen_stack) == 1, "the confirmation to close")
         assert calls(tmp_path) == []
 
 
@@ -205,7 +217,7 @@ async def test_start_key_starts_it_by_hand_even_with_autostart_off(tmp_path, pro
         await settle(pilot)
         assert calls(tmp_path) == []
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: len(starts(tmp_path)) == 1 and "dispatcher: started" in header(app), "the dispatcher to be started by hand")
         assert len(starts(tmp_path)) == 1 and "dispatcher: started" in header(app)
 
 
@@ -237,7 +249,7 @@ async def test_started_note_names_the_dispatchers_pid(tmp_path, profile, monkeyp
     monkeypatch.setattr(dispatch, "dispatcher_running", lock_taken_by_fake_tmux(tmp_path))
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "dispatcher: started (pid 4242)" in header(app), "the started note with the pid")
         assert "dispatcher: started (pid 4242)" in header(app)
 
 
@@ -248,7 +260,7 @@ async def test_autostart_and_the_key_together_start_one_dispatcher(tmp_path, pro
     async with app.run_test(size=(176, 48)) as pilot:
         app.dispatcher_job("start")
         app.dispatcher_job("start")
-        await settle(pilot)
+        await settle(pilot, lambda: starts(tmp_path), "tmux to be asked for a window")
         assert len(starts(tmp_path)) == 1
 
 
@@ -279,7 +291,7 @@ async def test_the_dashboard_shows_a_fresh_machine_status_and_not_a_stale_one(tm
         assert "machine" in data and (data["machine"] is not None) is shown
         app = PlApp(snapshot_provider=lambda: {**fake_data(), "machine": data["machine"]}, autostart=False)
         async with app.run_test(size=(176, 48)) as pilot:
-            await settle(pilot)
+            await settle(pilot, lambda: ('machine: 2 profiles, 5/8 agents, 38% agent memory' in window_bar(app)) is shown and window_bar(app), "the machine status in the window bar")
             bar = str(app.query_one("#window-bar").render())
             assert ("machine: 2 profiles, 5/8 agents, 38% agent memory" in bar) is shown
             assert ("10 live agents" in bar) is shown
@@ -305,22 +317,26 @@ async def test_a_managed_machine_starts_the_manager_never_the_dispatcher(tmp_pat
     status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "manager: started (pid 9)" in header(app), "the started note in the header")
         assert got == ["start"] and starts(tmp_path) == []
         assert "manager: started (pid 9)" in header(app)
         await pilot.press("D")                  # D on a managed machine: this profile's dispatcher only
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, DispatcherChoice), "the DispatcherChoice screen")
         assert isinstance(app.screen, DispatcherChoice)
         assert 'dispatcher of profile "work"' in app.screen.message and "pl manager stop" in app.screen.message
         await pilot.press("s")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the stop confirmation")
         assert got == ["start"] and isinstance(app.screen, ConfirmScreen)      # s asks once more
         assert app.screen.message == ('Stop the dispatcher of work? It stays stopped until you restart it. y/n')
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: len(app.screen_stack) == 1, "the stop confirmation to close")
         assert got == ["start"] and len(app.screen_stack) == 1                 # n: nothing written
-        await pilot.press("D", "s", "y")
-        await settle(pilot)
+        await pilot.press("D")
+        await settle(pilot, lambda: isinstance(app.screen, DispatcherChoice), "the DispatcherChoice screen")
+        await pilot.press("s")
+        await settle(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the stop confirmation")
+        await pilot.press("y")
+        await settle(pilot, lambda: got == ["start", ("stop", "work")] and "manager: stop work" in header(app), "the stop to be asked of the manager")
         assert got == ["start", ("stop", "work")] and "manager: stop work" in header(app)   # never manager.stop
 
 
@@ -335,19 +351,19 @@ async def test_d_on_a_running_managed_dispatcher_offers_restart_and_twice_never_
     status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, DispatcherChoice), "the DispatcherChoice screen")
         assert isinstance(app.screen, DispatcherChoice) and "Restart" in app.screen.message
         await pilot.press("r")
-        await settle(pilot)
+        await settle(pilot, lambda: got == [("restart", "work")], "the restart to be asked of the manager")
         assert got == [("restart", "work")]
         await pilot.press("D", "D")             # D twice: the second D lands on the open choice and does nothing
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, DispatcherChoice) and len(app.screen_stack) == 2, "the choice to open")
         assert isinstance(app.screen, DispatcherChoice) and len(app.screen_stack) == 2
         assert app.check_action("dispatcher", ()) is False   # refused while the choice is open
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: len(app.screen_stack) == 1, "the choice to close")
         assert got == [("restart", "work")] and not isinstance(app.screen, DispatcherChoice)
 
 
@@ -360,16 +376,16 @@ async def test_d_reads_the_status_fresh_a_pending_stop_counts_as_stopped(tmp_pat
     status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
         (manager.machine_dir() / "stop").mkdir(exist_ok=True)
         (manager.machine_dir() / "stop" / "work").touch()   # s was pressed; the manager has not ticked yet
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: got == [("restart", "work")], "the restart to be asked of the manager")
         assert got == [("restart", "work")]   # starts it again, never a second stop
         status([{"name": "work", "running": False, "stopped": True}])
         (manager.machine_dir() / "stop" / "work").unlink()
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: got == [("restart", "work")] * 2, "the second restart to be asked of the manager")
         assert got == [("restart", "work")] * 2
 
 
@@ -381,7 +397,7 @@ async def test_console_start_asks_an_older_manager_to_restart_and_says_so(tmp_pa
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "pl updated to v0.2.0 — background processes restarted" in notes, "the update note")
         assert "pl updated to v0.2.0 — background processes restarted" in notes
 
 
@@ -394,9 +410,9 @@ async def test_d_on_a_managed_profile_whose_dispatcher_is_stopped_asks_the_manag
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: got == [("restart", "work")] and "manager: restart work" in header(app), "the restart to be asked of the manager")
         assert got == [("restart", "work")] and not isinstance(app.screen, ConfirmScreen)
         assert "manager: restart work" in header(app)
         assert [b.description for b in app.BINDINGS if b.key == "D"] == ["dispatcher (this profile)"]
@@ -412,10 +428,10 @@ async def test_d_on_a_profile_the_manager_does_not_manage_drives_its_own_dispatc
     monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
         assert got == []                        # autostart = false: nothing on mount
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: got == ["dispatcher"], "the dispatcher to be started by hand")
         assert got == ["dispatcher"]
 
 
@@ -430,9 +446,9 @@ async def test_d_restarts_a_profile_the_manager_gave_up_on(tmp_path, monkeypatch
     monkeypatch.setattr(manager, "stop", lambda all_=False: got.append("stop"))
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
         await pilot.press("D")
-        await settle(pilot)
+        await settle(pilot, lambda: got == ["work"] and "manager: restarting work" in header(app), "the restart to be asked of the manager")
         assert got == ["work"] and not isinstance(app.screen, ConfirmScreen)
         assert "manager: restarting work" in header(app)
 
@@ -446,7 +462,7 @@ async def test_a_missing_machine_toml_starts_the_manager_never_a_lone_dispatcher
     monkeypatch.setattr(dispatch, "start_dispatcher", lambda: got.append("dispatcher"))
     app = PlApp(snapshot_provider=fake_data, autostart=True)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: got == ["manager"] and "manager: started (pid 9)" in header(app), "the manager to be started and said so")
         assert got == ["manager"] and starts(tmp_path) == []
         assert "manager: started (pid 9)" in header(app)
 
@@ -456,7 +472,7 @@ async def test_manager_enabled_false_starts_the_lone_dispatcher(tmp_path, monkey
     monkeypatch.setattr(manager, "start", lambda: got.append("manager"))
     monkeypatch.setattr(dispatch, "dispatcher_running", lock_taken_by_fake_tmux(tmp_path))
     async with PlApp(snapshot_provider=fake_data, autostart=True).run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: len(starts(tmp_path)) == 1, "tmux to be asked for a window")
         assert got == [] and len(starts(tmp_path)) == 1
 
 
@@ -469,6 +485,7 @@ def test_manager_start_writes_machine_toml_with_the_defaults(tmp_path, monkeypat
 
 
 async def test_the_console_names_itself_as_the_source_of_a_stop_and_the_header_says_who(tmp_path, monkeypatch):
+    from pl.tui.app import DispatcherChoice
     from pl.tui.chrome import header_text
     machine(tmp_path, toml=True)
     sources = []
@@ -478,9 +495,13 @@ async def test_the_console_names_itself_as_the_source_of_a_stop_and_the_header_s
     status([{"name": "work", "running": True, "stopped": False}])
     app = PlApp(snapshot_provider=fake_data, autostart=False)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        await pilot.press("D", "s", "y")
-        await settle(pilot)
+        await settle(pilot, lambda: ready(app), "the console to mount")
+        await pilot.press("D")
+        await settle(pilot, lambda: isinstance(app.screen, DispatcherChoice), "the DispatcherChoice screen")
+        await pilot.press("s")
+        await settle(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the stop confirmation")
+        await pilot.press("y")
+        await settle(pilot, lambda: sources == ["console-D"], "the stop to be asked of the manager")
         assert sources == ["console-D"]
     data = {"snapshot": {"disp": "stopped", "prof": "p", "summary": "", "at": "t"},
             "machine": {"profiles": [{"name": "work", "stopped": True, "stopped_by": "console-D", "stopped_at": 1}]}}
