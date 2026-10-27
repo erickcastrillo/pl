@@ -215,3 +215,86 @@ def test_ac6_no_agent_dry_run_line_is_unchanged_generic(monkeypatch, capsys):
     monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
     monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
     assert _dry_line(capsys, "prepare") == "  would start prepare-card-1 under claude model sonnet (account claude): /pl-stage o/r#1 stage=prepare\n"
+
+
+COPYWRITER = {"name": "marketing-copywriter", "source": "built-in", "instructions": "Write warm copy.",
+              "skills": ["pl-stage"], "connector_roles": ["messaging"], "model": "sonnet", "approval": [], "pod": None}
+
+
+def _agent_stage(monkeypatch, tmp_path, agent=COPYWRITER, name="marketing-copywriter"):
+    stage = {**SALES["stages"]["prepare"], "agent": name}
+    C.PIPELINE, C.COLUMNS = {**SALES, "stages": {"prepare": stage}}, SALES["columns"]
+    C.STAGES = {"prepare": {"agent": name}}
+    C.PROFILES = {"claude": tmp_path / ".claude", "codex-a": tmp_path / ".codex"}
+    C.ACCOUNTS = {"claude": {"harness": "claude"}, "codex-a": {"harness": "codex"}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: {agent["name"]: agent} if agent else {})
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("opus", "account claude"))
+
+
+def _real_start(monkeypatch):
+    """start_worker for real with tmux and the launch faked; (launch_script kwargs, update metadata) lists."""
+    kws, metas = [], []
+    monkeypatch.setattr(C, "TMUX_SESSION", "pl-t", raising=False)
+    monkeypatch.setattr(C, "WORK_DIR", "/w", raising=False)
+    monkeypatch.setattr(C, "ATTENTION", None, raising=False)
+    monkeypatch.setattr(dispatch.harnesses, "unattended", lambda h: h)
+    monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: kws.append(kw) or "")
+    monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, s, p, **kw: p)
+    monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: argparse.Namespace(returncode=0))
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "%1")
+    monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: metas.append(f.get("metadata")))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    return kws, metas
+
+
+def test_ac2_launch_offers_exactly_the_agent_skills(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    kws, _ = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert kws[0]["pod"]["skills"] == ["pl-stage"] and kws[0]["pod"]["name"] == "agent-marketing-copywriter"
+    assert kws[0]["pod"]["roles"] == ["messaging"]
+
+
+def test_ac3_agent_model_is_used_and_reason_names_agent(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["model"], w["model_reason"], w["agent"]) == ("sonnet", "agent marketing-copywriter", "marketing-copywriter")
+    assert kws[0]["model"] == "sonnet"
+
+
+def test_ac3_agent_account_moves_the_harness(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "model": "codex-a"})
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["harness"], w["profile"], w["model_reason"]) == ("codex", "codex-a", "agent marketing-copywriter")
+    assert "model" not in kws[0]
+
+
+def test_ac4_agent_without_model_keeps_stage_model_and_reason(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "model": None})
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["model"], w["model_reason"], w["profile"]) == ("opus", "account claude", "claude")
+    assert "model" not in kws[0]
+
+
+def test_a_stage_without_an_agent_passes_no_agent_keywords(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    C.PIPELINE["stages"]["prepare"].pop("agent")
+    C.STAGES = {"prepare": {}}
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert not {"pod", "model"} & kws[0].keys() and "agent" not in metas[0]["worker"]
+
+
+def test_with_model_override_wins_only_for_a_valid_model_name(monkeypatch):
+    h = dispatch.harnesses.get("claude")
+    flags = lambda model: dispatch.harnesses._with_model(h.interactive, h, "claude", None, model=model)[1]["model"]
+    assert flags("haiku") == "haiku"
+    assert flags("bad name;") != "bad name;"
