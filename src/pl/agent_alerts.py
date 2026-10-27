@@ -14,6 +14,7 @@ BLOCK_LINES = 8
 TITLE_WIDTH = 80
 NUDGE = "pl: this stage looks stalled. Finish it now, or write one line saying what blocks you."
 STALL_RETRIES = 2   # restarts of a stalled stage per card per day, then the alert only
+NUDGE_ECHO_SLACK = 60   # idle this close to the time since the nudge means only the nudge's own echo moved the pane
 KINDS = ("agent_waiting:", "agent_unmoved:", "agent_blocked_dep:")
 
 
@@ -142,9 +143,12 @@ def stall(c, w, reg, st, seen):
         rec = {"session": w.get("session_id")}
     seen[cid] = rec
     idle, limit = agents.idle_seconds(w, reg, st), (C.DISPATCH.get("stall_minutes") or 0) * 60
-    if not limit or idle is None or idle < limit or _excused(c, w, agent_screen.read(w["pane"])[1]):
+    if not limit or idle is None or _excused(c, w, agent_screen.read(w["pane"])[1]) or (
+            idle < limit and idle < now - rec.get("nudged_at", now) - NUDGE_ECHO_SLACK):
         rec.pop("nudged_at", None)   # working or waiting again: the next stall starts with a fresh nudge
         rec.pop("reported", None)
+        return False
+    if idle < limit:
         return False
     if not rec.get("reported"):
         rec["reported"] = True

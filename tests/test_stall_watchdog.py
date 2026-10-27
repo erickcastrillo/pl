@@ -162,3 +162,27 @@ def test_a_finished_agent_is_not_nudged(fake):
     fake.word = "finished"
     fake.run([_card()])
     assert not fake.nudges() and not fake.kinds("stalled")
+
+
+def test_the_nudges_own_echo_does_not_cancel_the_restart(fake):
+    limit = C.DISPATCH["stall_minutes"] * 60
+    fake.run([_card()])
+    fake.idle = 5   # the typed nudge reset the pane's activity clock
+    fake.now += 5
+    fake.run([_card()])
+    fake.now += limit - 5
+    fake.idle = limit   # quiet again since the echo
+    fake.run([_card()])
+    assert fake.stops == [("%1", "s1")] and len(fake.nudges()) == 1
+
+
+def test_real_activity_after_the_nudge_clears_it(fake):
+    limit = C.DISPATCH["stall_minutes"] * 60
+    fake.run([_card()])
+    fake.now += limit // 2
+    fake.idle = 10   # the agent did something well after the nudge
+    fake.run([_card()])
+    fake.now += limit
+    fake.idle = limit
+    fake.run([_card()])
+    assert not fake.stops and len(fake.nudges()) == 2
