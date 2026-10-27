@@ -32,6 +32,15 @@ def no_real_screen_reads(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_reconcile_in_dispatch_passes(monkeypatch):
+    """A dispatcher pass in a test does not reconcile finished agents (it would read fake panes and open alerts the
+    test does not expect); tests/test_reconcile.py calls reconcile.sweep itself."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "reconcile", types.SimpleNamespace(sweep=lambda *a, **k: None))
+
+
+@pytest.fixture(autouse=True)
 def no_real_idle_clock(monkeypatch):
     """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
     from pl import agents

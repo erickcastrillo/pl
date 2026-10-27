@@ -20,6 +20,8 @@ COMMANDS = {
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
     "ConnectorsPanel.chat_add": "pl chat add ADAPTER --token-env VAR --allow ID --name NAME --yes",
     "ConnectorsPanel.chat_test": "pl chat test NAME",
+    "ConnectorsPanel.route": "pl chat route KIND NAME...",
+    "ConnectorsPanel.remove": "pl chat remove NAME --yes",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardScreen.approve": "pl approve <id>",
     "CardScreen.send_back": "pl reject <id> NOTES",

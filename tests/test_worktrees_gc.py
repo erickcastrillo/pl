@@ -117,3 +117,37 @@ def test_worktrees_gc_yes_removes_and_reports_space(env, capsys):
     assert any("prune" in c for c in env["calls"])
     out = capsys.readouterr().out
     assert "removed 1" in out and "kept 1" in out and "failed 1" in out and "freed" in out
+
+
+def test_gc_yes_keeps_live_agent_worktree_in_any_column(env, capsys):
+    env["alive"] = True
+    for name, column in (("busy", "In progress"), ("fin", "Done")):
+        env["make"](f"r-pl-{name}")
+    env["cards"] = [card("busy", "In progress", {"pane": "%1"}), card("fin", "Done", {"pane": "%2"})]
+    worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
+    assert not any("remove" in c for c in env["calls"])
+    assert all(r["reason"] == "agent running" for r in worktrees.inventory())
+    assert capsys.readouterr().out.count("removed 0, kept 2") == 1
+
+
+def test_gc_keeps_held_agent_worktree(env):
+    env["make"]("r-pl-wait")
+    env["cards"] = [card("wait", "In progress", {"trust_wait": "/x"})]
+    row = by_name(worktrees.inventory())["r-pl-wait"]
+    assert (row["action"], row["reason"]) == ("keep", "agent held")
+
+
+def test_gc_yes_writes_worktree_cleanup_event(env, tmp_path):
+    from pl import events
+    C.STATE_DIR = tmp_path / "state"
+    env["make"]("r-pl-fin"); env["make"]("r-pl-bad")
+    env["cards"] = [card("fin", "Done"), card("bad", "Done")]
+    real = worktrees._git
+    worktrees._git = lambda argv: (1, "locked") if "remove" in argv and argv[-1].endswith("r-pl-bad") else real(argv)
+    try:
+        worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
+    finally:
+        worktrees._git = real
+    found = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
+    assert [(e["card"], e["by"]) for e in found] == [("o/r#fin", "gc")]
+    assert found[0]["path"] == str(C.WORKTREES_DIR / "r-pl-fin")

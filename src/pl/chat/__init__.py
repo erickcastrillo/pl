@@ -139,7 +139,7 @@ def cmd_chat(argv: list[str]) -> int:
     p_test = sub.add_parser("test"); p_test.add_argument("name")
     p_route = sub.add_parser("route")
     p_route.add_argument("kind", choices=["gates", "alerts", "digest"])
-    p_route.add_argument("name", nargs="+")
+    p_route.add_argument("name", nargs="*")
 
     a = ap.parse_args(argv)
     if a.action == "route":
