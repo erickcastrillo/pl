@@ -207,6 +207,7 @@ WATCHES = {
     "loop_dead": "loops that burn no tokens",
     "loop_failed": "loops that keep failing",
     "loop_stale": "loops that stopped firing",
+    "main_checkout_dirty": "stray changes in the main checkout",
     "near_cap": "cards near their token or time cap",
     "permission_wait": "waiting agents",
     "pr_person": "PRs that need a person",
