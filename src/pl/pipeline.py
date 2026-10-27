@@ -98,6 +98,12 @@ def is_config() -> bool:
     return bool(p.get("stages")) and p.get("template") != "engineering"
 
 
+def has_code() -> bool:
+    """A stage writes code (gate auto-merge or skill pl-run); no [pipeline], or one without stages, is engineering."""
+    stages = (C.PIPELINE or {}).get("stages") or {}
+    return not stages or any(s.get("gate") == "auto-merge" or s.get("skill") == "pl-run" for s in stages.values())
+
+
 def stage_at(col) -> str | None:
     return next((n for n, s in C.PIPELINE["stages"].items() if s.get("column") == col), None)
 

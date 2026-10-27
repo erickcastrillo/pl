@@ -6,7 +6,11 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
+from pl import pipeline
 
+
+UNUSED = "not used in this pipeline"
+CODE_VIEWS = ("prs",)   # engineering-only views, hidden when the pipeline has no code stage
 
 GROUPS = [
     ("dashboard", "Dashboard", [("dashboard", "Dashboard")]),
@@ -143,7 +147,7 @@ def tabs():
     from pl.tui import getstarted
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
     return [(vid, name) for vid, name in TABS
-            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid not in CODE_VIEWS or pipeline.has_code()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
 
 
 def groups():
@@ -151,6 +155,11 @@ def groups():
     shown = {vid for vid, _ in tabs()}
     shown_groups = ((gid, label, [v for v in views if v[0] in shown]) for gid, label, views in GROUPS)
     return [g for g in shown_groups if g[2]]
+
+
+def unused(name):
+    """True for a view this pipeline hides, so opening it gives the UNUSED notice."""
+    return name in CODE_VIEWS and not pipeline.has_code()
 
 
 def resolve(name):
