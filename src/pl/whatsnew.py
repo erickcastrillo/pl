@@ -298,7 +298,7 @@ ENTRIES = [
     _e("2026-10-26.77", "Stalled work raises an alert and a notification",
        "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
     _e("2026-10-26.78", "Extend shows your pipeline's pod first", "Extend tab (press 6): Active pod", "pl pods show"),
-    _e("2026-10-26.74", "Add a chat connector from the console",
+    _e("2026-10-26.79", "Add a chat connector from the console",
        "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
 ]
 
