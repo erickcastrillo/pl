@@ -1311,11 +1311,13 @@ async def test_harness_agent_kind_shows_as_subagent(home):
         assert kind_of["alpha"] == "skill" and kind_of["deploy"] == "command"
 
 
-def test_skills_title_and_palette_say_subagents():
+async def test_skills_title_and_palette_say_subagents():
     from pl.tui import chrome
     from pl.tui.app import PlApp, VIEWS
-    pane = VIEWS["skills"]()
-    assert pane.border_title == "Skills, subagents and commands (every account)"
+    assert VIEWS["skills"]().border_title == "Skills, subagents and commands (every account)"
     assert "skills, subagents and commands" in chrome.HELP["skills"]
-    descriptions = [c.help for c in PlApp(snapshot_provider=lambda: {}).get_system_commands(None) if c.title.startswith("Skills")]
-    assert any("skills, subagents and commands" in d for d in descriptions)
+    app = PlApp(snapshot_provider=lambda: {})
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        helps = [c.help for c in app.get_system_commands(app.screen) if c.title.startswith("Skills")]
+    assert any("skills, subagents and commands" in h for h in helps)
