@@ -38,13 +38,25 @@ such choice in the pull request description.
    pl move <id> "In progress"
    ```
 
-2. pl started you in this card's worktree; its path is the `worktree=<path>` argument. Check it with
-   `git rev-parse --show-toplevel` and `git rev-parse --git-common-dir`. If the common dir is this folder's own
-   `.git` (this is the main checkout, not a worktree), or the top level is not the `worktree=` path, stop: write
-   the error as your last message and do nothing else. Do not make a branch or worktree of your own and do not `cd`
-   out of this folder. Run `pl worktrees bootstrap . --card <id>`; if it reports a problem, go on with its
-   diagnostics. Your branch is the one checked out here (`git branch --show-current`); use it wherever this
-   skill says `pl/<short-name>`.
+2. Make a worktree on a new branch from the up-to-date default branch. Never work in this checkout itself.
+   Put it in the profile's worktrees folder, `$PL_WORKTREES_DIR` (pl made it and gave you access to it).
+   When that variable is empty, use `..`:
+
+   ```
+   git fetch origin
+   git worktree add -b pl/<short-name> "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" origin/<default branch>
+   ```
+
+   Then bootstrap it, so the files and dependencies the repository's `.pl/worktree.yaml` asks for are in place:
+
+   ```
+   pl worktrees bootstrap "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" --card <id>
+   ```
+
+   If bootstrap reports a problem, proceed with the diagnostics it printed; do not stop.
+
+   If the branch or worktree already exists from an earlier attempt, reuse it (`git worktree list` shows where; an
+   older one may be at `../<repo>-pl-<short-name>`) and continue where it stopped. Run every later command inside it.
 
 3. For each work package, in order (an "End-to-end tests" package comes last, as below):
    1. Write the tests the package lists. Run them and confirm they fail for the expected reason.
@@ -67,7 +79,7 @@ such choice in the pull request description.
 5. Push and open the pull request:
 
    ```
-   git push -u origin HEAD
+   git push -u origin pl/<short-name>
    gh pr create --base <default branch> --title "<card title>" --body-file <file> --assignee @me --label <review label>
    ```
 
@@ -106,7 +118,8 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
    ```
 
    Every problem it lists as still open is the work. Findings it says are fixed need nothing.
-3. Work in the folder you were started in, the pull request's branch; never make a branch or worktree. `git fetch
+3. Do not make a new branch or a new pull request. Reuse the branch's worktree (`git worktree list`), or add one from
+   `origin/<branch>` in `$PL_WORKTREES_DIR` and run `pl worktrees bootstrap <worktree path> --card <id>`. `git fetch
    origin`, then merge the pull request's base branch into it (never rebase or force-push), resolving conflicts.
 4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.
    Where a finding is marked unsure or is a product call, pick the safer behaviour and say so. When a finding

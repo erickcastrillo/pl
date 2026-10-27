@@ -199,13 +199,12 @@ def _prompt_for(monkeypatch, metadata):
     monkeypatch.setattr(dispatch.harnesses, "refuse_bypass", lambda h: None)
     monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: seen.append(p) or "")
     monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, stage, p: p)
-    monkeypatch.setattr(dispatch, "memory_arg", lambda c, stage, dry, base=None: "")
+    monkeypatch.setattr(dispatch, "memory_arg", lambda c, stage, dry: "")
     monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0))
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "%1")
     monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
-    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: ("/w", None))
     dispatch.start_worker({"id": "c" * 36, "title": "t", "metadata": metadata}, "run", 0, False)
     return seen[0]
 

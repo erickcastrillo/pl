@@ -8,7 +8,7 @@ import pytest
 from pl import config as C
 from pl import skills, whatsnew
 
-BOOTSTRAP = 'pl worktrees bootstrap . --card <id>'
+BOOTSTRAP = 'pl worktrees bootstrap "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" --card <id>'
 README = Path(__file__).resolve().parent.parent / "README.md"
 SHIPPED = skills.BUILTIN_DIR
 
@@ -50,12 +50,20 @@ def test_pl_run_line_count_within_150_lines():
 
 def test_pl_run_invokes_worktree_bootstrap_in_step_2():
     text = _run_skill()
-    step2 = text[text.index("2. pl started you"):text.index("3. For each work package")]
+    step2 = text[text.index("2. Make a worktree"):text.index("3. For each work package")]
     assert BOOTSTRAP in step2
+    assert step2.index("git worktree add") < step2.index(BOOTSTRAP)
+
+
+def test_pl_run_invokes_worktree_bootstrap_in_rework_step_3():
+    text = _run_skill()
+    rework = text[text.index("## Rework mode"):]
+    step3 = rework[rework.index("3. Do not make a new branch"):rework.index("4. For each open finding")]
+    assert "pl worktrees bootstrap" in step3 and "--card <id>" in step3
 
 
 def test_pl_run_instructs_proceeding_on_bootstrap_diagnostics():
-    assert re.search(r"reports a problem.*go on", _run_skill(), re.S | re.I)
+    assert re.search(r"bootstrap reports.*proceed", _run_skill(), re.S | re.I)
 
 
 def test_install_builtins_updates_unedited_pl_run_from_v4_to_current(lib, shipped_v4, monkeypatch):
