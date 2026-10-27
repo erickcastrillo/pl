@@ -2488,7 +2488,7 @@ async def test_footer_on_a_running_card_hides_approve_and_send_back(monkeypatch)
 
 
 @pytest.mark.parametrize("tab,key", [("dashboard", "1"), ("cards", "3"), ("prs", "4"), ("loops", "5"),
-                                     ("alerts", "7"), ("ideas", "3"), ("settings", "8"), ("home", "H")])
+                                     ("alerts", "7"), ("ideas", "3"), ("settings", "8"), ("home", "H"), ("extend", "6")])
 async def test_question_mark_opens_this_screens_help(tab, key, monkeypatch, tmp_path):
     from pl.tui.app import HelpScreen
     from pl.tui.chrome import HELP
@@ -3863,7 +3863,7 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
     assert "chase" not in (profile / "config.toml").read_text()
 
 
-EXTEND_VIEWS = ["skills", "connectors", "pods", "models", "extensions"]
+EXTEND_VIEWS = ["extend", "skills", "connectors", "pods", "models", "extensions"]
 
 
 def _fake_extend_cli(monkeypatch):
@@ -3882,11 +3882,11 @@ def _fake_extend_cli(monkeypatch):
     return calls
 
 
-def test_extend_tab_lists_its_five_sub_tabs_in_order():
+def test_extend_tab_lists_its_six_sub_tabs_in_order():
     from pl.tui.chrome import GROUP_KEYS, GROUPS
     views = next(g[2] for g in GROUPS if g[0] == "extend")
     assert [v[0] for v in views] == EXTEND_VIEWS
-    assert [v[1] for v in views] == ["Skills", "Connectors", "Pods", "Models", "Extensions"]
+    assert [v[1] for v in views] == ["Active pod", "Skills", "Connectors", "Pods", "Models", "Extensions"]
     assert GROUP_KEYS["extend"] == "6"
 
 
@@ -3895,7 +3895,7 @@ def test_a_chat_view_id_does_not_resolve():
     assert chrome.resolve("chat") is None
 
 
-async def test_six_opens_extend_on_skills(monkeypatch):
+async def test_six_opens_extend_on_the_pod(monkeypatch):
     from pl.tui.skills import SkillsView
     _fake_extend_cli(monkeypatch)
     app = PlApp(snapshot_provider=Provider())
@@ -3903,8 +3903,8 @@ async def test_six_opens_extend_on_skills(monkeypatch):
         await settle(pilot)
         await pilot.press("6")
         await settle(pilot)
-        assert app.active_tab == "skills"
-        assert app.query_one("#extend-views").query_one(SkillsView)
+        assert app.active_tab == "extend"
+        assert app.query_one("#skills").query_one(SkillsView)
 
 
 @pytest.mark.parametrize("vid,panel", [("skills", "SkillsView"), ("connectors", "ConnectorsPanel"), ("pods", "CommandPanel"),

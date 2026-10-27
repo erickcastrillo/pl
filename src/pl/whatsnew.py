@@ -289,6 +289,7 @@ ENTRIES = [
        "pl pods show marketing"),
     _e("2026-10-26.73", "Stalled work raises an alert and a notification",
        "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
+    _e("2026-10-26.74", "Extend shows your pipeline's pod first", "Extend tab (press 6): Active pod", "pl pods show"),
 ]
 
 
