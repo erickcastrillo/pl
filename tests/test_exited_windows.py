@@ -1,5 +1,5 @@
 """The dispatcher's window sweep closes an exited agent's window once nothing in it needs a person: its card moved
-on or has a newer agent. A window showing an error or a human gate is kept for release_waiting_after minutes."""
+on or has a newer agent. A window showing an error or a human gate is kept for 30 minutes."""
 import subprocess
 import time
 
@@ -129,8 +129,7 @@ def test_a_human_gate_on_an_exited_window_keeps_it_and_a_nothing_runnable_gate_d
     assert sweep.killed == ["@12"] and lines == [CLOSING + "card moved on"]
 
 
-def test_a_kept_window_closes_after_release_waiting_after_and_its_alert_clears(sweep, clock, monkeypatch):
-    monkeypatch.setitem(C.DISPATCH, "release_waiting_after", 30)
+def test_a_kept_window_closes_after_30_minutes_and_its_alert_clears(sweep, clock):
     st = {}
     sweep(_row(), [_card()], ERROR_SCREEN, st)
     clock[0] += 31 * 60
@@ -141,20 +140,19 @@ def test_a_kept_window_closes_after_release_waiting_after_and_its_alert_clears(s
     assert alerts.get("exited_window:@12")["resolved_at"]
 
 
-def test_release_waiting_after_zero_alerts_once_and_never_closes(sweep, clock, monkeypatch):
-    monkeypatch.setitem(C.DISPATCH, "release_waiting_after", 0)
+def test_the_keep_ignores_an_old_release_waiting_after(sweep, clock, monkeypatch):
+    monkeypatch.setitem(C.DISPATCH, "release_waiting_after", 5)
     st = {}
     sweep(_row(), [_card()], ERROR_SCREEN, st)
-    clock[0] += 600
+    clock[0] += 10 * 60
     sweep(_row(), [_card()], ERROR_SCREEN, st)
-    clock[0] += 10 * 3600
+    assert sweep.killed == []
+    clock[0] += 21 * 60
     sweep(_row(), [_card()], ERROR_SCREEN, st)
-    assert sweep.killed == [] and len(sweep.notified) >= 1
-    assert alerts.get("exited_window:@12")["count"] == 3
+    assert sweep.killed == ["@12"]
 
 
-def test_a_kept_window_past_its_wait_in_dry_run_says_would_close(sweep, clock, monkeypatch):
-    monkeypatch.setitem(C.DISPATCH, "release_waiting_after", 30)
+def test_a_kept_window_past_its_wait_in_dry_run_says_would_close(sweep, clock):
     st = {"exited_waits": {"@12": {"since": clock[0] - 31 * 60}}}
     lines = sweep(_row(), [_card()], ERROR_SCREEN, st, dry=True)
     assert lines == ["would " + CLOSING.replace("closing", "close") + "kept 30 min for an error"]

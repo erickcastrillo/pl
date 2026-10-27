@@ -75,16 +75,14 @@ def test_the_alert_notifies_once_and_clears_when_the_agent_works_again(clock, se
     assert not alerts._live(alerts.get("stalled:o/r#1"))
 
 
-def test_a_released_run_agent_waiting_out_its_retry_is_blocked_and_high_after_two_releases(clock, sent):
+def test_a_leftover_release_hold_opens_no_stalled_alert(clock, sent):
     from datetime import datetime, timezone
     c = _card()
     c["metadata"]["run_retry_at"] = datetime.fromtimestamp(clock["now"] + 1200, timezone.utc).isoformat()
     c["metadata"]["run_released_why"] = "idle 31 min"
     c["metadata"]["run_releases"] = 2
-    c["metadata"]["run_released_on"] = agents.release_key(c)
     dispatch.check_alerts([c], set(), {"run_waits": {}})
-    a = alerts.get("stalled:o/r#1")
-    assert alerts._live(a) and a["severity"] == "high" and "released 2" in a["title"] and len(sent) == 1
+    assert not alerts._live(alerts.get("stalled:o/r#1")) and sent == []
 
 
 def test_a_card_that_reached_its_done_column_is_not_stalled(clock, sent):

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
-from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
+from pl.agents import NEW_WINDOW_SCRIPT, deps_open, registry, worker_status, worker_view
 from pl import audit, confirm, events, harnesses, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
@@ -1035,24 +1035,18 @@ def cmd_depends(a):
 
 def retry(ref, stage=None):
     """Clear the worker (and its attempt count) of one card, or with ref "all" of every funnel card whose agent hit the
-    attempt limit, so the dispatcher starts it fresh. A card held back after its waiting run agent was released
-    (blocked) has the hold cleared too. A running agent is left alone. Returns one line per card."""
+    attempt limit, so the dispatcher starts it fresh. A running agent is left alone. Returns one line per card."""
     fresh_next()   # it resets what it read: never a worker restarted since a cached copy
     cs = cards()
     if ref == "all":
         picked = [c for c in cs if (c.get("metadata") or {}).get("pipeline_mode") == "auto"
-                  and (int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS
-                       or run_blocked(c))]
+                  and int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS]
     else:
         picked = [pick(ref, cs, "pl retry", min_prefix=8)]   # like find_card, but a prefix needs 8+ chars
     reg, out = registry(), []
     for c in picked:
         w = (c.get("metadata") or {}).get("worker") or {}
         head = f"{short_id(c['id'])}  {c['title'][:50]}"
-        if not w and (c.get("metadata") or {}).get("run_retry_at"):
-            update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
-            out.append(f"{head}: cleared the blocked hold of its released run agent; the dispatcher starts it now")
-            continue
         meta = c.get("metadata") or {}
         if not w and meta.get("cap_stopped") and col_name(c["list_id"]) == "Manual" and not stage:
             back = meta.get("manual_from_column") or "Approved"
