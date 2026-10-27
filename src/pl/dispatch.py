@@ -1248,9 +1248,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
                 fix = harnesses.trust_command(wh, w.get("profile"), trust)
-                if why := alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
-                                      f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt"):
-                    notify(alerts.headline(why, f"Agent waiting: trust the folder: {c['title'][:40]}"), f"{trust}: run {fix} and answer once")
+                alerts.open(key, "warn", f"agent waiting: trust the folder {trust} for account {w.get('profile')}: run {fix}, choose \"Yes, I trust this folder\" and exit",
+                            f"window {where} (pl card {cmd_id(c['id'])}); pl never answers this prompt", cards=[c["id"]])
             if trust and w.get("window"):
                 waiting.append(w["window"])
             if bool(trust) != bool(w.get("trust_wait")):
@@ -1269,9 +1268,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 key = f"permission_wait:{c['id']}"
                 failed.add(key)
                 where = f"{w.get('stage')}-{slug_of(c)[:28]}"
-                if why := alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
-                                      f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions"):
-                    notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), ask)
+                alerts.open(key, "warn", f"agent waiting for permission in {where}: {ask}",
+                            f"answer it in the agent window (pl card {cmd_id(c['id'])}); README: Permissions", cards=[c["id"]])
             if bool(ask) != bool(w.get("permission_wait")):
                 if ask and not hooks.hook_permission(w):
                     events.emit("state_transition", c["id"], source="screen", transition="permission_wait")
