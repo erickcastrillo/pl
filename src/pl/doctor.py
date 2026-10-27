@@ -67,7 +67,16 @@ def notify_settings():
     return True, [f"quiet hours: {v}" if v else "quiet hours: off"]
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings]
+def notifications():
+    from pl import chat   # imported here so doctor's import stays light
+    routed = [n for n, c in chat.load().items() if "alerts" in c.get("routes", [])]
+    if C.ATTENTION or routed:
+        return True, [f"attention_cmd: {C.ATTENTION or 'not set'}", f"chat alerts: {', '.join(routed) or 'none'}"]
+    return True, ["warning: this profile sends no notifications: set [paths] attention_cmd (pl setup) "
+                  "or run pl chat route alerts <name>"]
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications]
 
 
 def cmd_doctor(a):

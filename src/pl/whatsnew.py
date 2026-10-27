@@ -308,6 +308,8 @@ ENTRIES = [
        "Extend → Connectors: on a chat row, r picks what it receives and d removes it", "pl chat route"),
     _e("2026-10-26.83", "Quiet hours hold notifications overnight and send one summary after",
        '[notify] quiet = "22:00-07:00" in the profile config; high alerts still go out', "pl doctor"),
+    _e("2026-10-26.84", "Test that notifications reach you",
+       "pl notify test; pl doctor warns when nothing is set up", "pl notify test --chat <name>"),
 ]
 
 
