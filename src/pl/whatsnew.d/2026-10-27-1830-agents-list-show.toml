@@ -1,0 +1,3 @@
+title = "Named agents for each function"
+where = "pl agents list"
+try = "pl agents show sales-sdr"
