@@ -284,3 +284,10 @@ def test_read_runs_of_a_loop_with_no_runs_is_empty(profile):
     assert loops.read_runs("bad") == []
     (folder / "runs.json").write_text('{"a": 1}')
     assert loops.read_runs("bad") == []
+
+
+def test_a_scheduled_loop_script_exports_the_xdist_share(profile):
+    from pl import manager
+    manager.machine_dir().mkdir(parents=True, exist_ok=True)
+    (manager.machine_dir() / "machine.toml").write_text("[tests]\nmax_workers = 6\n[limits]\nmax_live_agents = 3\n")
+    assert "export PYTEST_XDIST_AUTO_NUM_WORKERS=2\n" in _headless_script("codex")

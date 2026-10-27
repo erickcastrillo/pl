@@ -46,7 +46,7 @@ def _script_cmd(payload):
     parts = shlex.split(payload)
     assert parts[0] == "sh" and len(parts) == 2, payload
     lines = open(parts[1]).read().splitlines()
-    wrapper = ("export PATH=", "export PL_CARD=", "export PL_LOOP=", "export PL_GH_LEDGER=")   # test_ghwrap.py covers these
+    wrapper = ("export PATH=", "export PL_CARD=", "export PL_LOOP=", "export PL_GH_LEDGER=", "export PYTEST_XDIST_AUTO_NUM_WORKERS=")   # test_ghwrap.py and the xdist tests cover these
     env = [line[len("export "):] for line in lines if line.startswith("export ") and not line.startswith(wrapper)]
     run = [line[len("exec "):] for line in lines if line.startswith("exec ")]
     assert len(run) == 1, lines
@@ -906,3 +906,56 @@ def test_login_argv_is_empty_for_an_unknown_harness():
     h = harnesses.BUILTINS["claude"]
     assert harnesses.login_argv(type("H", (), {"name": "mine"})()) == []
     assert harnesses.login_argv(h) == ["claude", "/login"]
+
+
+XDIST = "PYTEST_XDIST_AUTO_NUM_WORKERS"
+
+
+def _machine(tests=None, max_live_agents=None):
+    from pl import manager
+    lines = []
+    if tests is not None:
+        lines += ["[tests]", f"max_workers = {tests}"]
+    if max_live_agents is not None:
+        lines += ["[limits]", f"max_live_agents = {max_live_agents}"]
+    manager.machine_dir().mkdir(parents=True, exist_ok=True)
+    (manager.machine_dir() / "machine.toml").write_text("\n".join(lines) + "\n")
+
+
+def _agent_script(stage="run", **kw):
+    return harnesses.launch_script(harnesses.get("claude"), "acme", "go", SID, "lbl", plugin=False, stage=stage, **kw)
+
+
+@pytest.mark.parametrize("stage", ["spec", "design", "plan", "run", "review", "rework"])
+def test_launch_script_exports_the_xdist_share_for_every_stage(fake_home, stage):
+    _machine(tests=6, max_live_agents=3)
+    assert f"export {XDIST}=2\n" in _agent_script(stage)
+
+
+def test_xdist_share_rounds_down_and_never_below_one(fake_home):
+    _machine(tests=4, max_live_agents=12)
+    assert f"export {XDIST}=1\n" in _agent_script()
+
+
+@pytest.mark.parametrize("tests", [None, "0", '"six"'])
+def test_xdist_share_uses_the_default_budget_when_tests_is_missing_or_bad(fake_home, monkeypatch, tests):
+    from pl import worker_budget
+    monkeypatch.setattr(worker_budget, "_cpus", lambda: 16)
+    _machine(tests=tests, max_live_agents=4)
+    assert f"export {XDIST}=2\n" in _agent_script()
+
+
+@pytest.mark.parametrize("sandboxed", [True, False])
+@pytest.mark.parametrize("worktrees", [True, False])
+def test_xdist_share_is_the_same_sandboxed_or_not_and_with_or_without_worktrees(fake_home, monkeypatch, sandboxed, worktrees):
+    from pl import sandbox
+    monkeypatch.setattr(sandbox, "settings", lambda: {"enabled": sandboxed})
+    monkeypatch.setattr(sandbox, "vm_name", lambda: "pl-vm")
+    _machine(tests=6, max_live_agents=3)
+    assert f"{XDIST}=2" in _agent_script(worktrees=worktrees)
+
+
+def test_the_review_loop_window_exports_the_xdist_share(fake_home):
+    _machine(tests=6, max_live_agents=3)
+    script = harnesses.launch_script(harnesses.get("claude"), "acme", "/pl-review", None, "review", plugin=False)
+    assert f"export {XDIST}=2\n" in script
