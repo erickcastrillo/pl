@@ -15,6 +15,36 @@ STEP = {1: "1 h", 2: "4 h"}
 KEEP = 7 * 86400              # a resolved alert stays this long for pl alerts --all
 FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards"}
 _clock = time.time
+# these keys notify as agent_waiting, every other key as alert_opened
+WAITING = ("permission_wait:", "agent_waiting:")
+# transitional: these call sites still notify themselves; plan 51 slices 6-8 empty it
+DIRECT = (
+    "near_cap:",
+    "api_error:",
+    "stage_failed:",
+    "stage_unsafe:",
+    "exited_window:",
+    "dep_broken:",
+    "pr_person:",
+    "pr_waiting:",
+    "auto_merge_off:",
+    "account_parked:",
+    "accounts_all_out",
+    "trust:",
+    "gh_hold",
+    "tmp_full",
+    "github_rate_limited",
+    "loop_stale:",
+    "loop_failed:",
+    "loop_dead:",
+    "memory_low",
+    "runaway:",
+    "send_spike:",
+    "chat_unknown:",
+    "connector_new_place:",
+    "agent_move_failed:",
+    "send_cap:",
+)
 
 
 def _path():
@@ -68,14 +98,29 @@ def _step(a, now):
     return None if a.get("acked") else STEP[level]
 
 
+def _notify(key, why, severity, title, fix):
+    """Tell the owner of an alert that opened or escalated, under agent_waiting or alert_opened. It never fails the alert."""
+    try:
+        from pl import notifications   # imported here: the alerts module stays light
+        if key.startswith(WAITING):
+            notifications.send("agent_waiting", headline(why, title), fix)
+        else:
+            notifications.send("alert_opened", f"{severity}: {headline(why, title)}", fix)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _offer(key, why, title):
-    """Queue an alert that opened or escalated for the Assistant and chat. It never fails the alert."""
+    """Queue an alert that opened or escalated for the Assistant, and for chat when its site still notifies itself.
+    It never fails the alert."""
     hl = headline(why, title)
     try:
         from pl import assistant   # imported here: the alerts module stays light
         assistant.offer(key, hl)
     except (SystemExit, Exception):  # noqa: BLE001 - a tmux refusal raises SystemExit
         pass
+    if not key.startswith(DIRECT):
+        return
     try:
         from pl.manager import machine_dir
         mdir = machine_dir()
@@ -127,6 +172,8 @@ def open(key, severity, title, fix, cards=()):
         _logged("alert_opened", key=key, severity=severity, title=title, cards=cards)
     if why:
         _offer(key, why, title)
+        if not key.startswith(DIRECT):
+            _notify(key, why, severity, title, fix)
     return why
 
 
@@ -164,11 +211,14 @@ def sweep(prefix, active, send):
                 a.update(resolved_at=now, duration=now - a["first_seen"])
                 closed.append((key, a["title"], int(a["duration"])))
             elif why := _step(a, now):
-                out.append((key, why, a["title"], a["fix"]))
+                out.append((key, why, a["severity"], a["title"], a["fix"]))
     for key, title, duration in closed:
         _logged("alert_resolved", key=key, title=title, duration=duration)
-    for key, why, title, fix in out:
-        send(headline(why, title), fix)
+    for key, why, severity, title, fix in out:
+        if key.startswith(DIRECT):
+            send(headline(why, title), fix)
+        else:
+            _notify(key, why, severity, title, fix)
         _offer(key, why, title)
 
 

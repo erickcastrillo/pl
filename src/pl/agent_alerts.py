@@ -49,8 +49,7 @@ def check(all_cards, st, restarting):
 
 
 def _raise(key, severity, title, fix, cards):
-    if why := alerts.open(key, severity, title, fix, cards=cards):
-        _dispatch().notify(alerts.headline(why, title), fix)
+    alerts.open(key, severity, title, fix, cards=cards)
     return key
 
 

@@ -787,7 +787,7 @@ def test_a_stuck_agent_opens_an_alert_and_its_card_says_waiting_for_permission(f
     from pl import alerts
     updates, opened = [], []
     real_open = alerts.open
-    monkeypatch.setattr(alerts, "open", lambda *a: opened.append(a) or real_open(*a))
+    monkeypatch.setattr(alerts, "open", lambda *a, **k: opened.append(a) or real_open(*a, **k))
     c = _auto("eeee0005", "In progress", spec_slug="fix-x",
               worker={**RUN_W, "profile": "acme", "started_at": now_iso()})
     _pass(monkeypatch, [c], None, ask="Bash command · git push origin feat/x", updates=updates)
