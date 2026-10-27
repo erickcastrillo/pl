@@ -1,0 +1,3 @@
+title = "Review and merge run the full suite on several cores"
+where = ".pl/tests.toml: [tests] workers"
+try = "pl tests full"
