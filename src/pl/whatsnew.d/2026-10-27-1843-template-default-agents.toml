@@ -1,0 +1,3 @@
+title = "Sales, support and marketing pipelines come with agents"
+where = "pl pipelines add <name> --template new-client"
+try = "pl pipelines show --json"
