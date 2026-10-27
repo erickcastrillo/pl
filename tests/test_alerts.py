@@ -77,16 +77,16 @@ def test_the_file_is_private_and_written_by_rename(clock):
 
 def test_sweep_resolves_what_cleared_and_notifies_only_escalations(clock):
     sent = []
-    alerts.open("send_spike:a", "warn", "Card a: PR waits", "review it")
-    alerts.open("send_spike:b", "warn", "Card b: PR waits", "review it")
+    alerts.open("memory_low:a", "warn", "Card a: PR waits", "review it")
+    alerts.open("memory_low:b", "warn", "Card b: PR waits", "review it")
     alerts.open("other:x", "warn", "t", "f")
-    alerts.sweep("send_spike:", {"send_spike:a", "send_spike:b"}, lambda t, m: sent.append(t))
+    alerts.sweep("memory_low:", {"memory_low:a", "memory_low:b"}, lambda t, m: sent.append(t))
     assert sent == []                                        # no escalation yet
     clock["now"] += 3601
-    alerts.sweep("send_spike:", {"send_spike:a"}, lambda t, m: sent.append(t))
+    alerts.sweep("memory_low:", {"memory_low:a"}, lambda t, m: sent.append(t))
     assert sent == ["Still open after 1 h: Card a: PR waits"]
-    assert alerts.get("send_spike:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
-    alerts.sweep("send_spike:", {"send_spike:a"}, lambda t, m: sent.append(t))
+    assert alerts.get("memory_low:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
+    alerts.sweep("memory_low:", {"memory_low:a"}, lambda t, m: sent.append(t))
     assert len(sent) == 1                                    # one notification per escalation
 
 

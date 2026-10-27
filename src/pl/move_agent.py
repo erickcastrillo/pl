@@ -356,9 +356,8 @@ def _move(c, m, w, src, sid, target, reason):
         c["metadata"] = {**m, "worker": None}
         why = f"agent stopped but relaunch failed for {short_id(c['id'])}"
         events.emit("agent_move_failed", c["id"], to=target, reason=f"{why}: {e}"[:120])
-        if alerts.open(f"agent_move_failed:{c['id']}", "warn", f"Agent stopped but relaunch failed: {short_id(c['id'])}",
-                       "the dispatcher starts it again fresh on its next pass"):
-            notify(f"Agent move failed: {short_id(c['id'])}", why)
+        alerts.open(f"agent_move_failed:{c['id']}", "warn", f"Agent stopped but relaunch failed: {short_id(c['id'])}",
+                    "the dispatcher starts it again fresh on its next pass")
         return False, why, True
     nw = {**w, "profile": target, "moved_at": now_iso(), "launch": str(script), "resume": {"at": time.time()}}
     sw = {"at": now_iso(), "from": src, "to": target, "stage": w.get("stage"), "reason": reason, "resumed": True}

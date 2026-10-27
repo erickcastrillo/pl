@@ -15,6 +15,7 @@ from pl import board, dispatch, events, trackers, watch
 from pl.trackers import github
 from pl.tui import app as tui_app
 from pl.tui.app import PlApp
+from tui_wait import settle, wait_until
 
 FAKE_GH = r'''#!{python}
 import json, os, sys
@@ -436,23 +437,16 @@ def test_console_header_shows_the_resume_time_and_keeps_the_numbers(gh):
     async def run():
         app = PlApp(snapshot_provider=tui_app.default_provider, interval=3600)
         async with app.run_test(size=(176, 48)) as pilot:
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if app.data is not None:
-                    break
+            await wait_until(pilot, lambda: app.data is not None, "the first board read")
             first = app.data
             assert first is not None
-            await pilot.pause()
-            await app.workers.wait_for_complete()   # the first render's standup and review workers call gh too
+            await settle(pilot)   # the first render's standup and review workers call gh too
             gh.set(mode="ratelimit", reset=reset, headers=_spent(reset))
             trackers.reset()
             for _ in range(3):
                 app.error = None   # wait for this refresh to land: overlapping ones all call gh before the back-off is saved
                 app.refresh_data()
-                for _ in range(1200):
-                    await pilot.pause(0.05)
-                    if app.error:
-                        break
+                await wait_until(pilot, lambda: app.error, "the refresh to fail", timeout=60)
             header = str(app.query_one("#header").render())
             assert f"GitHub rate-limited, retrying at {hhmm}" in header
             assert "refresh failed" not in header
@@ -1468,10 +1462,7 @@ def test_console_header_says_the_board_is_held_until_the_reset(gh):
     async def run():
         app = PlApp(snapshot_provider=tui_app.default_provider, interval=3600)
         async with app.run_test(size=(176, 48)) as pilot:
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if app.data is not None:
-                    break
+            await wait_until(pilot, lambda: app.data is not None, "the first board read")
             first = app.data
             assert first is not None
             await app.workers.wait_for_complete()
@@ -1479,10 +1470,7 @@ def test_console_header_says_the_board_is_held_until_the_reset(gh):
             trackers.reset()
             app.error = None
             app.refresh_data()
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if app.error:
-                    break
+            await wait_until(pilot, lambda: app.error, "the refresh to fail", timeout=5)
             header = str(app.query_one("#header").render())
             assert "GitHub budget held" in header
             assert time.strftime("%H:%M", time.localtime(reset)) in header

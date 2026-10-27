@@ -36,7 +36,7 @@ READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
 BRAIN_TOOLS = "mcp__pl-brain__*"
 BRAIN_ASK = ["mcp__pl-brain__pl_file_card"]
 READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)", "Bash(pl activity*)",
-             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl help*)", "Bash(pl jobs*)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl sync*)",
+             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl help*)", "Bash(pl jobs*)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl plan*)", "Bash(pl sync*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry", "caps", "loops",
              "restart", "hold", "unhold", "rework", "merges", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
