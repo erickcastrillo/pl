@@ -63,6 +63,13 @@ MAIN_KEYS = {
 NEW_ROW = "+new"   # the row key of every list's "+ New <thing>" row
 
 
+def close(screen):
+    """Close a full-screen view only while it is the top screen. A second close (a quick double Esc) or one for a
+    screen with another opened on top of it does nothing, instead of popping the wrong screen or the last one."""
+    if screen.is_attached and screen.app.screen is screen:
+        screen.app.pop_screen()
+
+
 def new_row(thing):
     return Text(f"+ New {thing}", style="dim")
 
