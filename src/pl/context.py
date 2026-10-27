@@ -59,13 +59,18 @@ def _card_layer(card):
             f"{fence}\n{body}\n{fence}\n")
 
 
+def _pod_layer(pod):
+    rules = _file(pod["file"]) if pod["file"] else ""
+    return f"{rules.rstrip()}\n\nConnector roles: {', '.join(pod['roles'])}" if pod.get("roles") else rules
+
+
 def build(card, stage, pod, prompt=""):
     """(path, report) of the context file for one stage: the layers in order, each cut to the pod's budget. report
     lists (layer, tokens before, tokens after) for each cut. Only pod's own files are read."""
     budgets = pod["budgets"]
     docs = "\n\n".join(f"### {k.name}\n\n{_file(k).rstrip()}" for k in pod["knowledge"])
     layers = [("knowledge", docs, budgets.get("knowledge")),
-              ("pod", _file(pod["file"]) if pod["file"] else "", budgets.get("pod")),
+              ("pod", _pod_layer(pod), budgets.get("pod")),
               ("role", _role(prompt), None),
               ("client", _client(card, pod), budgets.get("client")),
               ("card", _card_layer(card), None)]
@@ -89,7 +94,7 @@ def build(card, stage, pod, prompt=""):
 def launch_prompt(card, stage, prompt):
     """The prompt that points at the context file when the pipeline's pod has a [pods.<name>] table, else prompt."""
     name = C.POD or C.PROFILE_NAME
-    if name not in C.PODS and name not in pods.OWN_SKILLS_ONLY:
+    if name not in C.PODS and name not in pods.OWN_SKILLS_ONLY and not pods.launch_pod():
         return prompt
     path, _ = build(card, stage, pods.find(name), prompt)
     return f"Follow the instructions in {path}."

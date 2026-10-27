@@ -9,6 +9,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Static
 
 from pl import loops, util
+from pl.tui.chrome import close
 
 MISSING = f"The log of this run is no longer kept (only the last {loops.RUNS_KEPT} runs are kept)."
 
@@ -56,7 +57,7 @@ class RunLogScreen(Screen):
         return self.query_one("#runlog-scroll", VerticalScroll)
 
     def action_close(self):
-        self.app.pop_screen()
+        close(self)
 
     def action_scroll_top(self):
         self._scroll().scroll_home(animate=False)

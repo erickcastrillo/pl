@@ -133,3 +133,24 @@ def test_a_marketing_stage_prompt_holds_the_marketing_rules_not_the_engineering_
     assert prompt.startswith("Follow the instructions in ")
     body = open(prompt.removeprefix("Follow the instructions in ").rstrip(".")).read()
     assert "Flag every factual claim" in body and "Write the tests first" not in body
+
+
+def _sales_body(home):
+    C.STATE_DIR.mkdir()
+    prompt = context.launch_prompt(_card(), "draft", "/pl-stage x")
+    assert prompt.startswith("Follow the instructions in ")
+    return open(prompt.removeprefix("Follow the instructions in ").rstrip(".")).read()
+
+
+def test_a_sales_stage_context_holds_the_sales_rules_and_roles_only(home, monkeypatch):
+    monkeypatch.setattr(C, "POD", "sales")
+    body = _sales_body(home)
+    assert "approves every proposal" in body and "Connector roles: contacts, email" in body
+    assert "Write the tests first" not in body
+
+
+def test_a_sales_launch_with_a_missing_pod_md_starts_with_no_rules(home, monkeypatch, tmp_path):
+    monkeypatch.setattr(C, "POD", "sales")
+    monkeypatch.setattr(pods, "BUILTIN_DIR", tmp_path / "empty")
+    body = _sales_body(home)
+    assert "## pod\n\nConnector roles: contacts, email" in body
