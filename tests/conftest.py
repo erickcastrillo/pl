@@ -43,6 +43,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
+    # a test run inside a pl agent inherits the real profile and worktrees folder: never let a test load or touch them
+    for var in ("PL_CONFIG_DIR", "PL_WORKTREES_DIR", "PL_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
     from pl import local_model
 
     def no_model(url, payload, timeout):
