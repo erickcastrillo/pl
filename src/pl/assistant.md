@@ -63,6 +63,7 @@ Status and the board:
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
 - `pl memory search Q` | `show ID`: look up what pl remembers (read-only). `pl memory add TEXT --kind K` writes an entry (ask first).
 - `pl pipelines list [--templates] [--json]`, `pl pipelines show [PROFILE] [--json]`: each profile's pipeline, and its columns, stages and gates. Read-only.
+- `pl agents list|show NAME [--json]`: the named agents (role, skills, connector roles, model, approval, pod). Read-only.
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
 - `pl loops list` (`--json`): the profile's loops with state, schedule, next run and account. `pl loops add|pause|resume|rm` change `[loops.NAME]`; they ask first.
 - `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.

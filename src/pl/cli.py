@@ -211,6 +211,8 @@
                           are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
+  pl agents list [--json] | show NAME [--json]
+                          the named agents: built-in and the profile's own (agents/NAME/agent.md), with role, skills, connector roles, model, approval and pod
   pl loops list [--json] | add NAME (--skill S | --prompt P | --template T) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
           | edit NAME [--every E] [--prompt P] [--skill S] [--hours H] [--account A] [--writes|--no-writes] [--convert]
           | pause NAME | resume NAME | rm NAME [--yes]
@@ -354,6 +356,7 @@ def _main():
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
      "standup": cmd_standup, "activity": cmd_activity, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
+     "agents": lambda a: __import__("pl.agent_defs").agent_defs.cmd_agents(a),
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
@@ -548,6 +551,9 @@ def build_parser():
     q = pl_.add_parser("rm"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pl_.add_parser("run"); q.add_argument("name"); q.add_argument("--wait", action="store_true", help="follow until the run ends and print its record"); q.add_argument("--json", action="store_true", help="with --wait: print the record as JSON")
     q.add_argument("--dry-run", action="store_true", help="run the loop in the foreground, read-only, and print what it would do")
+    p = sub.add_parser("agents"); pa = p.add_subparsers(dest="agents_cmd", required=True)
+    q = pa.add_parser("list"); q.add_argument("--json", action="store_true")
+    q = pa.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
