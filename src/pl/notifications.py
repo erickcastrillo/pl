@@ -98,6 +98,8 @@ def release():
 TEST_TITLE = "pl test notification"
 TEST_MESSAGE = "If you can read this, pl can reach you."
 
+_LOOKED = {"at": None}   # when review_passed last asked GitHub for the ready-labeled PRs
+
 
 def send(event, title, message) -> bool:
     if event not in C.NOTIFY["events"] or trackers.dry_run():
@@ -192,3 +194,33 @@ def cmd_notify(a):
     for _, line in results:
         print(line)
     raise SystemExit(0 if all(ok for ok, _ in results) else 1)
+
+
+def review_passed(all_cards, now_col, st):
+    """now_col: card id -> column name. One review_passed per card for the PRs that newly carry the ready label (and neither rework nor failed).
+    The sent record is st["notified"]["review_passed:<url>"], kept even when the event is off."""
+    from pl import rework   # rework imports commands, which imports dispatch
+    lab = rework.labels()
+    notified = st.setdefault("notified", {})
+    live = {u for c in all_cards if now_col[c["id"]] != "Done" for u in (c.get("metadata") or {}).get("pr_urls") or []}
+    for key in [k for k in notified if k.startswith("review_passed:") and k[len("review_passed:"):] not in live]:
+        del notified[key]
+    if not lab["ready"]:
+        return
+    open_cards = [c for c in all_cards if now_col[c["id"]] == "PR open" and not (c.get("metadata") or {}).get("dropped_at")]
+    pending = {repo for c in open_cards for repo, _, url in rework._prs(c) if f"review_passed:{url}" not in notified}
+    now = time.time()
+    if pending and (_LOOKED["at"] is None or now - _LOOKED["at"] >= rework.REWORK_EVERY):
+        _LOOKED["at"] = now
+        rework.look_at_ready(pending, lab)
+    for c in open_cards:
+        new = []
+        for _, num, url in rework._prs(c):
+            names = rework.SEEN.get(url) or frozenset()
+            if lab["ready"] in names and not names & {lab["rework"], lab["failed"]} and f"review_passed:{url}" not in notified:
+                new.append((num, url))
+        if not new:
+            continue
+        send("review_passed", f"Review passed: {short_id(c['id'])} " + ", ".join(f"#{n}" for n, _ in new), c["title"][:50])
+        for _, url in new:
+            notified[f"review_passed:{url}"] = time.time()

@@ -29,7 +29,7 @@ def fake_home(tmp_path, monkeypatch):
 @pytest.fixture
 def gh(monkeypatch):
     """GitHub, the board and the tracker faked. ns.flagged: {repo: [(number, labels)]} the rework search returns."""
-    ns = types.SimpleNamespace(flagged={}, calls=[], writes=[], moves=[], events=[], comments={}, comments_fail=False)
+    ns = types.SimpleNamespace(flagged={}, calls=[], writes=[], moves=[], events=[], sent=[], comments={}, comments_fail=False)
 
     def fake_gh(args):
         ns.calls.append(args)
@@ -48,6 +48,7 @@ def gh(monkeypatch):
     monkeypatch.setattr(rework, "update", lambda cid, **kw: ns.writes.append((cid, kw)))
     monkeypatch.setattr(commands, "move_to", lambda ref, col, cid=None: ns.moves.append((ref, col)))
     monkeypatch.setattr(rework.events, "emit", lambda kind, cid=None, **d: ns.events.append((kind, cid, d)))
+    monkeypatch.setattr(rework.notifications, "send", lambda event, title, message: ns.sent.append((event, title, message)))
     return ns
 
 
@@ -205,3 +206,40 @@ def test_pl_list_shows_merge_only(monkeypatch, merge_only, label):
     c = {"id": "c1", "list_id": "In progress", "metadata": {"pipeline_mode": "auto",
                                                               "rework": {"active": True, "merge_only": merge_only}}}
     assert agents.worker_view(c, {}) == label
+
+
+def test_send_back_sends_one_review_rework_naming_card_and_pr(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1")], dry=False)
+    assert len(gh.sent) == 1
+    event, title, _ = gh.sent[0]
+    assert event == "review_rework" and "c1" in title and "#1" in title
+
+
+def test_give_up_sends_no_review_rework(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1", rework={"round": 3, "active": False})], dry=False)
+    assert gh.sent == []
+
+
+def test_dry_run_sends_no_review_rework(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1")], dry=True, force=True)
+    assert gh.sent == []
+
+
+def _live_card(prs, n):
+    return {"id": "aaaa0001", "metadata": {"rework": {"active": True, "round": n, "prs": prs}}}
+
+
+def test_live_message_names_the_round_and_a_review_command_per_pr():
+    text = rework.live_message(_live_card(["https://github.com/o/r/pull/7", "https://github.com/o/s/pull/9"], 2))
+    assert "round 2" in text
+    assert "gh api repos/o/r/issues/7/comments --jq '.[-1].body'" in text
+    assert "gh api repos/o/s/issues/9/comments --jq '.[-1].body'" in text
+
+
+def test_live_message_leaves_out_a_pr_url_with_odd_characters():
+    text = rework.live_message(_live_card(["https://github.com/o/r'x/pull/7", "https://github.com/o/r y/pull/8"], 1))
+    assert "r'x" not in text and "r y" not in text
+    assert "latest review comment" in text
