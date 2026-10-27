@@ -20,14 +20,8 @@ _clock = time.time
 WAITING = ("permission_wait:", "agent_waiting:")
 # transitional: these call sites still notify themselves; plan 51 slices 6-8 empty it
 DIRECT = (
-    "near_cap:",
-    "api_error:",
-    "stage_failed:",
-    "stage_unsafe:",
-    "exited_window:",
     "dep_broken:",
     "pr_person:",
-    "pr_waiting:",
     "auto_merge_off:",
     "account_parked:",
     "accounts_all_out",

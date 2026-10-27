@@ -190,9 +190,7 @@ def _check_caps(c, w, st, now):
 def _warn_near_cap(c, w, spent):
     stage = w.get("stage")
     title = f"Card {short_id(c['id'])}: its {stage} agent is near its cap ({spent})"
-    if why := alerts.open(f"near_cap:{c['id']}:{stage}", "warn", title, f"pl caps set {cmd_id(c['id'])} --minutes M --tokens T raises it"):
-        if why == "open":
-            notify(alerts.headline(why, f"Near its cap: {c['title'][:40]}"), f"the {stage} agent has used {spent}")
+    alerts.open(f"near_cap:{c['id']}:{stage}", "warn", title, f"pl caps set {cmd_id(c['id'])} --minutes M --tokens T raises it")
 
 
 def stop_at_cap(c, w, note):
@@ -214,9 +212,8 @@ def _api_restart(st, c, w, err, failed):
     times = [t for t in (st.setdefault("api_restarts", {}).get(c["id"]) or []) if isinstance(t, (int, float)) and now - t < 86400]
     if len(times) >= API_RESTARTS:
         failed.add(key)
-        if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: its {stage} agent stopped on an API error {len(times)} times today",
-                              f"see its window; pl restart {cmd_id(c['id'])} starts it fresh"):
-            notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent keeps stopping on an API error")
+        alerts.open(key, "high", f"Card {short_id(c['id'])}: its {stage} agent stopped on an API error {len(times)} times today",
+                    f"see its window; pl restart {cmd_id(c['id'])} starts it fresh")
         return False
     if no := stop_worker(c, w):
         print(f"{short_id(c['id'])}  {stage} agent idle after an API error; could not stop it ({no})")
@@ -516,11 +513,10 @@ def start_worker(c, stage, attempts, dry):
         return
     try:
         harnesses.refuse_bypass(h)
-    except SystemExit as e:
-        if why := alerts.open(f"stage_unsafe:{stage}", "high",
-                              f"Stage {stage} template bypasses permissions",
-                              f"remove bypass flags from [harnesses.{h.name}] in {C.path() or 'config.toml'}"):
-            notify(alerts.headline(why, f"Stage {stage} unsafe"), str(e))
+    except SystemExit:
+        alerts.open(f"stage_unsafe:{stage}", "high",
+                    f"Stage {stage} template bypasses permissions",
+                    f"remove bypass flags from [harnesses.{h.name}] in {C.path() or 'config.toml'}")
         raise
     if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
         tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
@@ -855,10 +851,10 @@ def _exited_window(wid, pane, name, owner, all_cards, waits, seen, dry):
         seen[wid] = rec
         limit = C.DISPATCH.get("release_waiting_after", 30)
         if not limit or time.time() - rec["since"] < limit * 60:
-            if not dry and (alert := alerts.open(f"exited_window:{wid}", "warn",
-                                                 f"Card {short_id(c['id'])}: its exited {stage} agent window {name} shows {need}",
-                                                 f"see window {name} ({wid}); " + (f"pl closes it after {limit} min" if limit else "close it when done"))):
-                notify(alerts.headline(alert, f"Exited agent needs you: {c['title'][:40]}"), f"window {name} shows {need}")
+            if not dry:
+                alerts.open(f"exited_window:{wid}", "warn",
+                            f"Card {short_id(c['id'])}: its exited {stage} agent window {name} shows {need}",
+                            f"see window {name} ({wid}); " + (f"pl closes it after {limit} min" if limit else "close it when done"))
             return True
         seen.pop(wid)
         why = f"kept {limit} min for {need}"
@@ -1364,9 +1360,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if same_stage and status == "dead" and attempts >= MAX_ATTEMPTS:
             key = f"stage_failed:{c['id']}:{stage}"
             failed.add(key)
-            if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: the {stage} agent died {attempts} times",
-                                  f"pl card {cmd_id(c['id'])} shows why; pl retry {cmd_id(c['id'])} starts it fresh"):
-                notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent died {attempts} times; see pl card {cmd_id(c['id'])}")
+            if alerts.open(key, "high", f"Card {short_id(c['id'])}: the {stage} agent died {attempts} times",
+                           f"pl card {cmd_id(c['id'])} shows why; pl retry {cmd_id(c['id'])} starts it fresh"):
                 print(f"{short_id(c['id'])}  {stage} agent failed {attempts} times; not retrying")
             continue
         if attempts == 0:
@@ -1729,8 +1724,7 @@ def check_alerts(all_cards, failed, st=None):
                 and t and now - t > PR_WAIT:
             key = f"pr_waiting:{c['id']}"
             waiting.add(key)
-            if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
-                notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {cmd_id(c['id'])}")
+            alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on")
     alerts.sweep("pr_waiting:", waiting, notify)
     check_pr_person_alerts(all_cards)
     check_deps(all_cards)

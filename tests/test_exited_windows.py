@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from pl import agents, alerts, dispatch, harnesses
+from pl import agents, alerts, dispatch, harnesses, notifications
 from pl import config as C
 
 ERROR_SCREEN = "Error: unknown option --foo\n$ "
@@ -49,11 +49,12 @@ def _row(wid="@12", name="run-foo", cmd="zsh", activity=0):
 class Sweep:
     def __init__(self, monkeypatch, capsys):
         self.mp, self.capsys = monkeypatch, capsys
-        self.killed, self.notified = [], []
+        self.killed, self.notified, self.direct = [], [], []
         monkeypatch.setattr(dispatch, "death_line", agents.death_line)   # conftest fakes it for every other test
         monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
         monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: self.killed.append(a[2]) if a[0] == "kill-window" else None)
-        monkeypatch.setattr(dispatch, "notify", lambda *a: self.notified.append(a))
+        monkeypatch.setattr(notifications, "notify", lambda *a: self.notified.append(a))
+        monkeypatch.setattr(dispatch, "notify", lambda *a: self.direct.append(a))
 
     def __call__(self, out, cards, screen="", st=None, dry=False):
         self.mp.setattr(subprocess, "run", lambda argv, *a, **kw: subprocess.CompletedProcess(argv, 0, out, ""))
@@ -116,7 +117,7 @@ def test_an_exited_window_showing_an_error_is_kept_and_alerts_once(sweep, clock)
     st = {}
     assert sweep(_row(), [_card()], ERROR_SCREEN, st) == []
     assert sweep.killed == [] and list(st["exited_waits"]) == ["@12"]
-    assert alerts.get("exited_window:@12")["count"] == 1 and len(sweep.notified) == 1
+    assert alerts.get("exited_window:@12")["count"] == 1 and len(sweep.notified) == 1 and sweep.direct == []
     clock[0] += 300
     sweep(_row(), [_card()], ERROR_SCREEN, st)
     assert sweep.killed == [] and len(sweep.notified) == 1
