@@ -82,7 +82,8 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
         {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]},
         {"name": "notify_settings", "ok": True, "lines": ["quiet hours: off"]},
         {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]},
-        {"name": "queued_writes", "ok": True, "lines": ["Queued writes: none"]}]
+        {"name": "queued_writes", "ok": True, "lines": ["Queued writes: none"]},
+        {"name": "settings", "ok": True, "lines": []}]
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -256,3 +257,41 @@ def test_doctor_json_has_needs_you_and_unchanged_checks(capsys, tmp_path, monkey
     assert got["checks"] == json.loads(before)["checks"] and json.loads(before)["needs_you"] == []
     assert len(got["needs_you"]) == 5
     assert set(got["needs_you"][0]) == {"card", "kind", "opened_at", "age_seconds", "tried", "acked"}
+
+
+def _with_old_key(tmp_path):
+    with (tmp_path / ".pl-t" / "config.toml").open("a") as f:
+        f.write("[dispatch]\nrelease_waiting_after = 5\n")
+    C.load("t")
+
+
+def _models_ok(monkeypatch):
+    monkeypatch.setattr(local_model, "_request",
+                        lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
+
+
+def test_doctor_says_release_waiting_after_can_be_removed(capsys, monkeypatch, tmp_path):
+    _with_old_key(tmp_path)
+    _models_ok(monkeypatch)
+    code, out = run(capsys)
+    assert code == 0
+    assert "ok settings" in out
+    [line] = [l for l in out.splitlines() if "release_waiting_after" in l]
+    assert "no longer used" in line and "can be removed" in line
+
+
+def test_doctor_json_lists_release_waiting_after_once(capsys, monkeypatch, tmp_path):
+    _with_old_key(tmp_path)
+    _models_ok(monkeypatch)
+    code, out = run(capsys, json=True)
+    named = [c for c in json.loads(out)["checks"] if any("release_waiting_after" in l for l in c["lines"])]
+    assert code == 0 and [c["name"] for c in named] == ["settings"] and named[0]["ok"] is True
+    assert len(named[0]["lines"]) == 1
+
+
+def test_doctor_without_the_key_says_nothing_about_it(capsys, monkeypatch):
+    _models_ok(monkeypatch)
+    _, out = run(capsys)
+    assert "release_waiting_after" not in out
+    _, js = run(capsys, json=True)
+    assert next(c for c in json.loads(js)["checks"] if c["name"] == "settings") == {"name": "settings", "ok": True, "lines": []}
