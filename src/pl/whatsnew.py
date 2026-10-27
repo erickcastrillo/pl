@@ -302,7 +302,17 @@ ENTRIES = [
        "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
     _e("2026-10-26.80", "Customer-support pipeline template: triage and owner-approved replies",
        "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
-    _e("2026-10-26.81", "Alerts and waiting agents notify you once",
+    _e("2026-10-26.81", "Tests to run can come from .pl/tests.toml (affected_cmd, always, full_on)",
+       ".pl/tests.toml", "pl tests affected --json"),
+    _e("2026-10-26.82", "Route and remove chat connectors in the console",
+       "Extend → Connectors: on a chat row, r picks what it receives and d removes it", "pl chat route"),
+    _e("2026-10-26.83", "Quiet hours hold notifications overnight and send one summary after",
+       '[notify] quiet = "22:00-07:00" in the profile config; high alerts still go out', "pl doctor"),
+    _e("2026-10-26.84", "Test that notifications reach you",
+       "pl notify test; pl doctor warns when nothing is set up", "pl notify test --chat <name>"),
+    _e("2026-10-26.85", "Stalled agents are nudged, then restarted", "Alerts tab: stalled; [dispatch] stall_minutes",
+       "pl alerts"),
+    _e("2026-10-26.86", "Alerts and waiting agents notify you once",
        "[notify] events: agent_waiting, alert_opened (switch either off there)", "pl alerts"),
 ]
 

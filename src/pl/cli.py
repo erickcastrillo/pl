@@ -135,7 +135,8 @@
   pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
-  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the [tracker] and [intake] boards, the assistant's account)
+  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the [tracker] and [intake] boards, the assistant's account, notifications)
+  pl notify test [--chat NAME]  send one test notification; says whether attention_cmd (and NAME) got it
   pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
@@ -363,6 +364,7 @@ def _main():
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
+     "notify": lambda a: __import__("pl.notifications").notifications.cmd_notify(a),
      "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
      "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
@@ -559,6 +561,7 @@ def build_parser():
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
+    p = sub.add_parser("notify"); p.add_argument("action", choices=["test"]); p.add_argument("--chat", metavar="NAME", help="also send the test to this chat connector")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)

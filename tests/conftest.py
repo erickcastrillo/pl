@@ -32,6 +32,13 @@ def no_real_screen_reads(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_idle_clock(monkeypatch):
+    """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
+    from pl import agents
+    monkeypatch.setattr(agents, "idle_seconds", lambda w, reg, st=None: None)
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))

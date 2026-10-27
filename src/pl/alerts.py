@@ -12,6 +12,7 @@ from pl.util import age
 
 ESCALATE = (3600, 4 * 3600)   # seconds after first seen: the two escalations
 STEP = {1: "1 h", 2: "4 h"}
+URGENT = {"high", "error"}    # these bypass quiet hours when they open
 KEEP = 7 * 86400              # a resolved alert stays this long for pl alerts --all
 FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards"}
 _clock = time.time
@@ -122,13 +123,24 @@ def _offer(key, why, title):
     if not key.startswith(DIRECT):
         return
     try:
+        from pl import notifications
         from pl.manager import machine_dir
+        if notifications.holding():   # the site's own notify put it in the held file
+            return
         mdir = machine_dir()
         mdir.mkdir(parents=True, exist_ok=True, mode=0o700)
         outbox = mdir / "chat-outbox.jsonl"
         fd = os.open(outbox, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as f:
             f.write(json.dumps({"key": key, "headline": hl}) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _urgent(on):
+    try:
+        from pl import notifications
+        notifications.urgent(on)
     except Exception:  # noqa: BLE001
         pass
 
@@ -168,6 +180,7 @@ def open(key, severity, title, fix, cards=()):
             a.update(severity=severity, title=title, fix=fix, cards=cards, last_seen=now,
                      count=int(a.get("count") or 0) + 1)
             why = _step(a, now)
+    _urgent(bool(why) and severity in URGENT)
     if why == "open":
         _logged("alert_opened", key=key, severity=severity, title=title, cards=cards)
     if why:
