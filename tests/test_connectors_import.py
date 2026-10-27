@@ -71,6 +71,15 @@ def test_adding_an_unknown_server_or_role_exits_2(capsys):
     assert not connectors.path().exists()
 
 
+def test_adding_with_role_tickets_is_accepted(capsys):
+    connectors.cmd_connectors(argparse.Namespace(**{**vars(_args()), "add": "ledger", "role": ["tickets"], "yes": True}))
+    assert connectors.get("ledger")["role"] == ["tickets"]
+    with pytest.raises(SystemExit) as e:
+        connectors.cmd_connectors(argparse.Namespace(**{**vars(_args()), "add": "ledger", "role": ["bogus"], "yes": True}))
+    assert e.value.code == 2
+    assert "tickets" in capsys.readouterr().err
+
+
 def test_codex_import_exits_2(capsys):
     with pytest.raises(SystemExit) as e:
         connectors.cmd_connectors(argparse.Namespace(**{**vars(_args()), "source": "codex"}))

@@ -1,7 +1,12 @@
 """What's new on upgrade, and the empty states that point to a feature on a quiet board."""
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tomllib
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -194,3 +199,158 @@ def test_whatsnew_lists_empty_states():
 
 def test_whatsnew_names_the_marketing_pod():
     assert sum("marketing pod" in e["title"] for e in whatsnew.ENTRIES) == 1
+
+
+MIGRATED = {
+    "key": "2026-10-26.80",
+    "title": "Customer-support pipeline template: triage and owner-approved replies",
+    "where": "pl pipelines list --templates",
+    "try": "pl pipelines add support --template customer-support --board local --yes",
+}
+
+
+def _write(d, name, **fields):
+    lines = [f"{k} = {json.dumps(v)}" for k, v in fields.items()]
+    (d / name).write_text("\n".join(lines) + "\n")
+
+
+def _entry_file(d, name, **extra):
+    _write(d, name, title="T", where="W", **{"try": "pl x"}, **extra)
+
+
+def test_the_shipped_entry_files_have_no_problems():
+    assert whatsnew.problems() == []
+
+
+def test_entry_files_load_in_file_name_order(tmp_path):
+    for name in ("2026-10-28-0900-b.toml", "2026-10-27-2310-a.toml", "2026-10-28-0130-c.toml"):
+        _entry_file(tmp_path, name)
+    got = whatsnew.load(tmp_path)
+    assert [e["key"] for e in got] == ["2026-10-27-2310-a", "2026-10-28-0130-c", "2026-10-28-0900-b"]
+    assert all(set(e) == {"key", "title", "where", "try"} for e in got)
+
+
+def test_a_missing_entry_folder_loads_nothing(tmp_path):
+    assert whatsnew.load(tmp_path / "nope") == []
+
+
+def _bad_missing_try(d):
+    _write(d, "2026-10-27-0100-x.toml", title="T", where="W")
+    return "2026-10-27-0100-x.toml", "try"
+
+
+def _bad_name(d):
+    _entry_file(d, "foo.toml")
+    return "foo.toml", "name"
+
+
+def _bad_duplicate_files(d):
+    _entry_file(d, "2026-10-26-0001-a.toml", id="2026-10-26.01")
+    _entry_file(d, "2026-10-26-0001-b.toml", id="2026-10-26.01")
+    return "2026-10-26-0001-b.toml", "duplicate"
+
+
+def _bad_duplicate_legacy(d):
+    _entry_file(d, "2026-10-26-0079-a.toml", id="2026-10-26.79")
+    return "2026-10-26-0079-a.toml", "duplicate"
+
+
+def _bad_id_on_new_file(d):
+    _entry_file(d, "2026-10-28-0100-x.toml", id="2026-10-28-0100-x")
+    return "2026-10-28-0100-x.toml", "id"
+
+
+def _bad_old_date_without_id(d):
+    _entry_file(d, "2026-10-25-1200-x.toml")
+    return "2026-10-25-1200-x.toml", "id"
+
+
+def _bad_time(d):
+    _entry_file(d, "2026-10-28-2575-x.toml")
+    return "2026-10-28-2575-x.toml", "time"
+
+
+def _bad_unknown_key(d):
+    _entry_file(d, "2026-10-28-0100-x.toml", after="2026-11-01")
+    return "2026-10-28-0100-x.toml", "after"
+
+
+def _bad_syntax(d):
+    (d / "2026-10-28-0100-x.toml").write_text("title = \n")
+    return "2026-10-28-0100-x.toml", "parse"
+
+
+@pytest.mark.parametrize("make", [_bad_missing_try, _bad_name, _bad_duplicate_files, _bad_duplicate_legacy,
+                                  _bad_id_on_new_file, _bad_old_date_without_id, _bad_time, _bad_unknown_key,
+                                  _bad_syntax])
+def test_a_bad_entry_file_is_named_with_its_problem(tmp_path, make):
+    name, word = make(tmp_path)
+    msgs = whatsnew.problems(tmp_path)
+    assert any(m.startswith(name + ":") and word in m for m in msgs), msgs
+    assert name.removesuffix(".toml") not in [e["key"] for e in whatsnew.load(tmp_path)]
+
+
+def test_a_file_that_sorts_before_the_legacy_entries_is_named(tmp_path):
+    _entry_file(tmp_path, "2026-10-26-0001-a.toml", id="2026-10-26.01")
+    assert any("sorts before" in m for m in whatsnew.problems(tmp_path, legacy=[{"key": "2026-10-26.79"}]))
+
+
+def test_the_migrated_entry_keeps_its_key_and_text():
+    assert MIGRATED in whatsnew.ENTRIES   # later migrated entries (0081-0086, merged from main) may follow it
+    assert MIGRATED not in whatsnew._LEGACY
+    keys = [e["key"] for e in whatsnew.ENTRIES]
+    assert keys == sorted(keys) and len(keys) == len(set(keys))
+
+
+def test_seen_state_from_before_the_move_hides_old_entries_and_shows_new_files(tmp_path, monkeypatch):
+    real = whatsnew.DIR / "2026-10-26-0080-customer-support-template.toml"
+    (tmp_path / real.name).write_text(real.read_text())
+    _entry_file(tmp_path, "2026-10-27-0310-foo.toml")
+    monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew._LEGACY + whatsnew.load(tmp_path))
+    whatsnew.mark_seen("2026-10-26.80")
+    assert [e["key"] for e in whatsnew.unseen()] == ["2026-10-27-0310-foo"]
+
+
+def _git(cwd, *args):
+    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1"}
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], check=True, cwd=cwd,
+                          env=env, capture_output=True)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.parametrize("order", [("a", "b"), ("b", "a")])
+def test_two_branches_adding_entry_files_merge_cleanly_in_either_order(tmp_path, order):
+    repo = tmp_path / "repo"
+    (repo / "whatsnew.d").mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "whatsnew.d" / ".keep").write_text("")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    files = {"a": "2026-10-27-0310-a.toml", "b": "2026-10-27-0305-b.toml"}
+    for branch, name in files.items():
+        _git(repo, "checkout", "-q", "-b", branch, "main")
+        _entry_file(repo / "whatsnew.d", name)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", branch)
+    _git(repo, "checkout", "-q", "main")
+    for branch in order:
+        _git(repo, "merge", "-q", "--no-edit", branch)
+    assert [e["key"] for e in whatsnew.load(repo / "whatsnew.d")] == ["2026-10-27-0305-b", "2026-10-27-0310-a"]
+
+
+def test_entry_files_ship_in_the_wheel():
+    root = Path(__file__).parents[1]
+    wheel = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert wheel["packages"] == ["src/pl"]
+    assert not {"include", "exclude", "only-include"} & set(wheel)
+    ignored = (root / ".gitignore").read_text().splitlines()
+    assert not [line for line in ignored if "toml" in line]
+
+
+def test_a_file_named_after_the_migrated_one_needs_no_id_even_on_the_same_day(tmp_path, profile, monkeypatch):
+    _entry_file(tmp_path, "2026-10-26-1530-new-thing.toml")
+    assert whatsnew.problems(tmp_path, legacy=whatsnew._LEGACY + [MIGRATED]) == []
+    assert [e["key"] for e in whatsnew.load(tmp_path)] == ["2026-10-26-1530-new-thing"]
+    whatsnew.mark_seen("2026-10-26.80")
+    monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew._LEGACY + [MIGRATED] + whatsnew.load(tmp_path))
+    assert [e["key"] for e in whatsnew.unseen()] == ["2026-10-26-1530-new-thing"]
