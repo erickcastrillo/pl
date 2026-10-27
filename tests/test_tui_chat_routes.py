@@ -113,7 +113,7 @@ async def test_uncheck_alerts_keeps_other_connector(monkeypatch):
         await pilot.press("r")
         await settle(pilot)
         await toggle(pilot, "alerts")
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert fake.commands("route") == [["pl", "chat", "route", "alerts", "B"]]
         assert any("pl chat route alerts B" in n for n in seen)
@@ -131,7 +131,7 @@ async def test_two_kinds_changed_one_call_each(monkeypatch):
         await pilot.press("r")
         await settle(pilot)
         await toggle(pilot, "alerts", "digest")
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert fake.commands("route") == [["pl", "chat", "route", "alerts", "B", "A"],
                                           ["pl", "chat", "route", "digest"]]
@@ -146,7 +146,7 @@ async def test_save_unchanged_or_escape_runs_nothing(monkeypatch):
         await focus_chat_row(app, pilot)
         await pilot.press("r")
         await settle(pilot)
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert len(app.screen_stack) == 1
         await pilot.press("r")
@@ -169,7 +169,7 @@ async def test_failed_route_shows_error_row_unchanged(monkeypatch):
         await pilot.press("r")
         await settle(pilot)
         await toggle(pilot, "alerts")
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert any(err in n for n in seen)
         assert len(fake.commands("route")) == 1
@@ -241,14 +241,14 @@ async def test_token_value_never_shown(monkeypatch):
         await settle(pilot)
         assert SECRET not in screen_text(app)
         await toggle(pilot, "alerts")
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await settle(pilot)
         assert SECRET not in screen_text(app)
         fake.route_rc, fake.route_err = 1, f"failed with {SECRET}"
         await pilot.press("r")
         await settle(pilot)
         await toggle(pilot, "digest")
-        await pilot.press("s")
+        await pilot.press("ctrl+s")
         await settle(pilot)
         await pilot.press("d")
         await settle(pilot)

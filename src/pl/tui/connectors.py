@@ -109,7 +109,7 @@ class ChatRoutesScreen(ModalScreen):
     ChatRoutesScreen > Vertical { width: 50; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     #chat-routes { height: auto; }
     """
-    BINDINGS = [Binding("s", "save", "save"), Binding("escape", "cancel", "cancel")]
+    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
 
     def __init__(self, name, routes):
         super().__init__()
@@ -120,7 +120,7 @@ class ChatRoutesScreen(ModalScreen):
         with Vertical():
             yield Static(Text(f"Routes for {util.mask(self.connector)}"))
             yield SelectionList(*[(k, k, k in self.routes) for k in CHAT_KINDS], id="chat-routes")
-            yield Static(Text("space toggle · s save · esc cancel", style="dim"))
+            yield Static(Text("space toggle · ctrl+s save · esc cancel", style="dim"))
 
     def action_save(self):
         self.dismiss(set(self.query_one("#chat-routes", SelectionList).selected))
