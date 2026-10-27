@@ -173,3 +173,44 @@ async def test_pipeline_row_pane_and_card_show_the_line_and_todos(fake_home, mon
         await settle(pilot)
         text = screen_text(app)
         assert "[>] write the migration" in text and "[x] a" in text and "[ ] d" in text
+
+
+async def board_now_cells(monkeypatch, agent, col="Plan for review"):
+    monkeypatch.setattr(C, "PIPELINE", {"stages": {"draft": {"column": col, "agent": agent}}})
+    monkeypatch.setattr(tui_cards.agent_defs, "load", lambda: {agent: {}})
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        app.action_tab("cards")
+        await settle(pilot)
+        cells = app.query_one("#cards-table").get_row(CARD)
+        line = next(x for x in screen_text(app).splitlines() if "4a000001 " in x)
+        return cells[-1].plain, line
+
+
+async def test_board_now_cell_names_the_stage_agent(fake_home, monkeypatch):
+    now, line = await board_now_cells(monkeypatch, "marketing-copywriter")
+    assert now.startswith("agent: marketing-copywriter")
+    assert "4a000001" in line and "review" in line.lower()
+
+
+async def test_board_now_cell_shortens_a_long_agent_name(fake_home, monkeypatch):
+    now, _ = await board_now_cells(monkeypatch, "x" * 40)
+    shown = now.removeprefix("agent: ").split(" · ")[0]
+    assert shown.endswith("…") and len(shown) <= tui_cards.AGENT_WIDTH
+
+
+async def test_board_row_without_agent_is_unchanged(fake_home, monkeypatch):
+    async def rows():
+        app = PlApp(snapshot_provider=Provider(fake_data()))
+        async with app.run_test(size=(176, 48)) as pilot:
+            await settle(pilot)
+            app.action_tab("cards")
+            await settle(pilot)
+            t = app.query_one("#cards-table")
+            return {k.value: [c.plain if hasattr(c, "plain") else str(c) for c in t.get_row(k)] for k in t.rows}
+    monkeypatch.setattr(C, "PIPELINE", tui_cards.pipeline.engineering())
+    today = await rows()
+    monkeypatch.setattr(tui_cards, "stage_agent", lambda *a, **k: "")
+    assert await rows() == today
+    assert not any("agent:" in c for cells in today.values() for c in cells)
