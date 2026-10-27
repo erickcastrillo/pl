@@ -257,3 +257,124 @@ def test_shim_falls_back_to_next_gh_when_pl_is_gone(monkeypatch, tmp_path):
     env = {"PATH": f"{shim}:{other}:/usr/bin:/bin"}
     out = subprocess.run([str(shim / "gh"), "pr", "list"], env=env, capture_output=True, text=True)
     assert (out.returncode, out.stdout) == (7, "real gh pr list\n")
+
+
+# ---------- slice 3: the wrapper waits below the write reserve ----------
+
+ACCT = "bot.abc@github.com"
+
+
+class Clock:
+    """A fake clock that the fake sleep advances; no test sleeps for real."""
+
+    def __init__(self, monkeypatch, start=1_000_000):
+        self.now, self.sleeps, self.calls_at = start, [], []
+        monkeypatch.setattr(ghquota, "_clock", lambda: self.now)
+        monkeypatch.setattr(github, "_clock", lambda: self.now)
+        monkeypatch.setattr(ghwrap, "_sleep", self.sleep)
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture
+def held(monkeypatch, gh):
+    monkeypatch.setenv("PL_GH_LEDGER", ACCT)
+    monkeypatch.setattr(ghwrap, "_run", lambda argv, env: gh.run(argv, env))
+    return Clock(monkeypatch)
+
+
+def _ledger_at(clock, remaining, reset_in=300, at=None):
+    reset = clock.now + reset_in
+    ghquota._write(ghquota._path(ACCT), {"limit": 5000, "remaining": remaining, "reset": reset,
+                                         "at": clock.now if at is None else at, "window": reset,
+                                         "spent": {}, "by": {}, "subs": {}})
+    return reset
+
+
+def test_check_reads_the_named_ledger(monkeypatch):
+    reset = _seed(100, acct=ACCT)
+    monkeypatch.setattr(ghquota, "account", lambda: (_ for _ in ()).throw(AssertionError("gh auth token")))
+    got = ghquota.check("read", acct=ACCT)
+    assert got == (reset, "100 of 5000 GraphQL points left: kept for writes")
+    assert ghquota.stale(acct=ACCT) is False
+
+
+def test_refresh_writes_the_named_ledger(monkeypatch):
+    reset = _seed(100, acct=ACCT)
+    other = _seed(100, acct="other@github.com")
+    monkeypatch.setattr(ghquota, "account", lambda: (_ for _ in ()).throw(AssertionError("gh auth token")))
+    ghquota.refresh(4000, reset, acct=ACCT)
+    assert ghquota.ledger(ACCT)["remaining"] == 4000
+    assert ghquota.ledger("other@github.com")["remaining"] == 100 and other
+
+
+def test_waits_below_reserve_then_runs_once(held, gh, capsys):
+    reset = _ledger_at(held, 100)
+    gh.code = 4
+    seen = []
+    real_run = gh.run
+    gh.run = lambda argv, env: (seen.append(held.now), real_run(argv, env))[1]
+    assert ghwrap.main(["pr", "view", "12"]) == 4
+    assert gh.calls == [["/real/gh", "pr", "view", "12"]]
+    assert seen[0] >= reset
+
+
+def test_wait_line_once_a_minute_on_stderr_only(held, gh, capsys):
+    _ledger_at(held, 180)
+    ghwrap.main(["pr", "view", "12"])
+    out, err = capsys.readouterr()
+    lines = [x for x in err.splitlines() if "kept for writes" in x]
+    assert out == "" and 1 <= len(lines) <= 6
+    assert "180 of 5000 GraphQL points left" in lines[0] and "reset at" in lines[0]
+
+
+@pytest.mark.parametrize("args", [["pr", "view", "1"], ["pr", "list"], ["pr", "status"], ["pr", "checks", "1"],
+                                  ["api", "graphql", "-f", "query=x"], ["project", "item-list", "1"]])
+def test_each_graphql_subcommand_waits(held, gh, args):
+    reset = _ledger_at(held, 100)
+    ghwrap.main(args)
+    assert held.sleeps and gh.calls == [["/real/gh", *args]]
+    assert held.now >= reset
+
+
+@pytest.mark.parametrize("args", [["api", "repos/o/r/pulls/12"], ["pr", "create", "--fill"], ["--version"],
+                                  ["auth", "status"]])
+def test_rest_create_and_local_run_at_once(held, gh, capsys, args):
+    _ledger_at(held, 100)
+    ghwrap.main(args)
+    assert gh.calls == [["/real/gh", *args]] and held.sleeps == []
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("case", ["above", "no_ledger", "reset_passed"])
+def test_no_wait_above_reserve_no_reading_or_past_reset(held, gh, capsys, case):
+    if case == "above":
+        _ledger_at(held, 4000)
+    elif case == "reset_passed":
+        _ledger_at(held, 4000, reset_in=-10)
+    ghwrap.main(["pr", "view", "1"])
+    assert gh.calls and held.sleeps == []
+    assert capsys.readouterr().err == ""
+
+
+def test_stale_reading_is_refreshed_before_waiting(held, gh, capsys):
+    reset = _ledger_at(held, 100, at=held.now - ghquota.STALE - 5)
+    gh.reading = _reading(4000, reset)
+    ghwrap.main(["pr", "view", "1"])
+    assert gh.calls == [["/real/gh", "pr", "view", "1"]] and held.sleeps == []
+    assert capsys.readouterr().err == ""
+    assert ghquota.ledger(ACCT)["remaining"] >= 4000 - 5
+
+
+def test_ctrl_c_during_wait_exits_without_gh(held, gh, capsys, monkeypatch):
+    _ledger_at(held, 100)
+
+    def interrupt(seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ghwrap, "_sleep", interrupt)
+    assert ghwrap.main(["pr", "view", "1"]) == 130
+    assert gh.calls == []
+    assert "Traceback" not in capsys.readouterr().err

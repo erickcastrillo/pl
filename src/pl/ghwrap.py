@@ -9,18 +9,46 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from pl import config as C
 from pl import ghquota
 from pl.trackers import github
 
 ESTIMATE = 1   # points for a GraphQL call when no reading can say what it cost
+WAITS = {("pr", "view"), ("pr", "list"), ("pr", "status"), ("pr", "checks"), ("api", "graphql")}
 NO_CALL = {"", "--version", "version", "help", "--help", "auth", "config", "alias", "completion", "extension"}
 
 
 def _run(argv, env):
     """The one subprocess call: the real gh, nothing captured, no timeout (agents run `gh pr checks --watch`)."""
     return subprocess.run(argv, env=env).returncode
+
+
+_sleep = time.sleep
+
+
+def _waits(args):
+    return tuple(args[:2]) in WAITS or args[:1] == ["project"]
+
+
+def _held(acct):
+    wait = ghquota.check("read", acct)
+    if wait and ghquota.stale(acct) and (budget := github._graphql_budget()) and budget[1]:
+        ghquota.refresh(*budget, acct=acct)
+        wait = ghquota.check("read", acct)
+    return wait
+
+
+def _hold(acct, args):
+    """Wait for the reset while the ledger is below the write reserve, saying why on stderr once a minute."""
+    said = None
+    while (wait := _held(acct)) and (now := ghquota._clock()) < wait[0]:
+        if said is None or now - said >= 60:
+            at = time.strftime("%H:%M", time.localtime(wait[0]))
+            print(f"pl: gh {' '.join(args[:2])} waits for GitHub's reset at {at}: {wait[1]}", file=sys.stderr)
+            said = now
+        _sleep(min(60, wait[0] - now))
 
 
 def kind(args):
@@ -65,6 +93,13 @@ def main(argv=None):
     if not real:
         print("pl: gh is not installed: https://cli.github.com", file=sys.stderr)
         return 127
+    if counting and _waits(args) and (acct := os.environ.get("PL_GH_LEDGER")):
+        try:
+            _hold(acct, args)
+        except KeyboardInterrupt:
+            return 130
+        except Exception:
+            pass   # a broken ledger never blocks the agent's gh
     code = _run([real, *args], dict(os.environ))
     if counting and kind(args) == "graphql":
         try:

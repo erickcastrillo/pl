@@ -208,18 +208,18 @@ def record_agent(acct, caller, sub, points, remaining, reset):
         pass
 
 
-def stale():
+def stale(acct=None):
     """True when the ledger holds a reading of this window that is older than STALE seconds."""
-    led, now = ledger(), _clock()
+    led, now = ledger(acct), _clock()
     return (led.get("reset") or 0) > now and now - (led.get("at") or 0) > STALE
 
 
-def refresh(remaining, reset):
+def refresh(remaining, reset, acct=None):
     """Take GitHub's own reading (free) over the ledger's, spending nothing. A gap of more than 10% of the limit is
     logged, with where this process signs in (never a token), so a second token can be traced."""
     try:
         with _locked():
-            led = ledger()
+            led = ledger(acct)
             limit = led.get("limit") or 5000
             if isinstance(led.get("remaining"), int) and abs(led["remaining"] - remaining) > 0.1 * limit:
                 events.emit("github_budget_gap", None, ledger=led["remaining"], github=remaining, role=ROLE["name"],
@@ -228,7 +228,7 @@ def refresh(remaining, reset):
             if led.get("window") != reset:
                 led.update(window=reset, spent={}, by={}, subs={})
             led.update(limit=limit, remaining=remaining, reset=reset, at=_clock())
-            _write(_path(), led)
+            _write(_path(acct), led)
     except OSError:
         pass
 
@@ -252,9 +252,9 @@ def fair_share(led):
     return int((led.get("limit") or 5000) / n)
 
 
-def check(kind="read"):
+def check(kind="read", acct=None):
     """None when this call may go ahead, else (until, why). kind "write" for a change on GitHub, else "read"."""
-    led, now = ledger(), _clock()
+    led, now = ledger(acct), _clock()
     rem, lim, reset = led.get("remaining"), led.get("limit") or 5000, led.get("reset") or 0
     if not isinstance(rem, int):
         return None
