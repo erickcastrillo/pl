@@ -550,8 +550,7 @@ class LoopsView(Widget):
         super().__init__()
         self._runs, self._run_lines = [], None
         self.loops = None   # None until the first show, so an empty first refresh still draws
-        self.data, self._shown = None, None
-        self.agents, self.notes, self.lines, self.redraws, self._tail_key = [], [], [], 0, None
+        self.data, self._shown, self.agents, self.notes, self.lines, self.redraws, self._tail_key = None, None, [], [], [], 0, None
 
     def compose(self):
         with Horizontal():

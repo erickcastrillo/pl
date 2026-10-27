@@ -4264,12 +4264,12 @@ async def test_the_first_event_replaces_the_activity_empty_state():
 async def test_automate_shows_one_running_view():
     from pl.tui.chrome import GROUPS, HELP
     from pl.tui.loops import LoopsView
-    from pl.tui.subagents import SubagentsView
+    from pl.tui import subagents
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         assert _labels(app, "#automate-views") == ["Running"]
-        assert not app.query(SubagentsView) and app.query(LoopsView)
+        assert not hasattr(subagents, "SubagentsView") and app.query(LoopsView)
     assert not any("Background" in v for v in HELP.values())
     assert not any("Background" in label for _, _, views in GROUPS for _, label in views)
     assert "loops" in HELP["loops"] and "background" in HELP["loops"]

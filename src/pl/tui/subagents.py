@@ -199,12 +199,11 @@ def scan(data=None):
                 continue
             meta, session, entries = _meta(root, p), p.parent.parent.name, _entries(r, st)
             seen.add(r)
-            summary = _summary(entries)[0]
             what = ": ".join(str(x) for x in (meta.get("agentType"), meta.get("description")) if x)
             rows.append({"path": r, "ident": (st.st_dev, st.st_ino), "agent": p.name[len("agent-"):-len(".jsonl")], "parent": session[:8],
                          "card": cards.get(session, "-"), "what": mask(what or "-"),
                          "state": state(entries, now - st.st_mtime) if entries or not st.st_size else "unknown",
-                         "age": now - st.st_mtime, "now": summary, "ran": _started(entries),
+                         "age": now - st.st_mtime, "now": _summary(entries)[0], "ran": _started(entries),
                          "full": len(entries) >= TAIL_ENTRIES,
                          "key": (st.st_size, st.st_mtime_ns)})
     rows.sort(key=lambda r: r["age"])
@@ -261,10 +260,8 @@ def agent_sentence(r):
     line.append(r["state"], style="red" if r["state"] in ("error", "unknown") else "")
     if r["now"]:
         line.append(f": {r['now']}")
-    if r["ran"] is not None:
-        line.append(f" · running {_age(time.time() - r['ran'])}{'+' if r.get('full') else ''}")
-    else:
-        line.append(f" · last active {_age(r['age'])}")
+    line.append(f" · running {_age(time.time() - r['ran'])}{'+' if r.get('full') else ''}" if r["ran"] is not None
+                else f" · last active {_age(r['age'])}")
     return line
 
 
