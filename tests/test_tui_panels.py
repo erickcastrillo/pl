@@ -242,6 +242,8 @@ def test_parity_map_matches_spec():
     assert ("pods", "list") in PARITY_MAP
     assert ("pods", "rule add") in PARITY_MAP
     assert ("pods", "show") in PARITY_MAP
+    assert PARITY_MAP[("agents", "list")] == "pl agents list"
+    assert PARITY_MAP[("agents", "show")] == PARITY_MAP[("agents", "enter")] == "pl agents show"
     assert ("triggers", "list") in PARITY_MAP
     assert ("models", "list") in PARITY_MAP
     assert ("models", "test") in PARITY_MAP

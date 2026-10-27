@@ -3954,12 +3954,12 @@ async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stay
     assert "chase" not in (profile / "config.toml").read_text()
 
 
-EXTEND_VIEWS = ["extend", "skills", "connectors", "pods", "models", "extensions"]
+EXTEND_VIEWS = ["extend", "skills", "connectors", "pods", "agents", "models", "extensions"]
 
 
 def _fake_extend_cli(monkeypatch):
     """Every pl subcommand the Extend panels run, answered with an empty or one-row list; returns the argv log."""
-    from pl.tui import connectors, panels, skills
+    from pl.tui import agentdefs, connectors, panels, skills
     calls = []
 
     def fake_run(argv, **kw):
@@ -3968,16 +3968,16 @@ def _fake_extend_cli(monkeypatch):
             if argv[:3] == ["pl", "connectors", "list"] else "[]"
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
-    for mod in (connectors, panels, skills):
+    for mod in (agentdefs, connectors, panels, skills):
         monkeypatch.setattr(mod, "_run", fake_run, raising=False)
     return calls
 
 
-def test_extend_tab_lists_its_six_sub_tabs_in_order():
+def test_extend_tab_lists_its_seven_sub_tabs_in_order():
     from pl.tui.chrome import GROUP_KEYS, GROUPS
     views = next(g[2] for g in GROUPS if g[0] == "extend")
     assert [v[0] for v in views] == EXTEND_VIEWS
-    assert [v[1] for v in views] == ["Active pod", "Skills", "Connectors", "Pods", "Models", "Extensions"]
+    assert [v[1] for v in views] == ["Active pod", "Skills", "Connectors", "Pods", "Agents", "Models", "Extensions"]
     assert GROUP_KEYS["extend"] == "6"
 
 
@@ -3998,7 +3998,7 @@ async def test_six_opens_extend_on_the_pod(monkeypatch):
         assert app.query_one("#skills").query_one(SkillsView)
 
 
-@pytest.mark.parametrize("vid,panel", [("skills", "SkillsView"), ("connectors", "ConnectorsPanel"), ("pods", "CommandPanel"),
+@pytest.mark.parametrize("vid,panel", [("skills", "SkillsView"), ("connectors", "ConnectorsPanel"), ("pods", "CommandPanel"), ("agents", "AgentsView"),
                                        ("models", "CommandPanel"), ("extensions", "ExtensionsView")])
 async def test_each_extend_sub_tab_shows_its_panel(monkeypatch, vid, panel):
     calls = _fake_extend_cli(monkeypatch)

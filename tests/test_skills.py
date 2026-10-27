@@ -1299,3 +1299,25 @@ async def test_update_button_runs_the_check_then_labels_update_available(grouped
         await settle(pilot, lambda: str(pane_buttons(app)['skills-btn-update'].label) == 'Update available', "the update label")
         assert ran == [["pl", "skills", "update", "--check"]]
         assert str(pane_buttons(app)["skills-btn-update"].label) == "Update available"
+
+
+async def test_harness_agent_kind_shows_as_subagent(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        t = app.query_one("#skills-table", DataTable)
+        kind_of = {str(t.get_row_at(i)[0]): str(t.get_row_at(i)[1]) for i in range(t.row_count)}
+        assert kind_of["reviewer"] == "subagent"
+        assert kind_of["alpha"] == "skill" and kind_of["deploy"] == "command"
+
+
+async def test_skills_title_and_palette_say_subagents():
+    from pl.tui import chrome
+    from pl.tui.app import PlApp, VIEWS
+    assert VIEWS["skills"]().border_title == "Skills, subagents and commands (every account)"
+    assert "skills, subagents and commands" in chrome.HELP["skills"]
+    app = PlApp(snapshot_provider=lambda: {})
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        helps = [c.help for c in app.get_system_commands(app.screen) if c.title.startswith("Skills")]
+    assert any("skills, subagents and commands" in h for h in helps)
