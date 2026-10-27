@@ -22,6 +22,10 @@ async def wait_until(pilot, condition, what, timeout=5.0):
     pytest.fail(f"timed out after {timeout}s waiting for {what}")
 
 
+async def wait_for_screen(pilot, name):
+    await wait_until(pilot, lambda: name in {c.__name__ for c in type(pilot.app.screen).__mro__}, f"the {name}")
+
+
 async def settle(pilot, condition=None, what="the app to settle"):
     await pilot.app.workers.wait_for_complete()
     if condition is None:

@@ -5,7 +5,7 @@ import pytest
 from textual.app import App
 from textual.widgets import Static
 
-from tui_wait import settle, uncommented_pauses, view_app, wait_until
+from tui_wait import settle, uncommented_pauses, view_app, wait_for_screen, wait_until
 
 TESTS = Path(__file__).parent
 
@@ -51,6 +51,18 @@ async def test_view_app_mounts_only_the_given_widget():
         assert app.query_one("#x")
         assert len(app.screen_stack) == 1
         assert type(app).__name__ != "PlApp"
+
+
+async def test_wait_for_screen_sees_a_pushed_screen_by_class_name():
+    from textual.screen import ModalScreen
+
+    class Ask(ModalScreen):
+        pass
+
+    async with view_app(lambda: Static("hi")).run_test() as pilot:
+        await pilot.app.push_screen(Ask())
+        await wait_for_screen(pilot, "ModalScreen")
+        await wait_for_screen(pilot, "Ask")
 
 
 def test_uncommented_pauses_finds_bare_pauses_only(tmp_path):
