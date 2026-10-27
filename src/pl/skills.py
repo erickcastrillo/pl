@@ -459,6 +459,8 @@ def plugin_dir(pod=None):
         if isinstance(pod, dict):
             for sname in pod.get("skills", []):
                 src = lib / sname
+                if not src.is_dir() and (own := pods.skill_dir(sname)):
+                    src = own
                 if src.is_dir() and not (link_ / sname).exists():
                     os.symlink(src, link_ / sname, target_is_directory=True)
             for plug in pod.get("plugins", []):
@@ -530,6 +532,8 @@ def library_prompt(h, account, prompt, plugin=None, pod=None):
         return prompt
     try:
         f = library() / name / "SKILL.md"
+        if not f.is_file() and pod and (own := pods.skill_dir(name)):
+            f = own / "SKILL.md"
         if not f.is_file():
             return prompt
         root = harnesses.config_dir(account)
@@ -539,7 +543,7 @@ def library_prompt(h, account, prompt, plugin=None, pod=None):
             wd = Path(C.WORK_DIR) / ".claude" / "skills" / name if C.WORK_DIR else None
             own = os.path.lexists(root / "commands" / f"{name}.md") if root else False
             return prompt if own or not plugin or (wd and os.path.lexists(wd)) else f"{loop}/pl:{name}{rest}"
-        text = _read(_safe(library(), f))
+        text = _read(_safe(f.parent.parent, f))
         d = C.STATE_DIR / "launch"
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
         _clean_inlined(d)
