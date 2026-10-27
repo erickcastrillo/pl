@@ -74,9 +74,10 @@ def _defaults():
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
     # autostart: the console starts the dispatcher. account_checks: minutes between health checks of a parked account
     # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. release_waiting_after: minutes a run agent may wait (a GATE line or an idle
-    # screen) before pl stops it and holds its card back (0 is off)
+    # screen) before pl stops it and holds its card back (0 is off). stall_minutes: minutes a run agent may sit idle while
+    # its card has not moved on before pl opens a "stalled" alert and notifies (0 is off)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
-                "release_waiting_after": 30, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+                "release_waiting_after": 30, "stall_minutes": 20, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
     GATES = {"spec": False}
     PIPELINE = None       # [pipeline]: columns, stages and gates; the engineering pipeline when absent
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
@@ -353,7 +354,7 @@ def validate(doc) -> list[str]:
         errs.append("code_host.gh_config_dir must be a folder path (text)")
     errs += _pr_limit_errors({**_defaults()["PR_LIMITS"], **doc.get("code_host", {})})
     for key, low in (("max_runs", 0), ("max_prep", 0), ("interval", 1), ("max_agent_processes", 1),
-                     ("release_waiting_after", 0)):
+                     ("release_waiting_after", 0), ("stall_minutes", 0)):
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
