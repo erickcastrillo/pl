@@ -304,7 +304,7 @@ ENTRIES = [
        "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
     _e("2026-10-26.81", "Tests to run can come from .pl/tests.toml (affected_cmd, always, full_on)",
        ".pl/tests.toml", "pl tests affected --json"),
-    _e("2026-10-26.74", "Route and remove chat connectors in the console",
+    _e("2026-10-26.82", "Route and remove chat connectors in the console",
        "Extend → Connectors: on a chat row, r picks what it receives and d removes it", "pl chat route"),
 ]
 
