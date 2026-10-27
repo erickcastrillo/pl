@@ -149,6 +149,14 @@ def test_a_sales_stage_context_holds_the_sales_rules_and_roles_only(home, monkey
     assert "Write the tests first" not in body
 
 
+def test_a_support_stage_context_holds_the_support_rules_and_roles_only(home, monkeypatch):
+    monkeypatch.setattr(C, "POD", "support")
+    monkeypatch.setattr(C, "PODS", {})
+    body = _sales_body(home)
+    assert "approves every reply" in body and "Connector roles: tickets, email" in body
+    assert "Write the tests first" not in body and "approves every proposal" not in body
+
+
 def test_a_sales_launch_with_a_missing_pod_md_starts_with_no_rules(home, monkeypatch, tmp_path):
     monkeypatch.setattr(C, "POD", "sales")
     monkeypatch.setattr(pods, "BUILTIN_DIR", tmp_path / "empty")

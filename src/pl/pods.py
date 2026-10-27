@@ -14,10 +14,12 @@ BUILTIN_DIR = Path(__file__).parent / "pods_builtin"
 BUDGETS = {"knowledge": 2000, "pod": 1500, "client": 1500}   # tokens; the role and card layers are uncut
 ENGINEERING_SKILLS = ["pl-spec", "pl-design", "pl-plan", "pl-run", "pl-review"]
 SALES_SKILLS = ["pl-sales-proposal", "pl-sales-follow-up"]
-BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"], "sales": SALES_SKILLS}
-BUILTIN_ROLES = {"sales": ["contacts", "email"]}   # connector roles a built-in pod works with
+SUPPORT_SKILLS = ["pl-support-reply", "pl-support-triage"]
+BUILTIN_SKILLS = {"engineering": ENGINEERING_SKILLS, "marketing": ["pl-stage"], "sales": SALES_SKILLS,
+                  "support": SUPPORT_SKILLS}
+BUILTIN_ROLES = {"sales": ["contacts", "email"], "support": ["tickets", "email"]}   # connector roles a built-in pod works with
 OWN_SKILLS_ONLY = ("marketing",)   # built-in pods that limit a launch to their own skills
-PIPELINE_POD_ONLY = ("sales",)     # built-in pods only an explicit [pipeline] pod picks, never the profile's name
+PIPELINE_POD_ONLY = ("sales", "support")     # built-in pods only an explicit [pipeline] pod picks, never the profile's name
 
 
 def _resolve(path):
