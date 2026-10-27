@@ -1,0 +1,4 @@
+id = "2026-10-26.86"
+title = "Notifications when a review passes or sends a PR back"
+where = "[notify] events: review_passed, review_rework"
+try = "pl rework"

@@ -667,13 +667,7 @@ def test_a_write_through_pl_or_r_makes_the_next_console_read_fresh(gh):
     _pass()
     trackers.reset()
     board.share("read")
-    _move("3", "Plan for review")                         # an agent's pl move
-    gh.clear()
-    board.cards()
-    assert reads(gh) == 1
-    _pass()
-    trackers.reset()
-    board.share("read")
+    _move("3", "Plan for review")                         # an agent's pl move patches its card in the save
     gh.clear()
     board.cards()
     assert reads(gh) == 0
@@ -754,6 +748,7 @@ def test_an_hour_with_an_idle_dispatcher_the_console_reads_no_board_and_40_searc
     """Measured before: a pass every 300 s (an idle board) and a console refresh every 60 s made 36 board reads
     (24 by the console: it reused a save for 120 s only) and 48 PR searches (4 every 5 minutes)."""
     C.DISPATCH["interval"] = 300                          # the dispatcher's wait on an idle board
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     _hour(monkeypatch, 60, pass_every=300)
     assert reads(gh) == 12                                # the dispatcher's own reads; the console reuses every one
     assert gh.count("search", "prs") <= 40                # open PRs 3 every 5 minutes, PR activity 2 every 30
@@ -827,7 +822,10 @@ def test_an_mcp_board_is_shared_the_same_way(mcp_calls):
     trackers.reset()
     tui_app.default_provider()
     assert mcp_calls.count("item_list") == 1              # the console reused the dispatcher's read
-    board.update("c3", verify=False, title="renamed")     # a write through pl
+    board.update("c3", verify=False, title="renamed")     # a write through pl patches its card in the save
+    board.cards()
+    assert mcp_calls.count("item_list") == 1
+    board.fresh_next()
     board.cards()
     assert mcp_calls.count("item_list") == 2
 
@@ -880,6 +878,7 @@ def test_a_second_read_in_one_pass_after_another_process_write_is_fresh(gh):
 
 
 def test_readers_reuse_a_save_for_at_most_330_seconds_however_long_the_dispatcher_waits(gh, monkeypatch):
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     now = [time.time()]                                   # one fake clock from the save on: a slow fake gh adds no age
     monkeypatch.setattr(board, "_clock", lambda: now[0])
     monkeypatch.setattr(github, "_clock", lambda: now[0])
@@ -1078,6 +1077,7 @@ def test_a_refresh_seeding_between_fresh_next_and_the_write_does_not_feed_it_an_
 
 
 def test_a_seeded_copy_never_outlives_the_saves_hold(gh, monkeypatch):
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     t0 = time.time()
     _at(monkeypatch, t0)
     _pass()                                               # the dispatcher's save at t0, held 270 s
@@ -1710,3 +1710,179 @@ def test_usage_github_with_no_ledger_yet(gh, mine, capsys):
 def test_usage_github_without_fresh_reading_keeps_the_old_output(gh, mine):
     _ledger(4200, {})
     assert "pl 4200" not in ghquota.report() and "4200 of 5000 GraphQL points left" in ghquota.report()
+
+
+# ---------- Plan 53 slice 6: one shared board read for every process ----------
+
+def _process(share=None):
+    board._SHARE.clear()
+    trackers.reset()
+    if share:
+        board.share(share)
+
+
+def _saved():
+    return json.loads((C.STATE_DIR / "board-cache.json").read_text())
+
+
+def _col_of(cid, cs=None):
+    c = next(c for c in (cs or board.cards()) if c["id"] == cid)
+    return board.col_name(c["list_id"])
+
+
+def test_ten_commands_in_share_seconds_read_the_board_once(gh, monkeypatch):
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    for _ in range(10):
+        _process()
+        board.cards()
+    assert reads(gh) == 1
+
+
+def test_a_save_older_than_share_seconds_is_read_again(gh, monkeypatch):
+    t = [1000.0]
+    _at(monkeypatch, t[0])
+    _process()
+    board.cards()
+    t[0] += 119
+    _at(monkeypatch, t[0])
+    _process()
+    board.cards()
+    assert reads(gh) == 1
+    t[0] += 2
+    _at(monkeypatch, t[0])
+    _process()
+    board.cards()
+    assert reads(gh) == 2
+
+
+@pytest.mark.parametrize("damage", ["key", "garbage", "cards"])
+def test_a_save_from_another_tracker_key_or_garbage_is_ignored(gh, damage):
+    _process()
+    board.cards()
+    path = C.STATE_DIR / "board-cache.json"
+    if damage == "garbage":
+        path.write_text("{not json")
+    else:
+        got = _saved()
+        got["key" if damage == "key" else "cards"] = "other" if damage == "key" else "x"
+        path.write_text(json.dumps(got))
+    _process()
+    gh.clear()
+    assert board.cards()
+    assert reads(gh) == 1
+
+
+def test_a_stopped_dispatchers_long_hold_counts_only_share_seconds(gh, monkeypatch):
+    _at(monkeypatch, 1000.0)
+    _process("write")
+    board.share("write", hold=300)
+    board.cards()
+    _at(monkeypatch, 1200.0)
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    _process()
+    board.cards()
+    assert reads(gh) == 1
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    _process()
+    board.cards()
+    assert reads(gh) == 2
+
+
+def test_the_save_is_0600_and_holds_at_key_and_cards(gh):
+    import stat
+    _process()
+    board.cards()
+    path = C.STATE_DIR / "board-cache.json"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert {"at", "key", "cards"} <= set(_saved())
+
+
+def test_a_move_patches_the_save_and_the_next_reader_sees_it_without_a_board_read(gh):
+    _process()
+    board.cards()
+    _move("3", "Plan for review")
+    _process()
+    gh.clear()
+    assert _col_of("acme/app#3") == "Plan for review"
+    assert reads(gh) == 0
+
+
+def test_an_update_of_a_section_and_of_metadata_patches_the_save(gh):
+    _process()
+    board.cards()
+    cid = "acme/app#3"
+    desc = board.render({"SPEC": "new spec"})
+    board.update(cid, description=desc, metadata={"pr": "x"}, verify=False)
+    _process()
+    gh.clear()
+    c = next(c for c in board.cards() if c["id"] == cid)
+    assert board.sections(c["description"])["SPEC"] == "new spec"
+    assert c["metadata"]["pr"] == "x"
+    assert reads(gh) == 0
+
+
+def test_a_new_card_is_added_to_the_save(gh):
+    _process()
+    n = len(board.cards())
+    res = trackers.get("tracker").create("Inbox", title="fresh idea")
+    _process()
+    gh.clear()
+    cs = board.cards()
+    assert len(cs) == n + 1 and res["id"] in {c["id"] for c in cs}
+    assert reads(gh) == 0
+
+
+def test_a_delete_leaves_the_save_stale(gh):
+    _process()
+    board.cards()
+    trackers.get("tracker").delete("acme/app#3")
+    _process()
+    gh.clear()
+    board.cards()
+    assert reads(gh) == 1
+
+
+def test_a_write_after_a_stale_save_does_not_revive_it(gh):
+    _process()
+    board.cards()
+    board.dirty()                                         # another process wrote: the save is stale
+    _move("3", "Plan for review")
+    _process()
+    gh.clear()
+    board.cards()
+    assert reads(gh) == 1
+
+
+def test_list_inbox_card_and_section_reuse_a_fresh_dispatcher_save(gh, capsys):
+    from pl import commands, inbox
+    _pass()
+    gh.clear()
+    commands.cmd_list(argparse.Namespace(json=False, all=False, product=False, plan=None))
+    commands.cmd_list(argparse.Namespace(json=True, all=False, product=False, plan=None))
+    inbox.cmd_inbox(argparse.Namespace(json=True))
+    commands.cmd_card(argparse.Namespace(id="#3", delete=False, json=True))
+    commands.cmd_section(argparse.Namespace(id="#3", name="", from_=None))
+    assert reads(gh) == 0
+
+
+def test_fresh_reads_the_board_and_rewrites_the_save(gh, capsys, monkeypatch):
+    from pl import commands, inbox
+    runs = {
+        "list": lambda f: commands.cmd_list(argparse.Namespace(json=False, all=False, product=False, plan=None, fresh=f)),
+        "list-json": lambda f: commands.cmd_list(argparse.Namespace(json=True, all=False, product=False, plan=None, fresh=f)),
+        "inbox": lambda f: inbox.cmd_inbox(argparse.Namespace(json=True, fresh=f)),
+        "card": lambda f: commands.cmd_card(argparse.Namespace(id="#3", delete=False, json=True, fresh=f)),
+        "section": lambda f: commands.cmd_section(argparse.Namespace(id="#3", name="", from_=None, fresh=f)),
+    }
+    for name, run in runs.items():
+        _pass()
+        t = _saved()["at"]
+        _at(monkeypatch, t + 1)
+        _process()
+        gh.clear()
+        run(False)
+        assert reads(gh) == 0, name
+        _process()
+        run(True)
+        assert reads(gh) == 1, name
+        assert _saved()["at"] > t, name
