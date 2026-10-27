@@ -289,6 +289,8 @@ ENTRIES = [
        "pl pods show marketing"),
     _e("2026-10-26.73", "Stalled work raises an alert and a notification",
        "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
+    _e("2026-10-26.74", "Add a chat connector from the console",
+       "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
 ]
 
 
