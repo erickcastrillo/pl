@@ -59,7 +59,16 @@ def assistant_account():
     return True, [f"assistant: {acct} ({harnesses.account_harness(acct).name}), {reason}"]
 
 
-CHECKS = [local_models, tracker, assistant_account]
+def notifications():
+    from pl import chat   # imported here so doctor's import stays light
+    routed = [n for n, c in chat.load().items() if "alerts" in c.get("routes", [])]
+    if C.ATTENTION or routed:
+        return True, [f"attention_cmd: {C.ATTENTION or 'not set'}", f"chat alerts: {', '.join(routed) or 'none'}"]
+    return True, ["warning: this profile sends no notifications: set [paths] attention_cmd (pl setup) "
+                  "or run pl chat route alerts <name>"]
+
+
+CHECKS = [local_models, tracker, assistant_account, notifications]
 
 
 def cmd_doctor(a):

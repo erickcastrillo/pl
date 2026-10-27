@@ -2,10 +2,17 @@
 for alerts. Only events listed in [notify] events are sent. Text carries card ids, PR numbers and short titles only."""
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 from pl import config as C
 from pl import manager, trackers
 from pl.util import notify, short_id
+
+
+TEST_TITLE = "pl test notification"
+TEST_MESSAGE = "If you can read this, pl can reach you."
 
 
 def send(event, title, message) -> bool:
@@ -51,3 +58,51 @@ def moves(cards_moved):
         send("merged", f"Merged: {short_id(c['id'])} {pr_ref(c)}".rstrip(), c["title"][:50])
     elif merged:
         send("merged", f"Merged: {len(merged)} PRs", ", ".join(f"{short_id(c['id'])} {pr_ref(c)}".rstrip() for c in merged))
+
+
+def _run(argv):
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=30)
+    except OSError:
+        return subprocess.CompletedProcess(argv, 127)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124)
+
+
+def _attention():
+    if not C.ATTENTION:
+        return False, "attention_cmd: failed: not set (pl setup, or [paths] attention_cmd)"
+    path = Path(C.ATTENTION)
+    if not os.access(path, os.X_OK):
+        return False, f"attention_cmd: failed: {path} is missing or not executable"
+    result = _run([str(path), "notify", TEST_TITLE, TEST_MESSAGE])
+    if result.returncode:
+        return False, f"attention_cmd: failed: exit {result.returncode}"
+    return True, "attention_cmd: sent"
+
+
+def _chat(name):
+    from pl import chat
+    try:
+        ad = chat.adapter(name)
+        replies = [ad.send(str(chat_id), f"{TEST_TITLE}: {TEST_MESSAGE}") for chat_id in chat.load()[name].get("allow", [])]
+    except Exception as e:  # noqa: BLE001 - only the class is shown: its text could hold a token
+        return False, f"{name}: failed ({type(e).__name__})"
+    if any(isinstance(r, dict) and not r.get("ok", True) for r in replies):
+        return False, f"{name}: failed (error reply)"
+    return True, f"{name}: sent"
+
+
+def cmd_notify(a):
+    from pl import chat
+    if a.chat and a.chat not in chat.load():
+        print(f"pl notify test: {a.chat} is not a configured chat connector (pl chat list)", file=sys.stderr)
+        raise SystemExit(1)
+    if trackers.dry_run():
+        print("dry-run: nothing sent")
+        raise SystemExit(0)
+    print(f"sent: {TEST_TITLE} / {TEST_MESSAGE}")
+    results = [_attention()] + ([_chat(a.chat)] if a.chat else [])
+    for _, line in results:
+        print(line)
+    raise SystemExit(0 if all(ok for ok, _ in results) else 1)
