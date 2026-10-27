@@ -20,6 +20,10 @@ def state_dir(tmp_path, monkeypatch):
     return d
 
 
+async def wait_for(pilot, condition, what):
+    await wait_until(pilot, condition, what, timeout=20.0)   # a loaded machine (load average 100) needs more than 5s
+
+
 def saved_tab(state_dir, group="work"):
     try:
         saved = json.loads((state_dir / "subtabs.json").read_text())
@@ -29,14 +33,15 @@ def saved_tab(state_dir, group="work"):
 
 
 async def start(pilot, condition=None, what="the console to start"):
+    await wait_for(pilot, lambda: pilot.app.query(Footer), "the console to mount")
     await settle(pilot)
-    await wait_until(pilot, condition or (lambda: pilot.app.query(Footer)), what)
+    await wait_for(pilot, condition or (lambda: pilot.app.query(Footer)), what)
     return pilot.app
 
 
 async def on_tab(pilot, want):
     await settle(pilot)
-    await wait_until(pilot, lambda: pilot.app.active_tab == want, f"the {want} sub-tab")
+    await wait_for(pilot, lambda: pilot.app.active_tab == want, f"the {want} sub-tab")
 
 
 async def test_ac1_right_and_left_switch_work_sub_tabs_from_the_list():
@@ -88,12 +93,12 @@ async def test_ac4_text_boxes_keep_left_right_and_letters(monkeypatch):
         await start(pilot)
         await pilot.press("2")
         await settle(pilot)
-        await wait_until(pilot, lambda: isinstance(app.focused, Input), "the assistant's text box to take focus")
+        await wait_for(pilot, lambda: isinstance(app.focused, Input), "the assistant's text box to take focus")
         box = app.focused
         assert isinstance(box, Input)
         await pilot.press("x", "b", "left")
         await settle(pilot)
-        await wait_until(pilot, lambda: box.value == "xb" and box.cursor_position == 1, "the typed letters and the cursor move")
+        await wait_for(pilot, lambda: box.value == "xb" and box.cursor_position == 1, "the typed letters and the cursor move")
         assert box.value == "xb" and box.cursor_position == 1
         assert app.active_tab == "assistant"
 
@@ -117,7 +122,7 @@ async def test_ac6_last_sub_tabs_come_back_after_a_restart(state_dir):
         await start(pilot)
         await pilot.press("3", "right", "5", "right")
         await settle(pilot)
-        await wait_until(pilot, lambda: saved_tab(state_dir) == "cards" and saved_tab(state_dir, "automate") == "subagents",
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards" and saved_tab(state_dir, "automate") == "subagents",
                          "the cards and subagents tabs, saved")
     saved = json.loads((state_dir / "subtabs.json").read_text())
     assert saved["work"] == "cards" and saved["automate"] == "subagents"
@@ -166,7 +171,7 @@ async def test_ac8_bad_saved_file_falls_back_quietly(state_dir, saved, assistant
         assert not app._notifications
         await pilot.press("3", "right")
         await settle(pilot)
-        await wait_until(pilot, lambda: saved_tab(state_dir) == "cards", "the cards tab, saved")
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards", "the cards tab, saved")
     assert json.loads((state_dir / "subtabs.json").read_text())["work"] == "cards"
 
 
@@ -198,7 +203,7 @@ async def test_ac10_footer_at_80x24_shows_each_views_main_keys(view):
             pytest.skip("view not shown")
         app.action_tab(view)
         await settle(pilot)
-        await wait_until(pilot, lambda: footer_ready(app, view), f"the {view} footer keys laid out")
+        await wait_for(pilot, lambda: footer_ready(app, view), f"the {view} footer keys laid out")
         keys = footer_keys(app)
         for k in keys:
             if k.action in MAIN_KEYS[view] or k.action == "help":
@@ -213,7 +218,7 @@ async def test_footer_keeps_console_keys_after_view_keys():
         await start(pilot)
         app.action_tab("cards")
         await settle(pilot)
-        await wait_until(pilot, lambda: {"move_column", "dispatcher"} <= {k.action for k in footer_keys(app)},
+        await wait_for(pilot, lambda: {"move_column", "dispatcher"} <= {k.action for k in footer_keys(app)},
                          "the view's move_column key and the console's dispatcher key in the footer")
         actions = [k.action for k in footer_keys(app)]
         assert actions.index("move_column") < actions.index("dispatcher")

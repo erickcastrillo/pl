@@ -77,13 +77,13 @@ async def drain(pilot):
             pass
 
 
-async def settle(pilot, condition=None, what="the console to settle"):
+async def settle(pilot, condition=None, what="the console to settle", timeout=20.0):
     await drain(pilot)
     if condition is None:
         # nothing to observe here: the test checks that something did NOT happen (no tmux call, no stop); one queue drain after the workers are done
         await pilot.pause()
     else:
-        await wait_until(pilot, condition, what)
+        await wait_until(pilot, condition, what, timeout)   # a loaded machine (load average 100) needs more than 5s
 
 
 def ready(app):
@@ -127,7 +127,7 @@ async def test_running_dispatcher_means_no_tmux_call(tmp_path, profile):
     try:
         app = PlApp(snapshot_provider=fake_data, autostart=True)
         async with app.run_test(size=(176, 48)) as pilot:
-            await settle(pilot)
+            await settle(pilot, lambda: ready(app), "the console to mount")
             assert calls(tmp_path) == []
             assert "dispatcher: started" not in header(app) and "failed" not in header(app)
     finally:
