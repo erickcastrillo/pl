@@ -5,7 +5,7 @@ import types
 import pytest
 import tomlkit
 
-from pl import agent_alerts, agent_screen, agents, alerts, dispatch, jobs
+from pl import agent_alerts, agent_screen, agents, alerts, dispatch, stuck_jobs
 from pl import config as C
 
 HARNESS = 100
@@ -34,9 +34,9 @@ def fake_home(tmp_path, monkeypatch):
 def tree(monkeypatch):
     """A fake process table: add(pid, ppid, minutes, cmd, out) where out is the target of fds 1 and 2."""
     procs, links = {}, {}
-    monkeypatch.setattr(jobs.sys, "platform", "linux")
-    monkeypatch.setattr(jobs, "_procs", lambda: procs)
-    monkeypatch.setattr(jobs, "_link", lambda pid, fd: links.get((pid, fd)))
+    monkeypatch.setattr(stuck_jobs.sys, "platform", "linux")
+    monkeypatch.setattr(stuck_jobs, "_procs", lambda: procs)
+    monkeypatch.setattr(stuck_jobs, "_link", lambda pid, fd: links.get((pid, fd)))
 
     def add(pid, ppid, minutes, cmd, out=None):
         procs[pid] = (ppid, minutes * 60, cmd)
@@ -52,48 +52,48 @@ def _shell_job(tree, minutes, out):
 
 def test_a_job_whose_stdout_was_deleted_is_orphaned(tree):
     _shell_job(tree, 30, "/tmp/x/out (deleted)")
-    [j] = jobs.of(HARNESS)
+    [j] = stuck_jobs.of(HARNESS)
     assert j["state"] == "orphaned" and j["pid"] == 200 and "pytest" in j["command"] and j["minutes"] == 30
-    assert "output deleted" in jobs.describe(j)
+    assert "output deleted" in stuck_jobs.describe(j)
 
 
 def test_a_job_past_job_minutes_is_overrun(tree):
     _shell_job(tree, 50, "/tmp/x/out")
-    [j] = jobs.of(HARNESS)
-    assert j["state"] == "overrun" and "over 45 min" in jobs.describe(j)
+    [j] = stuck_jobs.of(HARNESS)
+    assert j["state"] == "overrun" and "over 45 min" in stuck_jobs.describe(j)
 
 
 def test_a_healthy_job_is_ok_and_not_stuck(tree):
     _shell_job(tree, 5, "/tmp/x/out")
-    js = jobs.of(HARNESS)
-    assert [j["state"] for j in js] == ["ok"] and jobs.stuck(js) == []
+    js = stuck_jobs.of(HARNESS)
+    assert [j["state"] for j in js] == ["ok"] and stuck_jobs.stuck(js) == []
 
 
 def test_a_mix_of_healthy_and_orphaned_jobs_is_not_stuck(tree):
     _shell_job(tree, 5, "/tmp/x/out")
     tree(300, HARNESS, 30, "bash -c rspec", "/tmp/y/out (deleted)")
-    js = jobs.of(HARNESS)
-    assert sorted(j["state"] for j in js) == ["ok", "orphaned"] and jobs.stuck(js) == []
+    js = stuck_jobs.of(HARNESS)
+    assert sorted(j["state"] for j in js) == ["ok", "orphaned"] and stuck_jobs.stuck(js) == []
 
 
 def test_job_minutes_zero_turns_overrun_off(tree):
     C.WATCHDOG["job_minutes"] = 0
     tree(200, HARNESS, 300, "bash -c a", "/tmp/a")
     tree(300, HARNESS, 300, "bash -c b", "/tmp/b (deleted)")
-    assert sorted(j["state"] for j in jobs.of(HARNESS)) == ["ok", "orphaned"]
+    assert sorted(j["state"] for j in stuck_jobs.of(HARNESS)) == ["ok", "orphaned"]
 
 
 def test_pipes_and_dev_null_are_not_jobs(tree):
     tree(200, HARNESS, 90, "node mcp-server", "pipe:[123]")
     tree(201, HARNESS, 90, "node other-mcp", "/dev/null")
-    assert jobs.of(HARNESS) == []
+    assert stuck_jobs.of(HARNESS) == []
 
 
 def test_no_proc_reports_nothing(tree, monkeypatch):
-    monkeypatch.setattr(jobs.sys, "platform", "darwin")
-    monkeypatch.setattr(jobs, "_procs", lambda: pytest.fail("ps"))
-    monkeypatch.setattr(jobs, "_link", lambda *a: pytest.fail("/proc"))
-    assert jobs.of(HARNESS) == [] and jobs.of(None) == []
+    monkeypatch.setattr(stuck_jobs.sys, "platform", "darwin")
+    monkeypatch.setattr(stuck_jobs, "_procs", lambda: pytest.fail("ps"))
+    monkeypatch.setattr(stuck_jobs, "_link", lambda *a: pytest.fail("/proc"))
+    assert stuck_jobs.of(HARNESS) == [] and stuck_jobs.of(None) == []
 
 
 def test_job_minutes_must_be_a_whole_number():
@@ -120,7 +120,7 @@ def agent(monkeypatch):
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: ns.keys.append(a) or "")
     monkeypatch.setattr(dispatch, "stop_worker", lambda c, w: ns.stops.append(c["id"]))
     monkeypatch.setattr(dispatch, "notify", lambda *a, **k: ns.notified.append(a))
-    monkeypatch.setattr(jobs, "of", lambda pid: ns.jobs if pid == HARNESS else [])
+    monkeypatch.setattr(stuck_jobs, "of", lambda pid: ns.jobs if pid == HARNESS else [])
 
     def card(col="In progress", stage="plan"):
         return {"id": CID, "title": "card", "list_id": col, "description": "d",
@@ -181,7 +181,7 @@ def test_mixed_healthy_and_orphaned_jobs_open_no_alert(agent):
 def test_nudge_names_the_jobs_and_nothing_is_signalled(agent):
     agent.stall()
     [text] = [k[-1] for k in agent.sent()]
-    assert jobs.describe(ORPHAN) in text and jobs.describe(OVERRUN) in text and "foreground" in text and "time limit" in text
+    assert stuck_jobs.describe(ORPHAN) in text and stuck_jobs.describe(OVERRUN) in text and "foreground" in text and "time limit" in text
     agent.now += C.DISPATCH["stall_minutes"] * 60 * 2
     agent.idle_minutes += 40
     assert agent.stall() is False
