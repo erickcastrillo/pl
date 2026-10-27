@@ -3,7 +3,8 @@ import json
 import os
 import sys
 import pytest
-from test_tui_views import Provider, _fake_card_read, fake_data, fake_home, settle  # noqa: F401  (fake_home is an autouse fixture)
+from test_tui_views import Provider, _fake_card_read, fake_data, fake_home  # noqa: F401  (fake_home is an autouse fixture)
+from tui_wait import settle, wait_until
 
 from pl import config as C
 from pl import watch
@@ -64,7 +65,7 @@ async def test_open_flag_opens_the_card_screen(monkeypatch):
 
     app = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False, open_card="c123", tab="alerts")
     async with app.run_test() as pilot:
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, CardScreen), "the card screen")
         assert isinstance(app.screen, CardScreen)
         assert app.screen.card_id == "c123"
         assert app.active_tab == "alerts"
@@ -116,20 +117,18 @@ async def test_choosing_a_card_in_another_pipeline_restarts_on_that_profile_with
 
     app = PlApp(snapshot_provider=lambda: data, autostart=False, whatsnew=False, updates=False, restarts=False)
     async with app.run_test() as pilot:
-        await pilot.pause()
+        await settle(pilot)
         await pilot.press("ctrl+k")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, switcher.SwitcherScreen), "the switcher screen")
         assert isinstance(app.screen, switcher.SwitcherScreen)
-        # Give worker a moment to load remote cards
-        await pilot.pause()
-        # Filter to remote card and select it
+        await settle(pilot)   # the worker that loads the remote cards
         inp = app.screen.query_one("#switcher-input")
         inp.value = "Remote"
-        await pilot.pause()
         ol = app.screen.query_one("#switcher-options")
+        await wait_until(pilot, lambda: ol.option_count == 1, "the filter to leave the remote card")
         assert ol.option_count == 1
         ol.action_select()
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.restart_into is not None, "the restart into the other pipeline")
         assert app.restart_into == ("profile", "other", "remote_c1", None)
 
 
@@ -152,18 +151,18 @@ async def test_bang_opens_the_oldest_gate_switching_pipelines_if_needed(monkeypa
     # Case 1: item from another profile -> switch_to
     app = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False)
     async with app.run_test() as pilot:
-        await pilot.pause()
+        await settle(pilot)
         await pilot.press("exclamation_mark")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.restart_into is not None, "the restart into the other pipeline")
         assert app.restart_into == ("profile", "other_prof", "other_c1", None)
 
     # Case 2: item from current profile -> CardScreen
     inbox_items = [{"card": "my_c1", "profile": "myprof"}]
     app2 = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False)
     async with app2.run_test() as pilot:
-        await pilot.pause()
+        await settle(pilot)
         await pilot.press("exclamation_mark")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app2.screen, CardScreen), "the card screen")
         assert isinstance(app2.screen, CardScreen)
         assert app2.screen.card_id == "my_c1"
 
@@ -173,9 +172,9 @@ async def test_bang_opens_the_oldest_gate_switching_pipelines_if_needed(monkeypa
     app3 = PlApp(snapshot_provider=_fake_provider, autostart=False, whatsnew=False, updates=False, restarts=False)
     monkeypatch.setattr(app3, "notify", lambda msg, **kw: notified.append(msg))
     async with app3.run_test() as pilot:
-        await pilot.pause()
+        await settle(pilot)
         await pilot.press("exclamation_mark")
-        await pilot.pause()
+        await wait_until(pilot, lambda: notified, "the notification")
         assert "nothing waits on you" in notified
 
 
