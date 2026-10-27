@@ -26,6 +26,8 @@ class Fake:
         self.next_id = 100
         self.writes = []
         self.labels = []
+        self.flat_filter = False   # Vikunja 2 answers a bucket filter with a flat task list
+        self.max_per_page = None   # a server's max_items_per_page caps per_page (Vikunja's default is 50)
         self.me = {"id": 1, "username": "me", "email": "me@x"}
         self.users = [self.me, {"id": 2, "username": "ann", "email": "ann@x"},
                       {"id": 3, "username": "bob", "email": "bob@x"}]
@@ -84,13 +86,16 @@ def _handler(fake):
                 return self._send(200, fake.buckets)
             if path == f"{base}/tasks":
                 per, page = int(q.get("per_page", ["50"])[0]), int(q.get("page", ["1"])[0])
-                only = re.search(r"bucket_id=(\d+)", q.get("filter", [""])[0])
+                per = min(per, fake.max_per_page or per)
+                only = re.search(r"bucket_id ?= ?(\d+)", q.get("filter", [""])[0])
                 out = []
                 for b in fake.buckets:
                     if only and int(only.group(1)) != b["id"]:
                         continue
                     mine = [t for i, t in fake.tasks.items() if fake.in_bucket[i] == b["id"]]
                     out.append({**b, "tasks": mine[(page - 1) * per:page * per] or None})
+                if only and fake.flat_filter:   # Vikunja 2: a bucket filter answers with that bucket's tasks, not grouped
+                    return self._send(200, (out[0]["tasks"] or []) if out else [])
                 return self._send(200, out)
             if m := re.fullmatch(rf"{base}/buckets/(\d+)/tasks", path):
                 fake.in_bucket[body["task_id"]] = int(m.group(1))
@@ -178,6 +183,23 @@ def test_cards_list_tasks_by_bucket_and_page(fake, monkeypatch):
     assert b["tags"] == ["bug"] and b["assigned_to"] == "ann"
     assert {"id", "title", "description", "tags", "metadata", "list_id", "updated_at", "assigned_to"} <= set(b)
     assert next(c for c in cards if c["title"] == "a0")["assigned_to"] is None
+
+
+def test_cards_page_on_when_the_server_caps_the_page_size(fake):
+    # the server returns fewer per page than asked (max_items_per_page), so a full page is the server's size, not PAGE
+    fake.max_per_page = 2
+    for i in range(5):
+        fake.add_task(10, title=f"a{i}")
+    fake.add_task(11, title="b")
+    assert sorted(c["title"] for c in fake.tracker.cards()) == ["a0", "a1", "a2", "a3", "a4", "b"]
+
+
+def test_cards_read_a_flat_bucket_page_from_vikunja_2(fake):
+    fake.max_per_page, fake.flat_filter = 2, True
+    for i in range(5):
+        fake.add_task(10, title=f"a{i}")
+    cards = fake.tracker.cards()
+    assert sorted(c["title"] for c in cards) == ["a0", "a1", "a2", "a3", "a4"] and {c["list_id"] for c in cards} == {"10"}
 
 
 def test_create_puts_task_in_column_and_reads_back(fake):
