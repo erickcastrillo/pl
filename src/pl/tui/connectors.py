@@ -7,15 +7,16 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, SelectionList, Static
 
 from pl import chat, util
 from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run  # the one subprocess runner here; tests fake it
-HINT = "n new connector · t test · R revoke (t works on chat rows too)"
+HINT = "n new connector · t test · R revoke (t works on chat rows too) · r routes · d remove (chat rows)"
 NEW_CHAT = "new-chat"
+CHAT_KINDS = ("gates", "alerts", "digest")
 CHAT_NOTE = "Chat connectors send approvals, alerts and the digest to Telegram, Slack or Discord."
 CHAT_ADD_HELP = "pl chat add telegram|slack|discord --token-env VAR --allow ID --name NAME"
 
@@ -102,6 +103,32 @@ class AddConnectorScreen(ModalScreen):
         self.dismiss(False)
 
 
+class ChatRoutesScreen(ModalScreen):
+    DEFAULT_CSS = """
+    ChatRoutesScreen { align: center middle; }
+    ChatRoutesScreen > Vertical { width: 50; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    #chat-routes { height: auto; }
+    """
+    BINDINGS = [Binding("s", "save", "save"), Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, name, routes):
+        super().__init__()
+        self.connector = name
+        self.routes = routes
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(f"Routes for {util.mask(self.connector)}"))
+            yield SelectionList(*[(k, k, k in self.routes) for k in CHAT_KINDS], id="chat-routes")
+            yield Static(Text("space toggle · s save · esc cancel", style="dim"))
+
+    def action_save(self):
+        self.dismiss(set(self.query_one("#chat-routes", SelectionList).selected))
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class ConnectorsPanel(Widget):
     DEFAULT_CSS = """
     ConnectorsPanel { height: auto; min-height: 8; }
@@ -116,6 +143,8 @@ class ConnectorsPanel(Widget):
         Binding("n", "new", "new connector"),
         Binding("t", "test", "test"),
         Binding("R", "revoke", "revoke"),
+        Binding("r", "route", "routes"),
+        Binding("d", "remove", "remove chat"),
     ]
 
     def __init__(self):
@@ -178,6 +207,56 @@ class ConnectorsPanel(Widget):
         if not self.chat or not 0 <= t.cursor_row < len(self.chat):
             return None
         return list(self.chat)[t.cursor_row]
+
+    def _chat_selected(self):
+        return self._selected_chat() if self.query_one("#chat-table", DataTable).has_focus else None
+
+    def _chat_command_notice(self, argvs, results):
+        for argv, r in zip(argvs, results):
+            if r.returncode:
+                text = util.mask((r.stderr or r.stdout or "").strip())
+                self.app.notify(f"{text} · {' '.join(argv)}", severity="error", markup=False)
+                return
+        self.app.notify("; ".join(" ".join(a) for a in argvs), markup=False)
+        self.rescan_chat()
+
+    def _run_chat_commands(self, argvs):
+        def run():
+            results = []
+            for argv in argvs:
+                results.append(_run(argv, capture_output=True, text=True))
+                if results[-1].returncode:
+                    break
+            self.app.call_from_thread(self._chat_command_notice, argvs[:len(results)], results)
+
+        self.run_worker(run, thread=True, group="connectors-action")
+
+    def action_route(self):
+        name = self._chat_selected()
+        if name is None:
+            return
+        old = set(self.chat[name].get("routes") or ["gates"])
+
+        def picked(new):
+            if new is None or new == old:
+                return
+            argvs = []
+            for kind in CHAT_KINDS:
+                if (kind in new) == (kind in old):
+                    continue
+                names = [n for n, c in self.chat.items() if n != name and kind in (c.get("routes") or ["gates"])]
+                argvs.append(["pl", "chat", "route", kind, *names, *([name] if kind in new else [])])
+            self._run_chat_commands(argvs)
+
+        self.app.push_screen(ChatRoutesScreen(name, old), picked)
+
+    def action_remove(self):
+        name = self._chat_selected()
+        if name is None:
+            return
+        message = f"Remove chat connector {util.mask(name)}? Approvals, alerts or digest routed only to it stop."
+        self.app.push_screen(ConfirmScreen(message),
+                             lambda yes: yes and self._run_chat_commands([["pl", "chat", "remove", name, "--yes"]]))
 
     def _chat_test(self, name):
         cfg = self.chat[name]

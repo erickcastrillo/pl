@@ -15,6 +15,8 @@ COMMANDS = {
     "PlApp.oldest": "pl inbox --json",
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
     "ConnectorsPanel.chat_test": "pl chat test NAME",
+    "ConnectorsPanel.route": "pl chat route KIND NAME...",
+    "ConnectorsPanel.remove": "pl chat remove NAME --yes",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardScreen.approve": "pl approve <id>",
     "CardScreen.send_back": "pl reject <id> NOTES",
