@@ -177,14 +177,15 @@ def test_setup_timeout_appends_note_to_card_with_timeout_limit_and_tail(repo, wt
 def test_a_successful_setup_with_card_leaves_the_card_alone(repo, wt, tmp_path, monkeypatch, board):
     _manifest(repo, 'setup: "true"\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
-    assert board.updates == []
+    assert board.updates == [(board.card["id"], {"metadata": {"worktree": str(wt.resolve())}})]
 
 
 def test_a_successful_setup_clears_an_earlier_failure(repo, wt, tmp_path, monkeypatch, board):
     board.card["metadata"] = {"bootstrap_error": {"reason": "old", "output": "old"}}
     _manifest(repo, 'setup: "true"\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
-    assert board.updates == [(board.card["id"], {"metadata": {"bootstrap_error": None}})]
+    assert board.updates == [(board.card["id"], {"metadata": {"worktree": str(wt.resolve())}}),
+                             (board.card["id"], {"metadata": {"bootstrap_error": None}})]
 
 
 def _prompt_for(monkeypatch, metadata):
