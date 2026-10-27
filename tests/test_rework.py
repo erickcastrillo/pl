@@ -29,10 +29,15 @@ def fake_home(tmp_path, monkeypatch):
 @pytest.fixture
 def gh(monkeypatch):
     """GitHub, the board and the tracker faked. ns.flagged: {repo: [(number, labels)]} the rework search returns."""
-    ns = types.SimpleNamespace(flagged={}, calls=[], writes=[], moves=[], events=[])
+    ns = types.SimpleNamespace(flagged={}, calls=[], writes=[], moves=[], events=[], comments={}, comments_fail=False)
 
     def fake_gh(args):
         ns.calls.append(args)
+        if args[:1] == ["api"] and len(args) == 2 and args[1].endswith("/comments?per_page=100"):
+            if ns.comments_fail:
+                raise SystemExit("gh failed")
+            repo, num = args[1].removeprefix("repos/").split("/issues/")[0], int(args[1].split("/issues/")[1].split("/")[0])
+            return json.dumps([{"body": b} for b in ns.comments.get((repo, num), [])])
         if args[:1] == ["api"] and len(args) == 2:   # the GET of labeled issues
             repo = args[1].split("/issues")[0].removeprefix("repos/")
             return json.dumps([{"number": n, "pull_request": {"url": "u"}, "labels": [{"name": x} for x in labs]}
@@ -71,7 +76,7 @@ def test_cards_without_a_flagged_pr_and_cards_in_other_columns_stay(gh):
 def test_one_search_per_repo_and_only_the_flagged_prs_of_a_stack(gh):
     gh.flagged = {"acme/app": [(2, ["pl:needs-rework"])]}
     rework.sweep([_card("c1", prs=(1, 2, 3)), _card("c2", prs=(4,))], dry=False)
-    gets = [a for a in gh.calls if len(a) == 2]
+    gets = [a for a in gh.calls if len(a) == 2 and "/comments" not in a[1]]
     assert len(gets) == 1 and "labels=pl%3Aneeds-rework" in gets[0][1]
     assert gh.writes[-1][1]["metadata"]["rework"]["prs"] == [URL.format(2)]
 
@@ -141,3 +146,62 @@ def test_start_worker_adds_the_rework_argument_to_the_built_in_run_prompt(gh, mo
     monkeypatch.setattr("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a))))
     dispatch.start_worker(c, "run", 1, dry=True)
     assert "rework=1 rework_label=pl:needs-rework" in out[0] and "review=pl:auto-review" in out[0]
+
+
+def _merge_only_of(gh):
+    return gh.writes[-1][1]["metadata"]["rework"]["merge_only"]
+
+
+def test_merge_only_review_marks_the_rework_merge_only(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    gh.comments = {("acme/app", 1): ["older", "This branch is behind main and has conflicts.\n- Merge main and fix the conflicts."]}
+    rework.sweep([_card("c1")], dry=False)
+    assert _merge_only_of(gh) is True
+
+
+def test_merge_plus_code_fix_is_a_normal_rework(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    gh.comments = {("acme/app", 1): ["Merge main.\n- test_foo fails: fix the off-by-one."]}
+    rework.sweep([_card("c1")], dry=False)
+    assert _merge_only_of(gh) is False
+
+
+def test_a_stack_is_merge_only_only_when_every_pr_is(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"]), (2, ["pl:needs-rework"])]}
+    gh.comments = {("acme/app", 1): ["Please rebase on main."], ("acme/app", 2): ["Fix the failing test."]}
+    rework.sweep([_card("c1", prs=(1, 2))], dry=False)
+    assert _merge_only_of(gh) is False
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_no_review_comment_is_a_normal_rework(gh, fail):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    gh.comments_fail = fail
+    assert rework.sweep([_card("c1")], dry=False) == ["c1"]
+    assert _merge_only_of(gh) is False
+    assert gh.moves == [("c1", "In progress")]
+
+
+def test_a_pass_with_no_rework_reads_no_comments(gh):
+    rework.sweep([_card("c1")], dry=False)
+    assert not [a for a in gh.calls if "/comments" in str(a)]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Please rebase on main.", True),
+    ("", False),
+    (None, False),
+    ("## Review\n- Merge main.\n- This is out of date with main.", True),
+    ("Rebase on main. Also rename foo.", False),
+])
+def test_merge_only_rule(text, expected):
+    assert rework.merge_only(text) is expected
+
+
+@pytest.mark.parametrize("merge_only,label", [(True, "waiting: merge-only rework"), (False, "waiting")])
+def test_pl_list_shows_merge_only(monkeypatch, merge_only, label):
+    from pl import agents
+    monkeypatch.setattr(agents, "col_name", lambda lid: lid)
+    c = {"id": "c1", "list_id": "In progress", "metadata": {"pipeline_mode": "auto",
+                                                              "rework": {"active": True, "merge_only": merge_only}}}
+    assert agents.worker_view(c, {}) == label

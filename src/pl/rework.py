@@ -12,13 +12,14 @@ import time
 import urllib.parse
 
 from pl import config as C
-from pl import events, jobs
+from pl import alerts, events, jobs
 from pl.board import col_name, update
 from pl.trackers import github
-from pl.util import now_iso, short_id
+from pl.util import now_iso, parse_iso, short_id
 
 REWORK_EVERY = 600   # seconds between two looks at the rework label (one REST call per repo)
 PR_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
+MERGE_RE = re.compile(r"\b(merg\w*|rebas\w*|conflict\w*|behind main|out of date|up to date with main)\b", re.I)
 _LAST = {"at": None}
 SEEN = {}   # PR url -> frozenset of its label names, as the last rework or merge look saw it (closed PRs dropped)
 
@@ -63,6 +64,22 @@ def flagged(repos, lab):
     return out
 
 
+def merge_only(text):
+    """True when every finding in the review text asks only for a merge, a rebase or a conflict fix."""
+    pieces = (re.sub(r"^\s*(?:[-*]|\d+\.)\s*", "", p).strip() for p in re.split(r"(?<=[.!?])\s+|\n+", text or ""))
+    findings = [p for p in pieces if p and not p.startswith("#")]
+    return bool(findings) and all(MERGE_RE.search(p) for p in findings)
+
+
+def _review_text(repo, num):
+    """The body of the newest comment on the pull request (where the auto-review posts its findings), or ''."""
+    try:
+        comments = json.loads(github._gh(["api", f"repos/{repo}/issues/{num}/comments?per_page=100"]) or "[]")
+        return (comments[-1].get("body") or "") if comments else ""
+    except (Exception, SystemExit):   # no review text is a normal rework, never a stopped sweep
+        return ""
+
+
 def _give_up(c, todo, n, lab, dry):
     head = short_id(c["id"])
     print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} still fails review after {n} rework rounds; "
@@ -80,13 +97,15 @@ def _give_up(c, todo, n, lab, dry):
     events.emit("rework_gave_up", c["id"], prs=[u for _, _, u in todo], rounds=n)
 
 
-def _send_back(c, todo, n, dry):
+def _send_back(c, todo, n, dry, mo=False):
     from pl.commands import move_to
     head = short_id(c["id"])
-    print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} needs rework: back to In progress (round {n})")
+    print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} needs rework: back to In progress (round {n})"
+          + (", merge-only" if mo else ""))
     if dry:
         return
-    update(c["id"], metadata={"rework": {"round": n, "prs": [u for _, _, u in todo], "at": now_iso(), "active": True}})
+    update(c["id"], metadata={"rework": {"round": n, "prs": [u for _, _, u in todo], "at": now_iso(), "active": True,
+                                                 "merge_only": mo}})
     move_to(c["id"], "In progress", c["id"])
     events.emit("rework", c["id"], prs=[u for _, _, u in todo], round=n)
 
@@ -122,7 +141,7 @@ def sweep(all_cards, dry, force=False):
         if n > n_max:
             _give_up(c, todo, n - 1, lab, dry)
         else:
-            _send_back(c, todo, n, dry)
+            _send_back(c, todo, n, dry, all(merge_only(_review_text(r, num)) for r, num, _ in todo))
             sent.append(c["id"])
     return sent
 
@@ -147,3 +166,27 @@ def cmd_rework(a):
         jobs.progress(f"looking for pull requests labeled {labels()['rework']} on cards in PR open")
         sent = sweep(cards(), a.dry_run, force=True)
         jobs.result(f"{len(sent or [])} card(s) sent back")
+
+
+def check_waits(waiting, all_cards, st, send):
+    """A rework that has waited over [watchdog] rework_wait_minutes for a run slot: one Activity warning per wait and
+    an open rework_waiting alert, resolved once the card is no longer waiting. waiting: run cards still unstarted."""
+    limit = int(getattr(C, "WATCHDOG", {}).get("rework_wait_minutes", 30)) * 60
+    seen, active = st.setdefault("rework_waits", {}), set()
+    for c in waiting:
+        rw = (c.get("metadata") or {}).get("rework") or {}
+        at = parse_iso(rw["at"]) if rw.get("active") and rw.get("at") else 0
+        if not at or time.time() - at <= limit:
+            continue
+        cid, mins = c["id"], int((time.time() - at) // 60)
+        active.add(key := f"rework_waiting:{cid}")
+        if why := alerts.open(key, "warn", f"Card {short_id(cid)}: its rework has waited {mins} min for a run slot",
+                              "pl list; free a run slot or raise [dispatch] max_runs", [cid]):
+            send(alerts.headline(why, f"Card {short_id(cid)}: its rework has waited {mins} min for a run slot"),
+                 "pl list; free a run slot or raise [dispatch] max_runs")
+        if seen.get(cid) != rw["at"]:
+            events.emit("rework_waiting", cid, minutes=mins)
+            seen[cid] = rw["at"]
+    live = {c["id"]: ((c.get("metadata") or {}).get("rework") or {}).get("at") for c in all_cards}
+    st["rework_waits"] = {cid: at for cid, at in seen.items() if live.get(cid) == at}
+    alerts.sweep("rework_waiting:", active, send)

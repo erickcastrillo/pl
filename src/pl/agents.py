@@ -349,7 +349,8 @@ def worker_view(c, reg):
     if col_name(c["list_id"]) == "Manual":
         return "manual: yours to do"
     if not w:
-        return "waiting"
+        rw = m.get("rework") or {}
+        return "waiting: merge-only rework" if rw.get("active") and rw.get("merge_only") else "waiting"
     if int(w.get("attempts") or 0) >= MAX_ATTEMPTS and worker_status(w, reg)[0] == "dead":
         return died_label(c, "pl retry")
     if (hit := w.get("limit_hit")) and isinstance(hit, dict):   # set by the dispatcher while the agent sits on a limit screen

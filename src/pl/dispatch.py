@@ -57,6 +57,22 @@ def stage_for(c, col):
     return None
 
 
+def _merge_only_rework(t):
+    rw = (t[0].get("metadata") or {}).get("rework") or {}
+    return rw if t[1] == "run" and rw.get("active") and rw.get("merge_only") else None
+
+
+def _wait_rank(t):
+    """Restarted runs keep their place, then merge-only reworks, then the rest."""
+    return 0 if t[2] > 1 else 1 if _merge_only_rework(t) else 2
+
+
+def _wait_since(t):
+    """Merge-only reworks: since the rework was recorded, so the longest wait starts first; the rest: card age."""
+    mo = _merge_only_rework(t)
+    return (mo and mo.get("at")) or t[0].get("updated_at") or ""
+
+
 def approved_label(c, col, reg, all_cards=None):
     """Status line for a Spec ready card whose spec you approved: which stage is next and whether an agent is on it."""
     if hold := hold_reason(c):
@@ -1334,9 +1350,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     # order: runs first (they are the long pole), In progress ones (a restart) before Approved ones that have not
     # started, then plans, designs, specs; oldest first
     rank = {"run": 0, "plan": 1, "design": 2, "spec": 3}
-    todo.sort(key=lambda t: (rank.get(t[1], 4), t[3] != "In progress", slice_order(t[0]), t[0].get("updated_at") or ""))
+    todo.sort(key=lambda t: (rank.get(t[1], 4), t[3] != "In progress", _wait_rank(t), slice_order(t[0]), _wait_since(t)))
     pause = paused()
     held = 0
+    started = set()
     for c, stage, attempts, col in todo:
         if pause and attempts <= 1:   # paused: only restart a stage that already started and crashed
             held += 1
@@ -1425,12 +1442,18 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if not dry:
                 events.failure("harness_start_failed", "error", str(e), c["id"], stage=stage, **_start_who(stage, c))
             raise
+        started.add(c["id"])
         if attempts <= 1 and room is not None:
             room -= 1
         prev = ((c.get("metadata") or {}).get("worker") or {})
         if prev and prev.get("stage") != stage and prev.get("window") and not dry:
             fin = list((c.get("metadata") or {}).get("finished_workers") or []) + [prev]
             update(c["id"], metadata={"finished_workers": fin})
+    if not dry:
+        try:
+            rework.check_waits([t[0] for t in todo if t[1] == "run" and t[0]["id"] not in started], all_cards, st, notify)
+        except Exception as e:   # a failed check never stops the pass
+            print(f"rework wait check skipped this pass: {e}", file=sys.stderr)
     if shared:
         print(f"{shared} new start(s) wait: this profile's share of the machine's agents is in use (pl manager status)")
     if pause:
