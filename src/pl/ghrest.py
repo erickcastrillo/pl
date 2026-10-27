@@ -12,7 +12,7 @@ FIELDS = ("number title body state url isDraft headRefName headRefOid baseRefNam
           "createdAt updatedAt closedAt mergedAt").split()
 REPO = re.compile(r"^(?!\.+/)[\w.-]+/(?!\.+$)[\w.-]+$")   # no "." or ".." segment: the path stays under repos/
 PR_URL = re.compile(r"^https://([^/]+)/([^/]+/[^/]+)/pull/(\d+)$")
-STATES = ("open", "closed", "merged", "all")
+STATES = ("open", "closed", "all")
 LIST_FLAGS = {"--state": "state", "-s": "state", "--head": "head", "-H": "head", "--base": "base", "-B": "base",
               "--limit": "limit", "-L": "limit"}
 REPO_FLAGS = ("--repo", "-R")
@@ -46,7 +46,7 @@ def _flags(rest):
 
 
 def parse(args):
-    """(endpoint, fields, post) for a call REST can answer, else None."""
+    """(endpoint, fields) for a call REST can answer, else None."""
     if len(args) < 2 or args[0] != "pr" or args[1] not in ("view", "list"):
         return None
     parsed = _flags(args[2:])
@@ -76,7 +76,7 @@ def parse(args):
         elif not positional[0].isdigit():
             return None
         number = found.group(3) if found else positional[0]
-        return f"repos/{repo or '{owner}/{repo}'}/pulls/{number}", fields, None
+        return f"repos/{repo or '{owner}/{repo}'}/pulls/{number}", fields
     if positional:
         return None
     opts = {name: flags[flag] for flag, name in LIST_FLAGS.items() if flag in flags}
@@ -84,18 +84,19 @@ def parse(args):
     if state not in STATES or not limit.isdigit() or not 1 <= int(limit) <= 100:
         return None
     limit = int(limit)
-    query = {"state": "closed" if state == "merged" else state, "per_page": 100 if state == "merged" else limit}
+    query = {"state": state, "per_page": limit}
     if "head" in opts:
         query["head"] = f"{repo.split('/')[0] if repo else '{owner}'}:{opts['head']}"
     if "base" in opts:
         query["base"] = opts["base"]
-    post = (lambda items: [i for i in items if i.get("merged_at")][:limit]) if state == "merged" else None
-    return f"repos/{repo or '{owner}/{repo}'}/pulls?{urlencode(query, safe='{}:')}", fields, post
+    return f"repos/{repo or '{owner}/{repo}'}/pulls?{urlencode(query, safe='{}:')}", fields
 
 
 def _value(item, field):
     if field == "state":
         return "MERGED" if item.get("merged_at") else item["state"].upper()
+    if field == "body":
+        return item.get("body") or ""
     if field == "url":
         return item["html_url"]
     if field == "isDraft":
@@ -126,14 +127,14 @@ def answer(gh, args, env):
     parsed = parse(args)
     if not parsed:
         return None
-    endpoint, fields, post = parsed
+    endpoint, fields = parsed
     done = _run([gh, "api", endpoint], env)
     if done is None or done.returncode != 0:
         return None
     try:
         data = json.loads(done.stdout)
         if isinstance(data, list):
-            data = [_pr(i, fields) for i in (post(data) if post else data)]
+            data = [_pr(i, fields) for i in data]
         else:
             data = _pr(data, fields)
     except (ValueError, KeyError, TypeError, AttributeError):

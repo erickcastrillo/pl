@@ -79,12 +79,14 @@ def test_view_pr_url_and_repo_flag(rest):
     assert [c[2] for c in rest.calls] == ["repos/o/r/pulls/12"] * 2
 
 
-def test_list_merged_and_limit(monkeypatch):
-    items = [_item(1), _item(2, merged=False), _item(3), _item(4)]
-    rest = Rest(monkeypatch, items)
-    data = json.loads(ghrest.answer("gh", ["pr", "list", "--json", "number,state", "--state", "merged", "--limit", "2", "-R", "o/r"], {}))
-    assert "state=closed&per_page=100" in rest.calls[0][2]
-    assert data == [{"number": 1, "state": "MERGED"}, {"number": 3, "state": "MERGED"}]
+def test_view_null_body_is_empty_string(monkeypatch):
+    Rest(monkeypatch, _item(body=None))
+    assert json.loads(ghrest.answer("gh", ["pr", "view", "1", "--json", "body"], {})) == {"body": ""}
+
+
+def test_list_state_merged_falls_through_to_gh(rest):
+    assert ghrest.answer("gh", ["pr", "list", "--json", "number", "--state", "merged", "--limit", "2"], {}) is None
+    assert rest.calls == []
 
 
 def test_list_default_limit_and_head(rest):
