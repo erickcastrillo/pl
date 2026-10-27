@@ -61,11 +61,6 @@ def _profile(home, text):
     return d / "config.toml"
 
 
-@pytest.fixture(autouse=True)
-def fake_run_worktree(monkeypatch, tmp_path):
-    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (tmp_path / "wt", None))
-
-
 def _launch(home, fake_tmux, harness, account_extra="", toml="", stage="spec"):
     """The argv of a stage agent and of a loop started under account a of this harness."""
     _profile(home, f'[accounts.a]\nharness = "{harness}"\nconfig_dir = "~"\n{account_extra}\n{toml}')

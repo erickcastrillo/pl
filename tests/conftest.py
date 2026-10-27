@@ -222,6 +222,13 @@ def trusted_work_dir(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def run_worktree_is_work_dir(monkeypatch):
+    """Run agents start in a worktree git makes: off unless a test turns it on (tests/test_run_worktree.py)."""
+    from pl import config, worktrees
+    monkeypatch.setattr(worktrees, "for_run", lambda c: (config.WORK_DIR, None))
+
+
+@pytest.fixture(autouse=True)
 def no_live_agent_window(monkeypatch):
     """The dispatcher's look for an agent window it does not track reads tmux: off unless a test turns it on."""
     from pl import dispatch

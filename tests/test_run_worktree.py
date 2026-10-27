@@ -8,6 +8,8 @@ from pl import config as C
 from pl import dispatch, harnesses, worktrees
 from pl.util import slug_of
 
+REAL_FOR_RUN = worktrees.for_run   # conftest fakes it for every other test
+
 CARD = {"id": "acme/app#7", "title": "Add thing", "metadata": {}}
 
 
@@ -59,7 +61,7 @@ def _dest():
 def test_new_card_gets_branch_from_default(monkeypatch):
     git = FakeGit()
     monkeypatch.setattr(worktrees, "_run", git)
-    path, err = worktrees.for_run(CARD)
+    path, err = REAL_FOR_RUN(CARD)
     assert (path, err) == (_dest(), None)
     assert ["fetch", "origin"] in [a[1:] for a in git.calls]
     assert git.adds() == [["worktree", "add", "-b", f"pl/{_slug()}", str(_dest()), "origin/HEAD"]]
@@ -69,21 +71,21 @@ def test_existing_worktree_is_reused(monkeypatch):
     listing = f"worktree /elsewhere/old\nHEAD abc\nbranch refs/heads/pl/{_slug()}\n\n"
     git = FakeGit(listing=listing)
     monkeypatch.setattr(worktrees, "_run", git)
-    assert worktrees.for_run(CARD) == (Path("/elsewhere/old"), None)
+    assert REAL_FOR_RUN(CARD) == (Path("/elsewhere/old"), None)
     assert git.adds() == []
 
 
 def test_existing_local_branch_gets_worktree_without_new_branch(monkeypatch):
     git = FakeGit(local_branch=True)
     monkeypatch.setattr(worktrees, "_run", git)
-    assert worktrees.for_run(CARD) == (_dest(), None)
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
     assert git.adds() == [["worktree", "add", str(_dest()), f"pl/{_slug()}"]]
 
 
 def test_remote_branch_is_checked_out_as_new_local_branch(monkeypatch):
     git = FakeGit(remote_branch=True)
     monkeypatch.setattr(worktrees, "_run", git)
-    worktrees.for_run(CARD)
+    REAL_FOR_RUN(CARD)
     assert git.adds() == [["worktree", "add", "-b", f"pl/{_slug()}", str(_dest()), f"origin/pl/{_slug()}"]]
 
 
@@ -93,7 +95,7 @@ def test_rework_uses_pr_head_branch(monkeypatch):
     git = FakeGit(listing=listing)
     monkeypatch.setattr(worktrees, "_run", git)
     monkeypatch.setattr(worktrees, "_pr_info", lambda url: {"headRefName": "pl/other"})
-    assert worktrees.for_run(card) == (Path("/wts/other"), None)
+    assert REAL_FOR_RUN(card) == (Path("/wts/other"), None)
     assert git.adds() == []
 
 
@@ -102,14 +104,14 @@ def test_rework_refuses_a_branch_that_looks_like_an_option(monkeypatch):
     git = FakeGit()
     monkeypatch.setattr(worktrees, "_run", git)
     monkeypatch.setattr(worktrees, "_pr_info", lambda url: {"headRefName": "--force"})
-    worktrees.for_run(card)
+    REAL_FOR_RUN(card)
     assert git.adds() == [["worktree", "add", "-b", f"pl/{_slug()}", str(_dest()), "origin/HEAD"]]
 
 
 def test_add_failure_returns_git_last_line(monkeypatch):
     err = f"Preparing\nfatal: '{_dest()}' already exists\n"
     monkeypatch.setattr(worktrees, "_run", FakeGit(fail=(["worktree", "add"], err)))
-    assert worktrees.for_run(CARD) == (None, f"fatal: '{_dest()}' already exists")
+    assert REAL_FOR_RUN(CARD) == (None, f"fatal: '{_dest()}' already exists")
 
 
 def test_never_touches_main_checkout_files(monkeypatch):
@@ -117,7 +119,7 @@ def test_never_touches_main_checkout_files(monkeypatch):
     for kw in ({}, {"local_branch": True}, {"remote_branch": True}):
         git = FakeGit(**kw)
         monkeypatch.setattr(worktrees, "_run", git)
-        worktrees.for_run(CARD)
+        REAL_FOR_RUN(CARD)
         for argv in git.calls:
             assert argv[0] == "git"
             assert any(tuple(argv[1:1 + len(a)]) == a for a in allowed), argv
