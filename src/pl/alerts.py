@@ -265,6 +265,7 @@ def needs_you(now=None):
 
 
 WATCHES = {
+    "agent_unknown": "stages naming an unknown agent",
     "account_parked": "parked accounts",
     "accounts_all_out": "accounts out of credits",
     "api_error": "agents stopped by API errors",
