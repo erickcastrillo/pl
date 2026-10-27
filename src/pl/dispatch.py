@@ -1674,18 +1674,24 @@ def _stall_tried(cid, st, now):
 def check_stalled(all_cards, st=None):
     """Open an alert, and notify once, for work that stopped moving: a run agent idle stall_minutes while its card has
     not reached the run stage's done column, or a run agent the dispatcher released that waits out its retry (high after two
-    releases). An alert clears when the card moves on or its agent works again. Read from card metadata and the
-    dispatcher state only: no tmux or GitHub call."""
+    releases), or any stage agent waiting only on background jobs that cannot report. An alert clears when the card moves
+    on or its agent works again. Read from card metadata and the dispatcher state only: no tmux or GitHub call."""
     limit = C.DISPATCH.get("stall_minutes", 20)
     run = ((C.PIPELINE or {}).get("stages") or {}).get("run") or {}
     building = {run.get("column") or "Approved", "In progress"}   # the run stage starts from its column, works in In progress
-    waits, now, active = (st or {}).get("run_waits") or {}, time.time(), set()
+    waits, stalls, now, active = (st or {}).get("run_waits") or {}, (st or {}).get("stalls") or {}, time.time(), set()
     for c in all_cards:
-        if col_name(c.get("list_id")) not in building:
-            continue
         m, head, key = c.get("metadata") or {}, short_id(c["id"]), f"stalled:{c['id']}"
-        since = (waits.get(c["id"]) or {}).get("since")
-        if limit and isinstance(since, (int, float)) and now - since >= limit * 60:
+        stall = stalls.get(c["id"]) or {}
+        if jobs_left := stall.get("jobs"):
+            stage = (m.get("worker") or {}).get("stage") or "stage"
+            title = f"Card {head}: its {stage} agent waits on jobs that cannot report: {'; '.join(jobs_left)}"
+            fix = f"pl asked the agent to stop them and re-run in the foreground; pl card {cmd_id(c['id'])} shows the agent (pl never stops them itself)"
+            severity = "warn"
+        elif col_name(c.get("list_id")) not in building:
+            continue
+        elif (since := (waits.get(c["id"]) or {}).get("since")) and not stall.get("jobs_ok") and limit \
+                and isinstance(since, (int, float)) and now - since >= limit * 60:
             title = f"Card {head}: its run agent is idle {int((now - since) // 60)} min and the card has not moved"
             fix = f"pl card {cmd_id(c['id'])} shows the agent; the dispatcher releases it at release_waiting_after"
             severity = "warn"
