@@ -1,7 +1,6 @@
 """When a stage agent finished but its card, PR link or PR labels do not show it, pl applies those writes itself (plan 54 slice 2)."""
 import json
 import sys
-from pathlib import Path
 
 from pl import agent_screen, agents, alerts, board, events, move_agent, pipeline, rework, worktrees
 from pl import config as C
@@ -27,7 +26,7 @@ def _branch_pr(c):
     repo = c["id"].rpartition("#")[0]
     if "/" not in repo or not C.WORK_DIR:
         return None
-    for tree in worktrees._list_worktrees(Path(C.WORK_DIR)):
+    for tree in worktrees._list_worktrees(C.WORK_DIR):
         branch = tree.get("branch") or ""
         if branch.startswith("pl/") and worktrees._card_for(branch.removeprefix("pl/"), [c]):
             found = json.loads(github._gh(["pr", "list", "--repo", repo, "--head", branch, "--state", "open",
@@ -37,8 +36,7 @@ def _branch_pr(c):
 
 
 def _labels(url, m):
-    """(label to add, label to remove) for the PR; None for each that is already right. A PR that is not open, or a
-    rework run with no commit since the review, needs nothing."""
+    """(label to add, label to remove) for the PR, None for each already right; none for a closed PR or a rework with no new commit."""
     pr = json.loads(github._gh(["pr", "view", url, "--json", "state,labels,commits"]))
     if pr.get("state") != "OPEN":
         return None, None
@@ -70,11 +68,11 @@ def _write(c, name, fn, active):
 
 def _move(c, col, changes, active):
     from pl import commands
-    if not _write(c, f"move to {col}", lambda: commands.move_to(c["id"], col, c["id"]), active):
-        return False
-    c["list_id"] = board.col_id(col)   # the rest of this pass sees the card where it now is
-    changes.append(f"moved to {col}")
-    return True
+    ok = _write(c, f"move to {col}", lambda: commands.move_to(c["id"], col, c["id"]), active)
+    if ok:
+        c["list_id"] = board.col_id(col)   # the rest of this pass sees the card where it now is
+        changes.append(f"moved to {col}")
+    return ok
 
 
 def _link(c, url, changes, active):
@@ -113,10 +111,7 @@ def _card(c, reg, done, active):
             return
         ok = _finished(w, reg) and _move(c, C.STAGE_DONE_AT[stage], changes, active)
     elif stage == "run" and col in ("Approved", "In progress", C.STAGE_DONE_AT["run"]):
-        if not _finished(w, reg):
-            return
-        url = (m.get("pr_urls") or [None])[-1] or (_branch_pr(c) if col != C.STAGE_DONE_AT["run"] else None)
-        if not url:
+        if not _finished(w, reg) or not (url := (m.get("pr_urls") or [None])[-1] or (_branch_pr(c) if col != C.STAGE_DONE_AT["run"] else None)):
             return
         ok = _link(c, url, changes, active)
         if ok and col != C.STAGE_DONE_AT["run"]:
