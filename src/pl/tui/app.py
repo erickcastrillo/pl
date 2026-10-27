@@ -28,6 +28,7 @@ from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.connectors import ConnectorsPanel
+from pl.tui.extend import ExtendView
 from pl.tui.extensions import ExtensionsView
 from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, MAIN_KEYS, UNUSED, groups, header_text, resolve, sub_label, tabs, unused
 from pl.tui.needs import needs_you_count, review_kind
@@ -91,6 +92,7 @@ VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs"
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
          "waiting": WaitingView,
+         "extend": ExtendView,
          "skills": _titled("Skills, agents and commands (every account)", SkillsView),
          "connectors": _titled("Connectors", ConnectorsPanel),
          "pods": _titled("Pods", make_pods_panel),
@@ -651,7 +653,7 @@ class PlApp(App):
     def action_skills(self):
         """Extend tab, the Skills sub-tab, its list focused."""
         self.action_tab("skills")
-        self.query_one(SkillsView).focus_table()
+        self.query_one("#skills").query_one(SkillsView).focus_table()
 
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
