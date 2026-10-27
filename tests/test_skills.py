@@ -15,6 +15,7 @@ from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 from pl import cli, skill_sources, skills
 from pl import config as C
 from pl.tui import skills as tui
+from tui_wait import settle
 
 SKILL = "---\nname: {n}\ndescription: {d}\n---\n\n# {n}\n\nBody of {n}.\n"
 
@@ -258,12 +259,6 @@ def screen_text(app):
     return " ".join(console.export_text().split())
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
-
-
 class Host(App):
     def compose(self):
         yield tui.SkillsView()
@@ -274,21 +269,32 @@ def rows(app):
     return [None if r is None else (r["name"], r["account"]) for r in view.rows]
 
 
+def loaded(app):
+    return rows(app) and app.query_one("#skills-preview", Markdown).source
+
+
+def confirm_shown(app):
+    return isinstance(app.screen, tui.ConfirmScreen) and "y yes" in screen_text(app)
+
+
 async def select(pilot, name, account):
     app = pilot.app
+    md = app.query_one("#skills-preview", Markdown)
+    before = md.source
     t = app.query_one("#skills-table", DataTable)
     t.focus()
     t.move_cursor(row=rows(app).index((name, account)))
-    await settle(pilot)
+    await settle(pilot, lambda: md.source != before, "the preview of the selected row")
 
 
 async def test_view_lists_two_accounts_and_renders_the_preview(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         got = rows(app)
         assert ("alpha", "a") in got and ("beta", "b") in got and ("team-wide", "shared") in got
         await select(pilot, "beta", "b")
+        await settle(pilot, lambda: "Body of beta." in screen_text(app), "the preview on screen")
         md = app.query_one("#skills-preview", Markdown)
         assert "Body of beta." in md.source
         assert "Body of beta." in screen_text(app)
@@ -297,18 +303,18 @@ async def test_view_lists_two_accounts_and_renders_the_preview(home):
 async def test_e_edits_in_app_and_saves_with_a_backup_after_confirming(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         ta = app.screen.query_one(TextArea)
         ta.load_text(ta.text + "Added line.\n")
         await pilot.press("ctrl+s")
-        await settle(pilot)
+        await settle(pilot, lambda: '+Added line.' in screen_text(app), "the diff")
         assert "+Added line." in screen_text(app)                  # the diff is shown before anything is written
         assert "Added line." not in (home["a"] / "skills/alpha/SKILL.md").read_text()
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: (home['a'] / 'skills/alpha/SKILL.md').read_text().endswith('Added line.\n'), "the saved file")
         assert (home["a"] / "skills/alpha/SKILL.md").read_text().endswith("Added line.\n")
         assert len(list((home["a"] / "skills/alpha").glob("SKILL.md.bak-*"))) == 1
 
@@ -316,10 +322,10 @@ async def test_e_edits_in_app_and_saves_with_a_backup_after_confirming(home):
 async def test_e_on_a_plugin_skill_is_refused(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "plugskill", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: "plugin's file" in notes(app), "the refusal")
         assert not app.screen.query(TextArea)
         assert "plugin" in screen_text(app)
 
@@ -354,18 +360,20 @@ def buttons(app):
 
 
 async def choose(pilot, which):
-    pilot.app.query_one("#skills-table").focus()
+    app = pilot.app
+    app.query_one("#skills-table").focus()
     await pilot.press("n")
-    await settle(pilot)
+    await settle(pilot, lambda: app.screen.query(f'#skills-choose-{which}'), "the chooser")
     await pilot.click(f"#skills-choose-{which}")
-    await settle(pilot)
+    await settle(pilot, lambda: app.screen.query('#skills-new-name') if which == 'write' else isinstance(app.screen, tui.PromptScreen), "the chosen form")
 
 
 async def start_install(pilot, source="github:o/r/x"):
+    app = pilot.app
     await choose(pilot, "install")
-    pilot.app.screen.query_one(Input).value = source
+    app.screen.query_one(Input).value = source
     await pilot.press("enter")
-    await settle(pilot)
+    await settle(pilot, lambda: app.screen.query('#skills-review-cancel') or toasts(app), "the review screen or an error toast")
 
 
 async def test_n_opens_a_chooser_with_exactly_two_choices_and_esc_changes_nothing(home, monkeypatch):
@@ -373,14 +381,14 @@ async def test_n_opens_a_chooser_with_exactly_two_choices_and_esc_changes_nothin
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         before = rows(app)
         app.query_one("#skills-table").focus()
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, tui.NewChoiceScreen), "the chooser")
         assert buttons(app) == ["Install from GitHub", "Write a new one"]
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, ModalScreen), "the chooser to close")
         assert not isinstance(app.screen, ModalScreen)   # the chooser closed; the right pane keeps its own buttons
         assert fake.calls == [] and rows(app) == before and not skills.library().exists()
 
@@ -390,8 +398,9 @@ async def test_install_shows_the_dry_run_with_cancel_focused(home, monkeypatch):
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await start_install(pilot)
+        await settle(pilot, lambda: "Install from o/r@aaaaaaa?" in screen_text(app), "the review text")
         assert fake.calls == [["pl", "skills", "install", "github:o/r/x", "--dry-run"]]
         text = screen_text(app)
         assert text.index("Runs code:") < text.index("Files:") and "Install from o/r@aaaaaaa?" in text
@@ -403,10 +412,10 @@ async def test_install_runs_the_pinned_source_with_yes_and_refreshes(home, monke
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await start_install(pilot)
         await pilot.click("#skills-review-install")
-        await settle(pilot)
+        await settle(pilot, lambda: ('x', 'library') in rows(app) and 'installed x' in toasts(app), "the installed skill")
         assert fake.calls[1] == ["pl", "skills", "install", f"github:o/r/x@{SHA}", "--yes"]
         assert ("x", "library") in rows(app)
         assert "installed x" in toasts(app)
@@ -418,13 +427,13 @@ async def test_cancel_or_esc_installs_nothing(home, monkeypatch, dismiss):
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await start_install(pilot)
         if dismiss == "cancel":
             await pilot.click("#skills-review-cancel")
         else:
             await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: 'nothing installed' in toasts(app), "the cancel notice")
         assert len(fake.calls) == 1 and not skills.library().exists()
         assert "nothing installed" in toasts(app)
 
@@ -438,7 +447,7 @@ async def test_a_failed_dry_run_shows_the_error_and_no_install_button(home, monk
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await start_install(pilot)
         assert shown in toasts(app)
         assert not app.screen.query("#skills-review-install") and len(fake.calls) == 1
@@ -455,24 +464,25 @@ async def test_a_plugin_installs_with_one_pinned_yes_call(home, monkeypatch):
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await start_install(pilot, "github:o/r")
+        await settle(pilot, lambda: "Install plugin p (3 skills) from o/r@aaaaaaa?" in screen_text(app), "the review text")
         assert "Install plugin p (3 skills) from o/r@aaaaaaa?" in screen_text(app)
         await pilot.click("#skills-review-install")
-        await settle(pilot)
+        await settle(pilot, lambda: len(fake.calls) == 2, "the install call")
         assert fake.calls[1] == ["pl", "skills", "install", f"github:o/r@{SHA}", "--yes"]
 
 
 async def test_write_a_new_one_creates_in_the_library_with_the_description_and_opens_the_editor(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await choose(pilot, "write")
         app.screen.query_one("#skills-new-name", Input).value = "made-here"
         app.screen.query_one("#skills-new-description", Input).value = "Use when testing"
         app.screen.query_one("#skills-new-description", Input).focus()
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea) and ('made-here', 'library') in rows(app), "the editor on the new skill")
         path = skills.library() / "made-here/SKILL.md"
         assert "\ndescription: Use when testing\n" in path.read_text()
         assert "description: Use when testing" in app.screen.query_one(TextArea).text
@@ -483,14 +493,14 @@ async def test_write_a_new_one_shows_name_errors_in_the_form(home):
     (skills.library() / "taken").mkdir(parents=True)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await choose(pilot, "write")
         for name, shown in (("Bad Name", "is not a valid name"), ("taken", "pl never overwrites")):
             app.screen.query_one("#skills-new-name", Input).value = name
             app.screen.query_one("#skills-new-description", Input).value = "d"
             app.screen.query_one("#skills-new-description", Input).focus()
             await pilot.press("enter")
-            await settle(pilot)
+            await settle(pilot, lambda: shown in str(app.screen.query_one('#skills-new-error', Static).content), "the name error")
             assert shown in str(app.screen.query_one("#skills-new-error", Static).content)
             assert app.screen.query("#skills-new-name")
         assert not (skills.library() / "Bad Name").exists()
@@ -499,12 +509,12 @@ async def test_write_a_new_one_shows_name_errors_in_the_form(home):
 async def test_enter_on_the_name_moves_to_the_description(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await choose(pilot, "write")
         app.screen.query_one("#skills-new-name", Input).value = "next-one"
         app.screen.query_one("#skills-new-name", Input).focus()
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: app.focused.id == 'skills-new-description', "the description field to take focus")
         assert app.focused.id == "skills-new-description" and not (skills.library() / "next-one").exists()
 
 
@@ -513,29 +523,29 @@ async def test_I_skips_the_chooser(home, monkeypatch):
     monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         app.query_one("#skills-table").focus()
         await pilot.press("I")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, tui.PromptScreen), "the source prompt")
         assert isinstance(app.screen, tui.PromptScreen) and not app.screen.query("#skills-choose-install")
         app.screen.query_one(Input).value = "github:o/r/x"
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query('#skills-review-cancel'), "the review screen")
         await pilot.click("#skills-review-install")
-        await settle(pilot)
+        await settle(pilot, lambda: len(fake.calls) == 2, "the install call")
         assert [c[-1] for c in fake.calls] == ["--dry-run", "--yes"]
 
 
 async def test_d_asks_then_moves_to_trash(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         await pilot.press("d")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the confirm")
         assert (home["b"] / "skills/beta").is_dir()                 # nothing moves before the yes
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: ('beta', 'b') not in rows(app), "the row to go")
         assert not (home["b"] / "skills/beta").exists() and (home["b"] / ".pl-trash/skills").is_dir()
         assert ("beta", "b") not in rows(app)
 
@@ -545,10 +555,10 @@ async def test_palette_entry_opens_the_skills_section(home):
     from test_tui_views import Provider
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         cmd = next(c for c in app.get_system_commands(app.screen) if c.title == "Skills: view, edit, create")
         cmd.callback()
-        await settle(pilot)
+        await settle(pilot, lambda: app.active_tab == 'skills' and app.focused is app.query_one('#skills-table'), "the skills tab")
         assert app.active_tab == "skills" and app.focused is app.query_one("#skills-table")
 
 
@@ -643,10 +653,10 @@ async def test_e_on_a_big_file_says_why_and_opens_nothing(home):
     (home["a"] / "skills/alpha/SKILL.md").write_bytes(b"x" * ((1 << 20) + 1))
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: 'larger than 1 MiB' in notes(app), "the refusal")
         assert not app.screen.query(TextArea) and "larger than 1 MiB" in notes(app)
 
 
@@ -679,22 +689,22 @@ def test_save_never_writes_through_a_link_swapped_in_after_the_check(home, tmp_p
 async def test_esc_with_unsaved_edits_asks_before_discarding(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         ta = app.screen.query_one(TextArea)
         ta.load_text(ta.text + "Unsaved.\n")
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the discard question")
         assert "Discard" in screen_text(app)
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor again")
         assert app.screen.query(TextArea) and "Unsaved." in app.screen.query_one(TextArea).text
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the discard question")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: not app.screen.query(TextArea), "the editor to close")
         assert not app.screen.query(TextArea)
         assert "Unsaved." not in (home["a"] / "skills/alpha/SKILL.md").read_text()
 
@@ -702,17 +712,17 @@ async def test_esc_with_unsaved_edits_asks_before_discarding(home):
 async def test_ctrl_s_after_a_change_on_disk_says_reopen(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         (home["a"] / "skills/alpha/SKILL.md").write_text("theirs\n")
         ta = app.screen.query_one(TextArea)
         ta.load_text(ta.text + "mine\n")
         await pilot.press("ctrl+s")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ModalScreen), "the diff")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: 'changed on disk; reopen' in notes(app), "the reopen notice")
         assert "changed on disk; reopen" in notes(app)
         assert (home["a"] / "skills/alpha/SKILL.md").read_text() == "theirs\n"
 
@@ -738,10 +748,10 @@ def test_trash_refuses_a_library_skill_that_accounts_still_link(home):
 async def test_d_warns_that_links_and_pl_prompts_will_break(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         await pilot.press("d")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the confirm")
         text = screen_text(app)
         assert "other profiles" in text and "Not used by any stage, loop or pod" in text
 
@@ -764,10 +774,11 @@ def gh(home, monkeypatch):
 
 
 async def press_d(pilot, name, account):
-    await settle(pilot)
+    app = pilot.app
+    await settle(pilot, lambda: loaded(app), "the first scan and preview")
     await select(pilot, name, account)
     await pilot.press("d")
-    await settle(pilot)
+    await settle(pilot, lambda: confirm_shown(app) or toasts(app), "the confirm or a refusal")
 
 
 async def test_d_on_a_github_skill_names_its_stages_and_loops_and_keeps_it(gh):
@@ -784,7 +795,7 @@ async def test_d_yes_on_a_github_skill_removes_it_everywhere(gh, home):
     async with app.run_test(size=(176, 48)) as pilot:
         await press_d(pilot, "foo", "library")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: 'removed foo' in toasts(app) and ('foo', 'library') not in rows(app), "the removal")
         assert not os.path.lexists(home["a"] / "skills/foo") and not (gh / "foo").exists()
         assert len(list((gh / ".pl-trash").glob("foo-*"))) == 1
         assert "foo" not in skill_sources.records()
@@ -799,7 +810,7 @@ async def test_d_no_or_escape_on_a_github_skill_changes_nothing(gh, home, key):
     async with app.run_test(size=(176, 48)) as pilot:
         await press_d(pilot, "foo", "library")
         await pilot.press(key)
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, ModalScreen), "the confirm to close")
         assert (gh / "foo").is_dir() and (home["a"] / "skills/foo").is_symlink()
         assert (gh / skill_sources.SOURCES_FILE).read_bytes() == before
 
@@ -815,7 +826,7 @@ async def test_d_on_an_own_skill_names_its_pod_and_trashes_on_yes(home, monkeypa
         assert "pod review" in text and ".pl-trash" in text
         assert (home["b"] / "skills/beta").is_dir()
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: not (home['b'] / 'skills/beta').exists() and (home['b'] / '.pl-trash/skills').is_dir(), "the trashed skill")
         assert not (home["b"] / "skills/beta").exists() and (home["b"] / ".pl-trash/skills").is_dir()
 
 
@@ -858,7 +869,7 @@ async def test_d_when_a_pod_fails_to_load_still_asks_and_says_users_could_not_be
         await press_d(pilot, "beta", "b")
         assert "could not check" in screen_text(app).lower()
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: not (home['b'] / 'skills/beta').exists(), "the trashed skill")
         assert not (home["b"] / "skills/beta").exists()
 
 
@@ -952,13 +963,14 @@ def test_inlined_prompt_files_are_0600_and_old_ones_are_removed(lib):
 async def test_s_is_left_to_standup_and_S_shares(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         await pilot.press("s")
+        # s is left to standup and shows nothing, so there is no state to wait for
         await settle(pilot)
         assert "skills library" not in screen_text(app)
         await pilot.press("S")
-        await settle(pilot)
+        await settle(pilot, lambda: 'skills library' in screen_text(app), "the share notice")
         assert "skills library" in screen_text(app)
 
 
@@ -973,7 +985,7 @@ async def test_the_preview_is_read_off_the_ui_thread(home, monkeypatch):
     monkeypatch.setattr(skills, "read", spy)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         assert seen and not any(seen)
         assert "Body of beta." in app.query_one("#skills-preview", Markdown).source
@@ -1041,14 +1053,16 @@ def test_grouped_survives_a_failing_users_lookup(grouped_home, monkeypatch):
 async def test_view_shows_headings_and_a_heading_row_selects_nothing(grouped_home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app) and 'a (claude)' in screen_text(app), "the grouped list")
         text = screen_text(app)
         assert "Your library" in text and "a (claude)" in text
         t = app.query_one("#skills-table", DataTable)
         t.focus()
         t.move_cursor(row=1)   # row 0 is "+ New skill"
+        # moving onto a heading posts no message to wait for
         await settle(pilot)
         await pilot.press("e")
+        # e on a heading does nothing, so there is no state to wait for
         await settle(pilot)
         assert len(app.screen_stack) == 1
 
@@ -1063,7 +1077,7 @@ async def test_first_row_is_new_skill_even_with_no_skills(home, monkeypatch):
     monkeypatch.setattr(skills, "scan", lambda: [])
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         t = app.query_one("#skills-table", DataTable)
         assert t.row_count == 1
         assert t.get_row_at(0)[0].plain == "+ New skill" and "dim" in str(t.get_row_at(0)[0].style)
@@ -1076,26 +1090,27 @@ async def test_enter_on_new_skill_and_n_open_the_same_choice_and_save_through_sk
     monkeypatch.setattr(skills, "create", lambda *a, **kw: made.append(a) or real(*a, **kw))
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         t = app.query_one("#skills-table", DataTable)
         t.focus()
         t.move_cursor(row=0)
+        # the cursor is on the new row already; no message to wait for
         await settle(pilot)
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, tui.NewChoiceScreen), "the chooser")
         assert isinstance(app.screen, tui.NewChoiceScreen)
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, ModalScreen), "the chooser to close")
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, tui.NewChoiceScreen), "the chooser")
         assert isinstance(app.screen, tui.NewChoiceScreen)
         await pilot.click("#skills-choose-write")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query('#skills-new-name'), "the new-skill form")
         app.screen.query_one("#skills-new-name", Input).value = "made-here"
         app.screen.query_one("#skills-new-description", Input).value = "Use when testing"
         app.screen.query_one("#skills-new-description", Input).focus()
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: made and (skills.library() / 'made-here/SKILL.md').exists(), "the created skill")
         assert made and made[0][2] == "made-here"
         assert (skills.library() / "made-here/SKILL.md").exists()
 
@@ -1103,14 +1118,15 @@ async def test_enter_on_new_skill_and_n_open_the_same_choice_and_save_through_sk
 async def test_item_actions_on_the_new_row_say_nothing_selected(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         t = app.query_one("#skills-table", DataTable)
         t.focus()
         t.move_cursor(row=0)
+        # the cursor is on the new row already; no message to wait for
         await settle(pilot)
         for key in ("e", "E", "d", "S", "l"):
             await pilot.press(key)
-            await settle(pilot)
+            await settle(pilot, lambda: 'nothing selected' in toasts(app), "the nothing-selected notice")
             assert len(app.screen_stack) == 1
             assert "nothing selected" in screen_text(app)
             app.clear_notifications()
@@ -1119,19 +1135,19 @@ async def test_item_actions_on_the_new_row_say_nothing_selected(home):
 async def test_footer_reads_n_new_skill(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         app.query_one("#skills-table", DataTable).focus()
-        await settle(pilot)
+        await settle(pilot, lambda: 'new skill' in _footer_keys(app), "the footer")
         assert "new skill" in _footer_keys(app)
 
 
 async def test_the_first_real_item_is_acted_on_not_the_one_after_it(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         assert "alpha" in app.screen.query_one(TextArea).text
 
 
@@ -1200,8 +1216,9 @@ def pane_buttons(app):
 async def test_pane_shows_buttons_linked_and_used_by_above_the_text(grouped_home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "mine", skills.LIBRARY)
+        await settle(pilot, lambda: "Body of mine" in screen_text(app), "the preview on screen")
         ids = [b.id for b in app.query("#skills-buttons Button") if b.display]
         assert ids == [f"skills-btn-{k}" for k in ("edit", "update", "link", "share", "remove")]
         order = [w.id for w in app.query_one("#skills-preview-box").children]
@@ -1214,10 +1231,11 @@ async def test_pane_shows_buttons_linked_and_used_by_above_the_text(grouped_home
 async def test_heading_row_shows_nothing_selected_and_no_buttons(grouped_home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         t = app.query_one("#skills-table", DataTable)
         t.focus()
         t.move_cursor(row=0)
+        # the cursor is on row 0 already; no message to wait for
         await settle(pilot)
         assert not app.query_one("#skills-buttons").display and not app.query_one("#skills-meta").display
         assert "nothing selected" in screen_text(app)
@@ -1226,7 +1244,7 @@ async def test_heading_row_shows_nothing_selected_and_no_buttons(grouped_home):
 async def test_disabled_button_shows_its_reason_without_pressing(grouped_home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         link = pane_buttons(app)["skills-btn-link"]
         assert link.disabled and link.tooltip == "only library skills can be linked"
@@ -1236,10 +1254,10 @@ async def test_disabled_button_shows_its_reason_without_pressing(grouped_home):
 async def test_pressing_remove_opens_the_same_confirm_as_d(grouped_home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         pane_buttons(app)["skills-btn-remove"].press()
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the confirm")
         assert ".pl-trash" in screen_text(app)
         assert (grouped_home["b"] / "skills/beta").is_dir()
 
@@ -1250,16 +1268,16 @@ async def test_reset_asks_and_only_resets_after_yes(grouped_home, monkeypatch, a
     monkeypatch.setattr(skills, "reset_builtin", lambda name: called.append(name))
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "pl-plan", skills.LIBRARY)
         pane_buttons(app)["skills-btn-reset"].press()
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, tui.ConfirmScreen), "the reset question")
         shipped = grouped_home["library"] / "pl-plan" / "SKILL.md"
         assert isinstance(app.screen, tui.ConfirmScreen)
         assert app.screen.message == f"Replace {shipped} with the shipped version? A backup is kept."
         assert called == []
         await pilot.press(answer)
-        await settle(pilot)
+        await settle(pilot, lambda: called == calls and not isinstance(app.screen, ModalScreen), "the answer to be handled")
         assert called == calls
 
 
@@ -1274,10 +1292,10 @@ async def test_update_button_runs_the_check_then_labels_update_available(grouped
     monkeypatch.setattr(tui, "_run", fake_run)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "mine", skills.LIBRARY)
         assert str(pane_buttons(app)["skills-btn-update"].label) == "Check for update"
         pane_buttons(app)["skills-btn-update"].press()
-        await settle(pilot)
+        await settle(pilot, lambda: str(pane_buttons(app)['skills-btn-update'].label) == 'Update available', "the update label")
         assert ran == [["pl", "skills", "update", "--check"]]
         assert str(pane_buttons(app)["skills-btn-update"].label) == "Update available"

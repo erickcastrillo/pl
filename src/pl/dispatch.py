@@ -577,9 +577,9 @@ def _check_auto_merge(name, svc):
         events.failure("auto_review_check_skipped", "warning", f"could not read allow_auto_merge for {repo}")
     elif allowed:
         alerts.resolve(key)
-    elif why := alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
-                            f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand"):
-        notify(alerts.headline(why, f"Auto-merge is off for {repo}"), "pl alerts")
+    else:
+        alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
+                    f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand")
 
 
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
@@ -1566,8 +1566,7 @@ def check_deps(all_cards):
             title = f"Card {short_id(c['id'])} waits on {short_id(dep_id)}: " + ("it was dropped" if why == "dropped" else "its PR was closed unmerged")
             fix = (f"pl undrop {cmd_id(dep_id)}" if why == "dropped" else f"open a new PR for {cmd_id(dep_id)}") \
                 + f" or pl depends {cmd_id(c['id'])} --clear"
-            if w := alerts.open(key, "warn", title, fix):
-                notify(alerts.headline(w, title), fix)
+            alerts.open(key, "warn", title, fix, cards=[c["id"]])
     alerts.sweep("dep_broken:", active, notify)
 
 
@@ -1650,9 +1649,7 @@ def check_pr_person_alerts(all_cards):
         fix = f"{', '.join(urls)}: fix the PR by hand, remove {lab['failed']} to send it back once more, or close it"
         if any(need in names for names in seen):
             fix += f"; or clear {need} once the merge rule it names is fixed"
-        if opened := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix,
-                                 cards=[c["id"]]):
-            notify(alerts.headline(opened, f"PR needs a person: {c['title'][:40]}"), fix)
+        alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix, cards=[c["id"]])
     alerts.sweep("pr_person:", active, notify)
 
 

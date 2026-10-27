@@ -10,6 +10,7 @@ from pl import chat, manager
 from pl.tui import connectors
 from pl.tui.chatform import ChatAdapterPicker, ChatConnectorForm, save
 from pl.tui.connectors import AddConnectorScreen, ConnectorsPanel
+from tui_wait import settle, wait_until
 
 SECRET = "sekret-123456"
 
@@ -116,10 +117,8 @@ def screen_text(app):
     return console.export_text()
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
+def _listed(app):
+    return all(app.query_one(t, DataTable).row_count > 0 for t in ("#connectors-table", "#chat-table"))
 
 
 class HostApp(App):
@@ -149,7 +148,7 @@ def capture_notices(app):
 async def open_picker(app, pilot):
     app.query_one("#chat-table", DataTable).focus()
     await pilot.press("n")
-    await settle(pilot)
+    await wait_until(pilot, lambda: isinstance(app.screen, ChatAdapterPicker), "the adapter picker")
 
 
 async def pick(app, pilot, index):
@@ -157,18 +156,18 @@ async def pick(app, pilot, index):
     for _ in range(index):
         await pilot.press("down")
     await pilot.press("enter")
-    await settle(pilot)
+    await wait_until(pilot, lambda: isinstance(app.screen, ChatConnectorForm), "the chat form")
 
 
 async def test_new_chat_row_opens_picker_with_three_adapters(calls):
     app = HostApp()
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         chat_table = app.query_one("#chat-table", DataTable)
         chat_table.focus()
         chat_table.move_cursor(row=0)
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ChatAdapterPicker), "the adapter picker")
         assert isinstance(app.screen, ChatAdapterPicker)
         ol = app.screen.query_one(OptionList)
         assert [ol.get_option_at_index(i).id for i in range(ol.option_count)] == ["telegram", "slack", "discord"]
@@ -177,14 +176,14 @@ async def test_new_chat_row_opens_picker_with_three_adapters(calls):
 async def test_n_on_chat_table_opens_picker_and_n_on_oauth_table_does_not(calls):
     app = HostApp()
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         await open_picker(app, pilot)
         assert isinstance(app.screen, ChatAdapterPicker)
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, ChatAdapterPicker), "the picker to close")
         app.query_one("#connectors-table", DataTable).focus()
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, AddConnectorScreen), "the add form")
         assert isinstance(app.screen, AddConnectorScreen)
 
 
@@ -192,7 +191,7 @@ async def test_n_on_chat_table_opens_picker_and_n_on_oauth_table_does_not(calls)
 async def test_form_fields_defaults_and_setup_text(calls, index, needle):
     app = HostApp()
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         await pick(app, pilot, index)
         form = app.screen
         assert isinstance(form, ChatConnectorForm)
@@ -205,11 +204,11 @@ async def test_form_fields_defaults_and_setup_text(calls, index, needle):
         assert needle in str(form.query_one("#chat-setup", Static).render())
 
 
-async def fill(app, pilot, var, allow):
+async def fill(app, pilot, var, allow, done, what):
     app.screen.query_one("#chat-var", Input).value = var
     app.screen.query_one("#chat-allow", Input).value = allow
     await pilot.press("ctrl+s")
-    await settle(pilot)
+    await settle(pilot, done, what)
 
 
 async def test_form_save_writes_refreshes_and_notifies(monkeypatch, calls):
@@ -217,9 +216,10 @@ async def test_form_save_writes_refreshes_and_notifies(monkeypatch, calls):
     app = HostApp()
     notices = capture_notices(app)
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         await pick(app, pilot, 0)
-        await fill(app, pilot, "TG_TOKEN", "12345")
+        await fill(app, pilot, "TG_TOKEN", "12345",
+                   lambda: not isinstance(app.screen, ChatConnectorForm), "the form to close")
         assert not isinstance(app.screen, ChatConnectorForm)
         assert chat.load()["telegram"]["token"] == "${TG_TOKEN}"
         assert calls.count(["pl", "chat", "list", "--json"]) == 2
@@ -232,9 +232,10 @@ async def test_form_error_keeps_form_open(monkeypatch, calls, machine):
     monkeypatch.delenv("TG_TOKEN", raising=False)
     app = HostApp()
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         await pick(app, pilot, 0)
-        await fill(app, pilot, "TG_TOKEN", "12345")
+        await fill(app, pilot, "TG_TOKEN", "12345",
+                   lambda: str(app.screen.query_one("#chat-error", Static).render()), "the form error")
         assert isinstance(app.screen, ChatConnectorForm)
         assert "TG_TOKEN is not set" in str(app.screen.query_one("#chat-error", Static).render())
         assert chat.load() == {}

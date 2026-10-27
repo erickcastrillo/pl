@@ -51,10 +51,15 @@ def _hold(acct, args):
         _sleep(min(60, wait[0] - now))
 
 
+REST = {("label", "create"), ("label", "edit"), ("label", "delete")}
+
+
 def kind(args):
     """"none" for gh commands that call no API, "rest" for gh api on a REST endpoint, else "graphql"."""
     if not args or args[0] in NO_CALL:
         return "none"
+    if tuple(args[:2]) in REST:
+        return "rest"
     if args[0] == "api":
         endpoint = next((a for a in args[1:] if not a.startswith("-")), "")
         return "graphql" if endpoint == "graphql" else "rest"

@@ -19,6 +19,7 @@ SKIP_DIRS = {"node_modules", "__pycache__", "build", "dist"}
 FULL_FILES = {"conftest.py", "pyproject.toml", "uv.lock"}
 TEST_DIRS = {"tests", "test"}
 CMD_TIMEOUT = 120
+FULL_DEFAULT = "uv run pytest -q"
 
 
 class GitError(Exception):
@@ -27,6 +28,10 @@ class GitError(Exception):
 
 class SettingsError(Exception):
     pass
+
+
+class TestsConfigError(Exception):
+    __test__ = False
 
 
 def _run(argv, cwd, timeout=60):
@@ -236,13 +241,53 @@ def affected(root, ref=None):
     return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason}
 
 
+def _workers(root):
+    path = Path(root) / ".pl" / "tests.toml"
+    try:
+        data = tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise TestsConfigError(f"{path}: {e}") from e
+    tests = data.get("tests")
+    value = tests.get("workers") if isinstance(tests, dict) else None
+    if value is None or value == "auto" or isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    raise TestsConfigError(f'{path}: [tests] workers must be "auto" or a whole number of at least 1, got {value!r}')
+
+
+def _sets_workers(token):
+    return token.startswith(("-n", "--numprocesses"))
+
+
+def full_command(root, cmd=FULL_DEFAULT):
+    """cmd with `-n <workers>` from <root>/.pl/tests.toml when it is a pytest command that does not set -n itself."""
+    argv = shlex.split(cmd)
+    if not any(Path(t).name in ("pytest", "py.test") for t in argv) or any(_sets_workers(t) for t in argv):
+        return cmd
+    workers = _workers(root)
+    return cmd if workers is None else f"{cmd} -n {workers}"
+
+
 def cmd_tests(argv):
     ap = argparse.ArgumentParser(prog="pl tests")
     sub = ap.add_subparsers(dest="action", required=True)
     aff = sub.add_parser("affected", help="the test files a change can affect")
     aff.add_argument("--base", metavar="REF", help="compare with REF (default: merge base with the default branch)")
     aff.add_argument("--json", action="store_true")
+    sub.add_parser("full", help="the command that runs the whole suite")
     args = ap.parse_args(argv)
+    if args.action == "full":
+        try:
+            root = _git(".", "rev-parse", "--show-toplevel")
+        except GitError:
+            root = "."
+        try:
+            print(full_command(root))
+        except TestsConfigError as e:
+            print(f"pl tests: {e}", file=sys.stderr)
+            return 2
+        return 0
     try:
         res = affected(_git(".", "rev-parse", "--show-toplevel"), args.base)
     except GitError as e:
