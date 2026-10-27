@@ -287,6 +287,7 @@ ENTRIES = [
        "pl chat list"),
     _e("2026-10-26.72", "A built-in marketing pod: writer, editor and analyst rules", "Extend: pods",
        "pl pods show marketing"),
+<<<<<<< HEAD
     _e("2026-10-26.73", "Notifications for PR opened, merged and done",
        "[notify] events in the profile config; chat connectors routed for alerts", "pl chat route alerts <name>"),
     _e("2026-10-26.74", "A marketing template for new pipelines: brief, draft, publish, report",
@@ -295,8 +296,14 @@ ENTRIES = [
        "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
     _e("2026-10-26.76", "Open a loop run's full log",
        "Loops tab: select a scheduled loop and press l, or Enter on an earlier run", "l"),
-    _e("2026-10-26.73", "Stalled work raises an alert and a notification",
+    _e("2026-10-26.77", "Stalled work raises an alert and a notification",
        "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
+||||||| merged common ancestors
+>>>>>>>>> Temporary merge branch 2
+=======
+    _e("2026-10-26.78", "All pipelines' waiting items on Dashboard",
+       "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens", "pl inbox"),
+>>>>>>> origin/pl/plan-43-slice-5-all-pipelines
 ]
 
 
