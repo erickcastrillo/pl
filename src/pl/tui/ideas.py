@@ -17,14 +17,21 @@ from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from pl import config as C
-from pl import harnesses, ideas
+from pl import harnesses, ideas, pipeline
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.util import short_id
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 SKIP_TEXT = "(skipped: I do not know yet; ask something else)"
-STATUS = {"interviewing": "interviewing", "approving": "creating the card…", "approved": "approved · in Inbox",
+STATUS = {"interviewing": "interviewing", "approving": "creating the {item}…", "approved": "approved · in Inbox",
           "discarded": "discarded"}
+
+
+def status_text(status, item, default=None):
+    """The status sentence with the pipeline's word; an unknown status is shown as it is, never formatted."""
+    if status in STATUS:
+        return STATUS[status].replace("{item}", item)
+    return str(status) if default is None else default
 
 
 class IdeaInput(TextArea):
@@ -168,7 +175,7 @@ class IdeasView(Widget):
         ol.add_option(Option(new_row("idea"), id=NEW_ROW))
         for i in items:
             q = sum(1 for e in i.get("transcript", []) if e.get("role") == "harness")
-            line = STATUS.get(i.get("status"), str(i.get("status"))) + (f" · {q} question{'s' * (q != 1)}" if q else "")
+            line = status_text(i.get("status"), pipeline.ui()["item"]) + (f" · {q} question{'s' * (q != 1)}" if q else "")
             ol.add_option(Option(Text(f"{str(i.get('title'))[:60]}\n{line}"), id=i["id"]))
         if not items:
             ol.add_option(Option(Text("\n".join(empty_state("ideas")), style="dim"), disabled=True))
@@ -224,7 +231,7 @@ class IdeasView(Widget):
         if idea is None:
             return ""
         if idea.get("status") != "interviewing":
-            return STATUS.get(idea.get("status"), "")
+            return status_text(idea.get("status"), pipeline.ui()["item"], "")
         if ideas.is_clear(idea):
             return "the brief is clear: press A to approve it and start the spec"
         return "● waiting for your answer" if idea.get("question") else ""
@@ -244,7 +251,7 @@ class IdeasView(Widget):
             t.append("\n")
         t.append(f"brief {ideas.clear_count(brief)} of {len(ideas.FIELDS)} clear\n", style="dim")
         if idea and idea.get("card_id"):
-            t.append(f"card {short_id(idea['card_id'])} in Inbox\n", style="green")
+            t.append(f"{pipeline.ui()['item']} {short_id(idea['card_id'])} in Inbox\n", style="green")
         elif idea and ideas.is_clear(idea):
             t.append("A  approve brief, start spec\n", style="bold")
         else:
@@ -333,7 +340,7 @@ class IdeasView(Widget):
 
     def action_discard(self):
         if self.current and self.current.get("status") in ("approving", "approved"):
-            self.app.notify("an approved idea is not discarded; its card is on the board", markup=False)
+            self.app.notify(f"an approved idea is not discarded; its {pipeline.ui()['item']} is on the board", markup=False)
             return
         self._saved_update(status="discarded")
 
@@ -437,7 +444,7 @@ class IdeasView(Widget):
         self.approving = False
         self.current = done
         if done.get("status") != "approved" or not done.get("card_id"):
-            self.app.notify("another console is creating this card", markup=False)
+            self.app.notify(f"another console is creating this {pipeline.ui()['item']}", markup=False)
             return self.reload(select=done["id"])
-        self.app.notify(f"card {short_id(done.get('card_id'))} created in Inbox; the spec stage picks it up", markup=False)
+        self.app.notify(f"{pipeline.ui()['item']} {short_id(done.get('card_id'))} created in Inbox; the spec stage picks it up", markup=False)
         self.reload(select=done["id"])

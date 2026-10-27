@@ -68,7 +68,9 @@ def test_doctor_reports_each_jobs_model_pulled_or_not(capsys, monkeypatch):
     assert "route: r:1 is pulled" in out and "summarise: s:1 is not pulled: run ollama pull s:1" in out
 
 
-def test_doctor_json_lists_each_check(capsys, monkeypatch):
+def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = tmp_path / "attn.sh"
     monkeypatch.setattr(local_model, "_request",
                         lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
     code, out = run(capsys, json=True)
@@ -77,7 +79,9 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch):
         {"name": "local_models", "ok": True,
          "lines": ["Ollama: up, 2 models", "route: r:1 is pulled", "summarise: s:1 is pulled"]},
         {"name": "tracker", "ok": True, "lines": ["[tracker] ok: fake"]},
-        {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]}]}
+        {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]},
+        {"name": "notify_settings", "ok": True, "lines": ["quiet hours: off"]},
+        {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]}]}
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -150,3 +154,54 @@ def test_doctor_fails_when_no_account_can_run_the_assistant(capsys):
     code, out = run(capsys)
     assert code == 1
     assert "FAIL assistant_account" in out and "[assistant] account" in out
+
+
+@pytest.mark.parametrize("value", ["10pm-7am", "25:00-07:00", "22:00"])
+def test_doctor_names_a_bad_notify_quiet(capsys, monkeypatch, value):
+    C.NOTIFY = {**C.NOTIFY, "quiet": value}
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL notify_settings" in out and "notify.quiet" in out and "HH:MM-HH:MM" in out
+
+
+def test_doctor_reports_quiet_hours_when_valid(capsys, monkeypatch):
+    C.NOTIFY = {**C.NOTIFY, "quiet": "22:00-07:00"}
+    _, out = run(capsys)
+    assert "ok notify_settings" in out and "quiet hours: 22:00-07:00" in out
+
+
+def _machine_with_connector(tmp_path, monkeypatch, routes):
+    mdir = tmp_path / "machine"
+    mdir.mkdir(exist_ok=True)
+    monkeypatch.setenv("PL_MACHINE_DIR", str(mdir))
+    (mdir / "machine.toml").write_text('[connectors.tg]\nrole = "messaging"\nadapter = "telegram"\n'
+                                       f'token = "${{T}}"\nallow = ["1"]\nroutes = {json.dumps(routes)}\n')
+
+
+def test_doctor_warns_when_nothing_can_notify(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = None
+    _, out = run(capsys)
+    assert "ok notifications" in out
+    assert "warning:" in out and "pl setup" in out and "[paths] attention_cmd" in out and "pl chat route alerts" in out
+
+
+def test_doctor_json_reports_the_warning_as_ok(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = None
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "notifications")
+    assert check["ok"] is True and check["lines"][0].startswith("warning:")
+
+
+@pytest.mark.parametrize("how", ["attention", "alerts_route"])
+def test_doctor_no_warning_with_attention_or_alerts_route(capsys, monkeypatch, tmp_path, how):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = None
+    if how == "attention":
+        C.ATTENTION = tmp_path / "attn.sh"
+    else:
+        _machine_with_connector(tmp_path, monkeypatch, ["gates", "alerts"])
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "notifications")
+    assert check["ok"] is True and not any(ln.startswith("warning:") for ln in check["lines"])

@@ -1,0 +1,3 @@
+# pl tests affected: tests every build runs, beyond the ones the import graph finds
+[tests]
+always = ["tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"]

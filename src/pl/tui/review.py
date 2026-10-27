@@ -18,6 +18,7 @@ from textual.widgets import Footer, Input, Markdown, Static, TextArea
 
 from pl import commands
 from pl import config as C
+from pl import pipeline
 from pl.board import card, card_size, check_size, col_name, fresh_next, max_card_chars, render, sections, update
 from pl.ideas import _plain
 from pl.util import parse_iso, short_id, slug_of
@@ -131,7 +132,7 @@ def write_section(card_id, name, loaded, new, column=None):
     c = card(card_id)
     col = col_name(c["list_id"])
     if column and col != column:
-        raise SystemExit(f"the card is now in '{col}', not '{column}': nothing written")
+        raise SystemExit(f"the {pipeline.ui()['item']} is now in '{col}', not '{column}': nothing written")
     parts = sections(c.get("description"))
     if (parts.get(name) or "") != loaded:
         raise SystemExit(f"the {name.lower()} changed on the board since you opened it: nothing written (reopen it to see the new text)")
@@ -187,7 +188,7 @@ def review_file(kind, c):
     never overwritten."""
     slug = slug_of(c)
     if not SLUG_RE.fullmatch(slug or ""):
-        raise SystemExit(f"pl: card {short_id(c['id'])} has the slug {slug!r}, which is not a safe file name (a-z, 0-9 and -)")
+        raise SystemExit(f"pl: {pipeline.ui()['item']} {short_id(c['id'])} has the slug {slug!r}, which is not a safe file name (a-z, 0-9 and -)")
     if kind == "spec":
         path, text = C.PLANS.parent / "specs" / f"spec-{slug}.md", sections(c.get("description")).get("SPEC") or ""
     elif kind == "input":
@@ -224,7 +225,7 @@ def run_command(app, fn, after=None, kind=None, says=None, failed="", done=None,
             if kind:
                 col = col_name(card(kw["id"])["list_id"])
                 if col != KIND_COLUMN[kind]:
-                    raise SystemExit(f"the card is now in '{col}', not '{KIND_COLUMN[kind]}': nothing changed")
+                    raise SystemExit(f"the {pipeline.ui()['item']} is now in '{col}', not '{KIND_COLUMN[kind]}': nothing changed")
             with redirect_stdout(out):
                 fn(argparse.Namespace(**kw))
         except (SystemExit, Exception) as e:
@@ -351,7 +352,7 @@ class ReviewScreen(Screen):
             try:
                 c, text, checks = load_review(kind, cid)
             except (SystemExit, Exception) as e:
-                self.app.call_from_thread(self.app.notify, f"could not read the card: {e}", severity="error", markup=False)
+                self.app.call_from_thread(self.app.notify, f"could not read the {pipeline.ui()['item']}: {e}", severity="error", markup=False)
                 return
             self.app.call_from_thread(self._show, c, text, checks)
         self.run_worker(run, thread=True, group="review")

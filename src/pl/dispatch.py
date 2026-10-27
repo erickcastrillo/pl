@@ -1034,6 +1034,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     pods.save_draft(cid, sec, sections(c.get("description")).get(sec) or "")
         try:
             notifications.moves(moved)
+            notifications.review_passed(all_cards, now_col, st)
         except Exception as e:  # noqa: BLE001 - a notification never stops the pass
             print(f"notifications skipped this pass: {e}", file=sys.stderr)
         for c in all_cards:   # a design stage ends without a column move: its DESIGN section appears
@@ -1050,6 +1051,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     waiting = []     # windows of agents waiting at a trust or permission prompt: pl manager counts them in our share
     slow = {}        # slow-work conditions seen this pass (slowwork.py)
     holders = {"run": [], "prep": []}   # short ids of the cards counted in runs_alive / prep_alive
+    seen_stalls = {}
     waits, seen_waits = st.get("run_waits") or {}, {}   # card id -> when its run agent was first seen waiting
     for c in all_cards:
         if c.get("unreadable"):
@@ -1191,6 +1193,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
                 and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh
             m, w, status = c["metadata"], {}, "none"
+        if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
+                and agent_alerts.stall(c, w, reg, st, seen_stalls):   # idle with its stage unfinished: nudged, then restarted
+            m, w, status = c["metadata"], {}, "none"
         if w and status == "alive" and not busy and not dry and w.get("stage") == stage and (C.CAPS or m.get("caps")) \
                 and (note := _check_caps(c, w, st, time.time())) and stop_at_cap(c, w, note):
             continue
@@ -1296,6 +1301,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time
+    if not dry:
+        st["stalls"] = seen_stalls
     if not dry:
         try:
             agent_alerts.check(all_cards, st, {t[0]["id"] for t in todo})
@@ -1442,6 +1449,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         slowwork.observe(slow)
         check_alerts(all_cards, failed, st)
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
+        notifications.release()    # the summary of what quiet hours held
         summary.write(summary.build(all_cards, reg, time.time()))
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)

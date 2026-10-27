@@ -296,7 +296,7 @@ def test_a_file_that_sorts_before_the_legacy_entries_is_named(tmp_path):
 
 
 def test_the_migrated_entry_keeps_its_key_and_text():
-    assert whatsnew.ENTRIES[-1] == MIGRATED
+    assert MIGRATED in whatsnew.ENTRIES   # later migrated entries (0081-0086, merged from main) may follow it
     assert MIGRATED not in whatsnew._LEGACY
     keys = [e["key"] for e in whatsnew.ENTRIES]
     assert keys == sorted(keys) and len(keys) == len(set(keys))

@@ -307,7 +307,7 @@ _LEGACY = [
 
 
 DIR = Path(__file__).with_name("whatsnew.d")
-LAST_MIGRATED_FILE = "2026-10-26-0080"   # files up to this name carry their old <date>.<n> key as id
+LAST_MIGRATED_FILE = "2026-10-26-0086"   # files up to this name carry their old <date>.<n> key as id
 NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.toml$")
 _FIELDS = ("title", "where", "try")
 
