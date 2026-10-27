@@ -1,0 +1,3 @@
+title = "pl-plan orders slices that change the same file; pl plan check lists unordered ones"
+where = "built-in skill pl-plan v7; pl plan check <N>"
+try = "pl plan check 58 --json"
