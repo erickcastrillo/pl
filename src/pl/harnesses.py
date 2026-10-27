@@ -386,6 +386,18 @@ def mcp_flags(h, servers, profile, card_id, stage, window):
     return [f"--mcp-config={f}", "--strict-mcp-config"]
 
 
+# Without pl's python or package (upgraded, environment replaced) the agent's gh still runs: the next gh on the PATH.
+_SHIM = """#!/bin/sh
+dir=$(dirname "$0")
+if {py} -c 'import importlib.util as u, sys; sys.exit(u.find_spec("pl.ghwrap") is None)' 2>/dev/null; then
+  PL_GH_SHIM_DIR=$dir exec {py} -m pl.ghwrap "$@"
+fi
+PATH=$(printf %s "$PATH" | tr ':' '\\n' | grep -vxF "$dir" | paste -sd: -)
+export PATH
+exec gh "$@"
+"""
+
+
 def gh_shim():
     """Write the gh wrapper agents find first on their PATH (the real gh stays behind it); returns its folder."""
     folder = C.STATE_DIR / "bin"
@@ -394,7 +406,7 @@ def gh_shim():
     tmp = folder / f".gh.{os.getpid()}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
     with os.fdopen(fd, "w") as f:
-        f.write(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -m pl.ghwrap "$@"\n')
+        f.write(_SHIM.format(py=shlex.quote(sys.executable)))
     os.replace(tmp, folder / "gh")
     return folder
 

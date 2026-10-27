@@ -147,6 +147,21 @@ def test_wrapper_not_on_child_path(gh, monkeypatch, profile):
     assert str(shim) not in os.environ["PATH"].split(":")
 
 
+def test_unloadable_profile_still_runs_gh(gh, monkeypatch, profile):
+    def broken(*a, **k):
+        raise SystemExit("pl: no profile")
+    monkeypatch.setattr(C, "load", broken)
+    shim = profile / "bin"
+    monkeypatch.setenv("PL_GH_SHIM_DIR", str(shim))
+    monkeypatch.setenv("PL_GH_LEDGER", "me@github.com")
+    monkeypatch.setenv("PATH", f"{shim}:/usr/bin")
+    gh.code = 3
+    assert ghwrap.main(["pr", "view"]) == 3
+    assert gh.calls == [["/real/gh", "pr", "view"]]
+    assert str(shim) not in gh.envs[0]["PATH"].split(":")
+    assert gh.reads == []
+
+
 def test_no_token_read_or_written(gh, monkeypatch, capsys, profile):
     monkeypatch.setenv("GH_TOKEN", "tok-secret-1")
     monkeypatch.setenv("GITHUB_TOKEN", "tok-secret-2")
@@ -229,3 +244,16 @@ def test_headless_env_has_wrapper(monkeypatch):
     _, env = harnesses.headless_argv(harnesses.get("claude"), "a", "go", stage="run")
     assert env["PATH"].split(":")[0] == str(C.STATE_DIR / "bin")
     assert env["PL_GH_LEDGER"] == "me.abc123def456@github.com" and env["PL_STAGE"] == "run"
+
+
+def test_shim_falls_back_to_next_gh_when_pl_is_gone(monkeypatch, tmp_path):
+    monkeypatch.setattr(harnesses.sys, "executable", str(tmp_path / "no-such-python"))
+    shim = harnesses.gh_shim()
+    other = tmp_path / "other"
+    other.mkdir()
+    real = other / "gh"
+    real.write_text('#!/bin/sh\necho "real gh $*"\nexit 7\n')
+    real.chmod(0o700)
+    env = {"PATH": f"{shim}:{other}:/usr/bin:/bin"}
+    out = subprocess.run([str(shim / "gh"), "pr", "list"], env=env, capture_output=True, text=True)
+    assert (out.returncode, out.stdout) == (7, "real gh pr list\n")

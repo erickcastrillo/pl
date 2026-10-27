@@ -53,15 +53,20 @@ def _record(args):
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    C.load()
-    shim = str(C.STATE_DIR / "bin")
+    shim = os.environ.get("PL_GH_SHIM_DIR")
+    counting = True
+    try:
+        C.load()
+        shim = shim or str(C.STATE_DIR / "bin")
+    except (Exception, SystemExit):
+        counting = False   # a profile being edited or removed must not stop the agent's gh
     os.environ["PATH"] = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if p != shim)
     real = shutil.which("gh")
     if not real:
         print("pl: gh is not installed: https://cli.github.com", file=sys.stderr)
         return 127
     code = _run([real, *args], dict(os.environ))
-    if kind(args) == "graphql":
+    if counting and kind(args) == "graphql":
         try:
             _record(args)
         except Exception:
