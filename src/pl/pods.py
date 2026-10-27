@@ -47,7 +47,7 @@ def _configured(name):
 
 
 def find(name):
-    if name in C.PODS and name in PIPELINE_POD_ONLY:
+    if name in C.PODS and name in OWN_SKILLS_ONLY + PIPELINE_POD_ONLY:
         table = _configured(name)
         return {**_builtin(name), **{k: table[k] for k in C.PODS[name] if k in table}}
     if name in C.PODS:
@@ -67,7 +67,7 @@ def launch_pod():
     """The pod whose skills a launch is limited to: only one the profile configures with a `skills` key, so a profile without pods, or a pod table that sets only file or knowledge, keeps the whole library."""
     name = next((n for n in (C.POD or C.PROFILE_NAME, "engineering") if n in C.PODS), None)
     if name:
-        return find(name) if "skills" in C.PODS[name] else None
+        return find(name) if "skills" in C.PODS[name] or name in OWN_SKILLS_ONLY + PIPELINE_POD_ONLY else None
     own = C.POD or C.PROFILE_NAME
     return find(own) if own in OWN_SKILLS_ONLY or C.POD in PIPELINE_POD_ONLY else None
 

@@ -392,6 +392,13 @@ def test_a_pod_table_without_skills_keeps_the_whole_library(fake_env, monkeypatc
     assert "/pl:outside" in harnesses.launch_script(claude, None, "/outside x", "sid", "label")
 
 
+@pytest.mark.parametrize("built_in", ["sales", "marketing"])
+def test_a_file_only_override_of_a_built_in_pod_keeps_its_launch_limit(fake_home, monkeypatch, built_in):
+    monkeypatch.setattr(C, "PODS", {built_in: {"file": "x.md"}})
+    monkeypatch.setattr(C, "POD", built_in)
+    assert pods.launch_pod()["skills"] == pods.find(built_in)["skills"] != []
+
+
 def _enable(monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["pl", "skills", "enable", *argv])
     cli.main()
