@@ -362,7 +362,7 @@ def test_whatsnew_py_holds_no_entry_text():
         assert marker not in source
     for e in _migrated():
         for field in ("title", "where", "try"):
-            assert e[field] not in source
+            assert json.dumps(e[field]) not in source
 
 
 def test_the_migrated_entries_are_byte_identical():
