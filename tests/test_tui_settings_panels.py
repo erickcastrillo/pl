@@ -10,7 +10,7 @@ from pl.tui import connectors
 from pl.tui.connectors import AddConnectorScreen, ConnectorsPanel
 from pl.tui.parity import COMMANDS, PARITY
 from pl.tui.review import ConfirmScreen
-from tui_wait import settle, wait_until
+from tui_wait import settle
 
 
 def screen_text(app):
