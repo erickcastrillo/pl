@@ -7,6 +7,7 @@ from textual.widgets import Footer, Static
 from textual.worker import get_current_worker
 
 from pl import agent_screen
+from pl.tui.chrome import close
 
 REFRESH_SECONDS = 2
 SCROLLBACK_LINES = 2000
@@ -53,7 +54,7 @@ class LiveScreen(Screen):
             self.call_after_refresh(scroll.scroll_end, animate=False)
 
     def action_close(self):
-        self.app.pop_screen()
+        close(self)
 
     def action_page_up(self):
         self.query_one("#live-scroll", VerticalScroll).scroll_page_up()

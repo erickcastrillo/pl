@@ -46,7 +46,8 @@ def _script_cmd(payload):
     parts = shlex.split(payload)
     assert parts[0] == "sh" and len(parts) == 2, payload
     lines = open(parts[1]).read().splitlines()
-    env = [line[len("export "):] for line in lines if line.startswith("export ")]
+    wrapper = ("export PATH=", "export PL_CARD=", "export PL_LOOP=", "export PL_GH_LEDGER=")   # test_ghwrap.py covers these
+    env = [line[len("export "):] for line in lines if line.startswith("export ") and not line.startswith(wrapper)]
     run = [line[len("exec "):] for line in lines if line.startswith("exec ")]
     assert len(run) == 1, lines
     return " ".join(env + run)

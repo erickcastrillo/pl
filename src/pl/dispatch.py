@@ -1036,6 +1036,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     pods.save_draft(cid, sec, sections(c.get("description")).get(sec) or "")
         try:
             notifications.moves(moved)
+            notifications.review_passed(all_cards, now_col, st)
         except Exception as e:  # noqa: BLE001 - a notification never stops the pass
             print(f"notifications skipped this pass: {e}", file=sys.stderr)
         for c in all_cards:   # a design stage ends without a column move: its DESIGN section appears

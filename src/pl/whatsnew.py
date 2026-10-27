@@ -312,7 +312,9 @@ ENTRIES = [
        "pl notify test; pl doctor warns when nothing is set up", "pl notify test --chat <name>"),
     _e("2026-10-26.85", "Stalled agents are nudged, then restarted", "Alerts tab: stalled; [dispatch] stall_minutes",
        "pl alerts"),
-    _e("2026-10-27.86", "Budget-held moves are queued and replayed after the reset",
+    _e("2026-10-26.86", "Notifications when a review passes or sends a PR back",
+       "[notify] events: review_passed, review_rework", "pl rework"),
+    _e("2026-10-27.87", "Budget-held moves are queued and replayed after the reset",
        "pl doctor: Queued writes; Activity: write_queued", "pl doctor"),
 ]
 

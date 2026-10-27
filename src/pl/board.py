@@ -56,7 +56,15 @@ def _fresh():
 
 
 def _mode():
-    return _SHARE.get("mode") if _SHARE.get("dir") == C.STATE_DIR and C.STATE_DIR else None
+    if not C.STATE_DIR:
+        return None
+    if "mode" not in _SHARE:
+        return "read"
+    return _SHARE["mode"] if _SHARE.get("dir") == C.STATE_DIR else None
+
+
+def share_seconds():
+    return int((C.TRACKER or {}).get("share_seconds") or 120)
 
 
 def _save(path, data):
@@ -97,9 +105,16 @@ def cards():
     if mode == "read" and not _fresh():
         got = _load(C.STATE_DIR / "board-cache.json")
         pace = ghquota.pace() if str((C.TRACKER or {}).get("type") or "").startswith("github") else 1
-        at, hold = got.get("at"), min(got.get("hold") or C.DISPATCH["interval"] + 30, REUSE_MAX) * pace   # low budget: longer
+        at, floor = got.get("at"), share_seconds()
+        hold = floor
+        if (got.get("hold") or 0) > floor:
+            from pl.dispatch import dispatcher_running   # a stopped dispatcher's long hold no longer applies
+            if dispatcher_running():
+                hold = got["hold"]
+        hold = min(hold, REUSE_MAX) * pace   # low budget: longer
+        stamp = max(at, got.get("patched") or 0) if isinstance(at, (int, float)) else 0
         if (got.get("key") == _key() and isinstance(at, (int, float)) and 0 <= _clock() - at < hold
-                and at > (last_write() or 0) and isinstance(got.get("cards"), list) and not _fresh()):
+                and stamp > (last_write() or 0) and isinstance(got.get("cards"), list) and not _fresh()):
             if hasattr(_t(), "seed"):   # a tracker whose card(id) reads from its own listing takes this one, until the save's end
                 _t().seed(got["cards"], at, at + hold)
             return got["cards"]
@@ -112,6 +127,54 @@ def cards():
         at = min(start, r[2]) if (r := getattr(t, "_read", None)) else start
         _save(C.STATE_DIR / "board-cache.json", {"at": at, "hold": _SHARE.get("hold"), "key": _key(), "cards": out})
     return out
+
+
+def patch(name, args, kw, res, before):
+    """After a successful write: put that one card into the shared save and keep the save fresh. Anything that cannot
+    be patched in place leaves the save stale, so the next reader reads the board."""
+    if not C.STATE_DIR or name == "delete":
+        return
+    import fcntl
+    from datetime import datetime, timezone
+    path = C.STATE_DIR / "board-cache.json"
+    try:
+        lock = open(C.STATE_DIR / "board-cache.lock", "a")
+    except OSError:
+        return
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        got = _load(path)
+        at = got.get("at")
+        if (got.get("key") != _key() or not isinstance(got.get("cards"), list) or not isinstance(at, (int, float))
+                or max(at, got.get("patched") or 0) <= before):
+            return
+        ref = res if isinstance(res, str) else None
+        res = res if isinstance(res, dict) else {}
+        item_id = res.get("id") or ref or (args[0] if args else kw.get("item_id"))
+        column = kw.get("column") or (args[1] if name in ("move", "adopt") and len(args) > 1 else None)
+        old = next((c for c in got["cards"] if c.get("id") == item_id), None)
+        if name == "create":
+            new = res
+        elif old is None:
+            return
+        elif "list_id" in res:
+            new = res
+        else:
+            new = dict(old)
+            for k in ("title", "description", "tags", "assigned_to", "list_id"):
+                if k in kw:
+                    new[k] = kw[k]
+            if column:
+                new["list_id"] = col_id(column)
+            if kw.get("metadata") is not None:
+                new["metadata"] = {**(old.get("metadata") or {}), **kw["metadata"]}
+        if not isinstance(new, dict) or "list_id" not in new:
+            return
+        new = {**new, "updated_at": datetime.now(timezone.utc).isoformat()}
+        got["cards"] = ([*got["cards"], new] if name == "create" or old is None
+                        else [new if c is old else c for c in got["cards"]])
+        got["patched"] = _clock()
+        _save(path, got)
 
 
 def card(item_id):
