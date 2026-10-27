@@ -1,5 +1,6 @@
 """The merge checks: a throwaway merge, the test command and the CI checks. Git, the test command and gh are all faked."""
 import os
+import shlex
 import subprocess
 import types
 
@@ -119,6 +120,44 @@ def test_test_command_runs_in_the_merge_worktree(env):
     env.rules()
     argv, kw = env.popen[0]
     assert argv == ["uv", "run", "pytest", "-q"] and kw["cwd"] == env.path and "shell" not in kw
+
+
+def _pr_worktree_has(env, monkeypatch, tests_toml):
+    """Faked `git worktree add` also writes .pl/tests.toml into the pull request's worktree."""
+    fake = mc._git
+
+    def git(argv, cwd):
+        if argv[:2] == ["worktree", "add"]:
+            (env.path / ".pl").mkdir(parents=True, exist_ok=True)
+            (env.path / ".pl" / "tests.toml").write_text(tests_toml)
+        return fake(argv, cwd)
+
+    monkeypatch.setattr(mc, "_git", git)
+
+
+def test_tests_rule_adds_workers_from_the_pr_worktree(env, monkeypatch):
+    _pr_worktree_has(env, monkeypatch, '[tests]\nworkers = "auto"\n')
+    env.rules()
+    assert env.popen[0][0] == ["uv", "run", "pytest", "-q", "-n", "auto"]
+
+
+def test_tests_rule_command_unchanged_without_workers(env):
+    env.rules()
+    assert env.popen[0][0] == ["uv", "run", "pytest", "-q"]
+
+
+@pytest.mark.parametrize("cmd", ["make test", "uv run pytest -q -n 2"])
+def test_tests_rule_runs_non_pytest_and_n_commands_as_configured(env, monkeypatch, cmd):
+    C.AUTO_MERGE["test_command"] = cmd
+    _pr_worktree_has(env, monkeypatch, '[tests]\nworkers = "auto"\n')
+    env.rules()
+    assert env.popen[0][0] == shlex.split(cmd)
+
+
+def test_tests_rule_bad_workers_fails_and_runs_nothing(env, monkeypatch):
+    _pr_worktree_has(env, monkeypatch, '[tests]\nworkers = "many"\n')
+    r = env.rules()["tests"]
+    assert r["ok"] is False and "tests.toml" in r["why"] and "workers" in r["why"] and env.popen == []
 
 
 def test_tests_pass_with_green_ci(env):
