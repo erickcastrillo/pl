@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agents, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1528,6 +1528,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         alerts.flush_offers()      # at most one line per pass into an idle Assistant
         notifications.release()    # the summary of what quiet hours held
         summary.write(summary.build(all_cards, reg, time.time()))
+    try:
+        checkout_watch.check(all_cards, reg, st, dry, notify)
+    except (Exception, SystemExit) as e:
+        print(f"main checkout check skipped this pass: {e}", file=sys.stderr)
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
 

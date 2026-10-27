@@ -481,3 +481,23 @@ def test_dispatch_once_calls_check_missing(monkeypatch):
     monkeypatch.setattr(dispatch, "mirror_to_product", lambda *a, **k: None)
     dispatch.dispatch_once(max_runs=1, dry=False, max_prep=1, pull=False)
     assert checked == [test_cards]
+
+
+def test_sweep_runs_only_worktree_commands_in_the_main_checkout(wt_env):
+    from pl import worktrees
+
+    cards = []
+    for name, meta in (("merged", {"pr_urls": ["https://github.com/org/repo/pull/9"]}), ("dropped", {"dropped_at": "2026-10-23T00:00:00Z"})):
+        path = C.WORKTREES_DIR / f"repo-pl-{name}"
+        path.mkdir()
+        wt_env.worktrees.append({"path": path, "branch": f"pl/{name}"})
+        cards.append({"id": name, "title": name, "list_id": "Done", "metadata": {"pipeline_mode": "auto", **meta}})
+    wt_env.pr_views["https://github.com/org/repo/pull/9"] = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z", "headRefName": "pl/merged"}
+
+    worktrees.sweep(cards)
+
+    allowed = (["git", "worktree", "list"], ["git", "worktree", "remove"], ["git", "worktree", "prune"])
+    in_main = [cmd for cmd, cwd in wt_env.commands if str(cwd) == str(C.WORK_DIR)]
+    assert any(cmd[:3] == ["git", "worktree", "remove"] for cmd in in_main)
+    assert all(cmd[:3] in allowed for cmd in in_main)
+    assert not [cmd for cmd, _ in wt_env.commands if {"reset", "checkout", "stash", "clean"} & set(cmd)]
