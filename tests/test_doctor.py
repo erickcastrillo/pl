@@ -81,7 +81,8 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
         {"name": "tracker", "ok": True, "lines": ["[tracker] ok: fake"]},
         {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]},
         {"name": "notify_settings", "ok": True, "lines": ["quiet hours: off"]},
-        {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]}]}
+        {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]},
+        {"name": "queued_writes", "ok": True, "lines": ["Queued writes: none"]}]}
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):

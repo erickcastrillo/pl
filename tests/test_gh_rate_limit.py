@@ -1384,7 +1384,7 @@ def _pl(monkeypatch, capsys, *argv):
 
 
 @pytest.mark.parametrize("argv", [("idea", "x"), ("list",), ("card", "acme/app#3"), ("section", "acme/app#3", "SPEC"),
-                                  ("move", "acme/app#3", "Approved"), ("approve", "acme/app#3")])
+                                  ("approve", "acme/app#3")])
 def test_a_held_command_says_so_on_stderr_and_exits_3(gh, monkeypatch, capsys, argv):
     reset = _ledger(10, {})
     code, out, err = _pl(monkeypatch, capsys, *argv)
@@ -1396,8 +1396,10 @@ def test_a_held_command_says_so_on_stderr_and_exits_3(gh, monkeypatch, capsys, a
 
 def test_a_held_move_changes_nothing_and_runs_again_after_the_reset(gh, monkeypatch, capsys):
     reset = _ledger(10, {})
-    code, _, _ = _pl(monkeypatch, capsys, "move", "acme/app#3", "Approved")
-    assert code == 3
+    monkeypatch.setenv("PL_CONFIG_DIR", str(C.CONFIG_DIR))
+    monkeypatch.setattr(sys, "argv", ["pl", "move", "acme/app#3", "Approved"])
+    cli.main()   # queued, exit 0 (Plan 54 slice 3)
+    assert "queued" in capsys.readouterr().out
     assert gh.count("project", "item-edit") == 0 and gh.count("issue", "edit") == 0
     monkeypatch.setattr(github, "_clock", lambda: reset + 120)
     gh.set(remaining=5000, reset=reset + 3600)

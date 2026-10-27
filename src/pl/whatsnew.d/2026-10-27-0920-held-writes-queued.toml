@@ -1,0 +1,3 @@
+title = "Budget-held moves are queued and replayed after the reset"
+where = "pl doctor: Queued writes; Activity: write_queued"
+try = "pl doctor"

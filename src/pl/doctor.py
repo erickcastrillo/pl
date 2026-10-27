@@ -3,7 +3,7 @@ import json
 from urllib.parse import urlsplit
 
 from pl import config as C
-from pl import local_model, trackers, util
+from pl import heldwrites, local_model, trackers, util
 
 NOT_A_BOARD_KEY = ("columns", "skip_tags", "repo_tags", "enabled")
 
@@ -76,7 +76,12 @@ def notifications():
                   "or run pl chat route alerts <name>"]
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications]
+def queued_writes():
+    rows = heldwrites.doctor_lines()
+    return True, ["Queued writes: none"] if rows == ["none"] else [f"Queued writes: {len(rows)}"] + rows
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes]
 
 
 def cmd_doctor(a):
