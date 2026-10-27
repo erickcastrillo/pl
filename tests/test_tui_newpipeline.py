@@ -81,6 +81,7 @@ async def test_step_1_lists_the_builtin_templates_and_copy_existing():
         labels = [str(b.label) for b in screen.query_one("#np-kind", RadioSet).query(RadioButton)]
         for name, t in pipeline.templates().items():
             assert any(l.startswith(name) and " → ".join(t["columns"]) in l for l in labels)
+        assert any(l.startswith("marketing: Brief → Brief review → ") and l.endswith("→ Done") for l in labels)
         assert labels[-1].startswith("Start from an existing pipeline")
 
 

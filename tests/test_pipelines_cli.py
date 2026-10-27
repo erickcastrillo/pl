@@ -151,6 +151,26 @@ def test_add_unknown_template_exits_2(fake_home):
     assert e.value.code == 2
 
 
+def test_add_mkt_from_marketing_template(fake_home, capsys):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "name": "mkt", "template": "marketing"}))
+    capsys.readouterr()
+    pipeline.cmd_pipelines(_args(pipelines_cmd="show", name="mkt", json=True))
+    out = json.loads(capsys.readouterr().out)
+    want = pipeline.shown({**pipeline.templates()["marketing"], "name": "mkt"})
+    assert (out["columns"], out["stages"], out["gates"]) == (want["columns"], want["stages"], want["gates"])
+    assert set(out["gates"].values()) == {"owner"} and len(out["gates"]) == 4
+
+
+def test_add_unknown_template_marketin(fake_home, capsys):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    with pytest.raises(SystemExit) as e:
+        pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "name": "mkt", "template": "marketin"}))
+    assert e.value.code == 2 and "pl pipelines list --templates" in capsys.readouterr().err
+
+
 def test_add_dry_run_writes_nothing(fake_home, capsys):
     _profile(fake_home, "dev")
     C.load("dev")
@@ -238,10 +258,15 @@ def test_import_of_an_invalid_file_exits_2_naming_the_key(fake_home, capsys, tmp
     assert not (fake_home / ".pl-x").exists()
 
 
-def test_list_templates_names_all_five(capsys):
+def test_list_templates_names_all_six(capsys):
     pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
     names = {r["name"] for r in json.loads(capsys.readouterr().out)}
-    assert names == {"engineering", "new-client", "existing-client", "billing", "team"}
+    assert names == {"engineering", "new-client", "existing-client", "billing", "team", "marketing"}
+
+
+def test_list_templates_marketing_has_four_stages(capsys):
+    pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
+    assert {"name": "marketing", "stages": 4} in json.loads(capsys.readouterr().out)
 
 
 # ---------- Plan 35 slice 2: add takes a ready tracker table ----------
