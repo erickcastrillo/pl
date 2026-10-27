@@ -4,7 +4,7 @@ import types
 import pytest
 import tomlkit
 
-from pl import agent_alerts, alerts, dispatch, hooks, notifications, trackers
+from pl import agent_alerts, alerts, dispatch, hooks, notifications, rework, trackers
 from pl import config as C
 from pl.manager import machine_dir
 
@@ -208,3 +208,11 @@ def test_agent_waiting_left_out_sends_nothing(desktop, monkeypatch):
 @pytest.mark.parametrize("key", ["stalled:o/r#1", "ci_not_running:o/r"])
 def test_sites_that_notify_themselves_are_not_notified_again(key):
     assert key.startswith(alerts.DIRECT)
+
+
+def test_a_rework_wait_alert_notifies_once(desktop):
+    long_ago = "2020-01-01T00:00:00+00:00"
+    card = {"id": CARD, "metadata": {"rework": {"active": True, "at": long_ago}}}
+    rework.check_waits([card], [card], {}, lambda *a: desktop.direct.append(a))
+    assert alerts.get(f"rework_waiting:{CARD}")
+    assert desktop == [] and len(desktop.direct) == 1
