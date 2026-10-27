@@ -489,7 +489,7 @@ def build_parser():
     p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
-    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
+    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage, or with --github each account's callers and outside-pl points")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller, beside GitHub's own reading")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")

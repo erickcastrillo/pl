@@ -1,0 +1,3 @@
+title = "Loops read as sentences, with a row to start one from a template"
+where = "Automate → Loops: Enter on + New loop from a template"
+try = "pl loops add --help"

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pl import accounts, agents, alerts, dispatch, harnesses, hooks
+from pl import accounts, agents, alerts, dispatch, harnesses, hooks, notifications
 from pl import config as C
 
 REAL_ENABLED = hooks.enabled   # conftest turns hooks off for every other test
@@ -43,7 +43,7 @@ def board(monkeypatch):
     state = types.SimpleNamespace(card=_card(), writes=[], notes=[])
     monkeypatch.setattr(hooks.board, "card", lambda cid: state.card if cid == CARD else None)
     monkeypatch.setattr(hooks.board, "update", lambda cid, **f: state.writes.append((cid, f)))
-    monkeypatch.setattr(hooks, "notify", lambda t, m: state.notes.append((t, m)))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: state.notes.append((t, m)))
     return state
 
 

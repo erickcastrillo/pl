@@ -1,0 +1,3 @@
+title = "Alerts and waiting agents notify you once"
+where = "[notify] events: agent_waiting, alert_opened (switch either off there)"
+try = "pl alerts"

@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 10
+pl-builtin-version: 11
 ---
 
 # pl-run: build the approved plan for one card
@@ -110,10 +110,10 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
 
 1. Read the card (`pl card <id>`). `metadata.rework.prs` lists the pull requests to fix; `metadata.pr_urls`
    lists every pull request of the card. Read the plan and spec only as background.
-2. For each pull request to fix, read the newest review: the last comments, where the review's findings are.
+2. For each pull request to fix, read the newest review: the last comments, where the review's findings are (`<owner>`, `<repo>` and `<number>` are in its URL, `https://github.com/<owner>/<repo>/pull/<number>`). Read pull requests, labels, checks and comments through `gh api repos/...` (REST): GraphQL points are shared with pl. Use GraphQL only where REST has no equivalent (Projects).
 
    ```
-   gh pr view <url> --json number,headRefName,baseRefName,labels
+   gh api 'repos/<owner>/<repo>/pulls/<number>' --jq '{number, headRefName: .head.ref, baseRefName: .base.ref, labels: [.labels[].name]}'
    gh api 'repos/<owner>/<repo>/issues/<number>/comments?per_page=100' --jq '.[-3:][]|"\(.created_at) \(.body)"'
    ```
 

@@ -354,3 +354,10 @@ def test_a_file_named_after_the_migrated_one_needs_no_id_even_on_the_same_day(tm
     whatsnew.mark_seen("2026-10-26.80")
     monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew._LEGACY + [MIGRATED] + whatsnew.load(tmp_path))
     assert [e["key"] for e in whatsnew.unseen()] == ["2026-10-26-1530-new-thing"]
+
+
+def test_whatsnew_has_one_sales_and_support_pods_entry():
+    hits = [e for e in whatsnew.ENTRIES if all(w in e["title"].lower() for w in ("sales", "support", "pod"))]
+    assert len(hits) == 1
+    text = hits[0]["where"] + " " + hits[0]["try"]
+    assert "pl pods" in text and "pl pipelines add" in text and "--template new-client" in text
