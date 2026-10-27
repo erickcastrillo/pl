@@ -546,7 +546,7 @@ def cmd_move(a):
     except OverBudget as e:   # pl's own budget hold: saved, and the dispatcher applies it after the reset
         t = trackers.get("tracker")
         cid = t.ref_id(a.id) if hasattr(t, "ref_id") else a.id
-        heldwrites.add(cid, "move", {"column": a.column, "pr": pr}, e.until)
+        heldwrites.add(cid, "move", {"column": a.column, "pr": pr}, e.until, was=heldwrites.cached_list(cid))
         print(f"queued: move {short_id(cid)} to {a.column}; GitHub budget held, resets "
               f"{time.strftime('%H:%M', time.localtime(e.until))} (pl applies it after the reset)")
 

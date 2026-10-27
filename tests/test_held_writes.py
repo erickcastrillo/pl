@@ -11,7 +11,7 @@ import pytest
 from test_gh_rate_limit import _ledger, _move
 from test_gh_rate_limit import gh as _fake_gh
 
-from pl import alerts, commands, dispatch, doctor, events, heldwrites
+from pl import alerts, board, commands, dispatch, doctor, events, heldwrites
 from pl.trackers import github
 
 CARD3, CARD4 = "acme/app#3", "acme/app#4"
@@ -156,3 +156,41 @@ def test_a_dry_pass_leaves_the_queue_alone(gh, monkeypatch):
     monkeypatch.setattr(dispatch, "cards", lambda: [])
     dispatch.dispatch_once(1, True, pull=False)
     assert len(heldwrites.entries()) == 1 and json.loads(heldwrites.path().read_text().splitlines()[0])["card"] == CARD3
+
+
+# ---------- review round 1: a move is not replayed over a person's move ----------
+
+def _save_board(*cards):
+    heldwrites.C.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (heldwrites.C.STATE_DIR / "board-cache.json").write_text(json.dumps({"key": board._key(), "cards": list(cards)}))
+
+
+def test_held_move_records_the_column_the_shared_board_save_had(gh):
+    _save_board({"id": CARD3, "list_id": "opt-Spec ready"})
+    _ledger(10, {})
+    _move("3", "Approved")
+    assert heldwrites.entries()[0]["was"] == "opt-Spec ready"
+
+
+def test_held_move_without_a_board_save_records_no_column(gh):
+    _ledger(10, {})
+    _move("3", "Approved")
+    assert "was" not in heldwrites.entries()[0]
+
+
+def test_replay_skips_a_move_when_the_card_was_moved_since(gh, clock):
+    heldwrites.add(CARD3, "move", {"column": "Approved", "pr": None}, clock[0], was="opt-Spec ready")
+    gh.set(status={"3": "Done"})
+    notes = []
+    heldwrites.replay(lambda *a: notes.append(a))
+    assert gh.count("project", "item-edit") == 0 and heldwrites.entries() == []
+    (skipped,) = _kinds("write_replay_skipped")
+    assert skipped["card"] == CARD3 and skipped["op"] == "move" and skipped["why"]
+    assert notes == [] and alerts.listing() == [] and not _kinds("write_replayed")
+
+
+def test_replay_applies_a_move_when_the_card_is_still_where_it_was(gh, clock):
+    heldwrites.add(CARD3, "move", {"column": "Approved", "pr": None}, clock[0], was="opt-Spec ready")
+    gh.set(status={"3": "Spec ready"})
+    heldwrites.replay(lambda *a: None)
+    assert _edits(gh) == ["PVTI_3:opt-Approved"] and heldwrites.entries() == []

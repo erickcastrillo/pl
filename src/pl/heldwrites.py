@@ -66,11 +66,23 @@ def _write(keep):
     os.replace(tmp, p)
 
 
-def add(card, op, args, until) -> dict:
+def cached_list(card):
+    """The column id the shared board save has for card, or None: nothing is read from GitHub while the budget is held."""
+    from pl import board
+    got = board._load(C.STATE_DIR / "board-cache.json")
+    if got.get("key") != board._key():
+        return None
+    return next((c.get("list_id") for c in got.get("cards") or [] if c.get("id") == card), None)
+
+
+def add(card, op, args, until, was=None) -> dict:
+    """was: the card's column id when it was queued, if known; a replay leaves the card alone when it has moved since."""
     with _lock():
         cur = entries()
         entry = {"seq": (cur[-1]["seq"] + 1) if cur else 1, "card": str(card), "op": op, "args": args,
                  "at": now_iso(), "until": until}
+        if was is not None:
+            entry["was"] = was
         _write(cur + [entry])
     events.emit("write_queued", card, op=op, args=args, until=until)
     return entry
@@ -82,11 +94,14 @@ def _drop(seq):
 
 
 def _apply(entry):
-    from pl import commands   # commands imports the dispatcher, which imports this module
-    if entry["op"] == "move":
-        commands.move_card(entry["card"], entry["args"]["column"], entry["args"].get("pr"))
-    else:
+    """True when the write landed, False when it was skipped because the card moved after it was queued."""
+    from pl import board, commands   # commands imports the dispatcher, which imports this module
+    if entry["op"] != "move":
         raise ValueError(f"unknown queued write {entry['op']!r}")
+    if entry.get("was") is not None and board.card(entry["card"])["list_id"] != entry["was"]:
+        return False
+    commands.move_card(entry["card"], entry["args"]["column"], entry["args"].get("pr"))
+    return True
 
 
 def replay(notify):
@@ -97,7 +112,7 @@ def replay(notify):
             return
         card, op, args = entry["card"], entry["op"], entry["args"]
         try:
-            _apply(entry)
+            landed = _apply(entry)
         except RateLimited:   # OverBudget too: nothing failed, the write waits
             return
         except (Exception, SystemExit) as e:
@@ -110,7 +125,10 @@ def replay(notify):
                 notify(alerts.headline(why, title), err)
             continue
         _drop(entry["seq"])
-        events.emit("write_replayed", card, op=op, args=args)
+        if landed:
+            events.emit("write_replayed", card, op=op, args=args)
+        else:
+            events.emit("write_replay_skipped", card, op=op, args=args, why="the card was moved after the write was queued")
 
 
 def doctor_lines() -> list[str]:
