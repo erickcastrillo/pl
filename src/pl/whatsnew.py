@@ -310,7 +310,7 @@ ENTRIES = [
        '[notify] quiet = "22:00-07:00" in the profile config; high alerts still go out', "pl doctor"),
     _e("2026-10-26.84", "Test that notifications reach you",
        "pl notify test; pl doctor warns when nothing is set up", "pl notify test --chat <name>"),
-    _e("2026-10-26.81", "Stalled agents are nudged, then restarted", "Alerts tab: stalled; [dispatch] stall_minutes",
+    _e("2026-10-26.85", "Stalled agents are nudged, then restarted", "Alerts tab: stalled; [dispatch] stall_minutes",
        "pl alerts"),
 ]
 
