@@ -219,6 +219,8 @@ def test_reconciled_card_opens_no_unmoved_alert(world, monkeypatch):
 
 def test_dispatch_once_calls_reconcile(fake, monkeypatch):  # noqa: F811
     seen = []
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "reconcile", reconcile)   # conftest stubs it out of every other dispatcher pass
     monkeypatch.setattr(reconcile, "sweep", lambda *a: seen.append(a) or (_ for _ in ()).throw(RuntimeError("boom")))
     fake.run([])
     assert len(seen) == 1
