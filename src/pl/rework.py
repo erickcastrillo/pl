@@ -19,6 +19,7 @@ from pl.util import now_iso, short_id
 
 REWORK_EVERY = 600   # seconds between two looks at the rework label (one REST call per repo)
 PR_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
+SAFE_PR = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)$")   # the repo name lands in typed text
 _LAST = {"at": None}
 SEEN = {}   # PR url -> frozenset of its label names, as the last rework or merge look saw it (closed PRs dropped)
 
@@ -152,6 +153,18 @@ def prompt_arg(c):
     lab, q = labels(), shlex.quote
     return (f" rework={int(rw.get('round') or 1)} rework_label={q(lab['rework'])}"
             + (f" ready={q(lab['ready'])}" if lab.get("ready") else ""))
+
+
+def live_message(c):
+    """The one line typed into a card's live run agent for a rework round: the round and how to read the review,
+    never card text."""
+    rw = (c.get("metadata") or {}).get("rework") or {}
+    n = int(rw.get("round") or 1)
+    ms = [m for u in rw.get("prs") or [] if (m := SAFE_PR.match(str(u)))]
+    reads = " ; ".join(f"gh api repos/{m.group(1)}/issues/{m.group(2)}/comments --jq '.[-1].body'" for m in ms) \
+        or "read the latest review comment on the card's pull request"
+    return (f"pl: the review sent this card's pull request back for rework (round {n}). Read the review with: {reads} . "
+            f"Fix every finding on the PR's own branch and push, as /pl-run does with rework={n}.")
 
 
 def cmd_rework(a):

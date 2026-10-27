@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agents, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -283,6 +283,68 @@ def release_run(c, w, why, dry):
     events.emit("run_released", c["id"], reason=reason, releases=n, retry_at=retry)
     print(f"{head}  released the run agent ({reason}); its card waits {mins} min before the next start")
     return True
+
+
+def _prompt_has_text(pane):
+    """True when the agent's prompt line (after > or ❯) holds unsent text."""
+    screen = tmux("capture-pane", "-p", "-t", pane, "-S", "-20", check=False) or ""
+    lines = [agents.BOX_RE.sub(" ", ln).strip() for ln in screen.splitlines()]
+    marked = [ln for ln in lines if ln[:1] in (">", "❯")]
+    return bool(marked and marked[-1][1:].strip())
+
+
+def _type_into(pane, text):
+    """Clear the prompt box (Ctrl-U), type text literally and press Enter."""
+    tmux("send-keys", "-t", pane, "C-u", check=False)
+    tmux("send-keys", "-t", pane, "-l", "--", harnesses._typeable(text), check=False)
+    tmux("send-keys", "-t", pane, "Enter", check=False)
+
+
+def rework_live(c, w, why, reg, dry):
+    """A card sent back for rework whose run agent is still alive: type the review message into it once it is idle
+    (once per round); restart it fresh, with no backoff, when it has not gone busy within [dispatch] stall_minutes.
+    Returns "sent", "waiting", "restarted", or None when normal handling applies."""
+    rw = (c.get("metadata") or {}).get("rework") or {}
+    if not rw.get("active") or why == "exited" or w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit"):
+        return None
+    n, head = int(rw.get("round") or 1), short_id(c["id"])
+
+    def record(**more):
+        full = {**rw, **more}
+        update(c["id"], metadata={"rework": full})
+        c["metadata"] = {**(c.get("metadata") or {}), "rework": full}
+
+    if rw.get("sent_round") != n:
+        if why is None:
+            return None
+        if dry:
+            print(f"{head}  would type the rework message into the run agent")
+            return None
+        cleared = _prompt_has_text(w["pane"])
+        _type_into(w["pane"], rework.live_message(c))
+        record(sent_round=n, sent_at=now_iso(), started=False)
+        events.emit("rework_sent", c["id"], round=n, cleared=cleared)
+        print(f"{head}  typed the rework message (round {n}) into the run agent")
+        return "sent"
+    if rw.get("started"):
+        return None
+    rec = reg.get(w.get("session_id"))
+    if (rec.get("status") == "busy") if rec else why is None:
+        if not dry:
+            record(started=True)
+        return None
+    limit = C.DISPATCH.get("stall_minutes", 20)
+    if not limit:
+        return None
+    sent = parse_iso(rw["sent_at"]) if rw.get("sent_at") else time.time()
+    if time.time() - sent < limit * 60 or dry:
+        return "waiting"
+    if no := stop_worker(c, w, {"rework": {**rw, "started": True, "restarted_at": now_iso()}}):
+        print(f"{head}  rework agent has not started; could not stop it ({no})")
+        return "waiting"
+    events.emit("rework_restarted", c["id"], round=n)
+    print(f"{head}  run agent did not start the rework within {limit} min; restarted it")
+    return "restarted"
 
 
 def stage_servers(team, stage):
@@ -1252,7 +1314,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
                 why = ("waiting (usage limit)" if w.get("limit_hit") else run_waiting(w, reg, st)) if status == "alive" else None
-                if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
+                rw_state = rework_live(c, w, why, reg, dry) if status == "alive" else None
+                if rw_state == "restarted":
+                    seen_waits.pop(c["id"], None)
+                    todo.append((c, stage, 1, col))   # start_worker adds rework.prompt_arg
+                    continue
+                if why and rw_state is None and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
                 gate = f"GATE: {why[9:-1]}" if why and why.startswith("waiting (") and GATE_RE.fullmatch(f"GATE: {why[9:-1]}") else None

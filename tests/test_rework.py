@@ -162,3 +162,20 @@ def test_dry_run_sends_no_review_rework(gh):
     gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
     rework.sweep([_card("c1")], dry=True, force=True)
     assert gh.sent == []
+
+
+def _live_card(prs, n):
+    return {"id": "aaaa0001", "metadata": {"rework": {"active": True, "round": n, "prs": prs}}}
+
+
+def test_live_message_names_the_round_and_a_review_command_per_pr():
+    text = rework.live_message(_live_card(["https://github.com/o/r/pull/7", "https://github.com/o/s/pull/9"], 2))
+    assert "round 2" in text
+    assert "gh api repos/o/r/issues/7/comments --jq '.[-1].body'" in text
+    assert "gh api repos/o/s/issues/9/comments --jq '.[-1].body'" in text
+
+
+def test_live_message_leaves_out_a_pr_url_with_odd_characters():
+    text = rework.live_message(_live_card(["https://github.com/o/r'x/pull/7", "https://github.com/o/r y/pull/8"], 1))
+    assert "r'x" not in text and "r y" not in text
+    assert "latest review comment" in text
