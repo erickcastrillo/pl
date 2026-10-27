@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_screen, alerts, backup, board, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -953,6 +953,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     if github_board() and (wait := ghquota.check("read")):   # the shared budget is low: this pass waits
         raise OverBudget(*wait)
     trackers.reset("tracker")  # a fresh tracker each pass; the stage field stays remembered across passes
+    if not dry:
+        heldwrites.replay(notify)   # writes the budget hold refused earlier, once the reset has passed
     st = load_state()
     intake = pull and C.ISSUE_INTAKE   # the issue intake searches at most every INTAKE_EVERY s; a Product board bridge every pass
     if intake:

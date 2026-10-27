@@ -13,8 +13,9 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, confirm, events, harnesses, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, confirm, events, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
+from pl.trackers.github import OverBudget
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
                       render, sections, share, update)
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, paused, stop_worker
@@ -536,16 +537,30 @@ def cmd_move(a):
     pr = getattr(a, "pr", None)
     if pr is not None and not PR_URL_RE.fullmatch(pr):
         raise BadInput(f"pl move: --pr {pr!r} is not a GitHub pull request URL (https://github.com/OWNER/REPO/pull/N)")
+    try:
+        move_card(a.id, a.column, pr)
+    except OverBudget as e:   # pl's own budget hold: saved, and the dispatcher applies it after the reset
+        t = trackers.get("tracker")
+        cid = t.ref_id(a.id) if hasattr(t, "ref_id") else a.id
+        heldwrites.add(cid, "move", {"column": a.column, "pr": pr}, e.until)
+        print(f"queued: move {short_id(cid)} to {a.column}; GitHub budget held, resets "
+              f"{time.strftime('%H:%M', time.localtime(e.until))} (pl applies it after the reset)")
+
+
+def move_card(ref, column, pr=None):
+    """The body of pl move, also what the dispatcher replays: record the pull request, then move. Returns the card id."""
     cid = None
     if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
         fresh_next()     # it writes what it read: never from a copy that may be minutes old
         t = trackers.get("tracker")
-        cid = t.ref_id(a.id) if hasattr(t, "move") else find_card(a.id)["id"]
+        cid = t.ref_id(ref) if hasattr(t, "move") else find_card(ref)["id"]
         urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})
         print(f"recorded {pr}")
-    print(f"moved {move_to(a.id, a.column, cid)} to {a.column}")
+    cid = move_to(ref, column, cid)
+    print(f"moved {cid} to {column}")
+    return cid
 
 
 def move_to(ref, column, cid=None):
