@@ -205,3 +205,18 @@ def test_busy_agent_with_orphaned_job_is_not_stalled(agent):
     agent.status = "busy"
     agent.stall()
     assert not alerts._live(agent.alert()) and not agent.sent()
+
+
+def test_a_command_with_control_characters_or_a_secret_is_made_safe(agent):
+    agent.jobs = [{"pid": 11, "command": "curl \x1b]0;x\x07 --token ghp_" + "a" * 36, "minutes": 70, "state": "orphaned"}]
+    agent.stall()
+    [text] = [k[-1] for k in agent.sent()]
+    title = agent.alert()["title"]
+    for out in (text, title):
+        assert "\x1b" not in out and "\x07" not in out and "ghp_" not in out
+
+
+def test_no_process_is_read_before_the_agent_has_been_at_its_prompt_long_enough(agent, monkeypatch):
+    agent.idle_minutes = 2
+    monkeypatch.setattr(stuck_jobs, "of", lambda pid: pytest.fail("ps read for an agent that is not stalled"))
+    agent.stall()

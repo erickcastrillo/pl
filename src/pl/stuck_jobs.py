@@ -5,7 +5,8 @@ import subprocess
 import sys
 
 from pl import config as C
-from pl import memory
+from pl import harnesses, memory
+from pl.util import mask
 
 
 def _run(argv):
@@ -62,7 +63,8 @@ def stuck(js):
 
 def describe(j):
     why = "output deleted" if j["state"] == "orphaned" else f"over {C.WATCHDOG.get('job_minutes', 45)} min"
-    return " ".join(f"{j['command']} (pid {j['pid']}, {j['minutes']} min, {why})".split())
+    # the text reaches a live terminal, the alerts file, events and notifications: no control characters, no secrets
+    return harnesses._typeable(mask(" ".join(f"{j['command']} (pid {j['pid']}, {j['minutes']} min, {why})".split())))
 
 
 def nudge(js):

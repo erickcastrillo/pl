@@ -145,16 +145,17 @@ def stall(c, w, reg, st, seen):
     rec.pop("jobs", None)
     rec.pop("jobs_ok", None)
     r = reg.get(w.get("session_id")) or next((x for x in reg.values() if agents._on_pane(x, w)), {})
-    js = stuck_jobs.of(r.get("pid"))
+    limit = (C.DISPATCH.get("stall_minutes") or 0) * 60
+    at_prompt = r.get("status") != "busy" and now - r.get("statusUpdatedAt", 0) / 1000 >= limit
+    js = stuck_jobs.of(r.get("pid")) if limit and at_prompt else []   # ps and /proc only for an agent that could be stalled
     stuck = stuck_jobs.stuck(js)
     if js and not stuck:
         rec["jobs_ok"] = True   # waiting on a job that can still report
         return False
     if stuck:   # the "N shells still running" footer keeps the pane's activity fresh: the registry says how long it has been at its prompt
-        idle = None if r.get("status") == "busy" else now - r.get("statusUpdatedAt", 0) / 1000
+        idle = now - r.get("statusUpdatedAt", 0) / 1000
     else:
         idle = agents.idle_seconds(w, reg, st)
-    limit = (C.DISPATCH.get("stall_minutes") or 0) * 60
     if not limit or idle is None or _excused(c, w, agent_screen.read(w["pane"])[1]) or (
             idle < limit and idle < now - rec.get("nudged_at", now) - NUDGE_ECHO_SLACK):
         rec.pop("nudged_at", None)   # working or waiting again: the next stall starts with a fresh nudge
