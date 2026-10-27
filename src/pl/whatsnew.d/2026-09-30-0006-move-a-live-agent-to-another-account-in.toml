@@ -1,0 +1,4 @@
+id = "2026-09-30.06"
+title = "Move a live agent to another account in place"
+where = "done by itself on a usage limit; Activity tab"
+try = "pl move-agent <card> <account>"

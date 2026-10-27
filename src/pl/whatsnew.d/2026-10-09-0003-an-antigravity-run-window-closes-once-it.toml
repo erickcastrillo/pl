@@ -1,0 +1,4 @@
+id = "2026-10-09.03"
+title = "An Antigravity run window closes once its card reaches PR open and its screen goes quiet"
+where = "the dispatcher window: closing finished run agent window"
+try = "pl list"

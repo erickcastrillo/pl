@@ -1,6 +1,8 @@
 """What's new on upgrade, and the empty states that point to a feature on a quiet board."""
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -250,11 +252,6 @@ def _bad_duplicate_files(d):
     return "2026-10-26-0001-b.toml", "duplicate"
 
 
-def _bad_duplicate_legacy(d):
-    _entry_file(d, "2026-10-26-0079-a.toml", id="2026-10-26.79")
-    return "2026-10-26-0079-a.toml", "duplicate"
-
-
 def _bad_id_on_new_file(d):
     _entry_file(d, "2026-10-28-0100-x.toml", id="2026-10-28-0100-x")
     return "2026-10-28-0100-x.toml", "id"
@@ -280,7 +277,7 @@ def _bad_syntax(d):
     return "2026-10-28-0100-x.toml", "parse"
 
 
-@pytest.mark.parametrize("make", [_bad_missing_try, _bad_name, _bad_duplicate_files, _bad_duplicate_legacy,
+@pytest.mark.parametrize("make", [_bad_missing_try, _bad_name, _bad_duplicate_files,
                                   _bad_id_on_new_file, _bad_old_date_without_id, _bad_time, _bad_unknown_key,
                                   _bad_syntax])
 def test_a_bad_entry_file_is_named_with_its_problem(tmp_path, make):
@@ -290,14 +287,8 @@ def test_a_bad_entry_file_is_named_with_its_problem(tmp_path, make):
     assert name.removesuffix(".toml") not in [e["key"] for e in whatsnew.load(tmp_path)]
 
 
-def test_a_file_that_sorts_before_the_legacy_entries_is_named(tmp_path):
-    _entry_file(tmp_path, "2026-10-26-0001-a.toml", id="2026-10-26.01")
-    assert any("sorts before" in m for m in whatsnew.problems(tmp_path, legacy=[{"key": "2026-10-26.79"}]))
-
-
 def test_the_migrated_entry_keeps_its_key_and_text():
     assert MIGRATED in whatsnew.ENTRIES   # later migrated entries (0081-0086, merged from main) may follow it
-    assert MIGRATED not in whatsnew._LEGACY
     keys = [e["key"] for e in whatsnew.ENTRIES]
     assert keys == sorted(keys) and len(keys) == len(set(keys))
 
@@ -306,7 +297,7 @@ def test_seen_state_from_before_the_move_hides_old_entries_and_shows_new_files(t
     real = whatsnew.DIR / "2026-10-26-0080-customer-support-template.toml"
     (tmp_path / real.name).write_text(real.read_text())
     _entry_file(tmp_path, "2026-10-27-0310-foo.toml")
-    monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew._LEGACY + whatsnew.load(tmp_path))
+    monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew.load(tmp_path))
     whatsnew.mark_seen("2026-10-26.80")
     assert [e["key"] for e in whatsnew.unseen()] == ["2026-10-27-0310-foo"]
 
@@ -349,8 +340,46 @@ def test_entry_files_ship_in_the_wheel():
 
 def test_a_file_named_after_the_migrated_one_needs_no_id_even_on_the_same_day(tmp_path, profile, monkeypatch):
     _entry_file(tmp_path, "2026-10-26-1530-new-thing.toml")
-    assert whatsnew.problems(tmp_path, legacy=whatsnew._LEGACY + [MIGRATED]) == []
+    assert whatsnew.problems(tmp_path) == []
     assert [e["key"] for e in whatsnew.load(tmp_path)] == ["2026-10-26-1530-new-thing"]
     whatsnew.mark_seen("2026-10-26.80")
-    monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew._LEGACY + [MIGRATED] + whatsnew.load(tmp_path))
+    monkeypatch.setattr(whatsnew, "ENTRIES", [MIGRATED, *whatsnew.load(tmp_path)])
     assert [e["key"] for e in whatsnew.unseen()] == ["2026-10-26-1530-new-thing"]
+
+
+MIGRATED_COUNT = 139
+MIGRATED_SHA256 = "8100523cf8620c1e3291437d56d3c83b567c9b9856a486151468d55041483cc2"
+NEWEST_MIGRATED = "2026-10-26.86"
+
+
+def _migrated():
+    return [e for e in whatsnew.ENTRIES if whatsnew._order(e["key"]) <= whatsnew._order(NEWEST_MIGRATED)]
+
+
+def test_whatsnew_py_holds_no_entry_text():
+    source = Path(whatsnew.__file__).read_text()
+    for marker in ('_e("', "_LEGACY", "ENTRIES = ["):
+        assert marker not in source
+    for e in _migrated():
+        for field in ("title", "where", "try"):
+            assert e[field] not in source
+
+
+def test_the_migrated_entries_are_byte_identical():
+    got = _migrated()
+    assert len(got) == MIGRATED_COUNT
+    assert hashlib.sha256(json.dumps(got).encode()).hexdigest() == MIGRATED_SHA256
+
+
+def test_each_migrated_file_is_named_from_its_id():
+    for p in sorted(whatsnew.DIR.glob("*.toml")):
+        if p.stem[:15] > whatsnew.LAST_MIGRATED_FILE:
+            continue
+        date, nn = tomllib.loads(p.read_text())["id"].split(".")
+        m = re.fullmatch(rf"{date}-{int(nn):04d}-([a-z0-9-]+)\.toml", p.name)
+        assert m and len(m[1]) <= 40, p.name
+
+
+def test_seen_state_at_the_newest_migrated_key_shows_nothing_old():
+    whatsnew.mark_seen(NEWEST_MIGRATED)
+    assert [e for e in whatsnew.unseen() if whatsnew._order(e["key"]) <= whatsnew._order(NEWEST_MIGRATED)] == []

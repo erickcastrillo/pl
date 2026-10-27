@@ -1,0 +1,4 @@
+id = "2026-10-26.74"
+title = "A marketing template for new pipelines: brief, draft, publish, report"
+where = "Home: n, step 1"
+try = "pl pipelines add NAME --template marketing --board local"

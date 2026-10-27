@@ -1,0 +1,4 @@
+id = "2026-10-05.07"
+title = "Antigravity agents start again; a card whose agent died says why"
+where = "Pipeline: <stage> agent died 3x with its last error line; t or pl retry starts it fresh"
+try = "pl list"

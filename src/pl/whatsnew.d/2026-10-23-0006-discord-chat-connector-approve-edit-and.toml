@@ -1,0 +1,4 @@
+id = "2026-10-23.06"
+title = "Discord chat connector: approve, edit and send back gates from Discord"
+where = "machine.toml [connectors.discord]; buttons and Send back modal"
+try = "pl chat test discord"

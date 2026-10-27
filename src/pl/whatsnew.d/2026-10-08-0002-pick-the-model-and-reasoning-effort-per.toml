@@ -1,0 +1,4 @@
+id = "2026-10-08.02"
+title = "Pick the model and reasoning effort per account, and the effort per stage"
+where = "Settings: Models and effort, and <stage> effort"
+try = "[accounts.main] model = \"opus\", effort = \"high\""

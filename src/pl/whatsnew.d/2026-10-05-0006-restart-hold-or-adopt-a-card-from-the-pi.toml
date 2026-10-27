@@ -1,0 +1,4 @@
+id = "2026-10-05.06"
+title = "Restart, hold or adopt a card from the Pipeline; agents stuck on an API error restart"
+where = "Pipeline: R restarts its agent, p holds or releases it, i hands a manual card to the pipeline (all ask first)"
+try = "pl restart <id>, pl hold <id> --reason TEXT"

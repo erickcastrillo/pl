@@ -1,0 +1,4 @@
+id = "2026-10-23.02"
+title = "pl inbox: every gate waiting on you, in every profile"
+where = "CLI: pl inbox, or pl inbox --json"
+try = "pl inbox"
