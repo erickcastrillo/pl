@@ -77,16 +77,16 @@ def test_the_file_is_private_and_written_by_rename(clock):
 
 def test_sweep_resolves_what_cleared_and_notifies_only_escalations(clock):
     sent = []
-    alerts.open("memory_low:a", "warn", "Card a: PR waits", "review it")
-    alerts.open("memory_low:b", "warn", "Card b: PR waits", "review it")
+    alerts.open("stalled:a", "warn", "Card a: PR waits", "review it")
+    alerts.open("stalled:b", "warn", "Card b: PR waits", "review it")
     alerts.open("other:x", "warn", "t", "f")
-    alerts.sweep("memory_low:", {"memory_low:a", "memory_low:b"}, lambda t, m: sent.append(t))
+    alerts.sweep("stalled:", {"stalled:a", "stalled:b"}, lambda t, m: sent.append(t))
     assert sent == []                                        # no escalation yet
     clock["now"] += 3601
-    alerts.sweep("memory_low:", {"memory_low:a"}, lambda t, m: sent.append(t))
+    alerts.sweep("stalled:", {"stalled:a"}, lambda t, m: sent.append(t))
     assert sent == ["Still open after 1 h: Card a: PR waits"]
-    assert alerts.get("memory_low:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
-    alerts.sweep("memory_low:", {"memory_low:a"}, lambda t, m: sent.append(t))
+    assert alerts.get("stalled:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
+    alerts.sweep("stalled:", {"stalled:a"}, lambda t, m: sent.append(t))
     assert len(sent) == 1                                    # one notification per escalation
 
 
@@ -314,7 +314,7 @@ def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(mon
 
 def test_low_memory_opens_and_resolves(monkeypatch):
     notes = []
-    monkeypatch.setattr(memory, "notify", lambda t, m: notes.append(t))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: notes.append(t))
     monkeypatch.setattr(memory, "status", lambda: {"free": 1, "total": 32 * memory.GB, "low": True})
     st = {}
     memory.check_starts(st)
@@ -338,12 +338,13 @@ def test_a_runaway_opens_and_resolves_once_the_tree_is_small(monkeypatch):
             return "\n".join(rows) + "\n"
     monkeypatch.setattr(memory, "reading", lambda: (20 * memory.GB, 32 * memory.GB))
     monkeypatch.setattr(memory, "_run", run)
-    monkeypatch.setattr(memory, "notify", lambda t, m: notes.append(t))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: notes.append(t))
     cs = [{"id": "card0001aaaa", "title": SECRET, "metadata": {"worker": {"window": "@1"}}}]
     st = {}
     memory.guard_runaways(st, cs)
     memory.guard_runaways(st, cs)
-    assert _open("runaway:@1") and len(notes) == 1 and SECRET in notes[0]   # today's notification text stays
+    assert _open("runaway:@1") and len(notes) == 1
+    assert "Runaway agent in card card0001" in notes[0] and SECRET not in notes[0]
     ps["n"] = 5
     memory.guard_runaways(st, cs)
     assert not _open("runaway:@1")

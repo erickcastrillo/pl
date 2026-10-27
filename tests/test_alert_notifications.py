@@ -130,7 +130,7 @@ def test_chat_gets_one_message_per_alert(desktop, monkeypatch):
 
 
 def test_a_direct_site_key_keeps_todays_path(desktop):
-    alerts.open("memory_low", "warn", "Memory is low", "fix")
+    alerts.open("stalled:o/r#1", "warn", "Card stalled", "fix")
     assert desktop == [] and len(_outbox()) == 1
 
 
@@ -384,3 +384,59 @@ def test_the_three_moved_alerts_obey_events_and_survive_a_failing_notifier(prefi
         raise RuntimeError("no notifier")
     monkeypatch.setattr(notifications, "notify", boom)
     assert len(_open_moved(prefix, monkeypatch)) == 1
+
+
+def test_memory_prefixes_are_not_direct():
+    assert "memory_low" not in alerts.DIRECT and "runaway:" not in alerts.DIRECT
+
+
+def _low_memory(monkeypatch):
+    from pl import memory
+    monkeypatch.setattr(memory, "status", lambda: {"free": 1, "total": 32 * memory.GB, "low": True})
+    monkeypatch.setattr(memory, "notify", lambda *a: pytest.fail("memory notifies through alerts.open"))
+    return lambda: (memory.check_starts({}), memory.check_starts({}))
+
+
+def _runaway(monkeypatch):
+    from pl import memory
+    C.TMUX_SESSION = "pl-t"
+    C.DISPATCH = {**C.DISPATCH, "kill_runaway": False}
+
+    def run(argv):
+        if argv[0] == "tmux":
+            return "@1 100 run-card-words\n"
+        if argv[0] == "ps":
+            rows = ["100 1 3000 -zsh", "101 100 4000 claude"] + [f"{1000 + i} 101 100 ruby x" for i in range(200)]
+            return "\n".join(rows) + "\n"
+    monkeypatch.setattr(memory, "reading", lambda: (20 * memory.GB, 32 * memory.GB))
+    monkeypatch.setattr(memory, "_run", run)
+    monkeypatch.setattr(memory, "notify", lambda *a: pytest.fail("memory notifies through alerts.open"))
+    cs = [{"id": "card0001aaaa", "title": "A card", "metadata": {"worker": {"window": "@1"}}}]
+
+    def twice():
+        st = {}
+        memory.guard_runaways(st, cs)
+        memory.guard_runaways(st, cs)
+    return twice
+
+
+def test_low_memory_sends_one_alert_opened(desktop, monkeypatch):
+    _low_memory(monkeypatch)()
+    assert desktop == [("high: Low memory: pl holds new agents", "close apps, or lower [dispatch] min_free_memory")]
+    assert alerts.get("memory_low")["count"] == 2
+
+
+def test_a_runaway_sends_one_alert_opened(desktop, monkeypatch):
+    _runaway(monkeypatch)()
+    assert desktop == [("high: Runaway agent in card card0001", "stop it by hand (kill_runaway is off)")]
+    assert alerts.get("runaway:@1")["count"] == 1   # the guard skips a window it already reported
+
+
+@pytest.mark.parametrize("site,key", [(_low_memory, "memory_low"), (_runaway, "runaway:@1")])
+def test_memory_alerts_switched_off_still_record(desktop, monkeypatch, site, key):
+    from pl import events
+    _events("merged")
+    site(monkeypatch)()
+    assert desktop == [] and _outbox() == []
+    assert any(a["key"] == key for a in alerts.listing())
+    assert any(e.get("kind") == "alert_opened" for e in events.read()) if hasattr(events, "read") else True
