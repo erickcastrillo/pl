@@ -345,3 +345,12 @@ def test_entry_files_ship_in_the_wheel():
     assert not {"include", "exclude", "only-include"} & set(wheel)
     ignored = (root / ".gitignore").read_text().splitlines()
     assert not [line for line in ignored if "toml" in line]
+
+
+def test_a_file_named_after_the_migrated_one_needs_no_id_even_on_the_same_day(tmp_path, profile, monkeypatch):
+    _entry_file(tmp_path, "2026-10-26-1530-new-thing.toml")
+    assert whatsnew.problems(tmp_path, legacy=whatsnew._LEGACY + [MIGRATED]) == []
+    assert [e["key"] for e in whatsnew.load(tmp_path)] == ["2026-10-26-1530-new-thing"]
+    whatsnew.mark_seen("2026-10-26.80")
+    monkeypatch.setattr(whatsnew, "ENTRIES", whatsnew._LEGACY + [MIGRATED] + whatsnew.load(tmp_path))
+    assert [e["key"] for e in whatsnew.unseen()] == ["2026-10-26-1530-new-thing"]

@@ -307,7 +307,7 @@ _LEGACY = [
 
 
 DIR = Path(__file__).with_name("whatsnew.d")
-MIGRATED_THROUGH = "2026-10-26"   # the last day of the old <date>.<n> keys; their files carry that key as id
+LAST_MIGRATED_FILE = "2026-10-26-0080"   # files up to this name carry their old <date>.<n> key as id
 NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.toml$")
 _FIELDS = ("title", "where", "try")
 
@@ -329,16 +329,21 @@ def _entry(path):
         v = data.get(k)
         if not isinstance(v, str) or not v.strip() or "\n" in v:
             return None, f"{k} must be a non-empty one-line string"
-    if date <= MIGRATED_THROUGH:
+    if f"{date}-{hhmm}" <= LAST_MIGRATED_FILE:
         want = f"{date}.{hhmm[2:]}"
         if data.get("id") != want:
-            return None, f"a file dated {date} or earlier must carry id = \"{want}\""
+            return None, f"a file named {LAST_MIGRATED_FILE} or earlier must carry id = \"{want}\""
     else:
         if "id" in data:
             return None, "id is not allowed on a new file (the file name is the id)"
         if int(hhmm[:2]) > 23 or int(hhmm[2:]) > 59:
             return None, f"{hhmm} is not a time of day"
     return _e(data.get("id", path.stem), data["title"], data["where"], data["try"]), None
+
+
+def _order(key):
+    """Sort key that puts an old <date>.<n> key before the files of that day that follow it."""
+    return re.sub(r"\.(\d+)$", lambda m: f"-{int(m[1]):04d}", key)
 
 
 def load(d=DIR):
@@ -350,7 +355,7 @@ def load(d=DIR):
 def problems(d=DIR, legacy=None):
     """One "<file name>: <problem>" per bad file, duplicate id or id out of order."""
     seen = {e["key"] for e in (_LEGACY if legacy is None else legacy)}
-    previous = max(seen, default="")
+    previous = max(seen, key=_order, default="")
     out = []
     for p in sorted(d.glob("*.toml")):
         e, problem = _entry(p)
@@ -358,7 +363,7 @@ def problems(d=DIR, legacy=None):
             out.append(f"{p.name}: {problem}")
         elif e["key"] in seen:
             out.append(f"{p.name}: duplicate id {e['key']}")
-        elif e["key"] < previous:
+        elif _order(e["key"]) < _order(previous):
             out.append(f"{p.name}: id {e['key']} sorts before {previous}")
         else:
             previous = e["key"]
@@ -385,7 +390,7 @@ def last_shown():
 
 def unseen():
     last = last_shown()
-    return [e for e in ENTRIES if last is None or e["key"] > last]
+    return [e for e in ENTRIES if last is None or _order(e["key"]) > _order(last)]
 
 
 def mark_seen(key=None):
