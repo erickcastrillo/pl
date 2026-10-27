@@ -1015,6 +1015,11 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"worktrees cleanup skipped this pass: {e}", file=sys.stderr)
             if not dry:
                 events.failure("pass_step_skipped", "warning", f"worktrees cleanup skipped this pass: {e}", step="worktrees")
+        if not dry:
+            try:
+                worktrees.check_missing(all_cards)
+            except Exception as e:
+                print(f"worktree check skipped this pass: {e}", file=sys.stderr)
     if not dry:
         last = st.get("last_col") or {}
         now_col = {c["id"]: col_name(c["list_id"]) for c in all_cards}

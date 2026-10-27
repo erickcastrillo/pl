@@ -354,3 +354,130 @@ def test_a_merged_pr_is_asked_about_once_across_passes(wt_env, monkeypatch):
     worktrees.sweep([card])
     worktrees.sweep([card])
     assert len(_gh_views(wt_env)) == 1
+
+
+# --- Plan 54 slice 5: worktrees are never removed under a live card ---
+
+
+def _merged_done_card(wt_env, name="c1", metadata=None):
+    wt_path = C.WORKTREES_DIR / f"repo-pl-{name}"
+    wt_path.mkdir()
+    wt_env.worktrees = [{"path": wt_path, "branch": f"pl/{name}"}]
+    pr_url = f"https://github.com/org/repo/pull/{name}"
+    wt_env.pr_views[pr_url] = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z", "headRefName": f"pl/{name}"}
+    return wt_path, {"id": name, "title": name, "list_id": "Done", "metadata": {"pr_urls": [pr_url], **(metadata or {})}}
+
+
+def _removals(wt_env):
+    return [cmd for cmd, _ in wt_env.commands if cmd[:3] == ["git", "worktree", "remove"]]
+
+
+def test_sweep_keeps_worktree_of_live_agent_and_says_so(wt_env, monkeypatch, capsys):
+    from pl import worktrees
+    monkeypatch.setattr(worktrees, "registry", lambda: {})
+    monkeypatch.setattr(worktrees, "worker_status", lambda w, reg: ("alive", None))
+    wt_path, card = _merged_done_card(wt_env, metadata={"worker": {"pane": "%1"}})
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+    out = capsys.readouterr().out
+    assert str(wt_path) in out and "c1" in out and "skipped: agent running" in out
+
+
+def test_sweep_keeps_worktree_of_held_agent_with_reason(wt_env, monkeypatch, capsys):
+    from pl import agents, worktrees
+    monkeypatch.setattr(agents, "col_name", lambda lid: lid)
+    trusting_path, trusting = _merged_done_card(wt_env, "trusting", {"worker": {"trust_wait": "/x"}})
+    blocked_path = C.WORKTREES_DIR / "repo-pl-blocked"
+    blocked_path.mkdir()
+    wt_env.worktrees.append({"path": blocked_path, "branch": "pl/blocked"})
+    blocked = {"id": "blocked", "title": "blocked", "list_id": "In progress", "description": "d",
+               "metadata": {"run_retry_at": "2999-01-01T00:00:00+00:00", "run_released_why": "usage limit"}}
+    blocked["metadata"]["run_released_on"] = agents.release_key(blocked)
+    monkeypatch.setattr(worktrees, "registry", lambda: {})
+    monkeypatch.setattr(worktrees, "worker_status", lambda w, reg: ("alive", None))
+    worktrees.sweep([trusting, blocked])
+    assert _removals(wt_env) == []
+    lines = capsys.readouterr().out.splitlines()
+    assert any("trusting" in ln and "skipped: agent held" in ln and "trust the folder" in ln for ln in lines)
+    assert any("blocked" in ln and "skipped: agent held" in ln and "usage limit" in ln for ln in lines)
+
+
+def test_sweep_is_quiet_about_cards_without_an_agent(wt_env, capsys):
+    from pl import worktrees
+    path = C.WORKTREES_DIR / "repo-pl-idle"
+    path.mkdir()
+    wt_env.worktrees = [{"path": path, "branch": "pl/idle"}]
+    worktrees.sweep([{"id": "idle", "title": "idle", "list_id": "In progress", "metadata": {}}])
+    assert "skipped" not in capsys.readouterr().out
+
+
+def test_sweep_writes_worktree_cleanup_event(wt_env, tmp_path):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    wt_path, card = _merged_done_card(wt_env)
+    worktrees.sweep([card])
+    found = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
+    assert len(found) == 1
+    assert (found[0]["card"], found[0]["path"], found[0]["by"]) == ("c1", str(wt_path), "sweep")
+
+
+def _missing_card(tmp_path, column="In progress"):
+    return {"id": "c9", "title": "c9", "list_id": column, "metadata": {"worktree": str(tmp_path / "gone")}}
+
+
+def _removed_events():
+    from pl import events
+    return [e for e in events._read() if e["kind"] == "worktree_removed"]
+
+
+def test_check_missing_reports_removed_outside_pl_once(tmp_path, monkeypatch):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    monkeypatch.setattr(worktrees, "col_name", lambda lid: lid)
+    cards = [_missing_card(tmp_path)]
+    worktrees.check_missing(cards)
+    worktrees.check_missing(cards)
+    found = _removed_events()
+    assert len(found) == 1 and found[0]["card"] == "c9" and found[0]["path"] == str(tmp_path / "gone")
+    assert found[0]["message"] == "removed outside pl"
+
+
+def test_check_missing_names_pl_cleanup_when_it_removed_it(tmp_path, monkeypatch):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    monkeypatch.setattr(worktrees, "col_name", lambda lid: lid)
+    events.emit("worktree_cleanup", "c9", path=str(tmp_path / "gone"), by="gc")
+    worktrees.check_missing([_missing_card(tmp_path)])
+    assert _removed_events()[0]["message"].startswith("removed by pl cleanup at ")
+
+
+def test_check_missing_ignores_existing_and_done_worktrees(tmp_path, monkeypatch):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    monkeypatch.setattr(worktrees, "col_name", lambda lid: lid)
+    here = tmp_path / "here"
+    here.mkdir()
+    worktrees.check_missing([{"id": "c8", "list_id": "In progress", "metadata": {"worktree": str(here)}},
+                             _missing_card(tmp_path, "Done"),
+                             {"id": "c7", "list_id": "In progress", "metadata": {}}])
+    assert _removed_events() == []
+
+
+def test_dispatch_once_calls_check_missing(monkeypatch):
+    from pl import dispatch, worktrees
+    checked = []
+    monkeypatch.setattr(worktrees, "sweep", lambda cards, dry: None)
+    monkeypatch.setattr(worktrees, "check_missing", lambda cards: checked.append(cards))
+    monkeypatch.setattr(dispatch, "limited", lambda: None)
+    monkeypatch.setattr(dispatch, "github_board", lambda: False)
+    monkeypatch.setattr(dispatch, "load_state", lambda: {})
+    monkeypatch.setattr(dispatch, "registry", lambda: {})
+    test_cards = [{"id": "1", "list_id": "Done", "metadata": {"pipeline_mode": "auto"}}]
+    monkeypatch.setattr(dispatch, "cards", lambda: test_cards)
+    monkeypatch.setattr(dispatch, "paused", lambda: False)
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    monkeypatch.setattr(dispatch, "sweep_untracked", lambda *a, **k: 0)
+    monkeypatch.setattr(dispatch, "ensure_services", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "mirror_to_product", lambda *a, **k: None)
+    dispatch.dispatch_once(max_runs=1, dry=False, max_prep=1, pull=False)
+    assert checked == [test_cards]
