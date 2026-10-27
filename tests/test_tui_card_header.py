@@ -49,7 +49,7 @@ def test_header_reads_stage_who_next(monkeypatch):
     # Manual card
     c_manual = {"title": "Manual card", "metadata": {}}
     head = card_head(c_manual, "Manual", None).plain
-    assert "draft · you · yours to do" in head
+    assert "Manual · you · yours to do" in head
 
 
 def test_gate_card_offers_approve_and_send_back_in_place(monkeypatch):
