@@ -6,6 +6,7 @@ import sys
 
 import pytest
 import tomlkit
+import yaml
 
 from pl import cli, connectors, harnesses, pods, skills
 from pl import config as C
@@ -81,7 +82,7 @@ def test_show_engineering_json_lists_its_coding_rules_and_the_stage_skills(fake_
 def test_list_names_every_pod_and_an_unknown_pod_exits_2(fake_home, capsys):
     _profile(fake_home, "work")
     pods.cmd_pods(argparse.Namespace(pods_cmd="list", json=False))
-    assert capsys.readouterr().out.split() == ["engineering", "marketing", "sales"]
+    assert capsys.readouterr().out.split() == ["engineering", "marketing", "sales", "support"]
     with pytest.raises(SystemExit) as e:
         pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="nope", json=False))
     assert e.value.code == 2
@@ -91,7 +92,7 @@ def test_list_names_every_pod_and_an_unknown_pod_exits_2(fake_home, capsys):
 def test_list_json_includes_marketing_next_to_engineering(fake_home, capsys):
     _profile(fake_home, "work")
     pods.cmd_pods(argparse.Namespace(pods_cmd="list", json=True))
-    assert json.loads(capsys.readouterr().out) == ["engineering", "marketing", "sales"]
+    assert json.loads(capsys.readouterr().out) == ["engineering", "marketing", "sales", "support"]
 
 
 def _marketing_sections():
@@ -137,6 +138,24 @@ def test_show_sales_has_a_package_pod_md_three_rules_its_skills_and_roles(fake_h
 def test_every_sales_skill_ships_and_every_role_is_a_connector_role(fake_home):
     pod = pods.find("sales")
     assert all((pods.skill_dir(s) / "SKILL.md").is_file() for s in pod["skills"])
+    assert set(pod["roles"]) <= set(connectors.ROLES)
+
+
+def test_show_support_has_a_package_pod_md_rules_its_skills_and_roles(fake_home, capsys):
+    _profile(fake_home, "work")
+    pods.cmd_pods(argparse.Namespace(pods_cmd="show", name="support", json=True))
+    out = json.loads(capsys.readouterr().out)
+    assert out["file"].startswith(str(pods.BUILTIN_DIR)) and len(out["rules"]) >= 3
+    assert out["skills"] == ["pl-support-reply", "pl-support-triage"]
+    assert out["roles"] == ["tickets", "email"]
+
+
+def test_every_support_skill_ships_a_skill_md_with_name_and_description(fake_home):
+    pod = pods.find("support")
+    for s in pod["skills"]:
+        text = (pods.skill_dir(s) / "SKILL.md").read_text()
+        front = yaml.safe_load(text.split("---")[1])
+        assert front["name"] == s and front["description"]
     assert set(pod["roles"]) <= set(connectors.ROLES)
 
 
@@ -495,6 +514,19 @@ def test_a_sales_pipeline_launch_links_only_the_sales_skills(fake_env, monkeypat
     pdir = skills.launch_plugin(claude, pod=pods.launch_pod())
     assert sorted(p.name for p in (pdir / "skills").iterdir()) == ["pl-sales-follow-up", "pl-sales-proposal"]
     assert "/pl:pl-plan" not in harnesses.launch_script(claude, None, "/pl-plan x", "sid", "label")
+
+
+def test_a_support_pipeline_launch_links_only_the_support_skills(fake_env, monkeypatch):
+    for name in ("pl-spec", "pl-plan", "pl-run", "outside"):
+        _library_skill(fake_env, name)
+    monkeypatch.setattr(C, "POD", "support")
+    monkeypatch.setattr(C, "PODS", {})
+    monkeypatch.setattr(C, "WORK_DIR", str(fake_env["home"]))
+    claude = harnesses.get("claude")
+    pdir = skills.launch_plugin(claude, pod=pods.launch_pod())
+    assert sorted(p.name for p in (pdir / "skills").iterdir()) == ["pl-support-reply", "pl-support-triage"]
+    script = harnesses.launch_script(claude, None, "/pl-support-reply x", "sid", "label")
+    assert "/pl:pl-plan" not in script and "/pl:outside" not in script
 
 
 def test_a_profile_named_sales_without_a_pipeline_pod_keeps_the_whole_library(fake_env, monkeypatch):
