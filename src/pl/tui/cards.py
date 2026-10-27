@@ -11,7 +11,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Markdown, OptionList, Static
 from textual.worker import get_current_worker
 
-from pl import agent_screen
+from pl import agent_defs, agent_screen
 from pl import config as C
 from pl import confirm, move_agent, pipeline, trackers
 from pl.agents import jump_to_window
@@ -34,6 +34,7 @@ def _rename_key(screen, key, description):
 
 TITLE_WIDTH = 34   # two less than before: the state column starts with the ! marker
 NARROW_NOW = 14
+AGENT_WIDTH = 24   # a longer agent name ends in … on the board
 
 
 class FitTable(DataTable):
@@ -114,6 +115,23 @@ def header_summary(c, col):
     return stage, "nobody", "waits for a slot" if queued else "-"
 
 
+def known_agents():
+    """The names of the agents that exist, or None when they cannot be read (nothing is then marked unknown)."""
+    try:
+        return set(agent_defs.load())
+    except Exception:
+        return None
+
+
+def stage_agent(c, col, known=None):
+    """The agent named by the card's current stage ("" for none); " (unknown)" follows a name that is not in `known`."""
+    stage, _, _ = header_summary(c, col)
+    name = (((C.PIPELINE or {}).get("stages") or {}).get(stage) or {}).get("agent")
+    if not name or not isinstance(name, str):
+        return ""
+    return f"{name} (unknown)" if isinstance(known, set) and name not in known else name
+
+
 def card_head(c, col, url, approved=None):
     """The plain header lines of the card screen: title, then stage/who/next, column, tags, assignee, links, updated, link, metadata."""
     m = c.get("metadata") or {}
@@ -123,6 +141,9 @@ def card_head(c, col, url, approved=None):
                       for l in m.get("links") or [])
     t = Text(f"{c.get('title') or ''}\n", style="bold")
     t.append(f"{stage} · {who} · {next_step}\n")
+    if agent := stage_agent(c, col, known_agents()):
+        t.append(f"{'agent':<9}", style="dim")
+        t.append(f"{agent}\n")
     for label, value in (("column", col), *([("status", approved)] if approved else []),
                          ("tags", ", ".join(map(str, c.get("tags") or []))),
                          ("assignee", c.get("assigned_to_display") or c.get("assigned_to")),
@@ -524,6 +545,8 @@ class CardsView(CardActions, Horizontal):
             t.border_title = f"Pipeline · {total} {words['items']} · {mine} need you (f only those) · " + (
                 "z hides Done" if self.show_done else "Done is hidden (z shows it)")
         keep, keep_key = t.cursor_row, self._current()[0]
+        names_agents = any(isinstance(s, dict) and s.get("agent") for s in ((C.PIPELINE or {}).get("stages") or {}).values())
+        known = known_agents() if names_agents else None
         self._rows, built = {}, []
         for col, here in groups:
             built.append((f"group:{col}", (Text("■", style="dim"), Text(f"{col.upper()} {len(here)}", style="bold"), *blank, Text(""), Text(""))))
@@ -539,6 +562,9 @@ class CardsView(CardActions, Horizontal):
                     label, colour = (r["approved"], "red" if r.get("blocked") or r.get("failed") or r.get("waiting") else "green") if r.get("approved") else STATE[card_state(r)]
                 state = Text.assemble(("! ", "bold red") if needs_me(r) else "  ", (label, colour))   # ! = waits on a person
                 line = str(m.get("drop_reason") or "") if r.get("col") == "Done" else (self._now.get(cid) or {}).get("line") or ""
+                if names_agents and r.get("col") != "Done" and (agent := stage_agent(r["card"], r.get("col"), known)):
+                    agent = agent if len(agent) <= AGENT_WIDTH else agent[:AGENT_WIDTH - 1] + "…"
+                    line = f"agent: {agent} · {line}" if line else f"agent: {agent}"
                 if self.plan is not None:
                     line = f"{r.get('col')} · {line}" if line else str(r.get("col"))
                 built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"),

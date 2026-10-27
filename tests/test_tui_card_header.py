@@ -1,6 +1,8 @@
 """Tests for the card screen header line, actions in place, links and relative dates."""
 import time
 from pl import config as C
+from pl import pipeline
+from pl.tui import cards
 from pl.tui.cards import CardScreen, card_head
 from pl.tui.parity import PARITY
 
@@ -47,7 +49,7 @@ def test_header_reads_stage_who_next(monkeypatch):
     # Manual card
     c_manual = {"title": "Manual card", "metadata": {}}
     head = card_head(c_manual, "Manual", None).plain
-    assert "Manual · you · yours to do" in head
+    assert "draft · you · yours to do" in head
 
 
 def test_gate_card_offers_approve_and_send_back_in_place(monkeypatch):
@@ -108,3 +110,58 @@ def test_dates_read_as_relative_times(monkeypatch):
     head = card_head(c, "Inbox", None).plain
     assert "updated  5m ago" in head
     assert "2023-11-14T22:08:20+00:00" in head
+
+
+STAGE_AGENT = "marketing-copywriter"
+
+
+def agent_pipeline(monkeypatch, known=None, draft_column="Draft"):
+    monkeypatch.setattr(C, "GATES", {"spec": False})
+    monkeypatch.setattr(C, "PIPELINE", {"stages": {
+        "draft": {"column": draft_column, "agent": STAGE_AGENT}, "review": {"column": "Review"}}})
+    monkeypatch.setattr(cards.agent_defs, "load", lambda: {STAGE_AGENT: {}} if known is None else known)
+
+
+def test_card_head_names_the_stage_agent(monkeypatch):
+    agent_pipeline(monkeypatch)
+    head = card_head({"title": "T", "metadata": {}}, "Draft", None).plain
+    assert f"agent    {STAGE_AGENT}\n" in head
+
+
+def test_card_head_uses_the_running_workers_stage_agent(monkeypatch):
+    agent_pipeline(monkeypatch)
+    running = {"title": "T", "metadata": {"worker": {"stage": "draft"}}}
+    assert f"agent    {STAGE_AGENT}\n" in card_head(running, "Review", None).plain
+    assert "agent    " not in card_head({"title": "T", "metadata": {}}, "Review", None).plain
+
+
+def test_card_head_marks_an_unknown_agent(monkeypatch):
+    agent_pipeline(monkeypatch, known={})
+    card = {"title": "T", "metadata": {}}
+    assert f"{STAGE_AGENT} (unknown)" in card_head(card, "Draft", None).plain
+
+    def broken():
+        raise ValueError("bad agent file")
+    monkeypatch.setattr(cards.agent_defs, "load", broken)
+    head = card_head(card, "Draft", None).plain
+    assert STAGE_AGENT in head and "(unknown)" not in head
+
+
+def test_card_head_without_agent_is_unchanged(monkeypatch):
+    monkeypatch.setattr(C, "GATES", {"spec": False})
+    cases = [({"title": "a", "metadata": {"worker": {"stage": "plan"}}}, "Spec ready"),
+             ({"title": "b", "metadata": {}}, "Plan for review"),
+             ({"title": "c", "metadata": {}}, "Manual")]
+    heads = {}
+    for name, pipe in (("engineering", pipeline.engineering()), ("none", None)):
+        monkeypatch.setattr(C, "PIPELINE", pipe)
+        heads[name] = [card_head(c, col, None).plain for c, col in cases]
+        assert all("agent    " not in h for h in heads[name])
+    assert heads["engineering"] == heads["none"]
+
+
+def test_manual_card_with_agent_still_says_you(monkeypatch):
+    agent_pipeline(monkeypatch, draft_column="Manual")
+    head = card_head({"title": "T", "metadata": {}}, "Manual", None).plain
+    assert "draft · you · yours to do" in head
+    assert f"agent    {STAGE_AGENT}\n" in head
