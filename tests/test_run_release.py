@@ -168,17 +168,6 @@ def test_watch_does_not_mark_a_leftover_hold_as_needing_you(monkeypatch):
     assert not r["approved"] and snap["needs"]["attention"] == 0
 
 
-# ---------- config ----------
-
-@pytest.mark.parametrize("value, ok", [(0, True), (45, True), (-1, False), ("30", False), (True, False)])
-def test_release_waiting_after_is_validated(value, ok):
-    import tomlkit
-    doc = tomlkit.parse("")
-    doc["dispatch"] = {"release_waiting_after": value}
-    errs = C.validate(doc)
-    assert (not any("release_waiting_after" in e for e in errs)) == ok
-
-
 # ---------- an agent idle after an API error restarts fresh ----------
 
 def test_api_error_wait_reads_the_error_line_once_the_pane_is_idle(monkeypatch):

@@ -81,7 +81,16 @@ def queued_writes():
     return True, ["Queued writes: none"] if rows == ["none"] else [f"Queued writes: {len(rows)}"] + rows
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes]
+RETIRED = {("dispatch", "release_waiting_after"): "DISPATCH"}   # keys pl no longer reads: doctor says they can go
+
+
+def settings():
+    """Always ok: a key pl no longer reads is reported, never a failure."""
+    return True, [f"[{table}] {key} is no longer used and can be removed"
+                  for (table, key), name in RETIRED.items() if key in getattr(C, name)]
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings]
 
 
 def _needs_you():
