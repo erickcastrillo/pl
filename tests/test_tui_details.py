@@ -11,6 +11,7 @@ from pl.tui.details import DetailsScreen
 from pl.tui.home import HomeView
 from pl.tui.parity import PARITY_MAP
 from pl.tui.review import ConfirmScreen
+from tui_wait import settle, wait_until
 
 
 class DetailsApp(App):
@@ -20,12 +21,6 @@ class DetailsApp(App):
 
     def on_mount(self):
         self.push_screen(self._initial_screen)
-
-
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
 
 
 def screen_text(app):
@@ -68,7 +63,7 @@ async def test_details_show_columns_stages_gates_board_loops_agents(monkeypatch)
     app = DetailsApp(screen)
 
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: screen.data is not None, "the pipeline to load")
 
         # Check call was made with expected args
         assert any(
@@ -136,9 +131,9 @@ async def test_d_asks_then_runs_the_dispatcher_command(monkeypatch):
     app = DetailsApp(screen)
 
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: screen.data is not None, "the pipeline to load")
         await pilot.press("D")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm")
 
         assert isinstance(app.screen, ConfirmScreen)
         expected_msg = (
@@ -149,7 +144,7 @@ async def test_d_asks_then_runs_the_dispatcher_command(monkeypatch):
         assert app.screen.message == expected_msg
 
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen is screen, "the confirm to close")
 
         assert [sys.executable, "-m", "pl", "manager", "restart", "sales"] in calls
 
@@ -179,16 +174,16 @@ async def test_d_cancelled_does_not_run_command(monkeypatch):
     app = DetailsApp(screen)
 
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: screen.data is not None, "the pipeline to load")
         rendered = screen_text(app)
         assert "slack, github" in rendered
 
         await pilot.press("D")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm")
 
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen is screen, "the confirm to close")
 
         assert not any(c[1:3] == ["manager", "restart"] for c in calls)
 
@@ -201,10 +196,10 @@ async def test_q_closes_screen(monkeypatch):
     app = DetailsApp(screen)
 
     async with app.run_test(size=(120, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: screen.data is not None, "the pipeline to load")
         assert app.screen is screen
         await pilot.press("q")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, DetailsScreen), "the details to close")
         assert app.screen is not screen
 
 

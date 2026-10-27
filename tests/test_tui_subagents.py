@@ -11,7 +11,9 @@ from pl import harnesses
 from pl.tui import loops
 from pl.tui import subagents as sa
 from pl.tui.app import PlApp
+from pl.tui.chrome import resolve
 from pl.tui.live import LiveScreen
+from tui_wait import settle
 
 SESSION = "11111111-2222-4333-8444-555555555555"
 TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
@@ -201,14 +203,13 @@ def test_last_entry_bigger_than_cap_is_unknown(fake_home):
     assert sa.tail_lines(rows[0]["path"]) == ["last entry larger than 256 KB"]
 
 
+async def _open_tab(pilot, app):
+    app.action_tab("subagents")
+    await settle(pilot, lambda: app.subtabs.get(resolve("subagents")[0]) == "subagents", "the tab to activate")
+
+
 def _screen(app):
     return str(app.query_one("#subagents-screen").render())
-
-
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
 
 
 async def test_tab_lists_agents_shows_tail_and_skips_unchanged_redraw(fake_home, monkeypatch):
@@ -217,25 +218,25 @@ async def test_tab_lists_agents_shows_tail_and_skips_unchanged_redraw(fake_home,
     monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        app.action_tab("subagents")
-        await settle(pilot)
+        await _open_tab(pilot, app)
         view = app.query_one(sa.SubagentsView)
+        await settle(pilot, lambda: len(view.rows) == 3, "the three agents")
         app.query_one("#subagents-table").focus()
         assert [r["state"] for r in view.rows] == ["running", "waiting", "error"]
         text = _screen(app)
         assert "tool Bash" in text and TOKEN not in text and "***" in text
         n = view.redraws
         view.tick()
-        await settle(pilot)
+        await settle(pilot)   # nothing changes on screen, so there is no state to wait for
         assert view.redraws == n          # the file did not change: no redraw
         await pilot.press("down")
-        await settle(pilot)
+        await settle(pilot, lambda: "tool Read: /x/app.py" in _screen(app), "the second agent's tail")
         assert "tool Read: /x/app.py" in _screen(app)
         copied = []
         monkeypatch.setattr(PlApp, "copy_to_clipboard", lambda self, t: copied.append(t))
         monkeypatch.setattr(loops.shutil, "which", lambda name: None)
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: copied, "the copy")
         assert copied and "tool Read: /x/app.py" in copied[0]
 
 
@@ -245,13 +246,13 @@ async def test_header_state_updates_with_time_alone(fake_home, monkeypatch):
     monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        app.action_tab("subagents")
-        await settle(pilot)
+        await _open_tab(pilot, app)
+        await settle(pilot, lambda: "(running)" in _screen(app), "the running header")
         assert "(running)" in _screen(app)
         later = time.time() + 600
         monkeypatch.setattr(sa.time, "time", lambda: later)
         app.query_one(sa.SubagentsView).tick()
-        await settle(pilot)
+        await settle(pilot, lambda: "(waiting)" in _screen(app), "the waiting header")
         assert "(waiting)" in _screen(app)
 
 
@@ -264,7 +265,7 @@ async def test_hidden_tab_does_not_scan(fake_home, monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
         app.query_one(sa.SubagentsView).tick()
-        await settle(pilot)
+        await settle(pilot)   # a tick on a hidden tab must do nothing, so there is no state to wait for
         assert calls == []
 
 
@@ -355,10 +356,11 @@ def _table_cells(app):
 
 async def _open_background(pilot, app, data):
     await settle(pilot)
-    app.action_tab("subagents")
+    await _open_tab(pilot, app)
     app.query_one(sa.SubagentsView).show(data)
     app.query_one(sa.SubagentsView).tick()
-    await settle(pilot)
+    table = app.query_one("#agentwin-table")
+    await settle(pilot, lambda: table.row_count == max(1, len(data["snapshot"]["rows"])), "the agent window rows")
 
 
 def _bg_app(monkeypatch):
@@ -385,13 +387,13 @@ async def test_hidden_background_view_runs_no_capture(fake_home, monkeypatch):
         view = app.query_one(sa.SubagentsView)
         view.show(_wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
         view.tick()
-        await settle(pilot)
+        await settle(pilot)   # a hidden view must run no capture, so there is no state to wait for
         assert tmux.captures() == []
-        app.action_tab("subagents")
-        await settle(pilot)
+        await _open_tab(pilot, app)
+        await settle(pilot, lambda: app.query_one("#agentwin-table").row_count == 2, "the shown view's rows")
         tmux.calls.clear()
         view.tick()
-        await settle(pilot)
+        await settle(pilot, lambda: len(tmux.captures()) >= 2, "the captures")
         assert sorted(a[a.index("-t") + 1] for a in tmux.captures()) == ["%1", "%2"]
 
 
@@ -403,10 +405,10 @@ async def test_enter_opens_live_view_and_esc_returns_to_same_row(fake_home, monk
         await _open_background(pilot, app, _wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
         app.query_one("#agentwin-table").focus()
         await pilot.press("down", "enter")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, LiveScreen), "the live screen")
         assert isinstance(app.screen, LiveScreen) and app.screen.pane == "%2"
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, LiveScreen), "the live screen to close")
         assert not isinstance(app.screen, LiveScreen)
         assert app.query_one("#agentwin-table").cursor_row == 1
     assert not any("send-keys" in a for a in tmux.calls)
