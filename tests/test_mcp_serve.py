@@ -31,6 +31,15 @@ CARD = {"id": "acme/app#7", "title": "A card", "list_id": "L1", "tags": [], "upd
 
 
 @pytest.fixture(autouse=True)
+def temp_profile(monkeypatch, tmp_path):
+    """The in-process pl commands need a profile: a throwaway one, never the real one (conftest clears PL_CONFIG_DIR)."""
+    prof = tmp_path / ".pl-test"
+    prof.mkdir()
+    (prof / "config.toml").write_text("[tracker]\ntype = 'memory'\n")
+    monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
+
+
+@pytest.fixture(autouse=True)
 def fake_board(monkeypatch):
     monkeypatch.setattr(commands, "find_card", lambda cid: CARD)
     monkeypatch.setattr(commands, "sections", lambda d: {"SPEC": "the spec"})
