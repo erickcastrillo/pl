@@ -6,11 +6,12 @@ import time
 
 import pytest
 
-from pl import accounts, alerts, dispatch, memory, reconcile, usage
+from pl import accounts, alerts, dispatch, memory, notifications, reconcile, usage
 from pl import config as C
 from pl.trackers.github import RateLimited
 
 SECRET = "TOPSECRET card words"
+DESKTOP = []   # what pl.notifications.notify received during _pass
 
 
 @pytest.fixture(autouse=True)
@@ -76,16 +77,16 @@ def test_the_file_is_private_and_written_by_rename(clock):
 
 def test_sweep_resolves_what_cleared_and_notifies_only_escalations(clock):
     sent = []
-    alerts.open("pr_waiting:a", "warn", "Card a: PR waits", "review it")
-    alerts.open("pr_waiting:b", "warn", "Card b: PR waits", "review it")
+    alerts.open("loop_stale:a", "warn", "Card a: PR waits", "review it")
+    alerts.open("loop_stale:b", "warn", "Card b: PR waits", "review it")
     alerts.open("other:x", "warn", "t", "f")
-    alerts.sweep("pr_waiting:", {"pr_waiting:a", "pr_waiting:b"}, lambda t, m: sent.append(t))
+    alerts.sweep("loop_stale:", {"loop_stale:a", "loop_stale:b"}, lambda t, m: sent.append(t))
     assert sent == []                                        # no escalation yet
     clock["now"] += 3601
-    alerts.sweep("pr_waiting:", {"pr_waiting:a"}, lambda t, m: sent.append(t))
+    alerts.sweep("loop_stale:", {"loop_stale:a"}, lambda t, m: sent.append(t))
     assert sent == ["Still open after 1 h: Card a: PR waits"]
-    assert alerts.get("pr_waiting:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
-    alerts.sweep("pr_waiting:", {"pr_waiting:a"}, lambda t, m: sent.append(t))
+    assert alerts.get("loop_stale:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
+    alerts.sweep("loop_stale:", {"loop_stale:a"}, lambda t, m: sent.append(t))
     assert len(sent) == 1                                    # one notification per escalation
 
 
@@ -126,6 +127,7 @@ def _card(cid, col, **meta):
 def _pass(monkeypatch, cs, status="none", screen=None, parked=(), healthy="acme", loops=None):
     """One dispatcher pass with the board, tmux, the registry and accounts faked. Returns the notifications."""
     notes = []
+    monkeypatch.setattr(notifications, "notify", lambda t, m: DESKTOP.append((t, m)))
     monkeypatch.setattr(dispatch, "registry", lambda: {})
     monkeypatch.setattr(dispatch, "cards", lambda: cs)
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
@@ -175,9 +177,11 @@ def test_all_accounts_out_opens_and_resolves(monkeypatch):
 def test_a_stage_that_failed_3_times_opens_and_resolves_on_retry(monkeypatch):
     w = {"stage": "spec", "attempts": 3, "session_id": "s", "pane": "%1", "window": "@1"}
     c = _card("card0001aaaa", "Inbox", worker=w)
-    notes = _pass(monkeypatch, [c], status="dead")
-    assert _open("stage_failed:card0001aaaa:spec") and len(notes) == 1 and notes[0][0].startswith("Needs you")
+    DESKTOP.clear()
     assert _pass(monkeypatch, [c], status="dead") == []
+    assert _open("stage_failed:card0001aaaa:spec") and len(DESKTOP) == 1
+    assert "high" in DESKTOP[0][0] and "the spec agent died 3 times" in DESKTOP[0][0]
+    assert _pass(monkeypatch, [c], status="dead") == [] and len(DESKTOP) == 1
     c["metadata"].pop("worker")                               # pl retry clears the worker
     _pass(monkeypatch, [c])
     assert not _open("stage_failed:card0001aaaa:spec")
@@ -263,8 +267,12 @@ def test_a_pr_waiting_over_24_hours_opens_and_resolves(monkeypatch):
     _pass(monkeypatch, [c])
     assert not _open("pr_waiting:card0001aaaa")               # a fresh PR
     c["updated_at"] = "2020-01-01T00:00:00+00:00"
-    notes = _pass(monkeypatch, [c])
-    assert _open("pr_waiting:card0001aaaa") and len(notes) == 1
+    DESKTOP.clear()
+    assert _pass(monkeypatch, [c]) == []
+    assert _open("pr_waiting:card0001aaaa") and len(DESKTOP) == 1
+    assert "its PR waits over 24 h" in DESKTOP[0][0]
+    _pass(monkeypatch, [c])
+    assert len(DESKTOP) == 1
     c["list_id"] = "Done"
     _pass(monkeypatch, [c])
     assert not _open("pr_waiting:card0001aaaa")
@@ -508,11 +516,12 @@ def test_hints_for_a_github_card_use_the_quoted_short_id(monkeypatch):
     import shlex
     w = {"stage": "spec", "attempts": 3, "session_id": "s", "pane": "%1", "window": "@1"}
     c = _card("your-org/your-repo#43", "Inbox", worker=w)
-    notes = _pass(monkeypatch, [c], status="dead")
+    DESKTOP.clear()
+    _pass(monkeypatch, [c], status="dead")
     fix = alerts.get("stage_failed:your-org/your-repo#43:spec")["fix"]
     assert fix == "pl card 'your-repo#43' shows why; pl retry 'your-repo#43' starts it fresh"
     assert shlex.split(fix.split(";")[0]) == ["pl", "card", "your-repo#43", "shows", "why"]
-    assert notes[0][1].endswith("see pl card 'your-repo#43'")
+    assert DESKTOP[0][1] == fix
 
 
 # ---------- affected cards and the Activity log ----------

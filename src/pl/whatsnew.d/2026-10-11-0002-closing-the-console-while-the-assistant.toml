@@ -1,0 +1,4 @@
+id = "2026-10-11.02"
+title = "Closing the console while the Assistant tab reads its screen no longer ends in a crash"
+where = "Assistant tab"
+try = "pl"

@@ -1,0 +1,4 @@
+id = "2026-10-25.04"
+title = "Agents ask you questions; pl answer continues the stage"
+where = "Pipeline: questions show in pl inbox and in chat; the owner's answer continues the stage"
+try = "pl answer <id> \"text\""

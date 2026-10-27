@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import time
 
 from pl import config as C
@@ -14,20 +15,14 @@ ESCALATE = (3600, 4 * 3600)   # seconds after first seen: the two escalations
 STEP = {1: "1 h", 2: "4 h"}
 URGENT = {"high", "error"}    # these bypass quiet hours when they open
 KEEP = 7 * 86400              # a resolved alert stays this long for pl alerts --all
-FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards"}
+FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards", "tried"}
 _clock = time.time
 # these keys notify as agent_waiting, every other key as alert_opened
 WAITING = ("permission_wait:", "agent_waiting:")
 # transitional: these call sites still notify themselves; plan 51 slices 6-8 empty it
 DIRECT = (
-    "near_cap:",
-    "api_error:",
-    "stage_failed:",
-    "stage_unsafe:",
-    "exited_window:",
     "dep_broken:",
     "pr_person:",
-    "pr_waiting:",
     "auto_merge_off:",
     "account_parked:",
     "accounts_all_out",
@@ -47,6 +42,7 @@ DIRECT = (
     "send_cap:",
     "stalled:",
     "ci_not_running:",
+    "rework_waiting:",
 )
 
 
@@ -166,7 +162,7 @@ def _logged(kind, **detail):
         pass
 
 
-def open(key, severity, title, fix, cards=()):
+def open(key, severity, title, fix, cards=(), tried=None):
     """Open the alert, or count one more sighting. Returns what to notify: "open", "1 h", "4 h", or None."""
     now, cards = _clock(), [str(c) for c in cards]
     with _locked() as d:
@@ -174,6 +170,8 @@ def open(key, severity, title, fix, cards=()):
         if not _live(a):
             d[key] = {"severity": severity, "title": title, "fix": fix, "first_seen": now, "last_seen": now,
                       "count": 1, "level": 0, "cards": cards}
+            if tried:
+                d[key]["tried"] = tried
             why = "open"
         else:
             if a.get("acked") and (a.get("severity") != severity or sorted(a.get("cards") or []) != sorted(cards)):
@@ -181,6 +179,8 @@ def open(key, severity, title, fix, cards=()):
                 a["level"] = 0
             a.update(severity=severity, title=title, fix=fix, cards=cards, last_seen=now,
                      count=int(a.get("count") or 0) + 1)
+            if tried:
+                a["tried"] = tried
             why = _step(a, now)
     _urgent(bool(why) and severity in URGENT)
     if why == "open":
@@ -254,6 +254,33 @@ def listing(all=False):
 def shown():
     """Open, unacknowledged alerts, newest first (the Alerts tab and header)."""
     return sorted((r for r in listing() if not r.get("acked")), key=lambda a: -(a.get("first_seen") or 0))
+
+
+WATCHDOG = ("stalled", "reconcile_failed", "queued_write_failed", "rework_waiting", "worktree_removed")
+
+
+def _tried(kind, a):
+    """What pl did about a watchdog alert: the text its producer stored, else a default for the kind."""
+    if a.get("tried"):
+        return a["tried"]
+    title = a.get("title") or ""
+    if kind == "reconcile_failed":
+        return title.partition("could not ")[2] or "a board write"
+    if kind == "rework_waiting":
+        m = re.search(r"(\d+) min", title)
+        return f"waited {m.group(1) if m else int((_clock() - a['first_seen']) // 60)} min for a slot"
+    return {"stalled": "nothing yet", "queued_write_failed": "queued, replay failed",
+            "worktree_removed": "removed outside pl"}[kind]
+
+
+def needs_you(now=None):
+    """The open watchdog alerts as rows for "Needs you", oldest first; no title or fix, which can hold card text."""
+    now = _clock() if now is None else now
+    rows = [{"card": (a.get("cards") or [""])[0], "kind": a["key"].split(":", 1)[0], "opened_at": a["first_seen"],
+             "age_seconds": int(now - a["first_seen"]), "tried": _tried(a["key"].split(":", 1)[0], a),
+             "acked": bool(a.get("acked")), "key": a["key"]}
+            for a in listing() if a["key"].split(":", 1)[0] in WATCHDOG]
+    return sorted(rows, key=lambda r: r["opened_at"])
 
 
 WATCHES = {

@@ -1,0 +1,4 @@
+id = "2026-10-25.38"
+title = "Auto-merge loop: pl merges what passes every rule"
+where = "Loops tab: auto-merge; [loops.auto-merge] enabled, every, merge_method, max_per_pass"
+try = "pl merges --dry-run"

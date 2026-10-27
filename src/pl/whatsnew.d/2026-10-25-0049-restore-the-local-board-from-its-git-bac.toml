@@ -1,0 +1,4 @@
+id = "2026-10-25.49"
+title = "Restore the local board from its git backup, keeping card ids"
+where = "pl board restore --from <clone> --yes (stop the dispatcher first; the old board is kept next to board.db)"
+try = "pl board restore --from ~/pl-board-backup"

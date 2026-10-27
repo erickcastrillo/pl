@@ -1,0 +1,4 @@
+id = "2026-09-30.09"
+title = "Memory guard: new agents wait when memory is low; a runaway agent is stopped"
+where = "Dashboard: the memory line"
+try = "pl manager status"

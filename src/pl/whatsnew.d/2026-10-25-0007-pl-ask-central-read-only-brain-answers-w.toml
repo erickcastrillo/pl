@@ -1,0 +1,4 @@
+id = "2026-10-25.07"
+title = "pl ask: central read-only brain answers with checked sources"
+where = "ask questions across every pipeline and connector; every fact links a source"
+try = "pl ask \"what needs me today?\""

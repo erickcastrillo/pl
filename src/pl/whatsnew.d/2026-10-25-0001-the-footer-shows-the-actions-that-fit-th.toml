@@ -1,0 +1,4 @@
+id = "2026-10-25.01"
+title = "The footer shows the actions that fit the selected card, and ? opens help for the screen"
+where = "Pipeline: approve and send back show only on a spec or plan waiting for you, p reads hold; ? is help, What's new is in the palette (ctrl+p)"
+try = "pl"

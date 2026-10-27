@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pl import agents, commands, dispatch, events, move_agent, usage
+from pl import agents, commands, dispatch, events, move_agent, notifications, usage
 from pl import config as C
 from pl.util import save_state
 
@@ -246,11 +246,13 @@ def test_cap_stop_records_where_the_card_came_from(fake):
 def test_near_cap_80_percent_alert_opens_without_duplicates(fake, monkeypatch):
     C.CAPS = {"run": {"minutes": 100}}
     sent = []
-    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: sent.append(a))
+    direct = []
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: sent.append(a))
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: direct.append(a))
     cs = [_card("aaaa0001", {**RUN_W, "started_at": _iso(time.time() - 85 * 60)})]
     fake.run(cs)
     fake.run(cs)
-    assert fake.stops == [] and len(sent) == 1
+    assert fake.stops == [] and len(sent) == 1 and direct == []
     assert alerts_open() == ["near_cap:aaaa0001:run"]
 
 
@@ -258,17 +260,21 @@ def test_near_cap_alert_on_tokens(fake, monkeypatch):
     C.CAPS = {"run": {"tokens": 1_000_000}}
     fake.tokens = {"s1": 850_000}
     sent = []
-    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: sent.append(a))
+    direct = []
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: sent.append(a))
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: direct.append(a))
     fake.run([_card("aaaa0001", {**RUN_W, "started_at": _iso(time.time() - 60)})])
-    assert len(sent) == 1 and fake.stops == []
+    assert len(sent) == 1 and fake.stops == [] and direct == []
 
 
 def test_below_80_percent_no_alert(fake, monkeypatch):
     C.CAPS = {"run": {"minutes": 100}}
     sent = []
-    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: sent.append(a))
+    direct = []
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: sent.append(a))
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **k: direct.append(a))
     fake.run([_card("aaaa0001", {**RUN_W, "started_at": _iso(time.time() - 70 * 60)})])
-    assert sent == [] and alerts_open() == []
+    assert sent == [] and direct == [] and alerts_open() == []
 
 
 def alerts_open():

@@ -1,0 +1,4 @@
+id = "2026-10-09.01"
+title = "The console restarts itself on a new pl install, like the dispatchers"
+where = "a notice and N when a dialog or unsent text is open"
+try = "pl"
