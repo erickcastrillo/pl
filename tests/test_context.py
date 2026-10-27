@@ -190,3 +190,54 @@ def test_ac6_no_agent_launch_script_kwargs_unchanged(home, monkeypatch):
                         lambda h, prof, p, sid, label, **kw: kwargs.append(kw) or "")
     dispatch.start_worker(_card(), "run", 0, False)
     assert kwargs and not {"pod", "model", "agent"} & kwargs[-1].keys()
+
+
+def _agent(**over):
+    return {"name": "marketing-copywriter", "instructions": "AGENT STANDING TEXT", "skills": ["pl-stage"],
+            "connector_roles": ["messaging"], "model": None, "pod": None, "approval": [], **over}
+
+
+def _agent_body(home, monkeypatch, agent, pod=None):
+    pod = pod or _billing(home, monkeypatch)
+    _recall(monkeypatch, "")
+    monkeypatch.setattr(C, "PIPELINE", {"stages": {"draft": {"instructions": "STAGE INSTRUCTIONS TEXT"}}}, raising=False)
+    path, _ = context.build(_card(), "draft", pod, "/pl-stage x", agent=agent)
+    return path.read_text()
+
+
+def test_ac1_agent_layer_comes_before_stage_instructions(home, monkeypatch):
+    body = _agent_body(home, monkeypatch, _agent())
+    assert body.index("AGENT STANDING TEXT") < body.index("STAGE INSTRUCTIONS TEXT")
+    assert body.index("\n## agent\n") < body.index("\n## role\n")
+
+
+def test_ac2_context_lists_only_the_agent_connector_roles(home, monkeypatch):
+    pod = {**_billing(home, monkeypatch), "roles": ["contacts", "email"]}
+    body = _agent_body(home, monkeypatch, _agent(), pod)
+    assert "Connector roles: messaging\n" in body
+    assert "contacts" not in body and "email" not in body
+
+
+def test_ac2_an_agent_with_no_roles_lists_none(home, monkeypatch):
+    pod = {**_billing(home, monkeypatch), "roles": ["contacts"]}
+    assert "Connector roles: (none)" in _agent_body(home, monkeypatch, _agent(connector_roles=[]), pod)
+
+
+def test_ac5_pipeline_pod_rules_then_agent_pod_rules(home, monkeypatch):
+    pod = pods.find("sales")
+    body = _agent_body(home, monkeypatch, _agent(pod="marketing"), pod)
+    assert body.index("approves every proposal") < body.index("Flag every factual claim")
+
+
+def test_ac5_agent_without_pod_gets_only_pipeline_pod_rules(home, monkeypatch):
+    body = _agent_body(home, monkeypatch, _agent(), pods.find("sales"))
+    assert "approves every proposal" in body and "Flag every factual claim" not in body
+
+
+def test_agent_with_no_pipeline_pod_still_gets_a_context_file(home, monkeypatch):
+    monkeypatch.setattr(C, "STATE_DIR", C.STATE_DIR, raising=False)
+    C.STATE_DIR.mkdir()
+    _recall(monkeypatch, "")
+    prompt = context.launch_prompt(_card(), "draft", "/pl-stage x", agent=_agent())
+    assert prompt.startswith("Follow the instructions in ")
+    assert "AGENT STANDING TEXT" in open(prompt.removeprefix("Follow the instructions in ").rstrip(".")).read()
