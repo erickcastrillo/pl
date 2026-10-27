@@ -17,7 +17,7 @@ GROUPS = [
     ("assistant", "Assistant", [("assistant", "Assistant")]),
     ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
     ("review", "Review", [("waiting", "Waiting"), ("prs", "Pull requests")]),
-    ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
+    ("automate", "Automate", [("loops", "Running")]),
     ("extend", "Extend", [("extend", "Active pod"), ("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
                           ("extensions", "Extensions")]),
     ("activity", "Activity", [("activity", "Activity"), ("alerts", "Alerts")]),
@@ -56,7 +56,7 @@ MEANING = {
 MAIN_KEYS = {
     "cards": ["review('approve')", "move_column", "retry"], "ideas": ["new", "edit_brief"], "dashboard": ["standup", "copy"],
     "assistant": ["mode", "file_idea"], "prs": ["merge"], "loops": ["pause", "run_now", "edit"],
-    "subagents": ["copy"], "activity": ["next_filter", "copy"], "alerts": ["ack"], "settings": ["save", "test"],
+    "activity": ["next_filter", "copy"], "alerts": ["ack"], "settings": ["save", "test"],
     "home": ["select"],
 }
 
@@ -81,7 +81,7 @@ HELP = {
     "cards": "Every card by column. A card that waits on you shows approve and send back in the footer; the details are on the right.",
     "waiting": "Everything that waits on you, oldest first. a approves, x sends back, Enter opens.",
     "prs": "Pull requests by what they need: a decision, a merge, a rework, or only a wait.",
-    "loops": "The background loops that keep the pipeline moving, with when each last ran.",
+    "loops": "Running: the loops that keep the pipeline moving and the agents working in the background, with what each is doing and when it last ran.",
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",
@@ -91,7 +91,6 @@ HELP = {
     "pods": "Pods hold the rules agents follow. r adds a rule to the pod, Enter shows it.",
     "models": "Local models: t test, s set.",
     "extensions": "Hooks, plugins and other extensions of every account.",
-    "subagents": "Running: agents working in the background and what each is doing.",
     "home": "Your pipelines, one row each. Press Enter to open one.",
 }
 
@@ -104,7 +103,6 @@ EMPTY = {
     "alerts": ("pl adds one when a thing fails.", None, None),
     "loops": ("n adds one, or pl loops add", "n", "loops"),
     "activity": ("Each card action adds a line.", None, None),
-    "subagents": ("An agent's background task.", None, None),
     "dashboard": ('n on Ideas, or pl idea "..."', "n", "ideas"),
     "home": ("pl setup adds a pipeline.", None, None),
 }
@@ -170,8 +168,12 @@ def unused(name):
     return name in CODE_VIEWS and not pipeline.has_code()
 
 
+ALIASES = {"subagents": "loops"}   # the Background view's old tab id
+
+
 def resolve(name):
     """(gid, view_id) for a visible view id, (gid, None) for a group id (its first view), else None."""
+    name = ALIASES.get(name, name)
     shown = groups()
     for gid, _, views in shown:
         if any(vid == name for vid, _ in views):

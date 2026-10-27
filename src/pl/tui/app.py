@@ -41,7 +41,6 @@ from pl.tui.review import ConfirmScreen
 from pl.tui.panels import make_models_panel, make_pods_panel
 from pl.tui.settings import SUBSCRIPTION_LINE, SettingsView
 from pl.tui.skills import SkillsView
-from pl.tui.subagents import SubagentsView
 from pl.tui.waiting import WaitingView
 
 LATER = {}
@@ -90,7 +89,7 @@ def read_place():
 
 VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs": PrsView,
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
-         "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
+         "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
          "waiting": WaitingView,
          "extend": ExtendView,
          "skills": _titled("Skills, agents and commands (every account)", SkillsView),
@@ -776,7 +775,6 @@ class PlApp(App):
             v.show(self.data)
         self.query_one(LoopsView).show(self.data)
         self.query_one(ActivityView).show(self.data)
-        self.query_one(SubagentsView).show(self.data)
         self.query_one(AlertsView).show(self.data)
         self.query_one(CardsView).show(self.data)
         if self.pending_row:
@@ -843,8 +841,8 @@ class PlApp(App):
                 self.subtabs[gid] = tc.active
                 self._save_subtabs()
         self.refresh_bindings()
-        if self.active_tab == "subagents":
-            self.query_one(SubagentsView).tick()
+        if self.active_tab == "loops":
+            self.query_one(LoopsView).tick()
         if self.active_tab == "prs":
             self.query_one(PrsView).selected()
         if self.active_tab == "assistant":

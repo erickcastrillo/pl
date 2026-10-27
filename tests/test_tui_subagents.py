@@ -1,17 +1,19 @@
-"""WP30: the Background tab lists a harness session's sub-agents and shows the selected one's transcript tail."""
+"""WP30: Automate → Running lists a harness session's sub-agents and shows the selected one's transcript tail."""
 import json
 import os
 import subprocess
 import time
 
 import pytest
+from textual.widgets import DataTable
 
 from pl import config as C
 from pl import harnesses
 from pl.tui import loops
+from pl.tui.chrome import NEW_ROW
+from pl.tui.loops import LoopsView
 from pl.tui import subagents as sa
 from pl.tui.app import PlApp
-from pl.tui.live import LiveScreen
 
 SESSION = "11111111-2222-4333-8444-555555555555"
 TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
@@ -202,7 +204,16 @@ def test_last_entry_bigger_than_cap_is_unknown(fake_home):
 
 
 def _screen(app):
-    return str(app.query_one("#subagents-screen").render())
+    return str(app.query_one("#loops-screen").render())
+
+
+def _keys(app):
+    return [r.key.value for r in app.query_one("#loops-table", DataTable).ordered_rows]
+
+
+def _row_text(app, key):
+    t = app.query_one("#loops-table", DataTable)
+    return str(t.get_row(key)[0])
 
 
 async def settle(pilot):
@@ -211,17 +222,40 @@ async def settle(pilot):
     await pilot.pause()
 
 
-async def test_tab_lists_agents_shows_tail_and_skips_unchanged_redraw(fake_home, monkeypatch):
-    three_agents(fake_home)
+def _running_app(monkeypatch):
+    C.SERVICES = C.LOOPS_OFF = {}
     app = PlApp(snapshot_provider=lambda: {"snapshot": {"rows": []}}, interval=3600, autostart=False)
     monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
+    return app
+
+
+async def _open_running(pilot, app):
+    await settle(pilot)
+    app.action_tab("loops")
+    app.query_one(LoopsView).show({"snapshot": {"rows": []}})
+    await settle(pilot)
+    app.query_one(LoopsView).tick()
+    await settle(pilot)
+
+
+async def test_running_lists_agents_after_loops_shows_tail_and_skips_unchanged_redraw(fake_home, monkeypatch):
+    three_agents(fake_home)
+    app = _running_app(monkeypatch)
     async with app.run_test(size=(176, 48)) as pilot:
+        await _open_running(pilot, app)
+        view = app.query_one(LoopsView)
+        keys = _keys(app)
+        assert keys[-5] == "head:agents" and keys[-1] == NEW_ROW
+        assert all(k.startswith("agent:") for k in keys[-4:-1])
+        for key, state in zip(keys[-4:-1], ("running", "waiting", "error")):
+            text = _row_text(app, key)
+            assert "(no card)" in text and f"is {state}" in text
+        assert [r["state"] for r in view.agents] == ["running", "waiting", "error"]
+        assert view._key() == NEW_ROW             # the cursor does not jump to an agent when the scan lands
+        app.query_one("#loops-table").focus()
+        await pilot.press("up", "up", "up")
         await settle(pilot)
-        app.action_tab("subagents")
-        await settle(pilot)
-        view = app.query_one(sa.SubagentsView)
-        app.query_one("#subagents-table").focus()
-        assert [r["state"] for r in view.rows] == ["running", "waiting", "error"]
+        assert view._key() == keys[-4]
         text = _screen(app)
         assert "tool Bash" in text and TOKEN not in text and "***" in text
         n = view.redraws
@@ -237,35 +271,73 @@ async def test_tab_lists_agents_shows_tail_and_skips_unchanged_redraw(fake_home,
         await pilot.press("y")
         await settle(pilot)
         assert copied and "tool Read: /x/app.py" in copied[0]
+        assert view.check_action("pause", ()) is False
+        assert view.check_action("copy", ()) is True
+
+
+def test_agent_sentence_says_what_card_now_and_how_long():
+    row = {"what": "general-purpose: Fix it", "card": "pl#12 Fix login", "state": "running", "now": "Read app.py",
+           "ran": time.time() - 240, "age": 5}
+    assert sa.agent_sentence(row).plain == "general-purpose: Fix it for pl#12 Fix login is running: Read app.py · running 4m"
+    bare = {**row, "card": "-", "ran": None, "now": "", "age": 900}
+    assert sa.agent_sentence(bare).plain == "general-purpose: Fix it for (no card) is running · last active 15m"
+
+
+def test_scan_rows_carry_now_and_when_they_started(fake_home):
+    write_agent(fake_home, "n1", [_prompt("go"), _tool_use("Read", {"file_path": "/a"}, "t")], 10, "Timed")
+    row = sa.scan()[0][0]
+    assert row["now"].startswith("Read") and 0 < row["ran"] <= time.time()
+    early, late = "2026-10-27T09:00:00+00:00", "2026-10-27T10:00:00+00:00"
+    assert sa._started([{"timestamp": late}, {"timestamp": "nope"}, {"x": 1}, {"timestamp": early}]) == 1793091600.0
+    assert sa._started([{"timestamp": "nope"}, {"x": 1}]) is None
 
 
 async def test_header_state_updates_with_time_alone(fake_home, monkeypatch):
     write_agent(fake_home, "t1", [_prompt("go"), _tool_use("Read", {"file_path": "/a"}, "t")], 10, "Timed")
-    app = PlApp(snapshot_provider=lambda: {"snapshot": {"rows": []}}, interval=3600, autostart=False)
-    monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
+    app = _running_app(monkeypatch)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        app.action_tab("subagents")
+        await _open_running(pilot, app)
+        app.query_one("#loops-table").focus()
+        await pilot.press("up")
         await settle(pilot)
         assert "(running)" in _screen(app)
         later = time.time() + 600
         monkeypatch.setattr(sa.time, "time", lambda: later)
-        app.query_one(sa.SubagentsView).tick()
+        app.query_one(LoopsView).tick()
         await settle(pilot)
         assert "(waiting)" in _screen(app)
 
 
-async def test_hidden_tab_does_not_scan(fake_home, monkeypatch):
+async def test_hidden_running_tab_does_not_scan(fake_home, monkeypatch):
     three_agents(fake_home)
     calls = []
     monkeypatch.setattr(sa, "scan", lambda data=None: calls.append(1) or ([], []))
-    app = PlApp(snapshot_provider=lambda: {"snapshot": {"rows": []}}, interval=3600, autostart=False)
-    monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
+    app = _running_app(monkeypatch)
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        app.query_one(sa.SubagentsView).tick()
+        app.action_tab("dashboard")
+        await settle(pilot)
+        app.query_one(LoopsView).tick()
         await settle(pilot)
         assert calls == []
+        app.action_tab("loops")
+        await settle(pilot)
+        app.query_one(LoopsView).tick()
+        await settle(pilot)
+        assert calls
+
+
+async def test_no_background_agents_line_and_template_row_last(fake_home, monkeypatch):
+    app = _running_app(monkeypatch)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_running(pilot, app)
+        keys = _keys(app)
+        assert keys[-3:] == ["head:agents", "none:agents", NEW_ROW]
+        assert "no background agents" in _row_text(app, "none:agents")
+        app.query_one("#loops-table").focus()
+        await pilot.press("up")
+        await settle(pilot)
+        assert app.query_one(LoopsView)._key() != "none:agents"
 
 
 class FakeTmux:
@@ -346,81 +418,6 @@ def test_window_rows_only_rows_with_worker_window(monkeypatch):
     del no_window["worker"]["window"]
     rows = sa.window_rows(_wdata({"kind": "loop_idle", "card": None, "worker": {}, "win": ""}, no_window, _wrow("aaaaaaaa1111", "%1")))
     assert [r["card"] for r in rows] == ["aaaaaaaa"]
-
-
-def _table_cells(app):
-    t = app.query_one("#agentwin-table")
-    return [[str(c) for c in t.get_row_at(i)] for i in range(t.row_count)]
-
-
-async def _open_background(pilot, app, data):
-    await settle(pilot)
-    app.action_tab("subagents")
-    app.query_one(sa.SubagentsView).show(data)
-    app.query_one(sa.SubagentsView).tick()
-    await settle(pilot)
-
-
-def _bg_app(monkeypatch):
-    app = PlApp(snapshot_provider=lambda: {"snapshot": {"rows": []}}, interval=3600, autostart=False)
-    monkeypatch.setattr(PlApp, "render_views", lambda self: _noop())
-    return app
-
-
-async def test_background_view_lists_agent_windows(fake_home, monkeypatch):
-    monkeypatch.setattr(harnesses, "_run", FakeTmux({"%1": "● Reading\n", "%2": "Which file?\n"}))
-    app = _bg_app(monkeypatch)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await _open_background(pilot, app, _wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
-        cells = _table_cells(app)
-        assert [(c[0], c[4]) for c in cells] == [("aaaaaaaa", "working"), ("bbbbbbbb", "waiting for you: Which file?")]
-
-
-async def test_hidden_background_view_runs_no_capture(fake_home, monkeypatch):
-    tmux = FakeTmux({"%1": "x\n", "%2": "y\n"})
-    monkeypatch.setattr(harnesses, "_run", tmux)
-    app = _bg_app(monkeypatch)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
-        view = app.query_one(sa.SubagentsView)
-        view.show(_wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
-        view.tick()
-        await settle(pilot)
-        assert tmux.captures() == []
-        app.action_tab("subagents")
-        await settle(pilot)
-        tmux.calls.clear()
-        view.tick()
-        await settle(pilot)
-        assert sorted(a[a.index("-t") + 1] for a in tmux.captures()) == ["%1", "%2"]
-
-
-async def test_enter_opens_live_view_and_esc_returns_to_same_row(fake_home, monkeypatch):
-    tmux = FakeTmux({"%1": "one\n", "%2": "two\n"})
-    monkeypatch.setattr(harnesses, "_run", tmux)
-    app = _bg_app(monkeypatch)
-    async with app.run_test(size=(176, 48)) as pilot:
-        await _open_background(pilot, app, _wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
-        app.query_one("#agentwin-table").focus()
-        await pilot.press("down", "enter")
-        await settle(pilot)
-        assert isinstance(app.screen, LiveScreen) and app.screen.pane == "%2"
-        await pilot.press("escape")
-        await settle(pilot)
-        assert not isinstance(app.screen, LiveScreen)
-        assert app.query_one("#agentwin-table").cursor_row == 1
-    assert not any("send-keys" in a for a in tmux.calls)
-
-
-async def test_background_view_without_tmux_shows_no_agent_window(fake_home, monkeypatch):
-    monkeypatch.setattr(harnesses, "_run", FakeTmux(raises=FileNotFoundError("tmux")))
-    app = _bg_app(monkeypatch)
-    notes = []
-    monkeypatch.setattr(PlApp, "notify", lambda self, *a, **k: notes.append(a))
-    async with app.run_test(size=(176, 48)) as pilot:
-        await _open_background(pilot, app, _wdata())
-        assert [c[4] for c in _table_cells(app)] == ["no agent window"]
-        assert notes == []
 
 
 async def _noop():

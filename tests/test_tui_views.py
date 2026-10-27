@@ -1354,7 +1354,7 @@ async def test_the_top_tabs_are_the_eight_jobs_in_order():
     ("home", ("home", "home")), ("dashboard", ("dashboard", "dashboard")), ("assistant", ("assistant", "assistant")),
     ("ideas", ("work", "ideas")), ("cards", ("work", "cards")), ("prs", ("review", "prs")),
     ("waiting", ("review", "waiting")), ("loops", ("automate", "loops")), ("alerts", ("activity", "alerts")), ("activity", ("activity", "activity")),
-    ("settings", ("settings", "settings")), ("subagents", ("automate", "subagents"))])
+    ("settings", ("settings", "settings")), ("subagents", ("automate", "loops"))])
 def test_every_old_tab_id_resolves(monkeypatch, old, place):
     from pl.tui import chrome
     monkeypatch.setattr(chrome, "tabs", lambda: [(v, v) for g in chrome.GROUPS for v, _ in g[2]])
@@ -1818,10 +1818,15 @@ async def test_old_tab_ids_still_open_their_view():
     app = PlApp(snapshot_provider=Provider(), tab="subagents")
     async with app.run_test(size=(176, 48)) as pilot:
         await settle(pilot)
-        assert app.active_tab == "subagents" and app.query_one("#tabs", TabbedContent).active == "g-automate"
+        assert app.active_tab == "loops" and app.query_one("#tabs", TabbedContent).active == "g-automate"
         app.action_tab("alerts")
         await settle(pilot)
         assert app.active_tab == "alerts" and app.query_one("#tabs", TabbedContent).active == "g-activity"
+        app.action_tab("subagents")
+        await settle(pilot)
+        assert app.active_tab == "loops"
+        app.action_tab("alerts")
+        await settle(pilot)
         app.action_tab("nope")
         await settle(pilot)
         assert app.active_tab == "alerts"
@@ -2989,7 +2994,7 @@ async def test_an_empty_board_says_no_cards_and_how_to_add_one():
 
 def test_empty_state_is_three_lines_for_every_list_tab():
     from pl.tui.chrome import EMPTY, HELP, TABS, empty_state
-    assert set(EMPTY) <= {t for t, _ in TABS} and {"ideas", "cards", "prs", "alerts", "loops", "activity", "subagents",
+    assert set(EMPTY) <= {t for t, _ in TABS} and {"ideas", "cards", "prs", "alerts", "loops", "activity",
                                                    "dashboard", "home"} == set(EMPTY)
     for tid in EMPTY:
         lines = empty_state(tid)
@@ -4256,58 +4261,18 @@ async def test_the_first_event_replaces_the_activity_empty_state():
     assert "dispatched" in text and "? learn more" not in text
 
 
-async def _background_view(pilot, app, monkeypatch):
+async def test_automate_shows_one_running_view():
+    from pl.tui.chrome import GROUPS, HELP
+    from pl.tui.loops import LoopsView
     from pl.tui.subagents import SubagentsView
-    await _open_tab(pilot, app, "subagents")
-    return app.query_one(SubagentsView)
-
-
-def _quiet_background(monkeypatch):
-    from pl.tui.subagents import SubagentsView
-    monkeypatch.setattr(SubagentsView, "tick", lambda self: None)
-
-
-_TASK = {"parent": "acme", "card": "abcd1234", "what": "explore the repo", "state": "working", "age": 5,
-         "path": "/x/agent.jsonl", "key": 1, "ident": None}
-
-
-async def test_an_empty_background_tab_says_what_it_is_for(monkeypatch):
-    from pl.tui.chrome import empty_state
-    _quiet_background(monkeypatch)
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
-        view = await _background_view(pilot, app, monkeypatch)
-        view._apply([], [], None, None, [])
         await settle(pilot)
-        assert all(line in screen_text(app) for line in empty_state("subagents"))
-        told = []
-        monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
-        app.query_one("#subagents-table", DataTable).focus()
-        await pilot.press("y")
-        await wait_until(pilot, lambda: told == ["select a background agent first"], "the notice")
-        assert told == ["select a background agent first"]
-
-
-async def test_background_shows_no_empty_state_before_the_first_scan(monkeypatch):
-    _quiet_background(monkeypatch)
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        await _background_view(pilot, app, monkeypatch)
-        assert "? learn more" not in screen_text(app)
-
-
-async def test_the_first_background_task_replaces_the_empty_state(monkeypatch):
-    _quiet_background(monkeypatch)
-    app = PlApp(snapshot_provider=Provider())
-    async with app.run_test(size=(176, 48)) as pilot:
-        view = await _background_view(pilot, app, monkeypatch)
-        view._apply([], [], None, None, [])
-        await settle(pilot)
-        assert "? learn more" in screen_text(app)
-        view._apply([_TASK], [], None, None, [])
-        await settle(pilot)
-        text = screen_text(app)
-    assert "abcd1234" in text and "? learn more" not in text
+        assert _labels(app, "#automate-views") == ["Running"]
+        assert not app.query(SubagentsView) and app.query(LoopsView)
+    assert not any("Background" in v for v in HELP.values())
+    assert not any("Background" in label for _, _, views in GROUPS for _, label in views)
+    assert "loops" in HELP["loops"] and "background" in HELP["loops"]
 
 
 def _first_column(app, table_id):
@@ -4683,4 +4648,4 @@ async def test_l_is_hidden_for_a_persistent_loop_and_background_agents():
         view = app.query_one(tui_loops.LoopsView)
         assert view.selected() and not view.selected().get("every")
         assert view.check_action("open_log", ()) is False
-    assert all(b.key != "l" for b in subagents.SubagentsView.BINDINGS)
+    assert not hasattr(subagents, "SubagentsView")

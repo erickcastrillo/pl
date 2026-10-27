@@ -1,27 +1,19 @@
-"""Background tab: the sub-agents a harness session spawned (Claude Code's Agent tool) and the selected one's transcript.
+"""Background agents: the sub-agents a harness session spawned (Claude Code's Agent tool) and the selected one's transcript.
 
 Claude Code writes each sub-agent to <account config_dir>/projects/<project>/<session id>/subagents/agent-<id>.jsonl,
 with agent-<id>.meta.json beside it (agentType, description). Only those files are read, and only their tail."""
 import json
 import os
 import stat
-import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 
 from rich.text import Text
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widget import Widget
-from textual.widgets import DataTable, Static
-
 from pl import agent_screen
 from pl import config as C
 from pl import harnesses
 from pl.trackers import mcp
-from pl.tui.chrome import empty_state
-from pl.tui.live import LiveScreen
-from pl.tui.loops import COPIERS, _copy_run
 from pl.util import PEM_RE, TOKEN_RE, _nofollow, age, mask, parse_iso, short_id  # noqa: F401  (shared with pl.usage, which must not load Textual)
 
 RECENT = 6 * 3600          # transcripts modified longer ago are hidden
@@ -207,11 +199,13 @@ def scan(data=None):
                 continue
             meta, session, entries = _meta(root, p), p.parent.parent.name, _entries(r, st)
             seen.add(r)
+            summary = _summary(entries)[0]
             what = ": ".join(str(x) for x in (meta.get("agentType"), meta.get("description")) if x)
             rows.append({"path": r, "ident": (st.st_dev, st.st_ino), "agent": p.name[len("agent-"):-len(".jsonl")], "parent": session[:8],
                          "card": cards.get(session, "-"), "what": mask(what or "-"),
                          "state": state(entries, now - st.st_mtime) if entries or not st.st_size else "unknown",
-                         "age": now - st.st_mtime,
+                         "age": now - st.st_mtime, "now": summary, "ran": _started(entries),
+                         "full": len(entries) >= TAIL_ENTRIES,
                          "key": (st.st_size, st.st_mtime_ns)})
     rows.sort(key=lambda r: r["age"])
     for k in [k for k in _cache if k not in seen]:
@@ -248,130 +242,30 @@ def window_rows(data):
     return rows or [{"pane": None, "card": "-", "stage": "", "who": "", "age": "", "status": NO_WINDOW, "last": ""}]
 
 
-class SubagentsView(Widget):
-    DEFAULT_CSS = """
-    SubagentsView { height: 1fr; }
-    #subagents-status { height: 1; margin: 0 1; }
-    #agentwin-table { height: auto; max-height: 12; border: round $panel-lighten-2; }
-    #subagents-table { width: 90; height: 1fr; border: round $panel-lighten-2; }
-    #subagents-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
-    """
-    BINDINGS = [Binding("y", "copy", "copy")]
+def _started(entries):
+    """Epoch of the earliest timestamp among the entries, or None."""
+    stamps = []
+    for e in entries:
+        try:
+            stamps.append(datetime.fromisoformat(str(e["timestamp"])).timestamp())
+        except (KeyError, ValueError, OverflowError, OSError):
+            continue
+    return min(stamps) if stamps else None
 
-    def __init__(self):
-        super().__init__()
-        self.data, self.rows, self.lines, self.redraws = None, [], [], 0
-        self._shown, self._tail_key = None, None
-        self.wins, self._wins_shown = [], None
 
-    def compose(self):
-        with Vertical():
-            yield Static(id="subagents-status")
-            yield DataTable(id="agentwin-table", cursor_type="row")
-            with Horizontal():
-                yield DataTable(id="subagents-table", cursor_type="row", zebra_stripes=True)
-                yield Static(Text("select a background agent", style="dim"), id="subagents-screen", markup=False)
-
-    def on_mount(self):
-        self.query_one("#agentwin-table", DataTable).add_columns("card", "stage", "account/model", "age", "status", "last line")
-        self.query_one("#subagents-table", DataTable).add_columns("parent", "card", "agent", "state", "last active")
-        self.set_interval(REFRESH, self.tick)
-
-    def show(self, data):
-        self.data = data
-
-    def selected(self):
-        t = self.query_one("#subagents-table", DataTable)
-        return self.rows[t.cursor_row] if self.rows and 0 <= t.cursor_row < len(self.rows) else None
-
-    def tick(self):
-        """Scan and read the selected tail off the UI thread, only while this tab is visible."""
-        if getattr(self.app, "active_tab", None) != "subagents" or self.app.screen is not self.screen:
-            return
-        sel = self.selected()
-        want, data, last_key = sel and sel["path"], self.data, self._tail_key
-
-        def run():
-            try:
-                rows, notes = scan(data)
-                wins = window_rows(data)
-                pick = next((r for r in rows if r["path"] == want), rows[0] if rows else None)
-                lines = None
-                if pick and (pick["path"], pick["key"], pick["state"]) != last_key:   # state also moves with time
-                    lines = tail_lines(pick["path"], pick["ident"])
-            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
-                self.app.call_from_thread(self.app.notify, f"could not list background agents: {e}", severity="error", markup=False)
-                return
-            self.app.call_from_thread(self._apply, rows, notes, pick, lines, wins)
-        self.run_worker(run, thread=True, group="subagents", exclusive=True)
-
-    def _apply(self, rows, notes, pick, lines, wins):
-        status = Text(f"{len(rows)} background agents active in the last 6 h", style="dim")
-        for n in notes:
-            status.append(f"   {n}", style="dim")
-        self.query_one("#subagents-status", Static).update(status)
-        self._apply_windows(wins)
-        t = self.query_one("#subagents-table", DataTable)
-        shown = [(r["parent"], r["card"], r["what"], r["state"], _age(r["age"])) for r in rows]
-        self.rows = rows
-        if shown != self._shown:   # an unchanged table is not rebuilt
-            self._shown = shown
-            t.clear()
-            for x in shown:
-                t.add_row(*(Text(str(v)) for v in x))
-            if not rows:
-                for line in empty_state("subagents"):
-                    t.add_row(Text(line, style="dim"), *(Text("") for _ in range(4)))
-        if pick is not None:
-            t.move_cursor(row=next(i for i, r in enumerate(rows) if r["path"] == pick["path"]))
-        if lines is not None:   # the file changed: redraw
-            self._tail_key, self.lines = (pick["path"], pick["key"], pick["state"]), lines
-            body = Text(f"{pick['what']}  ({pick['state']})\n", style="bold")
-            body.append("\n".join(lines[-TAIL_ENTRIES:]), style="not bold")
-            self.query_one("#subagents-screen", Static).update(body)
-            self.redraws += 1
-
-    def _apply_windows(self, wins):
-        t = self.query_one("#agentwin-table", DataTable)
-        cur = self.wins[t.cursor_row]["pane"] if 0 <= t.cursor_row < len(self.wins) else None
-        self.wins = wins
-        shown = [(w["card"], w["stage"], w["who"], w["age"], w["status"], w["last"]) for w in wins]
-        if shown == self._wins_shown:
-            return
-        self._wins_shown = shown
-        t.clear()
-        for x in shown:
-            t.add_row(*(Text(v) for v in x))
-        if cur is not None:
-            t.move_cursor(row=next((i for i, w in enumerate(wins) if w["pane"] == cur), 0))
-
-    def on_data_table_row_selected(self, event):
-        if event.data_table.id != "agentwin-table":
-            return
-        win = self.wins[event.cursor_row] if 0 <= event.cursor_row < len(self.wins) else None
-        if win is None or not win["pane"]:
-            self.app.notify(NO_WINDOW, markup=False)
-            return
-        self.app.push_screen(LiveScreen(win["pane"], f"{win['card']} · {win['stage']} agent"))
-
-    def on_data_table_row_highlighted(self, event):
-        if event.data_table.id != "subagents-table":
-            return
-        sel = self.selected()
-        if sel is not None and (self._tail_key or (None,))[0] != sel["path"]:
-            self.tick()
-
-    def action_copy(self):
-        if not self.lines:
-            self.app.notify("select a background agent first", markup=False)
-            return
-        text = "\n".join(self.lines[-TAIL_ENTRIES:])
-        self.app.copy_to_clipboard(text)
-        for argv in COPIERS:
-            if shutil.which(argv[0]):
-                _copy_run(argv, text)
-                break
-        self.app.notify(f"copied {len(self.lines[-TAIL_ENTRIES:])} lines", markup=False)
+def agent_sentence(r):
+    """One list row: what the agent is for, its card, its state, what it is doing now and how long it has run."""
+    line = Text(no_wrap=True, overflow="ellipsis")
+    line.append(r["what"], style="bold")
+    line.append(f" for {r['card'] if r['card'] != '-' else '(no card)'} is ")
+    line.append(r["state"], style="red" if r["state"] in ("error", "unknown") else "")
+    if r["now"]:
+        line.append(f": {r['now']}")
+    if r["ran"] is not None:
+        line.append(f" · running {_age(time.time() - r['ran'])}{'+' if r.get('full') else ''}")
+    else:
+        line.append(f" · last active {_age(r['age'])}")
+    return line
 
 
 NOW_CHARS = 60

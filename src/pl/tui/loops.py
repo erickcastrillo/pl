@@ -16,6 +16,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, OptionList, Selec
 
 from pl import agents, events, loops, pipeline, schedule, skills, util
 from pl import config as C
+from pl.tui import subagents
 from pl.tui.chrome import NEW_ROW, empty_state, skip_headings
 from pl.tui.review import ConfirmScreen
 from pl.tui.runlog import RunLogScreen
@@ -543,12 +544,14 @@ class LoopsView(Widget):
     """
     BINDINGS = [Binding("n", "new", "new"), Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
                 Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop"),
-                Binding("l", "open_log", "full log")]
+                Binding("l", "open_log", "full log"), Binding("y", "copy", "copy")]
 
     def __init__(self):
         super().__init__()
         self._runs, self._run_lines = [], None
         self.loops = None   # None until the first show, so an empty first refresh still draws
+        self.data, self._shown = None, None
+        self.agents, self.notes, self.lines, self.redraws, self._tail_key = [], [], [], 0, None
 
     def compose(self):
         with Horizontal():
@@ -565,10 +568,11 @@ class LoopsView(Widget):
         runs = self.query_one("#loops-runs", OptionList)
         runs.border_title = "Earlier runs · enter opens the log"
         runs.display = False
+        self.set_interval(subagents.REFRESH, self.tick)
 
     @staticmethod
     def _is_item(key):
-        return key == NEW_ROW or key.startswith("loop:")
+        return key == NEW_ROW or key.startswith(("loop:", "agent:"))
 
     def _key(self):
         t = self.query_one(DataTable)
@@ -580,6 +584,10 @@ class LoopsView(Widget):
         key = self._key() or ""
         return next((x for x in self.loops or [] if f"loop:{x['name']}" == key), None)
 
+    def selected_agent(self):
+        key = self._key() or ""
+        return next((r for r in self.agents if f"agent:{r['path']}" == key), None)
+
     def check_action(self, action, parameters):
         if action == "open_log":
             x = self.selected()
@@ -589,26 +597,74 @@ class LoopsView(Widget):
         return True
 
     def show(self, data):
-        t = self.query_one(DataTable)
-        keep, keep_row = self._key(), t.cursor_row
-        rows = loop_rows(data)
-        if rows != self.loops:   # an unchanged table is not rebuilt
-            self.loops = rows
-            t.clear()
-            t.add_row(Text("Loops", style="bold"), key="head:loops")
-            for x in self.loops:
-                t.add_row(loop_sentence(x), key=f"loop:{x['name']}")
-            if not self.loops:
-                for i, line in enumerate(empty_state("loops")):
-                    t.add_row(Text(line, style="dim"), key=f"none:loops:{i}")
-            t.add_row(Text(f"+ New loop from a template ({len(loops.TEMPLATES)})", style="#e0a040"), key=NEW_ROW)
-            if keep in [r.key.value for r in t.ordered_rows]:
-                t.move_cursor(row=t.get_row_index(keep))
-            else:
-                t.move_cursor(row=min(max(keep_row, 0), t.row_count - 1))
-            self._last = skip_headings(t, self._is_item)
+        self.data = data
+        self._rebuild()
         self.refresh_bindings()
         self.load_tail()
+
+    def _rebuild(self):
+        t = self.query_one(DataTable)
+        keep, keep_row = self._key(), t.cursor_row
+        rows = loop_rows(self.data)
+        shown = (rows, [(r["path"], subagents.agent_sentence(r).plain) for r in self.agents], self.notes)
+        if shown == self._shown:   # an unchanged table is not rebuilt
+            return
+        self._shown = shown
+        self.loops = rows
+        t.clear()
+        t.add_row(Text("Loops", style="bold"), key="head:loops")
+        for x in self.loops:
+            t.add_row(loop_sentence(x), key=f"loop:{x['name']}")
+        if not self.loops:
+            for i, line in enumerate(empty_state("loops")):
+                t.add_row(Text(line, style="dim"), key=f"none:loops:{i}")
+        heading = Text("Background agents", style="bold")
+        for n in self.notes:
+            heading.append(f"   {n}", style="dim")
+        t.add_row(heading, key="head:agents")
+        for r in self.agents:
+            t.add_row(subagents.agent_sentence(r), key=f"agent:{r['path']}")
+        if not self.agents:
+            t.add_row(Text("no background agents", style="dim"), key="none:agents")
+        t.add_row(Text(f"+ New loop from a template ({len(loops.TEMPLATES)})", style="#e0a040"), key=NEW_ROW)
+        if keep in [r.key.value for r in t.ordered_rows]:
+            t.move_cursor(row=t.get_row_index(keep))
+        else:
+            t.move_cursor(row=min(max(keep_row, 0), t.row_count - 1))
+        self._last = skip_headings(t, self._is_item)
+
+    def tick(self):
+        """Scan and read the selected agent's tail off the UI thread, only while this tab is visible."""
+        if getattr(self.app, "active_tab", None) != "loops" or self.app.screen is not self.screen:
+            return
+        sel = self.selected_agent()
+        want, data, last_key = sel and sel["path"], self.data, self._tail_key
+
+        def run():
+            try:
+                rows, notes = subagents.scan(data)
+                pick = next((r for r in rows if r["path"] == want), None)
+                lines = None
+                if pick and (pick["path"], pick["key"], pick["state"]) != last_key:   # state also moves with time
+                    lines = subagents.tail_lines(pick["path"], pick["ident"])
+            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+                self.app.call_from_thread(self.app.notify, f"could not list background agents: {e}", severity="error", markup=False)
+                return
+            self.app.call_from_thread(self._apply_agents, rows, notes, pick, lines)
+        self.run_worker(run, thread=True, group="loops-agents", exclusive=True)
+
+    def _apply_agents(self, rows, notes, pick, lines):
+        self.agents, self.notes = rows, notes
+        self._rebuild()
+        cur = self.selected_agent()
+        if lines is None or cur is None or cur["path"] != pick["path"]:
+            return
+        self._tail_key, self.lines = (pick["path"], pick["key"], pick["state"]), lines
+        body = Text(f"{pick['what']}  ({pick['state']})\n", style="bold")
+        body.append("\n".join(lines[-subagents.TAIL_ENTRIES:]), style="not bold")
+        self.query_one("#loops-screen", Static).update(body)
+        self.query_one("#loops-runs", OptionList).display = False
+        self.redraws += 1
 
     def on_data_table_row_highlighted(self, _):
         self._last = skip_headings(self.query_one(DataTable), self._is_item, self._last)
@@ -641,6 +697,12 @@ class LoopsView(Widget):
         self.app.push_screen(TemplateGallery(), chosen)
 
     def load_tail(self):
+        agent = self.selected_agent()
+        if agent is not None:
+            if (self._tail_key or (None,))[0] != agent["path"]:
+                self.tick()
+            return
+        self._tail_key, self.lines = None, []
         x = self.selected()
         if x is None:
             if self._key() == NEW_ROW:
@@ -669,6 +731,7 @@ class LoopsView(Widget):
         if x is None or x["name"] != name:
             return
         self.query_one("#loops-screen", Static).update(body)
+        self.lines = body.plain.splitlines()
         self._runs = runs
         earlier = self.query_one("#loops-runs", OptionList)
         earlier.display = len(runs) > 1
@@ -688,6 +751,7 @@ class LoopsView(Widget):
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
         self.query_one("#loops-runs", OptionList).display = False
+        self.lines = lines
 
     def on_data_table_row_selected(self, event):
         if event.row_key.value == NEW_ROW:   # the template row opens the add form; a loop row opens its log
@@ -705,6 +769,18 @@ class LoopsView(Widget):
                 return
             self.app.call_from_thread(self.app.push_screen, LogScreen(name, util.mask(text)))
         self.run_worker(run, thread=True, group="loops-log")
+
+    def action_copy(self):
+        if not self.lines:
+            self.app.notify("nothing to copy on this row", markup=False)
+            return
+        text = "\n".join(self.lines[-subagents.TAIL_ENTRIES:])
+        self.app.copy_to_clipboard(text)
+        for argv in COPIERS:
+            if shutil.which(argv[0]):
+                _copy_run(argv, text)
+                break
+        self.app.notify(f"copied {len(self.lines[-subagents.TAIL_ENTRIES:])} lines", markup=False)
 
     def _change(self, done, fn, *args, **kw):
         def run():
