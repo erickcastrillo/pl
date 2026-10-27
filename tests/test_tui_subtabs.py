@@ -73,7 +73,7 @@ async def test_ac3_sub_tab_letters_never_collide():
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         assert app.sub_keys == {"review": {"p": "prs", "w": "waiting"},   # Loops' l is its full-log key now
-                                "extend": {"c": "connectors", "m": "models", "p": "pods"}}
+                                "extend": {"a": "agents", "c": "connectors", "m": "models", "p": "pods"}}
         for gid, letters in app.sub_keys.items():
             own = {k for k in letters if all(b.action.startswith("sub_letter") for b in app._bindings.key_to_bindings[k])}
             assert own == set(letters)
