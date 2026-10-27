@@ -33,6 +33,10 @@ enabled = true               # false: each console starts its own profile's disp
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
+
+[tests]
+# max_workers = 6            # pytest workers shared by every profile's test runs (pl tests run).
+                             # Unset: half the cores, at least 1
 """
 
 
@@ -722,7 +726,13 @@ def stop(all_=False):
     return note
 
 
+def _test_workers():
+    from pl import worker_budget
+    return {"in_use": worker_budget.in_use(), "allowed": worker_budget.max_workers()}
+
+
 def show():
+    from pl import config as C
     st = read_status(max_age=float("inf"))
     if not running() or not st:
         return "manager: not running" + ("" if _path("machine.toml").exists() else " (never started on this machine)")
@@ -752,6 +762,9 @@ def show():
     lines.append(f"agents: {st.get('live_agents', 0)} live of {st.get('max_live_agents', '?')} on this machine "
                  "(agents column: in use/allowed now; each profile has its own share)"
                  + (f"; {n} exited window{'s' * (n != 1)} not counted" if (n := st.get("exited_windows")) else ""))
+    w = _test_workers()
+    lines.append(f"test workers: {w['in_use']}/{w['allowed']}")
+    lines.extend(f"machine.toml: {e}" for e in C.validate_tests(_machine_toml()))
     for acct, g in sorted(accounts.items()):
         lines.append(f"GitHub {acct.split('@')[0]}: {g['remaining']} of {g['limit']} GraphQL points left, resets "
                      f"{time.strftime('%H:%M', time.localtime(g['reset']))} (github column: spent/fair share; "
@@ -783,7 +796,7 @@ def cmd_manager(argv):
         return 0
     if a.json and a.action == "status":
         st = read_status(max_age=float("inf"))
-        jsonout.emit({"running": True, **st} if running() and st else {"running": False})
+        jsonout.emit({"running": True, **st, "test_workers": _test_workers()} if running() and st else {"running": False})
         return 0
     print({"start": start, "status": show}.get(a.action, lambda: stop(a.all))())
     return 0

@@ -93,9 +93,10 @@ a failed rule: `"add needs-person and comment"`, `"already commented on this hea
 `pl manager status --json`
 
 ```
-{"running": bool, ...the manager's status.json: "at", "pid", "hold", "profiles": [{"name", "running", ...}]}
+{"running": bool, ...the manager's status.json: "at", "pid", "hold", "profiles": [{"name", "running", ...}], "test_workers": {"in_use", "allowed"}}
 ```
-`{"running": false}` alone when no manager is running.
+`test_workers` is read live: `allowed` is machine.toml `[tests] max_workers` or half the cores.
+`{"running": false}` alone when no manager is running, without `test_workers`.
 
 ## local-model
 `pl local-model --json` (exit 0 when `ok`, else 1)

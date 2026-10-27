@@ -84,7 +84,11 @@
     "running": "bool"
    }
   ],
-  "running": "bool"
+  "running": "bool",
+  "test_workers": {
+   "allowed": "int",
+   "in_use": "int"
+  }
  },
  "profiles": {
   "profiles": [

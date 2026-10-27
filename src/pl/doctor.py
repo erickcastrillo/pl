@@ -81,7 +81,14 @@ def queued_writes():
     return True, ["Queued writes: none"] if rows == ["none"] else [f"Queued writes: {len(rows)}"] + rows
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes]
+def machine_toml():
+    from pl import manager
+    t = manager._machine_toml()
+    errs = C.validate_machine(t) + C.validate_tests(t)
+    return not errs, errs or ["machine.toml: fine"]
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, machine_toml]
 
 
 def _needs_you():
