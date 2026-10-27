@@ -142,6 +142,7 @@ def test_start_worker_adds_the_rework_argument_to_the_built_in_run_prompt(gh, mo
     monkeypatch.setattr("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a))))
     dispatch.start_worker(c, "run", 1, dry=True)
     assert "rework=1 rework_label=pl:needs-rework" in out[0] and "review=pl:auto-review" in out[0]
+<<<<<<< HEAD
 
 
 def test_send_back_sends_one_review_rework_naming_card_and_pr(gh):
@@ -162,3 +163,23 @@ def test_dry_run_sends_no_review_rework(gh):
     gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
     rework.sweep([_card("c1")], dry=True, force=True)
     assert gh.sent == []
+||||||| b414a67
+=======
+
+
+def _live_card(prs, n):
+    return {"id": "aaaa0001", "metadata": {"rework": {"active": True, "round": n, "prs": prs}}}
+
+
+def test_live_message_names_the_round_and_a_review_command_per_pr():
+    text = rework.live_message(_live_card(["https://github.com/o/r/pull/7", "https://github.com/o/s/pull/9"], 2))
+    assert "round 2" in text
+    assert "gh api repos/o/r/issues/7/comments --jq '.[-1].body'" in text
+    assert "gh api repos/o/s/issues/9/comments --jq '.[-1].body'" in text
+
+
+def test_live_message_leaves_out_a_pr_url_with_odd_characters():
+    text = rework.live_message(_live_card(["https://github.com/o/r'x/pull/7", "https://github.com/o/r y/pull/8"], 1))
+    assert "r'x" not in text and "r y" not in text
+    assert "latest review comment" in text
+>>>>>>> origin/pl/plan-54-slice-11-rework-live-agent
