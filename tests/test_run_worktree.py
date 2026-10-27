@@ -29,11 +29,14 @@ def fake_home(tmp_path, monkeypatch):
 
 class FakeGit:
     def __init__(self, listing="", fail=None, local_branch=False, remote_branch=False):
-        self.calls, self.listing, self.fail = [], listing, fail
+        self.calls, self.kwargs, self.listing, self.fail, self.hang = [], [], listing, fail, None
         self.local_branch, self.remote_branch = local_branch, remote_branch
 
     def __call__(self, argv, **kw):
         self.calls.append(argv)
+        self.kwargs.append(kw)
+        if self.hang and argv[1:3] == self.hang:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
         sub = argv[1:]
         rc, out, err = 0, "", ""
         if sub[:2] == ["worktree", "list"]:
@@ -112,6 +115,25 @@ def test_add_failure_returns_git_last_line(monkeypatch):
     err = f"Preparing\nfatal: '{_dest()}' already exists\n"
     monkeypatch.setattr(worktrees, "_run", FakeGit(fail=(["worktree", "add"], err)))
     assert REAL_FOR_RUN(CARD) == (None, f"fatal: '{_dest()}' already exists")
+
+
+def test_git_calls_have_a_timeout_and_never_prompt(monkeypatch):
+    git = FakeGit()
+    monkeypatch.setattr(worktrees, "_run", git)
+    REAL_FOR_RUN(CARD)
+    mutating = [kw for argv, kw in zip(git.calls, git.kwargs) if argv[1] in ("fetch", "worktree") and argv[2] != "list"]
+    assert len(mutating) == 2
+    for kw in mutating:
+        assert kw["timeout"] > 0 and kw["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+@pytest.mark.parametrize("hang", [["fetch", "origin"], ["worktree", "add"]])
+def test_a_git_timeout_is_a_failed_worktree(monkeypatch, hang):
+    git = FakeGit()
+    git.hang = hang
+    monkeypatch.setattr(worktrees, "_run", git)
+    path, err = REAL_FOR_RUN(CARD)
+    assert path is None and f"git {hang[0]}" in err and "timed out" in err
 
 
 def test_never_touches_main_checkout_files(monkeypatch):

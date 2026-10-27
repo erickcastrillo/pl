@@ -105,6 +105,7 @@ def cmd_worktrees(a):
 
 
 _run = subprocess.run
+GIT_TIMEOUT = 60
 
 
 def _list_worktrees(work_dir: Path) -> list[dict]:
@@ -155,7 +156,11 @@ def for_run(c) -> tuple[Path | None, str | None]:
     path = root / f"{work.name}-pl-{slug}"
 
     def git(*args):
-        return _run(["git", *args], capture_output=True, text=True, cwd=str(work))
+        try:
+            return _run(["git", *args], capture_output=True, text=True, cwd=str(work), timeout=GIT_TIMEOUT,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        except subprocess.TimeoutExpired:   # the dispatcher's pass must not wait on a slow remote or a prompt
+            return subprocess.CompletedProcess(args, 124, "", f"git {args[0]} timed out after {GIT_TIMEOUT}s")
 
     steps = [git("fetch", "origin")]
     if not steps[0].returncode:
