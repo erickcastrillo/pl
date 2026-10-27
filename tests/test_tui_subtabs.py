@@ -120,21 +120,21 @@ async def test_ac6_last_sub_tabs_come_back_after_a_restart(state_dir):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        await pilot.press("3", "right", "5", "right")
+        await pilot.press("3", "right", "4", "right")
         await settle(pilot)
-        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards" and saved_tab(state_dir, "automate") == "subagents",
-                         "the cards and subagents tabs, saved")
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards" and saved_tab(state_dir, "review") == "prs",
+                         "the cards and prs tabs, saved")
     saved = json.loads((state_dir / "subtabs.json").read_text())
-    assert saved["work"] == "cards" and saved["automate"] == "subagents"
+    assert saved["work"] == "cards" and saved["review"] == "prs"
     again = PlApp(snapshot_provider=Provider())
     async with again.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         await pilot.press("3")
         await on_tab(pilot, "cards")
         assert again.active_tab == "cards"
-        await pilot.press("5")
-        await on_tab(pilot, "subagents")
-        assert again.active_tab == "subagents"
+        await pilot.press("4")
+        await on_tab(pilot, "prs")
+        assert again.active_tab == "prs"
 
 
 async def test_ac7_another_profile_starts_on_first_sub_tabs(tmp_path, monkeypatch):
