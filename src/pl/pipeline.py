@@ -55,6 +55,8 @@ def errors(p, connectors=None) -> list[str]:
     """Problems in a pipeline, each starting with its key path."""
     cols, errs, owner = p["columns"], [], {}
     errs += _ui_errors(p.get("ui", UI_DEFAULT))
+    if "pod" in p and not isinstance(p["pod"], str):
+        errs.append("pipeline.pod: must be a pod name (a string)")
     for name, s in p["stages"].items():
         at = f"pipeline.stages.{name}"
         for key in ("column", "done", "next"):
@@ -274,7 +276,7 @@ def cmd_pipelines(a):
         else:
             _print_show(d)
     elif a.templates:
-        rows = [{"name": n, "stages": len(p["stages"])} for n, p in sorted(templates().items())]
+        rows = [{"name": n, "stages": len(p["stages"]), "pod": p.get("pod")} for n, p in sorted(templates().items())]
         if a.json:
             print(json.dumps(rows))
         else:

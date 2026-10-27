@@ -1,6 +1,7 @@
 [pipeline]
 name = "new-client"
 template = "new-client"
+pod = "sales"
 columns = ["Lead", "Qualify review", "Proposal", "Proposal review", "Onboarding", "Done"]
 
 [pipeline.stages.qualify]

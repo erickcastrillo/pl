@@ -314,6 +314,8 @@ ENTRIES = [
        "pl alerts"),
     _e("2026-10-26.86", "Notifications when a review passes or sends a PR back",
        "[notify] events: review_passed, review_rework", "pl rework"),
+    _e("2026-10-26.87", "Built-in sales and support pods: rules and skills for client pipelines",
+       "pl pods list; pl pods show sales", "pl pipelines add sales --template new-client --board local"),
 ]
 
 

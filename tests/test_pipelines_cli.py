@@ -6,9 +6,10 @@ import tomllib
 from types import SimpleNamespace
 
 import pytest
+import tomlkit
 
 from pl import config as C
-from pl import pipeline
+from pl import pipeline, profiles
 
 
 @pytest.fixture(autouse=True)
@@ -278,7 +279,7 @@ def test_list_templates_names_all_six(capsys):
 
 def test_list_templates_marketing_has_four_stages(capsys):
     pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
-    assert {"name": "marketing", "stages": 4} in json.loads(capsys.readouterr().out)
+    assert {"name": "marketing", "stages": 4, "pod": None} in json.loads(capsys.readouterr().out)
 
 
 # ---------- Plan 35 slice 2: add takes a ready tracker table ----------
@@ -319,5 +320,86 @@ def test_a_template_pod_is_written_to_the_new_pipeline(fake_home, monkeypatch):
 def test_an_engineering_template_writes_no_pod_key(fake_home):
     _profile(fake_home, "dev")
     C.load("dev")
-    pipeline.cmd_pipelines(_add_args())
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "template": "engineering"}))
     assert "pod" not in tomllib.loads((fake_home / ".pl-sales" / "config.toml").read_text())["pipeline"]
+
+
+# ---------- Plan 44 slice 9: templates choose their pod ----------
+
+def _import_args(path, name, **kw):
+    return _args(pipelines_cmd="import", file=str(path), name=name, board="local", account=None, dry_run=False,
+                 yes=True, **kw)
+
+
+def test_client_templates_carry_the_sales_pod_and_engineering_none(fake_home, capsys):
+    t = pipeline.templates()
+    assert t["new-client"]["pod"] == "sales" and t["existing-client"]["pod"] == "sales"
+    assert t["engineering"].get("pod") is None
+    pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
+    rows = {r["name"]: r for r in json.loads(capsys.readouterr().out)}
+    assert rows["new-client"]["pod"] == rows["existing-client"]["pod"] == "sales"
+    assert rows["engineering"]["pod"] is None
+
+
+@pytest.mark.parametrize("template", ["new-client", "existing-client"])
+def test_add_from_a_client_template_writes_pod_sales(fake_home, template):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "template": template}))
+    assert tomllib.loads((fake_home / ".pl-sales" / "config.toml").read_text())["pipeline"]["pod"] == "sales"
+
+
+def test_add_dry_run_prints_pod_sales_and_creates_nothing(fake_home, capsys):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "yes": False, "dry_run": True}))
+    assert tomllib.loads(capsys.readouterr().out)["pipeline"]["pod"] == "sales"
+    assert not (fake_home / ".pl-sales").exists()
+
+
+def test_import_of_a_support_template_writes_pod_support(fake_home, tmp_path):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    f = tmp_path / "support.toml"
+    f.write_text(NEW_CLIENT_CONFIG.replace('name = "sales"', 'name = "support"\npod = "support"'))
+    pipeline.cmd_pipelines(_import_args(f, "helpdesk"))
+    assert tomllib.loads((fake_home / ".pl-helpdesk" / "config.toml").read_text())["pipeline"]["pod"] == "support"
+
+
+def test_add_engineering_writes_the_same_config_as_before(fake_home):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(**{**vars(_add_args()), "name": "eng2", "template": "engineering"}))
+    text = (fake_home / ".pl-eng2" / "config.toml").read_text()
+    template = {k: v for k, v in pipeline.templates()["engineering"].items() if k != "pod"}
+    expected = tomlkit.dumps(profiles.pipeline_config({**template, "name": "eng2"}, {"type": "local"}, C.ACCOUNTS))
+    assert text == expected and "pod" not in text
+
+
+def test_a_template_without_pod_writes_no_pod_key(fake_home, tmp_path):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    f = tmp_path / "t.toml"
+    f.write_text(NEW_CLIENT_CONFIG)
+    pipeline.cmd_pipelines(_import_args(f, "x"))
+    assert "pod" not in tomllib.loads((fake_home / ".pl-x" / "config.toml").read_text())["pipeline"]
+
+
+def test_export_keeps_pod_sales(fake_home, capsys):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_add_args())
+    capsys.readouterr()
+    pipeline.cmd_pipelines(_args(pipelines_cmd="export", name="sales"))
+    assert tomllib.loads(capsys.readouterr().out)["pipeline"]["pod"] == "sales"
+
+
+def test_import_of_a_non_string_pod_exits_2(fake_home, tmp_path, capsys):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    f = tmp_path / "bad.toml"
+    f.write_text(NEW_CLIENT_CONFIG.replace('name = "sales"', 'name = "sales"\npod = 3'))
+    with pytest.raises(SystemExit) as e:
+        pipeline.cmd_pipelines(_import_args(f, "x"))
+    assert e.value.code == 2 and "pl: pipeline.pod:" in capsys.readouterr().err
+    assert not (fake_home / ".pl-x").exists()

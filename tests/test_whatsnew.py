@@ -194,3 +194,11 @@ def test_whatsnew_lists_empty_states():
 
 def test_whatsnew_names_the_marketing_pod():
     assert sum("marketing pod" in e["title"] for e in whatsnew.ENTRIES) == 1
+
+
+def test_whatsnew_has_one_sales_and_support_pods_entry():
+    hits = [e for e in whatsnew.ENTRIES if all(w in e["title"].lower() for w in ("sales", "support", "pod"))]
+    assert len(hits) == 1
+    text = hits[0]["where"] + " " + hits[0]["try"]
+    assert "pl pods" in text and "pl pipelines add" in text and "--template new-client" in text
+    assert all(hits[0]["key"] > e["key"] for e in whatsnew.ENTRIES if e is not hits[0])
