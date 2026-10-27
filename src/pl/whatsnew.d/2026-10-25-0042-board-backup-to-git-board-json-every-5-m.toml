@@ -1,0 +1,4 @@
+id = "2026-10-25.42"
+title = "Board backup to git: board.json every 5 minutes"
+where = "config.toml: [sync] git = \"<clone path>\" (local board only; use a private remote, pl forget cannot rewrite its history)"
+try = "pl alerts"

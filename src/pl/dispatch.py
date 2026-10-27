@@ -14,14 +14,14 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
-                       run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
+from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
+                       run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections, update
 from pl.product import mirror_to_product, pull_new
 from pl.trackers import github
@@ -55,6 +55,22 @@ def stage_for(c, col):
     if col in ("Approved", "In progress"):
         return "run"
     return None
+
+
+def _merge_only_rework(t):
+    rw = (t[0].get("metadata") or {}).get("rework") or {}
+    return rw if t[1] == "run" and rw.get("active") and rw.get("merge_only") else None
+
+
+def _wait_rank(t):
+    """Restarted runs keep their place, then merge-only reworks, then the rest."""
+    return 0 if t[2] > 1 else 1 if _merge_only_rework(t) else 2
+
+
+def _wait_since(t):
+    """Merge-only reworks: since the rework was recorded, so the longest wait starts first; the rest: card age."""
+    mo = _merge_only_rework(t)
+    return (mo and mo.get("at")) or t[0].get("updated_at") or ""
 
 
 def approved_label(c, col, reg, all_cards=None):
@@ -108,7 +124,7 @@ def _gh_env_args():
 
 
 LIVE_RUN_CAP = 2   # live run agents (waiting + working) never exceed this x max_runs: each is a ~250 MB process
-RELEASE_BACKOFF = (30, 60, 120)   # minutes a released run card waits before its next start: 1st, 2nd, 3rd+ release
+EXITED_KEEP = 30   # minutes an exited agent window showing an error or a human gate is kept
 # /run-plan gates a person must act on (approve the plan, allow the push, allow work outside the worktree): a
 # fresh agent would stop at the same gate, so an agent waiting there keeps its window
 HUMAN_GATES = ("not-approved", "before-push", "outside-worktree")
@@ -190,9 +206,7 @@ def _check_caps(c, w, st, now):
 def _warn_near_cap(c, w, spent):
     stage = w.get("stage")
     title = f"Card {short_id(c['id'])}: its {stage} agent is near its cap ({spent})"
-    if why := alerts.open(f"near_cap:{c['id']}:{stage}", "warn", title, f"pl caps set {cmd_id(c['id'])} --minutes M --tokens T raises it"):
-        if why == "open":
-            notify(alerts.headline(why, f"Near its cap: {c['title'][:40]}"), f"the {stage} agent has used {spent}")
+    alerts.open(f"near_cap:{c['id']}:{stage}", "warn", title, f"pl caps set {cmd_id(c['id'])} --minutes M --tokens T raises it")
 
 
 def stop_at_cap(c, w, note):
@@ -214,9 +228,8 @@ def _api_restart(st, c, w, err, failed):
     times = [t for t in (st.setdefault("api_restarts", {}).get(c["id"]) or []) if isinstance(t, (int, float)) and now - t < 86400]
     if len(times) >= API_RESTARTS:
         failed.add(key)
-        if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: its {stage} agent stopped on an API error {len(times)} times today",
-                              f"see its window; pl restart {cmd_id(c['id'])} starts it fresh"):
-            notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent keeps stopping on an API error")
+        alerts.open(key, "high", f"Card {short_id(c['id'])}: its {stage} agent stopped on an API error {len(times)} times today",
+                    f"see its window; pl restart {cmd_id(c['id'])} starts it fresh")
         return False
     if no := stop_worker(c, w):
         print(f"{short_id(c['id'])}  {stage} agent idle after an API error; could not stop it ({no})")
@@ -246,43 +259,12 @@ def _trust_restart(c, w, wh, folder, dry, failed):
     return True
 
 
-def _wait_due(waits, seen, c, w, why):
-    """True when this waiting run agent has waited [dispatch] release_waiting_after minutes (0 is off). The clock
-    starts the first pass that sees it waiting (kept per card and session in the dispatcher state). An agent at a
-    permission or trust prompt, a limit screen or a HUMAN_GATES gate waits for a person or a reset: it is never
-    released."""
-    gate = why.removeprefix("waiting (").removesuffix(")")
-    if w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit") or gate in HUMAN_GATES:
-        return False
+def _note_wait(waits, seen, c, w):
+    """Keep the clock of a waiting run agent, per card and session, in the dispatcher state: check_stalled reads it."""
     rec = waits.get(c["id"]) or {}
     if rec.get("session") != w.get("session_id") or not isinstance(rec.get("since"), (int, float)):
         rec = {"since": time.time(), "session": w.get("session_id")}
     seen[c["id"]] = rec
-    limit = C.DISPATCH.get("release_waiting_after", 30)
-    return bool(limit) and time.time() - rec["since"] >= limit * 60
-
-
-def release_run(c, w, why, dry):
-    """Stop a run agent that has waited too long, the way pl drop stops one (the move lock, the pane check, Ctrl-C),
-    hand its window to the finished-window cleanup and clear the worker: the next start is a fresh attempt 1, not a
-    death. The card is held back RELEASE_BACKOFF minutes (see run_blocked). True when released."""
-    reason = why.removeprefix("waiting (").removesuffix(")")
-    if not reason.startswith("idle") and (pr := gate_pr(w.get("pane"))):
-        reason += f" ({pr})"
-    head = short_id(c["id"])
-    if dry:
-        print(f"{head}  would release the run agent ({reason})")
-        return False
-    n = int((c.get("metadata") or {}).get("run_releases") or 0) + 1
-    mins = RELEASE_BACKOFF[min(n, len(RELEASE_BACKOFF)) - 1]
-    retry = datetime.fromtimestamp(time.time() + mins * 60, timezone.utc).isoformat(timespec="seconds")
-    if no := stop_worker(c, w, {"run_released_at": now_iso(), "run_released_why": reason, "run_retry_at": retry,
-                                "run_releases": n, "run_released_on": release_key(c)}):
-        print(f"{head}  run agent {why}; could not stop it ({no}); it keeps its window")
-        return False
-    events.emit("run_released", c["id"], reason=reason, releases=n, retry_at=retry)
-    print(f"{head}  released the run agent ({reason}); its card waits {mins} min before the next start")
-    return True
 
 
 def _prompt_has_text(pane):
@@ -516,11 +498,10 @@ def start_worker(c, stage, attempts, dry):
         return
     try:
         harnesses.refuse_bypass(h)
-    except SystemExit as e:
-        if why := alerts.open(f"stage_unsafe:{stage}", "high",
-                              f"Stage {stage} template bypasses permissions",
-                              f"remove bypass flags from [harnesses.{h.name}] in {C.path() or 'config.toml'}"):
-            notify(alerts.headline(why, f"Stage {stage} unsafe"), str(e))
+    except SystemExit:
+        alerts.open(f"stage_unsafe:{stage}", "high",
+                    f"Stage {stage} template bypasses permissions",
+                    f"remove bypass flags from [harnesses.{h.name}] in {C.path() or 'config.toml'}")
         raise
     if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
         tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
@@ -828,7 +809,7 @@ STAGE_PREFIXES = ("spec-", "design-", "plan-", "run-")
 
 def _exited_window(wid, pane, name, owner, all_cards, waits, seen, dry):
     """True when the exited agent window wid (a shell in a stage window) was handled here: closed, or kept because it
-    shows an error or a human gate, until release_waiting_after minutes passed since it was first seen so. False
+    shows an error or a human gate, until EXITED_KEEP minutes passed since it was first seen so. False
     leaves it to the rest of the sweep: no card owns it, or its card still runs this stage in it (the death and
     retry path of dispatch_once handles that)."""
     stage = name.split("-", 1)[0]
@@ -853,15 +834,14 @@ def _exited_window(wid, pane, name, owner, all_cards, waits, seen, dry):
     if need:
         rec = waits.get(wid) if isinstance((waits.get(wid) or {}).get("since"), (int, float)) else {"since": time.time()}
         seen[wid] = rec
-        limit = C.DISPATCH.get("release_waiting_after", 30)
-        if not limit or time.time() - rec["since"] < limit * 60:
-            if not dry and (alert := alerts.open(f"exited_window:{wid}", "warn",
-                                                 f"Card {short_id(c['id'])}: its exited {stage} agent window {name} shows {need}",
-                                                 f"see window {name} ({wid}); " + (f"pl closes it after {limit} min" if limit else "close it when done"))):
-                notify(alerts.headline(alert, f"Exited agent needs you: {c['title'][:40]}"), f"window {name} shows {need}")
+        if time.time() - rec["since"] < EXITED_KEEP * 60:
+            if not dry:
+                alerts.open(f"exited_window:{wid}", "warn",
+                            f"Card {short_id(c['id'])}: its exited {stage} agent window {name} shows {need}",
+                            f"see window {name} ({wid}); pl closes it after {EXITED_KEEP} min")
             return True
         seen.pop(wid)
-        why = f"kept {limit} min for {need}"
+        why = f"kept {EXITED_KEEP} min for {need}"
     print(f"{'would close' if dry else 'closing'} exited {stage} agent window {name} ({wid}) for {short_id(c['id'])}: {why}")
     if not dry:
         tmux("kill-window", "-t", wid, check=False)
@@ -1015,6 +995,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     if github_board() and (wait := ghquota.check("read")):   # the shared budget is low: this pass waits
         raise OverBudget(*wait)
     trackers.reset("tracker")  # a fresh tracker each pass; the stage field stays remembered across passes
+    if not dry:
+        heldwrites.replay(notify)   # writes the budget hold refused earlier, once the reset has passed
     st = load_state()
     intake = pull and C.ISSUE_INTAKE   # the issue intake searches at most every INTAKE_EVERY s; a Product board bridge every pass
     if intake:
@@ -1308,10 +1290,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 print(f"{short_id(c['id'])}  plan ready for review: {c['title'][:50]}")
                 notifications.send("plan_ready", f"Plan ready: {short_id(c['id'])} {c['title'][:40]}", f"pl review {cmd_id(c['id'])} ; then pl approve or pl reject")
             continue
-        if m.get("run_retry_at") and not dry and (on := release_key(c)) != m.get("run_released_on") and \
-                (not w or on.split(":")[0] != str(m.get("run_released_on") or "").split(":")[0]):
-            # a released run card changed (its text with no agent on it, or its column): the hold and its count go
-            print(f"{short_id(c['id'])}  card changed since its run agent was released; no longer held back")
+        if not dry and any(m.get(k) is not None for k in RELEASE_KEYS):
+            print(f"{short_id(c['id'])}  cleared the leftover run release hold")
             update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
             m = c["metadata"] = {**m, **dict.fromkeys(RELEASE_KEYS)}
         if stage is None or hold_reason(c) or m.get("question"):   # a split or parked card gets no agent and holds no slot
@@ -1327,9 +1307,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     seen_waits.pop(c["id"], None)
                     todo.append((c, stage, 1, col))   # start_worker adds rework.prompt_arg
                     continue
-                if why and rw_state is None and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
-                    seen_waits.pop(c["id"], None)
-                    continue   # stopped: it holds no slot and no live place
+                if why:
+                    _note_wait(waits, seen_waits, c, w)
                 gate = f"GATE: {why[9:-1]}" if why and why.startswith("waiting (") and GATE_RE.fullmatch(f"GATE: {why[9:-1]}") else None
                 if not dry and gate != w.get("run_waiting"):   # the console reads this instead of the screen
                     w = {**w, "run_waiting": gate} if gate else {k: v for k, v in w.items() if k != "run_waiting"}
@@ -1344,9 +1323,6 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 prep_alive += not w.get("limit_hit")   # an agent on a limit screen waits for its reset: no slot
                 if not w.get("limit_hit"):
                     holders["prep"].append(short_id(c["id"]))
-            continue
-        if stage == "run" and (blocked := run_blocked(c)):   # released: held back, no slot, not live
-            print(f"{short_id(c['id'])}  run {blocked}")
             continue
         attempts = int(w.get("attempts") or 0) if same_stage else 0
         script = _own_launch(w)
@@ -1364,9 +1340,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if same_stage and status == "dead" and attempts >= MAX_ATTEMPTS:
             key = f"stage_failed:{c['id']}:{stage}"
             failed.add(key)
-            if why := alerts.open(key, "high", f"Card {short_id(c['id'])}: the {stage} agent died {attempts} times",
-                                  f"pl card {cmd_id(c['id'])} shows why; pl retry {cmd_id(c['id'])} starts it fresh"):
-                notify(alerts.headline(why, f"Needs you: {c['title'][:40]}"), f"the {stage} agent died {attempts} times; see pl card {cmd_id(c['id'])}")
+            if alerts.open(key, "high", f"Card {short_id(c['id'])}: the {stage} agent died {attempts} times",
+                           f"pl card {cmd_id(c['id'])} shows why; pl retry {cmd_id(c['id'])} starts it fresh"):
                 print(f"{short_id(c['id'])}  {stage} agent failed {attempts} times; not retrying")
             continue
         if attempts == 0:
@@ -1410,9 +1385,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
     # order: runs first (they are the long pole), In progress ones (a restart) before Approved ones that have not
     # started, then plans, designs, specs; oldest first
     rank = {"run": 0, "plan": 1, "design": 2, "spec": 3}
-    todo.sort(key=lambda t: (rank.get(t[1], 4), t[3] != "In progress", slice_order(t[0]), t[0].get("updated_at") or ""))
+    todo.sort(key=lambda t: (rank.get(t[1], 4), t[3] != "In progress", _wait_rank(t), slice_order(t[0]), _wait_since(t)))
     pause = paused()
     held = 0
+    started = set()
     for c, stage, attempts, col in todo:
         if pause and attempts <= 1:   # paused: only restart a stage that already started and crashed
             held += 1
@@ -1501,12 +1477,18 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if not dry:
                 events.failure("harness_start_failed", "error", str(e), c["id"], stage=stage, **_start_who(stage, c))
             raise
+        started.add(c["id"])
         if attempts <= 1 and room is not None:
             room -= 1
         prev = ((c.get("metadata") or {}).get("worker") or {})
         if prev and prev.get("stage") != stage and prev.get("window") and not dry:
             fin = list((c.get("metadata") or {}).get("finished_workers") or []) + [prev]
             update(c["id"], metadata={"finished_workers": fin})
+    if not dry:
+        try:
+            rework.check_waits([t[0] for t in todo if t[1] == "run" and t[0]["id"] not in started], all_cards, st, notify)
+        except Exception as e:   # a failed check never stops the pass
+            print(f"rework wait check skipped this pass: {e}", file=sys.stderr)
     if shared:
         print(f"{shared} new start(s) wait: this profile's share of the machine's agents is in use (pl manager status)")
     if pause:
@@ -1658,34 +1640,42 @@ def check_pr_person_alerts(all_cards):
     alerts.sweep("pr_person:", active, notify)
 
 
+def _stall_tried(cid, st, now):
+    """What pl did about a stalled card: the nudge agent_alerts sent and the restarts it made today, else None."""
+    if not (((st or {}).get("stalls") or {}).get(cid) or {}).get("nudged_at"):
+        return None
+    n = len([t for t in ((st or {}).get("stall_retries") or {}).get(cid) or [] if isinstance(t, (int, float)) and now - t < 86400])
+    return f"nudged, retried {n} time{'s' if n != 1 else ''} today" if n else "nudged"
+
+
 def check_stalled(all_cards, st=None):
     """Open an alert, and notify once, for work that stopped moving: a run agent idle stall_minutes while its card has
-    not reached the run stage's done column, or a run agent the dispatcher released that waits out its retry (high after two
-    releases). An alert clears when the card moves on or its agent works again. Read from card metadata and the
-    dispatcher state only: no tmux or GitHub call."""
+    not reached the run stage's done column, or any stage agent waiting only on background jobs that cannot report. An
+    alert clears when the card moves on or its agent works again. Read from card metadata and the dispatcher state
+    only: no tmux or GitHub call."""
     limit = C.DISPATCH.get("stall_minutes", 20)
     run = ((C.PIPELINE or {}).get("stages") or {}).get("run") or {}
     building = {run.get("column") or "Approved", "In progress"}   # the run stage starts from its column, works in In progress
-    waits, now, active = (st or {}).get("run_waits") or {}, time.time(), set()
+    waits, stalls, now, active = (st or {}).get("run_waits") or {}, (st or {}).get("stalls") or {}, time.time(), set()
     for c in all_cards:
-        if col_name(c.get("list_id")) not in building:
-            continue
         m, head, key = c.get("metadata") or {}, short_id(c["id"]), f"stalled:{c['id']}"
-        since = (waits.get(c["id"]) or {}).get("since")
-        if limit and isinstance(since, (int, float)) and now - since >= limit * 60:
-            title = f"Card {head}: its run agent is idle {int((now - since) // 60)} min and the card has not moved"
-            fix = f"pl card {cmd_id(c['id'])} shows the agent; the dispatcher releases it at release_waiting_after"
+        stall = stalls.get(c["id"]) or {}
+        if jobs_left := stall.get("jobs"):
+            stage = (m.get("worker") or {}).get("stage") or "stage"
+            title = f"Card {head}: its {stage} agent waits on jobs that cannot report: {'; '.join(jobs_left)}"
+            fix = f"pl asked the agent to stop them and re-run in the foreground; pl card {cmd_id(c['id'])} shows the agent (pl never stops them itself)"
             severity = "warn"
-        elif blocked := run_blocked(c, now):
-            n = int(m.get("run_releases") or 0)
-            retry = blocked.rsplit("\u00b7", 1)[-1].strip()
-            title = f"Card {head}: run agent released {n}x ({m.get('run_released_why') or 'waiting'}), {retry}"
-            fix = f"pl retry {cmd_id(c['id'])} starts it now; pl card {cmd_id(c['id'])} shows why it stopped"
-            severity = "high" if n >= 2 else "warn"
+        elif col_name(c.get("list_id")) not in building:
+            continue
+        elif (since := (waits.get(c["id"]) or {}).get("since")) and not stall.get("jobs_ok") and limit \
+                and isinstance(since, (int, float)) and now - since >= limit * 60:
+            title = f"Card {head}: its run agent is idle {int((now - since) // 60)} min and the card has not moved"
+            fix = f"pl card {cmd_id(c['id'])} shows the agent; the watchdog nudges it, then starts its stage again"
+            severity = "warn"
         else:
             continue
         active.add(key)
-        if why := alerts.open(key, severity, title, fix, cards=[c["id"]]):
+        if why := alerts.open(key, severity, title, fix, cards=[c["id"]], tried=_stall_tried(c["id"], st, now)):
             notify(alerts.headline(why, f"Stalled: {c['title'][:40]}"), title)
     alerts.sweep("stalled:", active, notify)
 
@@ -1726,8 +1716,7 @@ def check_alerts(all_cards, failed, st=None):
                 and t and now - t > PR_WAIT:
             key = f"pr_waiting:{c['id']}"
             waiting.add(key)
-            if why := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on"):
-                notify(alerts.headline(why, f"PR waiting over 24 h: {c['title'][:40]}"), f"pl card {cmd_id(c['id'])}")
+            alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on")
     alerts.sweep("pr_waiting:", waiting, notify)
     check_pr_person_alerts(all_cards)
     check_deps(all_cards)

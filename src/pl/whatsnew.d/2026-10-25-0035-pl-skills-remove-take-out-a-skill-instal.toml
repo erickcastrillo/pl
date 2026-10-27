@@ -1,0 +1,4 @@
+id = "2026-10-25.35"
+title = "pl skills remove: take out a skill installed from GitHub"
+where = "unlinks it, moves the folder to a trash folder and names the stages and loops that used it"
+try = "pl skills remove NAME"

@@ -1,0 +1,4 @@
+id = "2026-10-25.21"
+title = "Move a pipeline to another board without losing a card"
+where = "pl board migrate"
+try = "pl board migrate --to local --dry-run"

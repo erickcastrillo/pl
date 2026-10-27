@@ -1,0 +1,4 @@
+id = "2026-10-25.26"
+title = "Connectors: plug any MCP server in by role, sign in through the browser"
+where = "docs/connectors.md; pl connectors import --from claude lists the servers you already set up"
+try = "pl connectors list"

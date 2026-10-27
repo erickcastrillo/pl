@@ -1,0 +1,4 @@
+id = "2026-10-25.44"
+title = "The merge loop asks a model about UI and performance changes"
+where = "one PR comment per head; [loops.auto-merge] ask and areas.<name>.globs"
+try = "pl merges --dry-run"

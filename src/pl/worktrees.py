@@ -11,8 +11,8 @@ from collections import deque
 from pathlib import Path
 
 from pl import config as C
-from pl import events
-from pl.agents import registry, run_blocked, worker_status
+from pl import events, ghquota
+from pl.agents import registry, worker_status
 from pl.board import cards, col_name
 from pl.util import mask, slug_of
 
@@ -28,14 +28,13 @@ def _card_for(name, cs):
 
 
 def agent_hold(c):
-    """("held", why) while the card's agent waits at the trust prompt or a released run is held back,
+    """("held", why) while the card's agent waits at the trust prompt,
     ("running", None) while its agent is alive, else None. Both cleanup paths keep the worktree then."""
     w = (c.get("metadata") or {}).get("worker")
     if w and w.get("trust_wait"):
         return "held", "trust the folder"
     if not w:
-        why = run_blocked(c)
-        return ("held", why) if why else None
+        return None
     return ("running", None) if worker_status(w, registry())[0] in ("alive", "starting") else None
 
 
@@ -161,8 +160,8 @@ def _pr_info(url: str) -> dict | None:
     known = _settled()
     if url in known:
         return known[url]
-    r = _run(["gh", "pr", "view", url, "--json", "state,mergedAt,headRefName"],
-             capture_output=True, text=True, env=C.gh_env())
+    r = ghquota.gh(_run, ["pr", "view", url, "--json", "state,mergedAt,headRefName"],
+                   capture_output=True, text=True, env=C.gh_env())
     if r.returncode != 0:
         return None
     try:

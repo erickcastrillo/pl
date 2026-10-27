@@ -1,0 +1,4 @@
+id = "2026-10-25.18"
+title = "Small changes run on a cheaper model"
+where = "[stages.run.small] in config.toml: a run agent whose approved PLAN budget is at or under max_lines and max_files starts on the small model for its harness; rework rounds use the normal one"
+try = "[stages.run.small] max_lines = 60"

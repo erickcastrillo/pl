@@ -1,0 +1,4 @@
+id = "2026-10-26.75"
+title = "All pipelines' waiting items on Dashboard"
+where = "Dashboard: A shows every pipeline's gates; a approves, x sends back, enter opens"
+try = "pl inbox"

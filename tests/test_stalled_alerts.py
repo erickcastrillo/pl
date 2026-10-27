@@ -75,16 +75,14 @@ def test_the_alert_notifies_once_and_clears_when_the_agent_works_again(clock, se
     assert not alerts._live(alerts.get("stalled:o/r#1"))
 
 
-def test_a_released_run_agent_waiting_out_its_retry_is_blocked_and_high_after_two_releases(clock, sent):
+def test_a_leftover_release_hold_opens_no_stalled_alert(clock, sent):
     from datetime import datetime, timezone
     c = _card()
     c["metadata"]["run_retry_at"] = datetime.fromtimestamp(clock["now"] + 1200, timezone.utc).isoformat()
     c["metadata"]["run_released_why"] = "idle 31 min"
     c["metadata"]["run_releases"] = 2
-    c["metadata"]["run_released_on"] = agents.release_key(c)
     dispatch.check_alerts([c], set(), {"run_waits": {}})
-    a = alerts.get("stalled:o/r#1")
-    assert alerts._live(a) and a["severity"] == "high" and "released 2" in a["title"] and len(sent) == 1
+    assert not alerts._live(alerts.get("stalled:o/r#1")) and sent == []
 
 
 def test_a_card_that_reached_its_done_column_is_not_stalled(clock, sent):
@@ -96,3 +94,17 @@ def test_stall_minutes_must_be_a_whole_number(fake_home):
     import tomlkit
     assert any("dispatch.stall_minutes" in e for e in C.validate(tomlkit.parse("[dispatch]\nstall_minutes = -1\n")))
     assert not any("stall_minutes" in e for e in C.validate(tomlkit.parse("[dispatch]\nstall_minutes = 0\n")))
+
+
+def test_a_stalled_alert_records_what_pl_tried(clock, sent):
+    st = {"stalls": {"o/r#1": {"nudged_at": clock["now"] - 60}}, "stall_retries": {"o/r#1": [clock["now"] - 30]}}
+    dispatch.check_stalled([_card()], {**st, **_idle(clock, 25)})
+    assert alerts.get("stalled:o/r#1")["tried"] == "nudged, retried 1 time today"
+    st["stall_retries"]["o/r#1"].append(clock["now"] - 10)
+    dispatch.check_stalled([_card()], {**st, **_idle(clock, 25)})
+    assert alerts.get("stalled:o/r#1")["tried"] == "nudged, retried 2 times today"
+
+
+def test_a_stalled_alert_before_any_nudge_has_no_tried(clock, sent):
+    dispatch.check_stalled([_card()], _idle(clock, 25))
+    assert "tried" not in alerts.get("stalled:o/r#1")

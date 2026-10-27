@@ -1,0 +1,4 @@
+id = "2026-10-05.01"
+title = "Needs you and Kanban are gone: the Pipeline tab lists every card, a red ! on those that need you"
+where = "tab 3 Pipeline; n shows only the cards that need you; tab keys are digits 0-9 (0 Dashboard, 1 Assistant, 2 Ideas, 4 Pull requests, 5 Loops, 6 Alerts)"
+try = "pl"

@@ -1,0 +1,4 @@
+id = "2026-10-26.62"
+title = "Alerts for stuck agents: waiting, unmoved or blocked"
+where = "Alerts tab; pl alerts"
+try = "pl alerts"

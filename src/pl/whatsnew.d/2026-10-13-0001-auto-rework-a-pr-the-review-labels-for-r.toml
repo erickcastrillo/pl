@@ -1,0 +1,4 @@
+id = "2026-10-13.01"
+title = "Auto-rework: a PR the review labels for rework goes back to its run agent, which fixes it"
+where = "Pipeline: the card returns to In progress, then PR open; after [dispatch] rework_rounds (3) the PR waits for you with the failed label"
+try = "pl rework --dry-run"

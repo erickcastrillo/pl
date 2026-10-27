@@ -1,0 +1,4 @@
+id = "2026-10-25.30"
+title = "Exited agents' windows close by themselves"
+where = "pl dispatch log; one showing an error or a gate stays release_waiting_after min and raises an alert"
+try = "pl alerts"

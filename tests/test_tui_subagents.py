@@ -412,6 +412,36 @@ async def test_enter_opens_live_view_and_esc_returns_to_same_row(fake_home, monk
     assert not any("send-keys" in a for a in tmux.calls)
 
 
+async def test_w_opens_live_view_of_the_selected_agent_window(fake_home, monkeypatch):
+    tmux = FakeTmux({"%1": "one\n", "%2": "two\n"})
+    monkeypatch.setattr(harnesses, "_run", tmux)
+    app = _bg_app(monkeypatch)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_background(pilot, app, _wdata(_wrow("aaaaaaaa1111", "%1"), _wrow("bbbbbbbb2222", "%2")))
+        app.query_one("#agentwin-table").move_cursor(row=1)
+        await pilot.press("w")
+        await settle(pilot)
+        assert isinstance(app.screen, LiveScreen) and app.screen.pane == "%2"
+        await pilot.press("escape")
+        await settle(pilot)
+        assert not isinstance(app.screen, LiveScreen)
+        assert app.query_one("#agentwin-table").cursor_row == 1
+    assert not any("send-keys" in a for a in tmux.calls)
+
+
+async def test_w_without_an_agent_window_says_so_and_opens_nothing(fake_home, monkeypatch):
+    monkeypatch.setattr(harnesses, "_run", FakeTmux(raises=FileNotFoundError("tmux")))
+    app = _bg_app(monkeypatch)
+    notes = []
+    monkeypatch.setattr(PlApp, "notify", lambda self, *a, **k: notes.append(a[0]))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_background(pilot, app, _wdata())
+        await pilot.press("w")
+        await settle(pilot)
+        assert not isinstance(app.screen, LiveScreen)
+    assert notes == ["no agent window"]
+
+
 async def test_background_view_without_tmux_shows_no_agent_window(fake_home, monkeypatch):
     monkeypatch.setattr(harnesses, "_run", FakeTmux(raises=FileNotFoundError("tmux")))
     app = _bg_app(monkeypatch)

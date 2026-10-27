@@ -1,0 +1,4 @@
+id = "2026-10-25.53"
+title = "Loop schedules are picked, with the next three run times shown"
+where = "Loops tab, n: schedule kind, time or cron; bad schedules can't be saved"
+try = "pl loops list"

@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -4411,7 +4412,7 @@ async def test_the_assistant_keeps_its_empty_screen_text(monkeypatch):
 
 # ---------- waiting for you (plan 40, slice 4) ----------
 
-def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None, blocked=None,
+def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None,
                   tmux_calls=None, **meta):
     from pl import agents
     from pl.tui import needs
@@ -4427,7 +4428,6 @@ def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", s
     monkeypatch.setattr(watch, "registry", lambda: reg or {})
     monkeypatch.setattr(watch, "worker_status", lambda w, r: (status, None))
     monkeypatch.setattr(agents, "worker_status", lambda w, r: (status, None))
-    monkeypatch.setattr(watch, "run_blocked", lambda card: blocked)
     monkeypatch.setattr(agents, "pane_exists", lambda pane: False)
     monkeypatch.setattr(watch.subprocess, "run", fake_run)
     monkeypatch.setattr(agents.harnesses, "_run", fake_run)
@@ -4471,7 +4471,7 @@ def test_ac4_a_live_run_agent_at_a_gate_reads_the_gate_line(monkeypatch):
 
 def test_ac5_a_waiting_card_counts_once_in_needs_you(monkeypatch):
     from pl.tui.needs import needs_me
-    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?", blocked="nothing-runnable")
+    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?")
     assert row["kind"] == "needs" and needs_me(row)
     assert [r["card"]["id"] for r in out] == ["wait0001aaaa"]
 
@@ -4684,3 +4684,36 @@ async def test_l_is_hidden_for_a_persistent_loop_and_background_agents():
         assert view.selected() and not view.selected().get("every")
         assert view.check_action("open_log", ()) is False
     assert all(b.key != "l" for b in subagents.SubagentsView.BINDINGS)
+
+
+def _watchdog_row(**kw):
+    return {"card": "4a000001aaaa", "kind": "stalled", "opened_at": time.time() - 720, "age_seconds": 720,
+            "tried": "nudged, retried 2 times today", "acked": False, "key": "stalled:4a000001aaaa", **kw}
+
+
+def test_decide_rows_count_and_list_a_stalled_alert():
+    from pl.tui.dashboard import decide_rows
+    data = fake_data()
+    base = decide_rows(data)[0][1]
+    rows = decide_rows({**data, "watchdog": [_watchdog_row()]})
+    assert rows[0][1] == base + 1 and rows[1][0] == "alert:stalled:4a000001aaaa"
+    assert all(s in rows[1][2] + rows[1][3] for s in ("4a000001", "stalled", "12m", "nudged, retried 2 times today"))
+
+
+def test_decide_rows_drop_a_resolved_alert():
+    from pl.tui.dashboard import decide_rows
+    data = fake_data()
+    rows = decide_rows({**data, "watchdog": []})
+    assert not any(r[0].startswith("alert:") for r in rows) and rows[0][1] == decide_rows(data)[0][1]
+
+
+def test_decide_rows_mark_an_acked_alert():
+    from pl.tui.dashboard import decide_rows
+    rows = decide_rows({**fake_data(), "watchdog": [_watchdog_row(acked=True)]})
+    assert "acked" in rows[1][3]
+
+
+def test_waiting_tile_counts_watchdog_alerts():
+    from pl.tui.dashboard import tile_values
+    data = fake_data()
+    assert tile_values({**data, "watchdog": [_watchdog_row()]}, 0)["waiting"] == tile_values(data, 0)["waiting"] + 1

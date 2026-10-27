@@ -1,0 +1,4 @@
+id = "2026-10-25.11"
+title = "pl titles check lists plan cards whose 'Plan N slice M' title and metadata disagree"
+where = "pl titles check"
+try = "pl titles check --json"

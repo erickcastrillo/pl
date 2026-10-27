@@ -4,7 +4,7 @@ import types
 import pytest
 import tomlkit
 
-from pl import agent_alerts, agents, alerts, dispatch, hooks, notifications, trackers
+from pl import agent_alerts, agents, alerts, dispatch, hooks, notifications, rework, trackers
 from pl import config as C
 from pl.manager import machine_dir
 
@@ -208,6 +208,64 @@ def test_agent_waiting_left_out_sends_nothing(desktop, monkeypatch):
 @pytest.mark.parametrize("key", ["stalled:o/r#1", "ci_not_running:o/r"])
 def test_sites_that_notify_themselves_are_not_notified_again(key):
     assert key.startswith(alerts.DIRECT)
+
+
+def test_a_rework_wait_alert_notifies_once(desktop):
+    long_ago = "2020-01-01T00:00:00+00:00"
+    card = {"id": CARD, "metadata": {"rework": {"active": True, "at": long_ago}}}
+    rework.check_waits([card], [card], {}, lambda *a: desktop.direct.append(a))
+    assert alerts.get(f"rework_waiting:{CARD}")
+    assert desktop == [] and len(desktop.direct) == 1
+
+
+MOVED_DISPATCHER = ("near_cap:", "api_error:", "stage_failed:", "stage_unsafe:", "exited_window:", "pr_waiting:")
+
+
+def test_moved_dispatcher_prefixes_are_not_direct():
+    assert not any(p in alerts.DIRECT for p in MOVED_DISPATCHER)
+
+
+@pytest.mark.parametrize("p", MOVED_DISPATCHER)
+def test_a_moved_dispatcher_alert_sends_one_alert_opened(desktop, clock, monkeypatch, p):
+    from pl import chat
+    from pl.chat import gates
+    doc = tomlkit.document()
+    conns = doc.setdefault("connectors", tomlkit.table())
+    conns["slack"] = {"role": "messaging", "adapter": "slack", "token": "${T}", "allow": ["222"], "routes": ["alerts"]}
+    (machine_dir() / "machine.toml").write_text(tomlkit.dumps(doc))
+    sent = []
+    adapter = types.SimpleNamespace(name="slack", allow=["222"], routes=["alerts"],
+                                    send=lambda chat_id, text, buttons=None: sent.append(text))
+    monkeypatch.setattr(chat, "adapter", lambda name: adapter)
+    alerts.open(p + "x", "warn", "T " + p, "fix")
+    assert len(desktop) == 1 and "warn" in desktop[0][0] and "T " + p in desktop[0][0] and desktop.direct == []
+    gates.post_outbox()
+    assert len(sent) == 1
+    clock["now"] += 60
+    alerts.open(p + "x", "warn", "T " + p, "fix")
+    assert len(desktop) == 1
+
+
+@pytest.mark.parametrize("p", MOVED_DISPATCHER)
+def test_a_moved_dispatcher_alert_with_alert_opened_off_still_records(desktop, p):
+    _events("merged")
+    alerts.open(p + "x", "warn", "T " + p, "fix")
+    assert desktop == [] and _outbox() == []
+    assert alerts.get(p + "x")
+
+
+def test_a_failing_notifier_keeps_near_cap_and_api_error_handling(monkeypatch):
+    def boom(*a):
+        raise RuntimeError("no notifier")
+    monkeypatch.setattr(notifications, "notify", boom)
+    card = {"id": CARD, "title": "Card 1"}
+    dispatch._warn_near_cap(card, {"stage": "run"}, "85 min")
+    assert alerts.get(f"near_cap:{CARD}:run")
+    import time
+    st, failed = {"api_restarts": {CARD: [time.time()] * dispatch.API_RESTARTS}}, set()
+    assert dispatch._api_restart(st, card, {"stage": "run"}, "API Error", failed) is False
+    assert f"api_error:{CARD}" in failed and alerts.get(f"api_error:{CARD}")
+
 
 
 def _open_dep_broken():
