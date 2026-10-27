@@ -12,7 +12,8 @@ from pl.tui.dashboard import inbox_rows
 from pl.tui.panels import InputModal
 from pl.tui.review import ConfirmScreen
 from pl.tui.app import PlApp
-from test_tui_views import Provider, screen_text, settle
+from test_tui_views import Provider, screen_text
+from tui_wait import settle, wait_until
 
 MIN, HOUR, DAY = 60, 3600, 86400
 
@@ -140,7 +141,7 @@ async def test_a_approves_in_the_items_pipeline_without_switching(monkeypatch):
         await _all_on(pilot, app)
         tab = app.active_tab
         await pilot.press("a")   # row 0 is the oldest: sales#7
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert fake.gates() == []
         await pilot.press("y")
         await settle(pilot)
@@ -156,7 +157,7 @@ async def test_a_asks_first_and_declining_runs_nothing(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _all_on(pilot, app)
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("n")
         await settle(pilot)
@@ -172,7 +173,7 @@ async def test_x_sends_back_with_notes_as_one_argument(monkeypatch):
         await _all_on(pilot, app)
         app.query_one("#decide", DataTable).move_cursor(row=2)   # support#3
         await pilot.press("x")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, InputModal), "the notes prompt")
         assert isinstance(app.screen, InputModal)
         app.screen.query_one("Input").value = notes
         await pilot.press("enter")
@@ -189,7 +190,7 @@ async def test_x_with_empty_notes_runs_nothing(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _all_on(pilot, app)
         await pilot.press("x")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, InputModal), "the notes prompt")
         await pilot.press("enter")
         await settle(pilot)
         assert fake.gates() == [] and len(_rows(app)) == 4
@@ -207,7 +208,7 @@ async def test_failed_approve_shows_error_and_keeps_row(monkeypatch):
         await _all_on(pilot, app)
         refreshed.clear()
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         await pilot.press("y")
         await settle(pilot)
         assert any(m == "pl: card moved to Done" and kw.get("severity") == "error" for m, kw in told)
@@ -223,12 +224,12 @@ async def test_enter_opens_card_switching_pipeline_when_needed(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _all_on(pilot, app)
         await pilot.press("enter")   # sales#7
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.restart_into is not None, "the restart into the other pipeline")
         assert app.restart_into == ("profile", "sales", "sales#7", None)
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _all_on(pilot, app)
         app.query_one("#decide", DataTable).move_cursor(row=1)   # eng#2
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, CardScreen), "the card screen")
         assert isinstance(app.screen, CardScreen) and app.screen.card_id == "eng#2"
