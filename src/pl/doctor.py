@@ -3,7 +3,7 @@ import json
 from urllib.parse import urlsplit
 
 from pl import config as C
-from pl import alerts, heldwrites, local_model, trackers, util
+from pl import agent_defs, alerts, heldwrites, local_model, trackers, util
 
 NOT_A_BOARD_KEY = ("columns", "skip_tags", "repo_tags", "enabled")
 
@@ -90,7 +90,12 @@ def settings():
                   for (table, key), name in RETIRED.items() if key in getattr(C, name)]
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings]
+def agents():
+    problems = agent_defs.problems_in_profile()
+    return not problems, problems
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings, agents]
 
 
 def _needs_you():

@@ -83,7 +83,8 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
         {"name": "notify_settings", "ok": True, "lines": ["quiet hours: off"]},
         {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]},
         {"name": "queued_writes", "ok": True, "lines": ["Queued writes: none"]},
-        {"name": "settings", "ok": True, "lines": []}]
+        {"name": "settings", "ok": True, "lines": []},
+            {"name": "agents", "ok": True, "lines": []}]
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -295,3 +296,14 @@ def test_doctor_without_the_key_says_nothing_about_it(capsys, monkeypatch):
     assert "release_waiting_after" not in out
     _, js = run(capsys, json=True)
     assert next(c for c in json.loads(js)["checks"] if c["name"] == "settings") == {"name": "settings", "ok": True, "lines": []}
+
+
+def test_doctor_agents_check_names_bad_agent(monkeypatch):
+    d = C.CONFIG_DIR / "agents" / "my-closer"
+    d.mkdir(parents=True)
+    (d / "agent.md").write_text("---\nskills: []\nconnector_roles: [crm]\nmodel: null\napproval: [send]\npod: null\n---\nx\n")
+    monkeypatch.setattr("pl.skills.builtin_names", lambda: [])
+    monkeypatch.setattr("pl.skills.scan", lambda: [])
+    ok, lines = doctor.agents()
+    assert not ok
+    assert lines == ["my-closer: unknown connector role crm"]

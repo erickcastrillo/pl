@@ -148,3 +148,149 @@ def test_agents_show_unknown_says_no_agent_named_and_exits_nonzero(fake_home, ca
         _pl(monkeypatch, "agents", "show", "no-such-agent")
     assert e.value.code == 2
     assert "no agent named no-such-agent" in capsys.readouterr().err
+
+
+@pytest.fixture
+def known(monkeypatch):
+    monkeypatch.setattr("pl.skills.builtin_names", lambda: ["pl-stage"])
+    monkeypatch.setattr("pl.skills.scan", lambda: [{"name": "mine"}])
+    monkeypatch.setattr("pl.harnesses.models", lambda name: ["opus"])
+
+
+def _md(skills="[]", roles="[]", model="null", approval="[send]", extra=""):
+    return (f"---\nskills: {skills}\nconnector_roles: {roles}\nmodel: {model}\napproval: {approval}\npod: null\n{extra}---\nDo it.\n")
+
+
+def test_validate_reports_unknown_skill_role_and_model(fake_home, known):
+    _profile(fake_home)
+    got = agent_defs.validate("my-closer", {"skills": ["pl-stage", "nope"], "connector_roles": ["crm"], "model": "gpt-x"})
+    assert got == ["my-closer: unknown skill nope", "my-closer: unknown connector role crm",
+                   "my-closer: unknown model or account gpt-x"]
+
+
+def test_validate_refuses_unknown_approval_action(fake_home, known):
+    _profile(fake_home)
+    assert agent_defs.validate("my-closer", {"approval": ["wire"]}) == ["my-closer: unknown approval action wire"]
+
+
+def test_validate_override_cannot_drop_builtin_approval(fake_home, known):
+    _profile(fake_home)
+    got = agent_defs.validate("sales-sdr", {"approval": []})
+    assert got == ["sales-sdr: approval cannot drop send from built-in sales-sdr"]
+
+
+def test_validate_literal_secret_is_reported_without_value(fake_home, known):
+    _profile(fake_home)
+    d = {"connector_settings": {"api_token": "s3cr3t-value", "api_key": "${KEY}"}}
+    got = agent_defs.validate("my-closer", d)
+    assert got == ["my-closer: connector_settings.api_token must use a ${VAR} reference, not a literal value"]
+    assert "s3cr3t" not in got[0]
+
+
+def test_validate_unreadable_model_list_reports_nothing(fake_home, known, monkeypatch):
+    _profile(fake_home, text='[accounts.a]\nharness = "codex"\n')
+    monkeypatch.setattr("pl.harnesses.models", lambda name: [])
+    assert agent_defs.validate("my-closer", {"model": "anything"}) == []
+
+
+def test_show_json_lists_problems(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home)
+    _agent_md(p, "my-closer", _md(roles="[crm]"))
+    _pl(monkeypatch, "agents", "show", "my-closer", "--json")
+    assert json.loads(capsys.readouterr().out)["problems"] == ["my-closer: unknown connector role crm"]
+
+
+def test_show_text_prints_problems(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home)
+    _agent_md(p, "my-closer", _md(roles="[crm]"))
+    _pl(monkeypatch, "agents", "show", "my-closer")
+    assert "problems:\n  my-closer: unknown connector role crm" in capsys.readouterr().out
+
+
+def test_add_creates_placeholder_definition(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home)
+    _pl(monkeypatch, "agents", "add", "my-closer")
+    front, _ = agent_defs._parse((p / "agents/my-closer/agent.md").read_text())
+    assert set(front) == set(agent_defs.FIELDS)
+    _pl(monkeypatch, "agents", "list", "--json")
+    rows = {r["name"]: r for r in json.loads(capsys.readouterr().out.splitlines()[-1])}
+    assert rows["my-closer"]["source"] == "profile"
+
+
+def test_add_existing_refuses_and_keeps_file(fake_home, known, monkeypatch):
+    p = _profile(fake_home)
+    _agent_md(p, "my-closer", _md())
+    before = (p / "agents/my-closer/agent.md").read_text()
+    with pytest.raises(SystemExit) as e:
+        _pl(monkeypatch, "agents", "add", "my-closer")
+    assert e.value.code == 1
+    assert (p / "agents/my-closer/agent.md").read_text() == before
+
+
+def test_add_builtin_copies_builtin(fake_home, known, monkeypatch):
+    _profile(fake_home)
+    monkeypatch.setattr("pl.skills.builtin_names", lambda: ["pl-stage", "pl-sales-proposal", "pl-sales-follow-up", "pl-support-triage"])
+    _pl(monkeypatch, "agents", "add", "sales-sdr")
+    agent = agent_defs.load()["sales-sdr"]
+    assert agent["source"] == "profile"
+    assert agent["approval"] == agent_defs._builtin()["sales-sdr"]["approval"]
+    assert agent["connector_roles"] == ["contacts", "email"]
+
+
+@pytest.mark.parametrize("name", ["", "a/b", "..", "a b"])
+def test_add_invalid_name_creates_nothing(fake_home, known, monkeypatch, name):
+    p = _profile(fake_home)
+    with pytest.raises(SystemExit) as e:
+        _pl(monkeypatch, "agents", "add", name)
+    assert e.value.code == 2
+    assert not (p / "agents").exists()
+
+
+def test_add_refuses_invalid_definition(fake_home, known, monkeypatch):
+    p = _profile(fake_home)
+    monkeypatch.setattr(agent_defs, "_builtin", lambda: {"bad": {"instructions": "x", "connector_roles": ["crm"], "approval": []}})
+    with pytest.raises(SystemExit) as e:
+        _pl(monkeypatch, "agents", "add", "bad")
+    assert e.value.code == 1
+    assert not (p / "agents/bad").exists()
+
+
+def test_remove_yes_deletes_folder(fake_home, known, monkeypatch):
+    p = _profile(fake_home)
+    _agent_md(p, "my-closer", _md())
+    _pl(monkeypatch, "agents", "remove", "my-closer", "--yes")
+    assert not (p / "agents/my-closer").exists()
+
+
+def test_remove_answer_no_keeps_folder(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home)
+    _agent_md(p, "my-closer", _md())
+    monkeypatch.setattr("pl.util.ask", lambda cmd, q, flag="--yes": "n")
+    _pl(monkeypatch, "agents", "remove", "my-closer")
+    assert (p / "agents/my-closer").is_dir()
+    assert "nothing changed" in capsys.readouterr().out
+
+
+def test_remove_without_tty_or_yes_refuses(fake_home, known, monkeypatch):
+    p = _profile(fake_home)
+    _agent_md(p, "my-closer", _md())
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
+    with pytest.raises(SystemExit) as e:
+        _pl(monkeypatch, "agents", "remove", "my-closer")
+    assert e.value.code == 1
+    assert (p / "agents/my-closer").is_dir()
+
+
+def test_remove_builtin_without_override_refuses(fake_home, known, monkeypatch, capsys):
+    _profile(fake_home)
+    with pytest.raises(SystemExit) as e:
+        _pl(monkeypatch, "agents", "remove", "sales-sdr", "--yes")
+    assert e.value.code == 1
+    assert "built-in agents cannot be removed" in capsys.readouterr().err
+
+
+def test_remove_override_restores_builtin(fake_home, known, monkeypatch):
+    p = _profile(fake_home)
+    _agent_md(p, "sales-sdr", _md(approval="[send]"))
+    _pl(monkeypatch, "agents", "remove", "sales-sdr", "--yes")
+    assert agent_defs.load()["sales-sdr"]["source"] == "built-in"
