@@ -340,8 +340,9 @@ def test_pl_tests_full_bad_workers_exits_non_zero(repo, monkeypatch, capsys):
     assert out.out == "" and ".pl/tests.toml" in out.err and "workers" in out.err
 
 
-def test_pl_repo_tests_toml_sets_auto_workers():
+def test_pl_repo_tests_toml_sets_a_capped_worker_count():
+    # several builds and reviews share one machine, so the repo caps workers instead of "auto"
     import tomllib
     from pathlib import Path
     data = tomllib.loads((Path(__file__).parents[1] / ".pl" / "tests.toml").read_text())
-    assert data["tests"]["workers"] == "auto"
+    assert isinstance(data["tests"]["workers"], int) and 1 < data["tests"]["workers"] <= 4
