@@ -1,7 +1,7 @@
 """Plan 41 slice 2: alerts for agents that wait, finish without moving their card, or are blocked on an unmerged card."""
 import pytest
 
-from pl import accounts, agent_alerts, agent_screen, agents, alerts, dispatch
+from pl import accounts, agent_alerts, agent_screen, agents, alerts, dispatch, notifications
 from pl import config as C
 from pl.trackers import github
 
@@ -50,7 +50,7 @@ def clock(monkeypatch):
 @pytest.fixture
 def sent(monkeypatch):
     out = []
-    monkeypatch.setattr(dispatch, "notify", lambda title, fix="": out.append((title, fix)))
+    monkeypatch.setattr(notifications, "notify", lambda title, fix="": out.append((title, fix)))
     return out
 
 

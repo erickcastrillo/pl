@@ -149,6 +149,9 @@ def real(monkeypatch):
     monkeypatch.setenv("PL_GH_LEDGER", ACCT)
     monkeypatch.setenv("PL_STAGE", "run")
     monkeypatch.setenv("PL_CARD", "pl#5")
+    now = [time.time()]
+    monkeypatch.setattr(ghquota, "_clock", lambda: now[0])
+    monkeypatch.setattr(ghwrap, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds + 1))
     return Real(monkeypatch)
 
 
@@ -195,3 +198,25 @@ def test_no_token_in_output(real, rest, monkeypatch, capsys):
     ghwrap.main(ARGS)
     out, err = capsys.readouterr()
     assert "tok-secret-1" not in out + err + ghquota._path(ACCT).read_text()
+
+
+def test_rest_answers_without_waiting_and_a_failed_rest_call_is_held(real, monkeypatch):
+    waits = []
+    monkeypatch.setattr(ghwrap, "_hold", lambda acct, args: waits.append(args))
+    _seed(100)
+    Rest(monkeypatch, _item())
+    ghwrap.main(ARGS)
+    assert waits == []
+    Rest(monkeypatch, code=1)
+    ghwrap.main(ARGS)
+    assert waits == [ARGS] and real.calls == [["/real/gh", *ARGS]]
+
+
+def test_rest_counts_reset_with_the_other_maps_on_a_new_window(real, rest):
+    _seed(100)
+    ghwrap.main(ARGS)
+    led = ghquota.ledger(ACCT)
+    assert led["rest"]
+    ghquota.record_agent(ACCT, "p agent run pl#5", "pr view", 0, 4000, led["reset"] + 3600)
+    led = ghquota.ledger(ACCT)
+    assert led["rest"] == {} and led["seen"] == {} and led["subs"]["p agent run pl#5"]["pr view"] == 0

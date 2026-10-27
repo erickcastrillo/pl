@@ -179,7 +179,7 @@ def record(points=1, rate=None):
             else:
                 return   # no reading this window: nothing to count against yet
             if led.get("window") != led.get("reset") or (led.get("reset") or 0) <= _clock():
-                led.update(window=led.get("reset"), spent={}, by={}, subs={}, rest={})
+                led.update(window=led.get("reset"), spent={}, by={}, subs={}, seen={}, rest={})
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
             spent[prof] = spent.get(prof, 0) + points
             by[f"{prof} {role}"] = by.get(f"{prof} {role}", 0) + points
@@ -195,7 +195,7 @@ def record_agent(acct, caller, sub, points, remaining, reset, rest=False):
         with _locked():
             led = ledger(acct)
             if led.get("window") != reset or (led.get("reset") or 0) <= _clock():
-                led.update(window=reset, spent={}, by={}, subs={}, rest={})
+                led.update(window=reset, spent={}, by={}, subs={}, seen={}, rest={})
             led.update(remaining=remaining, reset=reset, at=_clock(), limit=led.get("limit") or 5000)
             prof = C.PROFILE_NAME or "-"
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
@@ -211,27 +211,39 @@ def record_agent(acct, caller, sub, points, remaining, reset, rest=False):
         pass
 
 
-def stale():
+def stale(acct=None):
     """True when the ledger holds a reading of this window that is older than STALE seconds."""
-    led, now = ledger(), _clock()
+    led, now = ledger(acct), _clock()
     return (led.get("reset") or 0) > now and now - (led.get("at") or 0) > STALE
 
 
-def refresh(remaining, reset):
+def _top_callers(led, n=3):
+    """The n callers that spent the most since the previous reading, as [(caller, points)]."""
+    seen = led.get("seen") or {}
+    gained = ((k, v - seen.get(k, 0)) for k, v in (led.get("by") or {}).items())
+    return sorted(((k, v) for k, v in gained if v > 0), key=lambda kv: (-kv[1], kv[0]))[:n]
+
+
+def refresh(remaining, reset, acct=None):
     """Take GitHub's own reading (free) over the ledger's, spending nothing. A gap of more than 10% of the limit is
     logged, with where this process signs in (never a token), so a second token can be traced."""
     try:
         with _locked():
-            led = ledger()
+            led = ledger(acct)
             limit = led.get("limit") or 5000
             if isinstance(led.get("remaining"), int) and abs(led["remaining"] - remaining) > 0.1 * limit:
+                top = _top_callers(led)
                 events.emit("github_budget_gap", None, ledger=led["remaining"], github=remaining, role=ROLE["name"],
                             profile=C.PROFILE_NAME, folder=_folder(),
-                            token_env=bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")))
+                            token_env=bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")),
+                            top_callers=[{"caller": k, "points": v} for k, v in top],
+                            message=f"pl {led['remaining']} vs GitHub {remaining}; top callers: "
+                                    + (", ".join(f"{k} {v}" for k, v in top) or "none recorded"))
             if led.get("window") != reset:
-                led.update(window=reset, spent={}, by={}, subs={}, rest={})
+                led.update(window=reset, spent={}, by={}, subs={}, seen={}, rest={})
+            led["seen"] = dict(led.get("by") or {})
             led.update(limit=limit, remaining=remaining, reset=reset, at=_clock())
-            _write(_path(), led)
+            _write(_path(acct), led)
     except OSError:
         pass
 
@@ -242,7 +254,7 @@ def exhausted(until):
         with _locked():
             led = ledger()
             if (led.get("reset") or 0) <= _clock():   # a new window: what was spent before it no longer counts
-                led.update(spent={}, by={}, subs={}, rest={})
+                led.update(spent={}, by={}, subs={}, seen={}, rest={})
             led.update(remaining=0, reset=until, window=until, at=_clock(), limit=led.get("limit") or 5000)
             _write(_path(), led)
     except OSError:
@@ -255,9 +267,9 @@ def fair_share(led):
     return int((led.get("limit") or 5000) / n)
 
 
-def check(kind="read"):
+def check(kind="read", acct=None):
     """None when this call may go ahead, else (until, why). kind "write" for a change on GitHub, else "read"."""
-    led, now = ledger(), _clock()
+    led, now = ledger(acct), _clock()
     rem, lim, reset = led.get("remaining"), led.get("limit") or 5000, led.get("reset") or 0
     if not isinstance(rem, int):
         return None
@@ -348,6 +360,40 @@ def _github_side(acct, led, fresh, current):
     return side
 
 
+def callers(led, fresh, mine):
+    """([(caller, points)] most first, points spent outside pl or None) for one ledger. `fresh` is GitHub's reading
+    (remaining, reset) of this process's token, or why there is none; `mine` says the ledger is that token's."""
+    reading = mine and isinstance(fresh, tuple)
+    rows = sorted(((k, v) for k, v in ((led or {}).get("by") or {}).items() if v > 0), key=lambda kv: (-kv[1], kv[0]))
+    if reading and led and fresh[1] != led.get("window"):
+        rows = []   # the window reset since these records
+    if not reading:
+        return rows, None
+    limit = (led or {}).get("limit") or 5000
+    return rows, max(0, (limit - fresh[0]) - sum(v for _, v in rows))
+
+
+def _outside_line(outside):
+    return "  outside pl: no GitHub reading" if outside is None else f"  outside pl {outside}"
+
+
+def report_json(rows, fresh, current):
+    """`pl usage --github --json`: {"accounts": [...]} with the same callers and outside-pl points as the text."""
+    accts = list(rows) + ([] if any(a == current for a, _ in rows) else [(current, None)])
+    out = []
+    for acct, led in accts:
+        mine = acct == current
+        by, outside = callers(led, fresh, mine)
+        reading = fresh if mine and isinstance(fresh, tuple) else None
+        out.append({"account": _label(acct), "limit": (led or {}).get("limit") or 5000,
+                    "remaining": reading[0] if reading else (led or {}).get("remaining"),
+                    "reset": reading[1] if reading else (led or {}).get("reset"),
+                    "callers": [{"caller": k, "points": v} for k, v in by], "outside_pl": outside,
+                    "github": {"remaining": reading[0], "reset": reading[1]} if reading else None,
+                    "why": None if reading else _github_side(acct, led, fresh, current).removeprefix("GitHub: ")})
+    return {"accounts": out}
+
+
 def report(rows=None, fresh=None, current=None):
     """`pl usage --github`: every GitHub user's budget this hour, per profile and per caller. With `fresh` (GitHub's own
     reading of `current`'s token, or why there is none), each line shows pl's reading beside GitHub's."""
@@ -357,6 +403,7 @@ def report(rows=None, fresh=None, current=None):
     out = []
     if fresh is not None and all(acct != current for acct, _ in rows):
         out.append(f"{_label(current)}: pl: no reading yet | {_github_side(current, None, fresh, current)}")
+        out.append(_outside_line(callers(None, fresh, True)[1]))
     for acct, led in rows:
         reset = time.strftime("%H:%M", time.localtime(led["reset"]))
         age = int(_clock() - (led.get("at") or 0))
@@ -366,7 +413,8 @@ def report(rows=None, fresh=None, current=None):
         out.append(head if fresh is None else f"{head} | {_github_side(acct, led, fresh, current)}")
         for p, (v, share) in profile_rows(led).items():
             out.append(f"  {p:<20} spent {v:>5}   fair share {share}")
-        by = sorted((led.get("by") or {}).items(), key=lambda kv: -kv[1])
-        if by:
-            out.append("  by caller: " + ", ".join(f"{k} {v}" for k, v in by[:8]))
+        by, outside = callers(led, fresh, acct == current)
+        out.extend(f"  {k} {v}" for k, v in by)
+        if fresh is not None and acct == current:
+            out.append(_outside_line(outside))
     return "\n".join(out)
