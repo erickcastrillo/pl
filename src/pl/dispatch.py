@@ -467,13 +467,13 @@ def stage_agent(stage):
     return (name, agent_defs.load().get(name)) if name else (None, None)
 
 
-def _agent_launch(aname, agent, h, profile):
+def _agent_launch(aname, agent, h, profile, stage_skill):
     """(harness, account, launch_script keywords) for a stage run by agent: its account moves the harness, its
-    skills and roles go in a synthetic pod of their own."""
+    skills (plus the one the stage's prompt invokes) and roles go in a synthetic pod of their own."""
     if agent["model"] in C.PROFILES:
         profile = agent["model"]
         h = harnesses.account_harness(profile)
-    pod = {**(pods.launch_pod() or pods.current()), "name": f"agent-{aname}", "skills": agent["skills"],
+    pod = {**(pods.launch_pod() or pods.current()), "name": f"agent-{aname}", "skills": [*agent["skills"], *([stage_skill] if stage_skill not in agent["skills"] else [])],
            "roles": agent["connector_roles"]}
     kw = {"pod": pod}
     if agent["model"] and agent["model"] not in C.PROFILES and h.name in harnesses.MODEL_FLAGS and harnesses.MODEL_RE.fullmatch(agent["model"]):
@@ -499,15 +499,15 @@ def start_worker(c, stage, attempts, dry):
         return
     h, profile = harnesses.harness_for(stage, c)
     aname, agent = stage_agent(stage)
-    agent_kw = {}
-    if agent:
-        h, profile, agent_kw = _agent_launch(aname, agent, h, profile)
     name = f"{stage}-{slug_of(c)[:28]}"      # tmux window name: no colon, so "pipeline:<name>" targets stay unambiguous
     label = f"{stage}:{slug_of(c)[:28]}"     # Claude session display name
     generic = pipeline.is_config()
     if not generic and not C.PROMPTS.get(stage):
         raise SystemExit(f"pl: set [stages.{stage}] prompt in {C.path() or 'config.toml'}")
     prompt = pipeline.prompt(stage, c["id"]) if generic else C.PROMPTS[stage].format(id=c["id"], worktrees_dir=C.WORKTREES_DIR or "")
+    agent_kw = {}
+    if agent:
+        h, profile, agent_kw = _agent_launch(aname, agent, h, profile, prompt.split()[0].lstrip("/"))
     builtin = C.PROMPTS.get(stage) == C.BUILTIN_PROMPTS.get(stage) and not generic
     review = (C.CODE_HOST.get("labels") or {}).get("review")
     if stage == "run" and builtin and review:

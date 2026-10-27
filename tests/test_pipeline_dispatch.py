@@ -257,6 +257,13 @@ def test_ac2_launch_offers_exactly_the_agent_skills(monkeypatch, tmp_path):
     assert kws[0]["pod"]["roles"] == ["messaging"]
 
 
+def test_agent_without_the_stage_skill_still_offers_it(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "skills": ["pl-sales-proposal"]})
+    kws, _ = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert kws[0]["pod"]["skills"] == ["pl-sales-proposal", "pl-stage"]
+
+
 def test_ac3_agent_model_is_used_and_reason_names_agent(monkeypatch, tmp_path):
     _agent_stage(monkeypatch, tmp_path)
     kws, metas = _real_start(monkeypatch)
