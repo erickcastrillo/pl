@@ -261,3 +261,87 @@ def test_pl_repo_settings_list_the_always_tests():
     always = T._settings(Path(__file__).parents[1])["always"]
     for name in ("tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"):
         assert name in always
+
+
+# ---------- pl tests full: the command that runs the whole suite ----------
+
+def _tests_toml(root, body):
+    (root / ".pl").mkdir(exist_ok=True)
+    (root / ".pl" / "tests.toml").write_text(body)
+
+
+def test_full_command_is_serial_without_tests_toml(tmp_path):
+    assert T.full_command(tmp_path) == "uv run pytest -q"
+
+
+def test_full_command_is_serial_without_workers_key(tmp_path):
+    _tests_toml(tmp_path, '[tests]\nalways = ["tests/test_a.py"]\n')
+    assert T.full_command(tmp_path) == "uv run pytest -q"
+
+
+def test_full_command_adds_auto_workers(tmp_path):
+    _tests_toml(tmp_path, '[tests]\nworkers = "auto"\n')
+    assert T.full_command(tmp_path) == "uv run pytest -q -n auto"
+
+
+def test_full_command_adds_numeric_workers(tmp_path):
+    _tests_toml(tmp_path, "[tests]\nworkers = 4\n")
+    assert T.full_command(tmp_path) == "uv run pytest -q -n 4"
+
+
+@pytest.mark.parametrize("value", ['"many"', "0", "-2", "true"])
+def test_full_command_rejects_bad_workers(tmp_path, value):
+    _tests_toml(tmp_path, f"[tests]\nworkers = {value}\n")
+    with pytest.raises(T.TestsConfigError) as e:
+        T.full_command(tmp_path)
+    assert str(tmp_path / ".pl" / "tests.toml") in str(e.value) and "workers" in str(e.value)
+
+
+def test_full_command_rejects_unparsable_file(tmp_path):
+    _tests_toml(tmp_path, "[tests\n")
+    with pytest.raises(T.TestsConfigError, match="tests.toml"):
+        T.full_command(tmp_path)
+
+
+def test_full_command_leaves_non_pytest_commands(tmp_path):
+    _tests_toml(tmp_path, '[tests]\nworkers = "auto"\n')
+    assert T.full_command(tmp_path, "make test") == "make test"
+
+
+@pytest.mark.parametrize("cmd", ["uv run pytest -q -n 2", "pytest -n4", "pytest --numprocesses=3"])
+def test_full_command_leaves_commands_that_set_n(tmp_path, cmd):
+    _tests_toml(tmp_path, '[tests]\nworkers = "auto"\n')
+    assert T.full_command(tmp_path, cmd) == cmd
+
+
+def test_full_command_does_not_read_the_file_for_other_commands(tmp_path):
+    _tests_toml(tmp_path, "[tests\n")
+    assert T.full_command(tmp_path, "make test") == "make test"
+
+
+def test_pl_tests_full_prints_parallel_command(repo, monkeypatch, capsys):
+    fake_git(monkeypatch, repo)
+    _tests_toml(repo, '[tests]\nworkers = "auto"\n')
+    assert T.cmd_tests(["full"]) == 0
+    assert capsys.readouterr().out == "uv run pytest -q -n auto\n"
+
+
+def test_pl_tests_full_prints_serial_command(repo, monkeypatch, capsys):
+    fake_git(monkeypatch, repo)
+    assert T.cmd_tests(["full"]) == 0
+    assert capsys.readouterr().out == "uv run pytest -q\n"
+
+
+def test_pl_tests_full_bad_workers_exits_non_zero(repo, monkeypatch, capsys):
+    fake_git(monkeypatch, repo)
+    _tests_toml(repo, '[tests]\nworkers = "many"\n')
+    assert T.cmd_tests(["full"]) == 2
+    out = capsys.readouterr()
+    assert out.out == "" and ".pl/tests.toml" in out.err and "workers" in out.err
+
+
+def test_pl_repo_tests_toml_sets_auto_workers():
+    import tomllib
+    from pathlib import Path
+    data = tomllib.loads((Path(__file__).parents[1] / ".pl" / "tests.toml").read_text())
+    assert data["tests"]["workers"] == "auto"

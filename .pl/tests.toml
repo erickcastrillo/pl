@@ -1,3 +1,5 @@
 # pl tests affected: tests every build runs, beyond the ones the import graph finds
 [tests]
+# review and merge runs read the worker count through `pl tests full`
+workers = "auto"
 always = ["tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"]

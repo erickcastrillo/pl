@@ -268,6 +268,11 @@ def test_the_builtin_review_loop_uses_pl_review(tmp_path, monkeypatch):
         assert rule in text
 
 
+def test_pl_review_runs_pl_tests_full():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    assert "`pl tests full`" in text and "not available" in text
+
+
 # ---------- pl section: read and write one card section ----------
 
 @pytest.fixture
@@ -829,7 +834,7 @@ def test_an_unedited_pl_review_v6_is_updated_to_v7(lib, shipped):
 
 def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
     text = _shipped("pl-review")
-    step = text.split("4. Run the repository's")[1].split("5. Apply")[0]
+    step = text.split("4. Run `pl tests full`")[1].split("5. Apply")[0]
     assert "full test suite once" in step and '"ready"' in step and '"Review finds problems" row' in step
 
 
