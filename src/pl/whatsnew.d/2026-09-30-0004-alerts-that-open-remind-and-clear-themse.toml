@@ -1,0 +1,4 @@
+id = "2026-09-30.04"
+title = "Alerts that open, remind and clear themselves"
+where = "Alerts tab (press 6); k acknowledges"
+try = "pl alerts --all"

@@ -306,7 +306,7 @@ def test_pl_rework_under_hold_queues_the_send_back_and_exits_0(held, clock, monk
     out = capsys.readouterr().out
     assert "queued" in out and time.strftime("%H:%M", time.localtime(reset)) in out
     (e,) = heldwrites.entries()
-    assert (e["card"], e["op"], e["args"]) == ("c1", "rework", {"round": 1, "prs": [PR.format(1)]})
+    assert (e["card"], e["op"], e["args"]) == ("c1", "rework", {"round": 1, "prs": [PR.format(1)], "merge_only": False})
     assert held.writes == [] and held.moves == []
 
 
@@ -330,6 +330,15 @@ def test_queued_send_back_replays_after_the_reset(held, clock):
     assert cid == "c1" and fields["metadata"]["rework"]["round"] == 2 and fields["metadata"]["rework"]["prs"] == [PR.format(1)]
     assert held.moves == [("c1", "In progress")]
     assert len(_kinds("write_replayed")) == 1 and heldwrites.entries() == []
+
+
+def test_queued_send_back_replays_the_merge_only_flag(held, clock):
+    held.flagged = {("acme/app", 1)}
+    held.cards["c1"] = _rcard("c1")
+    heldwrites.add("c1", "rework", {"round": 2, "prs": [PR.format(1)], "merge_only": True}, clock[0])
+    heldwrites.replay(lambda *a: None)
+    (_, fields), = held.writes
+    assert fields["metadata"]["rework"]["merge_only"] is True
 
 
 def test_queued_give_up_labels_and_comments_each_pr_once(held, clock):

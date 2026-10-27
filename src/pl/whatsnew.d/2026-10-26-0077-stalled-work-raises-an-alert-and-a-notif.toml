@@ -1,0 +1,4 @@
+id = "2026-10-26.77"
+title = "Stalled work raises an alert and a notification"
+where = "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)"
+try = "pl alerts"

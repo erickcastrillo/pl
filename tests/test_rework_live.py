@@ -59,7 +59,6 @@ def fake(monkeypatch):
     monkeypatch.setattr(dispatch, "run_waiting", lambda w, reg, st=None: ns.waiting)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda w, reg: None)
     monkeypatch.setattr(dispatch, "pane_exists", lambda pane: False)
-    monkeypatch.setattr(dispatch, "gate_pr", lambda pane: "#7")
     monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: ns.started.append((c["id"], attempts)))
     monkeypatch.setattr(dispatch, "update", lambda cid, **f: ns.writes.append((cid, f)))
     for name in ("sweep_untracked", "ensure_services", "mirror_to_product", "screen_hit_limit", "notify"):

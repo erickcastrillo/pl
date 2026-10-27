@@ -1,0 +1,4 @@
+id = "2026-10-25.25"
+title = "Add a pipeline as a new profile; export and import it"
+where = "pl pipelines add"
+try = "pl pipelines add sales --template new-client --board local --yes"

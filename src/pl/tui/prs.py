@@ -9,6 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static
 
 from pl import config as C
+from pl import ghquota
 from pl.commands import PR_URL, intent_text
 from pl.setup import LABELS
 from pl.trackers import github
@@ -91,7 +92,7 @@ def fetch(url):
     if (lim := github.limited()) is not None:
         return ("error", lim.note)
     try:
-        r = _run(["gh", "pr", "view", url, "--json", FIELDS], capture_output=True, text=True, timeout=60, env=C.gh_env())
+        r = ghquota.gh(_run, ["pr", "view", url, "--json", FIELDS], capture_output=True, text=True, timeout=60, env=C.gh_env())
     except (subprocess.TimeoutExpired, OSError) as e:
         return ("error", f"gh pr view failed: {e}")
     if r.returncode:
@@ -312,8 +313,8 @@ class PrsView(Horizontal):
                 note = lim.note
             else:
                 try:
-                    r = _run(["gh", "pr", "merge", pr["url"], METHODS[method][0]], capture_output=True, text=True,
-                             timeout=120, env=C.gh_env())
+                    r = ghquota.gh(_run, ["pr", "merge", pr["url"], METHODS[method][0]], capture_output=True, text=True,
+                                   timeout=120, env=C.gh_env())
                     out, ok = ((r.stdout or "") + (r.stderr or "")).strip(), r.returncode == 0
                 except (subprocess.TimeoutExpired, OSError) as e:
                     out = str(e)

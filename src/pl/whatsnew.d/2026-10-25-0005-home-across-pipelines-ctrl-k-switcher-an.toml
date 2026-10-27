@@ -1,0 +1,4 @@
+id = "2026-10-25.05"
+title = "Home across pipelines, ctrl+k switcher and new Settings panels"
+where = "Home tab; ctrl+k; Settings"
+try = "pl pipelines list"

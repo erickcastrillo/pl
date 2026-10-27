@@ -1,0 +1,4 @@
+id = "2026-10-25.22"
+title = "One key, one meaning in the console; merge is M and asks first"
+where = "Pull requests: M merges (a PR that is not ready asks 'Merge anyway?'). Dashboard: [ and ] change the window. Pipeline: f only mine, F done. Settings: T tests connections. Ideas: F2 rename, H harness, ctrl+n skip question. Home: space opens details"
+try = "pl"

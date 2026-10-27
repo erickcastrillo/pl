@@ -1,0 +1,4 @@
+id = "2026-10-26.76"
+title = "Open a loop run's full log"
+where = "Loops tab: select a scheduled loop and press l, or Enter on an earlier run"
+try = "l"

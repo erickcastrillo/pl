@@ -1,0 +1,4 @@
+id = "2026-09-30.03"
+title = "Loop context care: an idle loop over 80% context restarts fresh"
+where = "Loops tab: context; [loops.<name>] max_context (0 = off)"
+try = "pl usage --by loop"

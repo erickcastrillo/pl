@@ -1,0 +1,4 @@
+id = "2026-10-09.04"
+title = "In progress cards whose agent must start again get run slots before Approved cards"
+where = "the dispatcher window: In progress -> run agent"
+try = "pl list"

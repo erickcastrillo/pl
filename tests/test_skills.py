@@ -1254,7 +1254,9 @@ async def test_reset_asks_and_only_resets_after_yes(grouped_home, monkeypatch, a
         await select(pilot, "pl-plan", skills.LIBRARY)
         pane_buttons(app)["skills-btn-reset"].press()
         await settle(pilot)
-        assert "with the shipped version? A backup is kept." in screen_text(app)
+        shipped = grouped_home["library"] / "pl-plan" / "SKILL.md"
+        assert isinstance(app.screen, tui.ConfirmScreen)
+        assert app.screen.message == f"Replace {shipped} with the shipped version? A backup is kept."
         assert called == []
         await pilot.press(answer)
         await settle(pilot)
