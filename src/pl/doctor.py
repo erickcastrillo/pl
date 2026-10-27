@@ -59,7 +59,15 @@ def assistant_account():
     return True, [f"assistant: {acct} ({harnesses.account_harness(acct).name}), {reason}"]
 
 
-CHECKS = [local_models, tracker, assistant_account]
+def notify_settings():
+    from pl import notifications   # imported here so doctor's import stays light
+    if problem := notifications.quiet_problem():
+        return False, [problem]
+    v = C.NOTIFY.get("quiet")
+    return True, [f"quiet hours: {v}" if v else "quiet hours: off"]
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings]
 
 
 def cmd_doctor(a):
