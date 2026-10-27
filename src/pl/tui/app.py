@@ -28,8 +28,9 @@ from pl.tui.alerts import AlertsView
 from pl.tui.assistant import AssistantView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.connectors import ConnectorsPanel
+from pl.tui.extend import ExtendView
 from pl.tui.extensions import ExtensionsView
-from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, MAIN_KEYS, groups, header_text, resolve, sub_label, tabs
+from pl.tui.chrome import GROUP_KEYS, GROUPS, HELP, MAIN_KEYS, UNUSED, groups, header_text, resolve, sub_label, tabs, unused
 from pl.tui.needs import needs_you_count, review_kind
 from pl.tui.dashboard import WINDOWS, DashboardView, HealthScreen, StandupScreen, copy_text
 from pl.tui.home import HomeView, read as summary_read
@@ -91,6 +92,7 @@ VIEWS = {"home": HomeView, "dashboard": DashboardView, "ideas": IdeasView, "prs"
          "loops": LoopsView, "activity": ActivityView, "settings": SettingsView,
          "subagents": SubagentsView, "assistant": AssistantView, "alerts": AlertsView, "cards": CardsView,
          "waiting": WaitingView,
+         "extend": ExtendView,
          "skills": _titled("Skills, agents and commands (every account)", SkillsView),
          "connectors": _titled("Connectors", ConnectorsPanel),
          "pods": _titled("Pods", make_pods_panel),
@@ -651,7 +653,7 @@ class PlApp(App):
     def action_skills(self):
         """Extend tab, the Skills sub-tab, its list focused."""
         self.action_tab("skills")
-        self.query_one(SkillsView).focus_table()
+        self.query_one("#skills").query_one(SkillsView).focus_table()
 
     @work(thread=True, group="dispatcher")
     def dispatcher_job(self, what):
@@ -770,7 +772,8 @@ class PlApp(App):
             self.query_one(HomeView).show(self.data)
         self.query_one(DashboardView).show(self.data, self.window)
         self.query_one(WaitingView).show(self.data)
-        self.query_one(PrsView).show(self.data)
+        for v in self.query(PrsView):
+            v.show(self.data)
         self.query_one(LoopsView).show(self.data)
         self.query_one(ActivityView).show(self.data)
         self.query_one(SubagentsView).show(self.data)
@@ -784,13 +787,15 @@ class PlApp(App):
             except RowDoesNotExist:
                 pass
         failed = (self.error or "").splitlines()[0] if self.error else ""
-        for table in ("#cards-table", "#prs-table"):
-            self.query_one(table).border_subtitle = failed if failed.startswith("refresh failed") else ""
+        for table in self.query("#cards-table, #prs-table"):
+            table.border_subtitle = failed if failed.startswith("refresh failed") else ""
         n_prs = sum(1 for r in rows if r.get("pr"))
         mine = needs_you_count(self.data)
         for group, tid, label in (("work", "cards", f"Board {card_count(self.data)}" + (f" · {mine} need you" if mine else "")),
                                   ("review", "prs", f"Pull requests {n_prs}"),
                                   ("activity", "alerts", f"Alerts {len(self.data.get('alerts') or [])}")):
+            if tid == "prs" and not self.query("#prs"):
+                continue
             self.query_one(f"#{group}-views", TabbedContent).get_tab(tid).label = sub_label(label, tid in self.sub_keys.get(group, {}).values())
 
     @property
@@ -802,6 +807,9 @@ class PlApp(App):
             return None
 
     def action_tab(self, name):
+        if unused(name):
+            self.notify(UNUSED, markup=False)
+            return
         if (place := resolve(name)) is None:
             return
         gid, view = place
@@ -854,7 +862,7 @@ class PlApp(App):
 
     def check_action(self, action, parameters):   # APP_TABS repeats the tab each gated action below needs
         if action == "tab":
-            return resolve(parameters[0]) is not None
+            return resolve(parameters[0]) is not None or unused(parameters[0])
         if action == "sub_tab":
             return len(self.screen_stack) == 1 and not self._typing() and len(self.active_group_views()) > 1
         if action == "sub_letter":
@@ -894,6 +902,7 @@ class PlApp(App):
         self.query_one(CardsView).review(what)
 
     def action_refresh(self):
-        self.query_one(PrsView).clear_cache()
+        for v in self.query(PrsView):
+            v.clear_cache()
         board.fresh_next()
         self.refresh_data()

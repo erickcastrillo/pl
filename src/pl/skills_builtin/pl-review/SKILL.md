@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed, and turn on auto-merge only for a small, safe pull request that passes. Never merges directly. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 5
+pl-builtin-version: 6
 ---
 
 # pl-review: review labelled pull requests
@@ -49,7 +49,8 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       - tests: changed behaviour with no test that would fail without the change;
       - comments that restate what the code does. List these only when the review already finds other
         problems. A comment alone never makes a pull request need rework.
-   4. Run the repository's tests in the worktree.
+   4. Run the repository's full test suite once in the worktree. That result decides whether the pull request can be "ready": a
+      failing suite uses the "Review finds problems" row, naming the failing tests.
    5. Apply the review outcome:
 
       Check for high-impact sensitivity:
@@ -86,6 +87,7 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
   and the smallest fix.
 - Only real problems. No style preferences, no praise, no summary of the diff.
 - Say how sure you are when you are not sure.
+- Name the failing tests; never ask the builder to rerun the full suite.
 
 ## Rules
 

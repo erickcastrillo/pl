@@ -2,6 +2,7 @@
 from rich.text import Text
 
 from pl import config as C
+from pl import outbound, pipeline
 from pl.util import cmd_id
 from pl.tui.subagents import TODO_MARK
 from pl.tui.review import ReviewScreen, confirm_and_approve
@@ -9,11 +10,43 @@ from pl.tui.review import ReviewScreen, confirm_and_approve
 GROUPS = ("specs", "plans", "decide", "rework", "manual")   # the Needs-you groups; decide and rework hold PRs
 
 
+def _plural(word):
+    word = word.capitalize()
+    if word[-1] == "y" and word[-2:-1].lower() not in "aeiou":
+        return word[:-1] + "ies"
+    return word + ("es" if word.endswith(("s", "x", "ch", "sh")) else "s")
+
+
+def _send_stages():
+    """The owner-gated outward stages that write a section, in stage order."""
+    if not pipeline.is_config():
+        return []
+    return [s for s in C.PIPELINE["stages"].values() if s.get("gate") == "owner" and s.get("outward") is True and s.get("section")]
+
+
+def send_groups():
+    """(group key, title) per section an outward stage writes; the first stage to write a section names its group."""
+    found = {}
+    for s in _send_stages():
+        found.setdefault(f"send:{s['section']}", str(s.get("review_group") or f"{_plural(s['section'])} to send"))
+    return list(found.items())
+
+
+def group_keys():
+    return [k for k, _ in send_groups()] if pipeline.is_config() else list(GROUPS)
+
+
 def needs_groups(rows):
-    """Rows per Needs-you group, plus "merge" (ready to merge, shown collapsed). Specs only when the spec gate is on."""
-    g = {k: [] for k in GROUPS}
+    """Rows per Needs-you group, plus "merge" (ready to merge, shown collapsed). Specs only when the spec gate is on.
+    A configured pipeline adds a "send:<SECTION>" group per outward stage, holding the cards in its done column."""
+    g = {k: [] for k, _ in send_groups()}
+    send_at = {s["done"]: f"send:{s['section']}" for s in reversed(_send_stages())}
+    g.update({k: [] for k in GROUPS})
     g["merge"] = []
     for r in rows:
+        if r.get("card") and r.get("col") in send_at:
+            g[send_at[r["col"]]].append(r)
+            continue
         if r.get("pr"):
             if r["pr"]["state"] in g:
                 g[r["pr"]["state"]].append(r)
@@ -30,7 +63,7 @@ def needs_groups(rows):
 
 
 def waiting_total(g):
-    return sum(len(g[k]) for k in GROUPS)
+    return sum(len(g[k]) for k in group_keys())
 
 
 def needs_you(data):
@@ -59,7 +92,7 @@ def needs_me(r):
     if not r.get("card"):
         return False
     g = needs_groups([r])
-    return any(g[k] for k in CARD_GROUPS) or r.get("kind") == "needs" or bool(r.get("failed")) or bool(r.get("blocked"))
+    return any(g[k] for k in (*CARD_GROUPS, *(k for k, _ in send_groups()))) or r.get("kind") == "needs" or bool(r.get("failed")) or bool(r.get("blocked"))
 
 
 def detail(r, now=None):
@@ -82,16 +115,24 @@ def detail(r, now=None):
     if now and now.get("line"):
         lines.append(f"now      {now['line']}")
     lines += [f"         {TODO_MARK.get(s, '[ ]')} {t}" for s, t in (now or {}).get("todos") or []]
+    if key := _send_key(r):
+        draft = outbound.parse_reply(c, key.removeprefix("send:"))
+        lines += ["", *([f"to       {draft['to']}"] if draft["to"] else []), f"subject  {draft['subject']}", "", draft["body"]]
     return Text("\n".join(lines))
 
 
 KIND = {"specs": "spec", "plans": "plan"}
 
 
-def review_kind(r):
-    """spec or plan when the row waits for a review, else None."""
+def _send_key(r):
     g = needs_groups([r])
-    return next((KIND[k] for k in KIND if g[k]), None)
+    return next((k for k, _ in send_groups() if g[k]), None)
+
+
+def review_kind(r):
+    """spec or plan when the row waits for a review, send for a draft to send, else None."""
+    g = needs_groups([r])
+    return next((KIND[k] for k in KIND if g[k]), "send" if _send_key(r) else None)
 
 
 def start_review(app, what, r, kind, ids):
@@ -100,7 +141,13 @@ def start_review(app, what, r, kind, ids):
         app.notify("select a spec to answer its open questions" if what == "answer" else "select a spec or a plan to review")
         return
     c = r["card"]
-    if what == "approve":
+    if kind == "send":
+        if what != "approve":
+            app.notify(f'use pl reject {cmd_id(c["id"])} "notes" to send it back')
+            return
+        outside = [e.removeprefix("outside: ") for e in outbound.flagged_recipients(c, _send_key(r).removeprefix("send:"))]
+        confirm_and_approve(app, c["id"], str(c.get("title") or ""), kind, outside=outside)
+    elif what == "approve":
         confirm_and_approve(app, c["id"], str(c.get("title") or ""), kind)
     else:
         app.push_screen(ReviewScreen(kind, c["id"], ids=ids, notes_first=what == "send_back", answers_first=what == "answer"))

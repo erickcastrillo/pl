@@ -297,7 +297,12 @@ ENTRIES = [
        "Loops tab: select a scheduled loop and press l, or Enter on an earlier run", "l"),
     _e("2026-10-26.77", "Stalled work raises an alert and a notification",
        "Activity → Alerts: a run agent idle 20 min, or released and waiting ([dispatch] stall_minutes)", "pl alerts"),
-    _e("2026-10-26.78", "Alerts and waiting agents notify you once",
+    _e("2026-10-26.78", "Extend shows your pipeline's pod first", "Extend tab (press 6): Active pod", "pl pods show"),
+    _e("2026-10-26.79", "Add a chat connector from the console",
+       "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
+    _e("2026-10-26.80", "Customer-support pipeline template: triage and owner-approved replies",
+       "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
+    _e("2026-10-26.81", "Alerts and waiting agents notify you once",
        "[notify] events: agent_waiting, alert_opened (switch either off there)", "pl alerts"),
 ]
 

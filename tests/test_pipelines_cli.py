@@ -124,6 +124,16 @@ def test_add_sales_from_new_client_creates_a_profile_with_the_templates_pipeline
     assert C.TRACKER["type"] == "local" and "code_host" not in (fake_home / ".pl-sales" / "config.toml").read_text()
 
 
+def test_add_support_from_customer_support_copies_columns_stages_gates_and_ui(fake_home):
+    _profile(fake_home, "dev")
+    C.load("dev")
+    pipeline.cmd_pipelines(_args(pipelines_cmd="add", name="support", template="customer-support", board="local",
+                                 account=None, yes=True, dry_run=False))
+    template = pipeline.templates()["customer-support"]
+    assert _shown("support") == pipeline.shown({**template, "name": "support"})
+    assert C.PIPELINE["ui"] == template["ui"]
+
+
 def test_add_existing_is_unchanged_and_exits_0(fake_home, capsys):
     d = _profile(fake_home, "sales", "# mine\n")
     _profile(fake_home, "dev")
@@ -260,8 +270,10 @@ def test_import_of_an_invalid_file_exits_2_naming_the_key(fake_home, capsys, tmp
 
 def test_list_templates_names_all_six(capsys):
     pipeline.cmd_pipelines(_args(pipelines_cmd="list", templates=True, json=True))
-    names = {r["name"] for r in json.loads(capsys.readouterr().out)}
-    assert names == {"engineering", "new-client", "existing-client", "billing", "team", "marketing"}
+    rows = json.loads(capsys.readouterr().out)
+    assert {r["name"] for r in rows} == {"engineering", "new-client", "existing-client", "billing", "team",
+                                         "marketing", "customer-support"}
+    assert next(r for r in rows if r["name"] == "customer-support")["stages"] == 2
 
 
 def test_list_templates_marketing_has_four_stages(capsys):

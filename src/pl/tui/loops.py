@@ -14,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Checkbox, DataTable, Input, Label, OptionList, Select, Static
 
-from pl import agents, events, loops, schedule, skills, util
+from pl import agents, events, loops, pipeline, schedule, skills, util
 from pl import config as C
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.review import ConfirmScreen
@@ -30,6 +30,7 @@ COLUMNS = (("loop", "label"), ("state", "state"), ("context", "context"), ("toke
            ("account", "account"), ("does", "does"), ("schedule", "schedule"), ("last active", "last"), ("next run", "next"),
            ("last result", "output"))
 LOG_LINES = 200
+CODE_LOOPS = ("merge-gate", "auto-merge")
 DOES_CHARS = 60
 LOOP_PREFIX_RE = re.compile(r"/loop (\d+)([mhd]) ")
 
@@ -156,7 +157,10 @@ def loop_rows(data):
     runs = load_state().get("services") or {}
     now = datetime.now()
     out = []
+    code = pipeline.has_code()
     for name, svc in C.SERVICES.items():
+        if name in CODE_LOOPS and not code:
+            continue
         r = by_name.get(name) or {}
         w = r.get("worker") or {}
         state = {"loop_busy": "working", "loop_off": "off"}.get(r.get("kind"), "on" if w else "off")
@@ -193,6 +197,8 @@ def loop_rows(data):
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
                     "pane": w.get("pane"), "window": w.get("window")})
     for name, v in C.LOOPS_OFF.items():
+        if name in CODE_LOOPS and not code:
+            continue
         run = (runs.get(name) or {}).get("last_run")
         out.append({"name": name, "state": "paused", "prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""),
                     "does": what_it_does(v), "every": v.get("every"), "schedule": schedule.in_words(v.get("every")),
@@ -200,7 +206,7 @@ def loop_rows(data):
                     "account": v.get("account") or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-", "last": "-",
                     "next": "-", "output": last_result(run) if run else "not reported",
                     "pane": None, "window": None})
-    if C.TRACKER.get("type") == "github-project":
+    if C.TRACKER.get("type") == "github-project" and code:
         out.append(_auto_merge_row())
     for r in out:
         r["label"] = r["name"] + (" · read-only" if r["read_only"] else "")

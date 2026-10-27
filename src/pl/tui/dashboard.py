@@ -16,11 +16,11 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Digits, Label, Sparkline, Static
 
 from pl import config as C
-from pl import standup
+from pl import pipeline, standup
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.cards import CardsView
 from pl.tui.chrome import empty_state
-from pl.tui.needs import needs_groups, needs_you_count
+from pl.tui.needs import needs_groups, needs_you_count, send_groups
 from pl.tui.prs import pr_groups
 from pl.usage import human
 from pl.util import age, parse_iso, short_id
@@ -95,6 +95,10 @@ def decide_rows(data):
 
 def _groups(rows):
     g, p = needs_groups(rows), pr_groups(rows)
+    sends = [(key, len(g[key]), f"{title} · {len(g[key])}", "read the draft; approve queues it to send", "#e0a040")
+             for key, title in send_groups()]
+    if pipeline.is_config():
+        return sends
     plans = sorted(parse_iso(r["card"].get("updated_at") or "") for r in g["plans"])
     return [("merge", len(p["merge"]), f"{len(p['merge'])} PRs pass the merge check", "merge them, oldest first", "green"),
             ("specs", len(g["specs"]), f"{len(g['specs'])} specs wait for your review", "approve, or send back with notes", "#e0a040"),
@@ -432,9 +436,10 @@ class DashboardView(Vertical):
         if e.row_key.value == "health":
             self.app.action_health()
             return
-        if e.row_key.value not in DECIDE_TARGET:
+        key = e.row_key.value
+        if not (target := DECIDE_TARGET.get(key) or (("cards", key) if key.startswith("send:") else None)):
             return
-        tab, group = DECIDE_TARGET[e.row_key.value]
+        tab, group = target
         self.app.action_tab(tab)
         if group:
             self.app.query_one(CardsView).show_attention(True, group)
