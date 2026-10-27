@@ -428,21 +428,18 @@ def start_worker(c, stage, attempts, dry):
     if stage == "run" and builtin:
         prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
     folder = C.WORK_DIR
-    if stage == "run" and not generic and C.WORK_DIR:
-        if dry:
-            print(f"  would use the run worktree for {c['id']}")
-        else:
-            folder, err = worktrees.for_run(c)
-            if err:
-                events.emit("error", c["id"], stage="run", message=f"worktree: {err}")
-                if why := alerts.open(f"worktree:{c['id']}", "high", f"Could not make the worktree for {short_id(c['id'])}",
-                                      f"{err}; fix it and the next pass retries"):
-                    notify(alerts.headline(why, f"Worktree failed for {short_id(c['id'])}"), err)
-                print(f"  {name}: no worktree ({err}); nothing started")
-                return
-            alerts.resolve(f"worktree:{c['id']}")
-            if builtin:
-                prompt += f" worktree={shlex.quote(str(folder))}"
+    if stage == "run" and not generic and C.WORK_DIR and not dry:
+        folder, err = worktrees.for_run(c)
+        if err:
+            events.emit("error", c["id"], stage="run", message=f"worktree: {err}")
+            if why := alerts.open(f"worktree:{c['id']}", "high", f"Could not make the worktree for {short_id(c['id'])}",
+                                  f"{err}; fix it and the next pass retries"):
+                notify(alerts.headline(why, f"Worktree failed for {short_id(c['id'])}"), err)
+            print(f"  {name}: no worktree ({err}); nothing started")
+            return
+        alerts.resolve(f"worktree:{c['id']}")
+        if builtin:
+            prompt += f" worktree={shlex.quote(str(folder))}"
     if builtin:
         prompt += memory_arg(c, stage, dry, folder)
     if stage == "run":

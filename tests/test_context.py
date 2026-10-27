@@ -104,6 +104,7 @@ def _launch(monkeypatch, prompt_seen):
     monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: ("/w", None))
     dispatch.start_worker(_card(), "run", 0, False)
 
 
