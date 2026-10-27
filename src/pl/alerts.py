@@ -40,11 +40,6 @@ DIRECT = (
     "loop_dead:",
     "memory_low",
     "runaway:",
-    "send_spike:",
-    "chat_unknown:",
-    "connector_new_place:",
-    "agent_move_failed:",
-    "send_cap:",
     "stalled:",
     "ci_not_running:",
 )
