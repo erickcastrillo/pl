@@ -4,7 +4,7 @@ import types
 import pytest
 import tomlkit
 
-from pl import agent_alerts, alerts, dispatch, hooks, notifications, rework, trackers
+from pl import agent_alerts, agents, alerts, dispatch, hooks, notifications, rework, trackers
 from pl import config as C
 from pl.manager import machine_dir
 
@@ -218,14 +218,14 @@ def test_a_rework_wait_alert_notifies_once(desktop):
     assert desktop == [] and len(desktop.direct) == 1
 
 
-MOVED = ("near_cap:", "api_error:", "stage_failed:", "stage_unsafe:", "exited_window:", "pr_waiting:")
+MOVED_DISPATCHER = ("near_cap:", "api_error:", "stage_failed:", "stage_unsafe:", "exited_window:", "pr_waiting:")
 
 
 def test_moved_dispatcher_prefixes_are_not_direct():
-    assert not any(p in alerts.DIRECT for p in MOVED)
+    assert not any(p in alerts.DIRECT for p in MOVED_DISPATCHER)
 
 
-@pytest.mark.parametrize("p", MOVED)
+@pytest.mark.parametrize("p", MOVED_DISPATCHER)
 def test_a_moved_dispatcher_alert_sends_one_alert_opened(desktop, clock, monkeypatch, p):
     from pl import chat
     from pl.chat import gates
@@ -246,7 +246,7 @@ def test_a_moved_dispatcher_alert_sends_one_alert_opened(desktop, clock, monkeyp
     assert len(desktop) == 1
 
 
-@pytest.mark.parametrize("p", MOVED)
+@pytest.mark.parametrize("p", MOVED_DISPATCHER)
 def test_a_moved_dispatcher_alert_with_alert_opened_off_still_records(desktop, p):
     _events("merged")
     alerts.open(p + "x", "warn", "T " + p, "fix")
@@ -265,3 +265,51 @@ def test_a_failing_notifier_keeps_near_cap_and_api_error_handling(monkeypatch):
     st, failed = {"api_restarts": {CARD: [time.time()] * dispatch.API_RESTARTS}}, set()
     assert dispatch._api_restart(st, card, {"stage": "run"}, "API Error", failed) is False
     assert f"api_error:{CARD}" in failed and alerts.get(f"api_error:{CARD}")
+
+
+
+def _open_dep_broken():
+    cards = [{"id": "o/r#2", "title": "t", "list_id": "Approved", "metadata": {"depends_on": ["o/r#1"]}},
+             {"id": "o/r#1", "title": "t", "list_id": "Done", "metadata": {"dropped_at": "2026-10-23T12:00:00Z"}}]
+    dispatch.check_deps(cards)
+
+
+def _open_pr_person():
+    C.DISPATCH["rework_rounds"] = 3
+    card = {"id": "o/r#9", "title": "t", "list_id": C.STAGE_DONE_AT["run"], "metadata": {"pipeline_mode": "auto", "rework": {"round": 3}}}
+    dispatch.check_pr_person_alerts([card])
+
+
+def _open_auto_merge_off(monkeypatch):
+    C.TRACKER = {"type": "github-project", "repo": "o/r"}
+    C.CODE_HOST = {"labels": {"merge_ready": "pl:merge-ready"}}
+    monkeypatch.setattr(dispatch.github, "auto_merge_allowed", lambda repo: False)
+    dispatch._check_auto_merge("auto-review", {"builtin": True})
+
+
+MOVED = {"dep_broken:": _open_dep_broken, "pr_person:": _open_pr_person, "auto_merge_off:": _open_auto_merge_off}
+
+
+def _open_moved(prefix, monkeypatch):
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    monkeypatch.setattr(agents, "col_name", lambda lid: lid)
+    opener = MOVED[prefix]
+    opener(monkeypatch) if prefix == "auto_merge_off:" else opener()
+    return [a["key"] for a in alerts.listing() if a["key"].startswith(prefix)]
+
+
+@pytest.mark.parametrize("prefix", list(MOVED))
+def test_the_three_moved_alerts_obey_events_and_survive_a_failing_notifier(prefix, desktop, monkeypatch):
+    assert not prefix.startswith(alerts.DIRECT)
+    _events("merged")
+    assert len(_open_moved(prefix, monkeypatch)) == 1
+    assert desktop == [] and desktop.direct == [] and _outbox() == []
+
+    for key in [a["key"] for a in alerts.listing()]:
+        alerts.resolve(key)
+    _events("alert_opened")
+
+    def boom(*a):
+        raise RuntimeError("no notifier")
+    monkeypatch.setattr(notifications, "notify", boom)
+    assert len(_open_moved(prefix, monkeypatch)) == 1
