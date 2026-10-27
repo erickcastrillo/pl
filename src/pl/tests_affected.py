@@ -1,11 +1,15 @@
 """pl tests affected: the test files a change can affect in a Python repository, from the import graph.
 
-Files are parsed with ast, never imported. git runs through _run (tests fake it). Anything the finder cannot
+Files are parsed with ast, never imported. git runs through _run (tests fake it). A repository's own
+.pl/tests.toml ([tests]: affected_cmd, always, full_on) adjusts or replaces the finder. Anything the finder cannot
 judge (a git failure, no Python files, a shared test file changed) says "full" so the build runs the whole suite."""
 import argparse
 import ast
+import fnmatch
+import shlex
 import subprocess
 import sys
+import tomllib
 from collections import deque
 from pathlib import Path
 
@@ -14,9 +18,14 @@ from pl import jsonout
 SKIP_DIRS = {"node_modules", "__pycache__", "build", "dist"}
 FULL_FILES = {"conftest.py", "pyproject.toml", "uv.lock"}
 TEST_DIRS = {"tests", "test"}
+CMD_TIMEOUT = 120
 
 
 class GitError(Exception):
+    pass
+
+
+class SettingsError(Exception):
     pass
 
 
@@ -155,13 +164,75 @@ def python_affected(root, changed, files):
     return tests
 
 
+def _string_list(cfg, key):
+    value = cfg.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise SettingsError(f".pl/tests.toml: {key} must be a list of strings")
+    return value
+
+
+def _settings(root):
+    """The validated [tests] table of <root>/.pl/tests.toml; {} when there is no file or no table."""
+    try:
+        cfg = tomllib.loads((Path(root) / ".pl" / "tests.toml").read_text()).get("tests")
+    except FileNotFoundError:
+        return {}
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise SettingsError(f".pl/tests.toml: {e}") from e
+    if not isinstance(cfg, dict):
+        return {}
+    found = {"always": _string_list(cfg, "always"), "full_on": _string_list(cfg, "full_on")}
+    cmd = cfg.get("affected_cmd")
+    if isinstance(cmd, str):
+        cmd = shlex.split(cmd)
+    if cmd is not None:
+        if not cmd or not isinstance(cmd, list) or not all(isinstance(v, str) for v in cmd):
+            raise SettingsError(".pl/tests.toml: affected_cmd must be a non-empty string or list of strings")
+        found["affected_cmd"] = cmd
+    return found
+
+
+def _from_cmd(root, argv, base):
+    code, out, err = _run([*argv, base], root, timeout=CMD_TIMEOUT)
+    if code:
+        raise SettingsError(f"affected_cmd failed: {(err or out).strip() or f'exit {code}'}")
+    return {line.strip(): "from affected_cmd" for line in out.splitlines() if line.strip()}
+
+
+def _full_on_reason(changed, patterns):
+    for p in changed:
+        for pat in patterns:
+            if fnmatch.fnmatch(p, pat):
+                return f"{p} matches full_on {pat}"
+    return None
+
+
+def _fallback(reason):
+    print(f"pl tests: {reason}", file=sys.stderr)
+    return {"tests": [], "reasons": {}, "full": True, "full_reason": reason}
+
+
 def affected(root, ref=None):
+    try:
+        cfg = _settings(root)
+    except SettingsError as e:
+        return _fallback(str(e))
     files = _python_files(root)
-    if not files:
+    if not cfg and not files:
         return {"tests": [], "reasons": {}, "full": True, "full_reason": "no Python files and no .pl/tests.toml"}
     changed = changed_paths(root, base_ref(root, ref))
-    reasons = python_affected(root, changed, files)
-    reason = _full_reason(changed)
+    reasons, reason = {}, None
+    if "affected_cmd" in cfg:
+        try:
+            reasons = _from_cmd(root, cfg["affected_cmd"], base_ref(root, ref))
+        except SettingsError as e:
+            print(f"pl tests: {e}", file=sys.stderr)
+            reason = str(e)
+    elif files:
+        reasons = python_affected(root, changed, files)
+        reason = _full_reason(changed)
+    reason = reason or _full_on_reason(changed, cfg.get("full_on", []))
+    reasons.update({p: "always rule" for p in cfg.get("always", [])})
     return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason}
 
 
