@@ -9,6 +9,8 @@ from textual.widgets import DataTable, Input
 from pl.tui import connectors
 from pl.tui.connectors import AddConnectorScreen, ConnectorsPanel
 from pl.tui.parity import COMMANDS, PARITY
+from pl.tui.review import ConfirmScreen
+from tui_wait import settle, wait_until
 
 
 def screen_text(app):
@@ -18,10 +20,8 @@ def screen_text(app):
     return console.export_text()
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
+def _listed(app):
+    return all(app.query_one(t, DataTable).row_count > 0 for t in ("#connectors-table", "#chat-table"))
 
 
 class HostApp(App):
@@ -62,7 +62,7 @@ async def test_connectors_list_shows_status_and_expiry(monkeypatch):
 
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         txt = screen_text(app)
         assert "github-prod" in txt
         assert "admin" in txt
@@ -98,9 +98,9 @@ async def test_n_runs_the_add_flow_command_with_the_answers(monkeypatch):
 
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, AddConnectorScreen), "the add form")
 
         assert isinstance(app.screen, AddConnectorScreen)
         app.screen.query_one("#connector-name", Input).value = "jira-work"
@@ -109,7 +109,7 @@ async def test_n_runs_the_add_flow_command_with_the_answers(monkeypatch):
         app.screen.query_one("#connector-role", Input).value = "developer"
 
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, AddConnectorScreen), "the add form to close")
 
         add_calls = [c for c in calls if len(c[0]) > 2 and c[0][1:3] == ["connectors", "add"]]
         assert len(add_calls) == 1
@@ -147,7 +147,7 @@ async def test_no_token_text_reaches_the_screen(monkeypatch):
 
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         txt = screen_text(app)
         assert secret_token not in txt
         assert jwt_secret not in txt
@@ -164,7 +164,7 @@ async def test_connectors_not_available_shows_notice(monkeypatch):
 
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "pl connectors is not available in this pl" in screen_text(app), "the notice")
         txt = screen_text(app)
         assert "pl connectors is not available in this pl" in txt
 
@@ -190,10 +190,10 @@ async def test_t_runs_test_command(monkeypatch):
 
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         app.query_one(DataTable).move_cursor(row=1)
         await pilot.press("t")
-        await settle(pilot)
+        await settle(pilot, lambda: any(c[0][1:3] == ["connectors", "test"] for c in calls), "the test command")
 
         test_calls = [c for c in calls if len(c[0]) > 2 and c[0][1:3] == ["connectors", "test"]]
         assert len(test_calls) == 1
@@ -214,14 +214,14 @@ async def test_R_revokes_behind_confirm(monkeypatch):
 
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         app.query_one(DataTable).move_cursor(row=1)
         await pilot.press("R")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm")
 
         # Confirm screen is open; press 'y' to confirm
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, ConfirmScreen), "the confirm to close")
 
         revoke_calls = [c for c in calls if len(c[0]) > 2 and c[0][1:3] == ["connectors", "revoke"]]
         assert len(revoke_calls) == 1
@@ -237,7 +237,7 @@ async def test_settings_view_has_no_extend_panels():
 
     app = SettingsApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: len(app.query(".panel")) == 9, "the nine panels")
         view = app.query_one(settings.SettingsView)
         assert not view.query(ConnectorsPanel)
         from pl.tui.extensions import ExtensionsView
@@ -267,7 +267,7 @@ async def test_first_row_is_new_connector_even_with_no_connectors(monkeypatch):
     _fake_list(monkeypatch, [])
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         t = app.query_one(DataTable)
         assert t.row_count == 1
         assert t.get_row_at(0)[0].plain == "+ New connector" and "dim" in str(t.get_row_at(0)[0].style)
@@ -278,14 +278,14 @@ async def test_enter_on_new_connector_opens_the_add_form_and_runs_pl_connectors_
     _fake_list(monkeypatch, [], calls)
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, AddConnectorScreen), "the add form")
         assert isinstance(app.screen, AddConnectorScreen)
         app.screen.query_one("#connector-name", Input).value = "jira-work"
         app.screen.query_one("#connector-url", Input).value = "https://jira.example.test"
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: not isinstance(app.screen, AddConnectorScreen), "the add form to close")
         assert ["pl", "connectors", "add", "jira-work", "https://jira.example.test", "--yes"] in calls
         assert app.query_one(DataTable).get_row_at(0)[0].plain == "+ New connector"
 
@@ -295,10 +295,10 @@ async def test_t_and_R_on_the_new_row_say_nothing_selected(monkeypatch):
     _fake_list(monkeypatch, [{"name": "conn1", "role": "admin", "teams": "core", "access": "rw", "status": "ok"}], calls)
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         for key in ("t", "R"):
             await pilot.press(key)
-            await settle(pilot)
+            await settle(pilot)   # the key only notifies, so there is no state to wait for
             assert len(app.screen_stack) == 1
             assert [n.message for n in app._notifications] == ["nothing selected"]
             app.clear_notifications()
@@ -309,7 +309,7 @@ async def test_footer_reads_n_new_connector(monkeypatch):
     _fake_list(monkeypatch, [])
     app = HostApp()
     async with app.run_test(size=(120, 30)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         assert "new connector" in _footer_keys(app)
 
 
@@ -341,7 +341,8 @@ async def _press_t_on_chat_row(app, pilot):
     chat.focus()
     chat.move_cursor(row=0)
     await pilot.press("t")
-    await settle(pilot)
+    panel = app.query_one(ConnectorsPanel)
+    await settle(pilot, lambda: panel.chat_tests, "the chat test result")
     return chat
 
 
@@ -349,7 +350,7 @@ async def test_chat_group_lists_connectors(monkeypatch):
     _fake_chat(monkeypatch, {"tg": TG})
     app = HostApp()
     async with app.run_test(size=(140, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         txt = screen_text(app)
         for want in ("Chat connectors", "tg", "telegram", "12345", "gates, digest", "not tested", "shared by all profiles"):
             assert want in txt
@@ -359,7 +360,7 @@ async def test_chat_group_empty_shows_new_row_and_note(monkeypatch):
     _fake_chat(monkeypatch, {})
     app = HostApp()
     async with app.run_test(size=(140, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         txt = screen_text(app)
         assert "New chat connector" in txt and "Telegram, Slack or Discord" in txt
         assert app.query_one("#chat-table", DataTable).row_count == 1
@@ -371,7 +372,7 @@ async def test_t_on_chat_row_runs_pl_chat_test_and_marks_pass(monkeypatch):
     _fake_chat(monkeypatch, {"tg": TG}, calls=calls)
     app = HostApp()
     async with app.run_test(size=(140, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         notices = _capture_notices(app)
         chat = await _press_t_on_chat_row(app, pilot)
         assert ["pl", "chat", "test", "tg"] in calls
@@ -384,7 +385,7 @@ async def test_t_on_chat_row_marks_fail_on_nonzero_exit(monkeypatch):
     _fake_chat(monkeypatch, {"tg": TG}, test_rc=1, test_out="bad")
     app = HostApp()
     async with app.run_test(size=(140, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         chat = await _press_t_on_chat_row(app, pilot)
         assert chat.get_row_at(0)[4].plain == "fail"
 
@@ -395,7 +396,7 @@ async def test_t_on_chat_row_with_unset_variable_names_it(monkeypatch):
     _fake_chat(monkeypatch, {"tg": TG}, calls=calls)
     app = HostApp()
     async with app.run_test(size=(140, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         notices = _capture_notices(app)
         chat = await _press_t_on_chat_row(app, pilot)
         assert not [c for c in calls if c[:3] == ["pl", "chat", "test"]]
@@ -408,7 +409,7 @@ async def test_chat_token_value_never_shown(monkeypatch):
     _fake_chat(monkeypatch, {"tg": TG})
     app = HostApp()
     async with app.run_test(size=(140, 40)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: _listed(app), "the connector lists")
         notices = _capture_notices(app)
         await _press_t_on_chat_row(app, pilot)
         assert "sekret-123456" not in screen_text(app)

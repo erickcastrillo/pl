@@ -7,6 +7,7 @@ from textual.app import App
 from pl import config as C
 from pl.trackers import mcp
 from pl.tui import runlog
+from tui_wait import settle, wait_until
 
 
 @pytest.fixture(autouse=True)
@@ -50,21 +51,29 @@ class Host(App):
     pass
 
 
+def _body(app):
+    return str(app.screen.query_one("#runlog-body").render())
+
+
+async def _open(app, pilot, run, ready):
+    await app.push_screen(runlog.RunLogScreen("invoices", run))
+    await wait_until(pilot, lambda: isinstance(app.screen, runlog.RunLogScreen) and ready(), "the run log to render")
+
+
 async def test_run_log_screen_is_read_only_and_esc_closes(profile):
     log = profile / "a.log"
     log.write_text("one\ntwo\n")
     app = Host()
     async with app.run_test(size=(100, 30)) as pilot:
-        await app.push_screen(runlog.RunLogScreen("invoices", {"log": "a.log", "ok": True}))
-        await pilot.pause()
-        before = str(app.screen.query_one("#runlog-body").render())
+        await _open(app, pilot, {"log": "a.log", "ok": True}, lambda: "one" in _body(app))
+        before = _body(app)
         await pilot.press("a", "d", "delete", "g", "R", "enter")
-        await pilot.pause()
+        await settle(pilot)   # read-only keys change nothing observable, so there is no state to wait for
         assert isinstance(app.screen, runlog.RunLogScreen)
         assert str(app.screen.query_one("#runlog-body").render()) == before and "one" in before
         assert log.read_text() == "one\ntwo\n"
         await pilot.press("escape")
-        await pilot.pause()
+        await settle(pilot, lambda: not isinstance(app.screen, runlog.RunLogScreen), "the run log to close")
         assert not isinstance(app.screen, runlog.RunLogScreen)
 
 
@@ -72,18 +81,17 @@ async def test_run_log_screen_opens_at_the_top(profile):
     (profile / "a.log").write_text("\n".join(f"line {i}" for i in range(300)))
     app = Host()
     async with app.run_test(size=(100, 30)) as pilot:
-        await app.push_screen(runlog.RunLogScreen("invoices", {"log": "a.log", "ok": True}))
-        await pilot.pause()
+        await _open(app, pilot, {"log": "a.log", "ok": True},
+                    lambda: app.screen.query_one("#runlog-scroll").max_scroll_y > 0)
         scroll = app.screen.query_one("#runlog-scroll")
         assert scroll.scroll_y == 0 and scroll.max_scroll_y > 0
         await pilot.press("end")
-        await pilot.pause()
+        await settle(pilot, lambda: scroll.scroll_y > 0, "the log to scroll down")
         assert scroll.scroll_y > 0
 
 
 async def test_run_log_screen_of_a_pruned_run_says_so(profile):
     app = Host()
     async with app.run_test(size=(100, 30)) as pilot:
-        await app.push_screen(runlog.RunLogScreen("invoices", {"log": "gone.log", "ok": False}))
-        await pilot.pause()
-        assert runlog.MISSING in str(app.screen.query_one("#runlog-body").render())
+        await _open(app, pilot, {"log": "gone.log", "ok": False}, lambda: runlog.MISSING in _body(app))
+        assert runlog.MISSING in _body(app)
