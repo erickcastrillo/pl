@@ -192,3 +192,26 @@ def test_approve_off_a_gate_exits_2(store, cmd, args):
         cmd(argparse.Namespace(id="o/r#1", **args))
     assert e.value.code == 2 or isinstance(e.value, commands.BadInput)
     assert "Working" in str(e.value.code)
+
+
+# ---------- plan 61 slice 4: the dispatcher runs the agent a stage names ----------
+
+def _dry_line(capsys, stage):
+    dispatch.start_worker(_card(1, "Inbox"), stage, 1, True)
+    return capsys.readouterr().out
+
+
+def test_ac6_no_agent_dry_run_line_is_unchanged_engineering(monkeypatch, capsys):
+    C.PIPELINE = {**pipeline.engineering(), "template": "engineering"}
+    C.STAGES = {"spec": {}}
+    C.PROMPTS = {"spec": "/pl-spec {id}"}
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
+    assert _dry_line(capsys, "spec") == "  would start spec-card-1 under claude model sonnet (account claude): /pl-spec o/r#1\n"
+
+
+def test_ac6_no_agent_dry_run_line_is_unchanged_generic(monkeypatch, capsys):
+    _sales()
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
+    assert _dry_line(capsys, "prepare") == "  would start prepare-card-1 under claude model sonnet (account claude): /pl-stage o/r#1 stage=prepare\n"
