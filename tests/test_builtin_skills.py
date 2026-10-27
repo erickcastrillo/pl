@@ -761,7 +761,7 @@ def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     for phrase in ("depends on unmerged PR #N", "pulls?state=open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 7" in text
+    assert "pl-builtin-version: 8" in text
 
 
 def test_pl_run_assigns_the_pull_request_to_you():
@@ -824,18 +824,18 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v10_is_updated_to_v11(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 10, 11)
+def test_an_unedited_pl_run_v11_is_updated_to_v12(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 11, 12)
 
 
-def test_an_unedited_pl_review_v6_is_updated_to_v7(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 6, 7)
+def test_an_unedited_pl_review_v7_is_updated_to_v8(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 7, 8)
 
 
 def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
     text = _shipped("pl-review")
-    step = text.split("4. Run `pl tests full`")[1].split("5. Apply")[0]
-    assert "full test suite once" in step and '"ready"' in step and '"Review finds problems" row' in step
+    step = text.split("4. Run the full test suite once with the command `pl tests full` prints")[1].split("5. Apply")[0]
+    assert '"ready"' in step and '"Review finds problems" row' in step
 
 
 def test_pl_review_never_asks_for_a_full_rerun():
@@ -912,3 +912,30 @@ def test_pl_run_rework_reads_the_pr_through_rest():
     assert len(pr) == 1 and "repos/<owner>/<repo>/pulls/<number>" in pr[0]
     assert all(f in pr[0] for f in (".head.ref", ".base.ref", ".labels"))
     assert any("issues/<number>/comments" in x for x in lines)
+
+
+def _builtin(name):
+    return (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+
+
+def test_pl_run_runs_tests_only_through_pl_tests():
+    text = _builtin("pl-run")
+    for phrase in ("pl tests affected", "pl tests full", "one run at a time", "foreground", "own worktree"):
+        assert phrase in text
+
+
+def test_pl_review_runs_the_full_suite_through_pl_tests_full():
+    text = _builtin("pl-review")
+    step = text[text.index("4. Run"):text.index("5.", text.index("4. Run"))]
+    for phrase in ("pl tests full", "one run at a time", "foreground", "review worktree"):
+        assert phrase in step
+
+
+@pytest.mark.parametrize("name", ["pl-run", "pl-review"])
+def test_builtin_run_and_review_never_start_tests_wide_or_in_the_background(name):
+    text = _builtin(name)
+    assert not re.search(r"-n\s*(auto|\d+)", text)
+    assert not re.search(r"nohup|detached|background", text, re.I)
+    assert not re.search(r"(?<!&)&\s*$", text, re.M)
+    for m in re.finditer("main checkout", text):
+        assert "never" in text[max(0, m.start() - 40):m.start()]

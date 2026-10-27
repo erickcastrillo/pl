@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 11
+pl-builtin-version: 12
 ---
 
 # pl-run: build the approved plan for one card
@@ -59,11 +59,11 @@ such choice in the pull request description.
    older one may be at `../<repo>-pl-<short-name>`) and continue where it stopped. Run every later command inside it.
 
 3. For each work package, in order (an "End-to-end tests" package comes last, as below):
-   1. Write the tests the package lists. Run them and confirm they fail for the expected reason.
+   1. Write the tests the package lists. Run them with the command `pl tests affected` prints and confirm they fail for the expected reason.
    2. Make the change the package describes, and nothing else. In pl itself, a what's-new entry is one new file in
       `src/pl/whatsnew.d/` named with the current UTC date and time (`YYYY-MM-DD-HHMM-<slug>.toml`); never edit another entry.
-   3. Run the package's tests until they pass. Then run the test files `pl tests affected --json` lists in "tests", and the project's
-      lint command (the full test suite only when the JSON has `full` true or the command fails: non-zero exit, or output that is not JSON), in the foreground under `timeout 1200`; read the result before going on.
+   3. Run the package's tests until they pass. Run tests only with the command `pl tests affected --json` prints in "command" (`pl tests full`, the full suite, when the JSON has `full` true or the command fails: non-zero exit, or output that is not JSON),
+      one run at a time, in the foreground under `timeout 1200`, inside the card's own worktree, never in the main checkout; then run the project's lint command and read both results before going on.
    4. Check `git diff --stat` against the plan's "Minimum change" budget (remove code if over), then commit with a message naming the work package.
 
 4. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
@@ -109,7 +109,7 @@ each test file and title with its criterion, and "pl e2e <repo path> --ref pl/<s
 Only with a `rework=N` argument. The work is the review's findings, not the plan.
 
 1. Read the card (`pl card <id>`). `metadata.rework.prs` lists the pull requests to fix; `metadata.pr_urls`
-   lists every pull request of the card. Read the plan and spec only as background.
+   lists every pull request of the card. Read the plan and spec only for context.
 2. For each pull request to fix, read the newest review: the last comments, where the review's findings are (`<owner>`, `<repo>` and `<number>` are in its URL, `https://github.com/<owner>/<repo>/pull/<number>`). Read pull requests, labels, checks and comments through `gh api repos/...` (REST): GraphQL points are shared with pl. Use GraphQL only where REST has no equivalent (Projects).
 
    ```

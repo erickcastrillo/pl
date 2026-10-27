@@ -81,6 +81,15 @@ def queued_writes():
     return True, ["Queued writes: none"] if rows == ["none"] else [f"Queued writes: {len(rows)}"] + rows
 
 
+RETIRED = {("dispatch", "release_waiting_after"): "DISPATCH"}   # keys pl no longer reads: doctor says they can go
+
+
+def settings():
+    """Always ok: a key pl no longer reads is reported, never a failure."""
+    return True, [f"[{table}] {key} is no longer used and can be removed"
+                  for (table, key), name in RETIRED.items() if key in getattr(C, name)]
+
+
 def machine_toml():
     from pl import manager
     t = manager._machine_toml()
@@ -88,7 +97,8 @@ def machine_toml():
     return not errs, errs or ["machine.toml: fine"]
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, machine_toml]
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings,
+          machine_toml]
 
 
 def _needs_you():
