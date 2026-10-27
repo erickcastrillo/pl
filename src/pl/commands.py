@@ -86,6 +86,8 @@ def _list_json(a):
                 "age_seconds": int(time.time() - parse_iso(c.get("updated_at") or "")) if c.get("updated_at") else 0}
     reg = registry()
     share("read")
+    if getattr(a, "fresh", False):
+        fresh_next()
     pipeline = cards()
     plan = getattr(a, "plan", None)
     rows = {"pipeline": [], "intake": []}
@@ -125,6 +127,8 @@ def cmd_list(a):
     if getattr(a, "json", False):
         return _list_json(a)
     share("read")   # the dispatcher's board read, while it is young
+    if getattr(a, "fresh", False):
+        fresh_next()
     pipeline = cards()   # before any output: a held read leaves stdout empty
     reg = registry()
     bad = exhausted_profiles()
@@ -627,6 +631,8 @@ def _caps_line(used):
 
 
 def cmd_card(a):
+    if getattr(a, "fresh", False):
+        fresh_next()
     c = find_card(a.id)
     if a.delete:
         trackers.get("tracker").delete(c["id"])
@@ -727,6 +733,8 @@ def cmd_section(a):
     An approved PLAN or SPEC is refused unless --force (a person's yes)."""
     name = " ".join(a.name.split()).upper()
     if a.from_ is None:
+        if getattr(a, "fresh", False):
+            fresh_next()
         c = find_card(a.id)
         text = sections(c.get("description")).get(name)
         if text is None:

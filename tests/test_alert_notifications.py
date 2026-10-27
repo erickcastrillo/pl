@@ -203,3 +203,8 @@ def test_agent_waiting_left_out_sends_nothing(desktop, monkeypatch):
     _pass(monkeypatch, [_waiting_card()], ask="Allow Bash?")
     assert desktop == [] and _outbox() == []
     assert alerts.get(f"permission_wait:{CARD}")
+
+
+@pytest.mark.parametrize("key", ["stalled:o/r#1", "ci_not_running:o/r"])
+def test_sites_that_notify_themselves_are_not_notified_again(key):
+    assert key.startswith(alerts.DIRECT)

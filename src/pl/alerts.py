@@ -45,6 +45,8 @@ DIRECT = (
     "connector_new_place:",
     "agent_move_failed:",
     "send_cap:",
+    "stalled:",
+    "ci_not_running:",
 )
 
 
