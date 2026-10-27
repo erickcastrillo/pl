@@ -4412,7 +4412,7 @@ async def test_the_assistant_keeps_its_empty_screen_text(monkeypatch):
 
 # ---------- waiting for you (plan 40, slice 4) ----------
 
-def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None, blocked=None,
+def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None,
                   tmux_calls=None, **meta):
     from pl import agents
     from pl.tui import needs
@@ -4428,7 +4428,6 @@ def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", s
     monkeypatch.setattr(watch, "registry", lambda: reg or {})
     monkeypatch.setattr(watch, "worker_status", lambda w, r: (status, None))
     monkeypatch.setattr(agents, "worker_status", lambda w, r: (status, None))
-    monkeypatch.setattr(watch, "run_blocked", lambda card: blocked)
     monkeypatch.setattr(agents, "pane_exists", lambda pane: False)
     monkeypatch.setattr(watch.subprocess, "run", fake_run)
     monkeypatch.setattr(agents.harnesses, "_run", fake_run)
@@ -4472,7 +4471,7 @@ def test_ac4_a_live_run_agent_at_a_gate_reads_the_gate_line(monkeypatch):
 
 def test_ac5_a_waiting_card_counts_once_in_needs_you(monkeypatch):
     from pl.tui.needs import needs_me
-    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?", blocked="nothing-runnable")
+    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?")
     assert row["kind"] == "needs" and needs_me(row)
     assert [r["card"]["id"] for r in out] == ["wait0001aaaa"]
 
