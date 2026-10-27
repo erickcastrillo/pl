@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from pl import accounts, dispatch, harnesses, move_agent
+from pl import accounts, dispatch, harnesses, move_agent, notifications
 from pl import config as C
 
 SID = "11111111-2222-3333-4444-555555555555"
@@ -764,14 +764,16 @@ def test_a_failed_relaunch_after_the_stop_clears_the_worker_and_alerts(fake_home
     assert any("relaunch" in str(a.get("title")) for a in alerts._load().values())
 
 
-def test_the_parked_alert_after_a_move_says_moved_and_resumed(fake_home, pane, monkeypatch):
+def test_the_parked_alert_after_a_move_notifies_once_and_the_move_is_printed(fake_home, pane, monkeypatch, capsys):
     _transcript(fake_home)
     c = _card(age=3 * 3600)
     _updates(monkeypatch, c)
-    said = []
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: said.append(m))
+    said, direct = [], []
+    monkeypatch.setattr(notifications, "notify", lambda t, m: said.append(t))
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: direct.append(t))
     _dispatch(monkeypatch, c, BANNER)
-    assert any("moved and resumed" in m for m in said) and not any("young agents" in m for m in said)
+    assert len([t for t in said if "is parked: usage limit" in t]) == 1 and direct == []
+    assert "same session" in capsys.readouterr().out
 
 
 # ---------- the test guard ----------
