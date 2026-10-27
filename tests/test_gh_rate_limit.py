@@ -1633,14 +1633,14 @@ def _hhmm(epoch):
     return time.strftime("%H:%M", time.localtime(epoch))
 
 
-def _usage_github(capsys):
+def _usage_github(capsys, json=False):
     from pl import usage
-    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None))
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None, json=json))
     out = capsys.readouterr().out
     for tok in (TOKEN_A, TOKEN_B):
         assert tok not in out
     assert not github.TOKEN_RE.search(out)
-    return out
+    return __import__("json").loads(out) if json else out
 
 
 def _line(out, text):
@@ -1710,6 +1710,127 @@ def test_usage_github_with_no_ledger_yet(gh, mine, capsys):
 def test_usage_github_without_fresh_reading_keeps_the_old_output(gh, mine):
     _ledger(4200, {})
     assert "pl 4200" not in ghquota.report() and "4200 of 5000 GraphQL points left" in ghquota.report()
+
+
+# ---------- pl usage --github by caller (Plan 53 slice 2) ----------
+
+CALLERS = {"agent run pl#10": 40, "agent review pl#11": 12, "claude board": 5}
+
+
+def _ledger_by(by, reset=None, remaining=4943, **extra):
+    reset = reset or int(time.time()) + 1800
+    ghquota._write(ghquota._path(), {"limit": 5000, "remaining": remaining, "reset": reset, "at": time.time(),
+                                     "window": reset, "spent": {"main": sum(by.values())}, "by": by, **extra})
+    return reset
+
+
+def test_usage_github_lists_callers_most_first_and_outside_pl(gh, mine, capsys):
+    reset = _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=reset)
+    lines = [l.strip() for l in _usage_github(capsys).splitlines()]
+    rows = [l for l in lines if l in ("agent run pl#10 40", "agent review pl#11 12", "claude board 5")]
+    assert rows == ["agent run pl#10 40", "agent review pl#11 12", "claude board 5"]
+    assert "outside pl 143" in lines
+
+
+def test_usage_github_json_matches_the_rows(gh, mine, capsys):
+    reset = _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=reset)
+    got = _usage_github(capsys, json=True)
+    entry = next(e for e in got["accounts"] if _hash(TOKEN_A) in e["account"])
+    assert (entry["limit"], entry["remaining"], entry["reset"]) == (5000, 4800, reset)
+    assert entry["callers"] == [{"caller": k, "points": v} for k, v in CALLERS.items()]
+    assert entry["outside_pl"] == 143
+    assert "does not apply" not in capsys.readouterr().out
+
+
+def test_outside_pl_never_negative(gh, mine, capsys):
+    reset = _ledger_by({"claude board": 57})
+    gh.set(remaining=4970, reset=reset)
+    assert "outside pl 0" in _usage_github(capsys).splitlines()[-1]
+    gh.set(remaining=4970, reset=reset)
+    got = _usage_github(capsys, json=True)
+    assert next(e for e in got["accounts"] if _hash(TOKEN_A) in e["account"])["outside_pl"] == 0
+
+
+@pytest.mark.parametrize("state, why", [({"mode": "ratelimit", "remaining": 0}, "GitHub refused: rate limited"),
+                                        ({"reset": None}, "gh could not read the budget")])
+def test_outside_pl_unknown_without_a_reading(gh, mine, capsys, state, why):
+    _ledger_by(dict(CALLERS))
+    gh.set(**state)
+    out = _usage_github(capsys)
+    assert "agent run pl#10 40" in out and "outside pl: no GitHub reading" in out and why in out
+    gh.set(**state)
+    entry = next(e for e in _usage_github(capsys, json=True)["accounts"] if _hash(TOKEN_A) in e["account"])
+    assert entry["outside_pl"] is None and why in entry["why"] and len(entry["callers"]) == 3
+
+
+def test_callers_from_the_previous_window_are_not_listed(gh, mine, capsys):
+    _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=int(time.time()) + 5400)
+    assert "agent run pl#10" not in _usage_github(capsys)
+    gh.set(remaining=4800, reset=int(time.time()) + 5400)
+    entry = next(e for e in _usage_github(capsys, json=True)["accounts"] if _hash(TOKEN_A) in e["account"])
+    assert entry["callers"] == []
+
+
+def test_usage_github_json_holds_no_token(gh, mine, capsys, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", TOKEN_A)
+    monkeypatch.setenv("GITHUB_TOKEN", TOKEN_B)
+    reset = _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=reset)
+    _usage_github(capsys)
+    gh.set(remaining=4800, reset=reset)
+    _usage_github(capsys, json=True)
+
+
+def _grow(ledger_by, **extra):
+    reset = int(time.time()) + 1800
+    ghquota._write(ghquota._path(), {"limit": 5000, "remaining": 4900, "reset": reset, "at": time.time(),
+                                     "window": reset, "spent": {}, "by": ledger_by, **extra})
+    return reset
+
+
+def test_gap_event_names_the_top_three_callers_since_the_last_reading(gh):
+    first = {"agent run pl#10": 10}
+    reset = _grow({"agent run pl#10": 100, "agent spec pl#12": 30, "agent review pl#11": 20, "claude board": 2},
+                  seen=first)
+    ghquota.refresh(3000, reset)
+    top = [{"caller": "agent run pl#10", "points": 90}, {"caller": "agent spec pl#12", "points": 30},
+           {"caller": "agent review pl#11", "points": 20}]
+    gap = _gap_events()
+    assert len(gap) == 1 and gap[0]["top_callers"] == top
+    assert ghquota.ledger()["seen"] == ghquota.ledger()["by"]
+
+
+def test_gap_event_with_fewer_or_no_callers(gh):
+    reset = _grow({"claude board": 7})
+    ghquota.refresh(3000, reset)
+    assert _gap_events()[-1]["top_callers"] == [{"caller": "claude board", "points": 7}]
+    reset = _grow({})
+    ghquota.refresh(3000, reset)
+    last = _gap_events()[-1]
+    assert last["top_callers"] == [] and last["message"].endswith("top callers: none recorded")
+
+
+def test_activity_tab_shows_the_top_callers(gh):
+    from pl.tui import loops
+    reset = _grow({"agent run pl#10": 100, "agent spec pl#12": 30, "agent review pl#11": 20, "claude board": 2},
+                  seen={"agent run pl#10": 10})
+    ghquota.refresh(3000, reset)
+    e = _gap_events()[0]
+    want = "top callers: agent run pl#10 90, agent spec pl#12 30, agent review pl#11 20"
+    assert want in loops._fields(e, ("ts", "kind", "card", "profile", "level", "demo"))
+    assert want in loops.event_text(e)
+
+
+def test_gap_event_holds_no_token(gh, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", TOKEN_A)
+    monkeypatch.setenv("GITHUB_TOKEN", TOKEN_B)
+    reset = _grow({"claude board": 7})
+    ghquota.refresh(3000, reset)
+    event = str(_gap_events()[0])
+    assert TOKEN_A not in event and TOKEN_B not in event
 
 
 # ---------- Plan 53 slice 6: one shared board read for every process ----------
