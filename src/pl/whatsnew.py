@@ -1,8 +1,11 @@
 """What's new: one entry per feature, oldest first. The console shows the entries newer than the last one it showed
 (kept in <profile>/state/whatsnew.json) once after an upgrade; the palette shows them all; `pl whatsnew` prints them.
-A new feature adds an entry here with a key greater than every other one."""
+A new feature adds one file to whatsnew.d named with the current UTC date and time (YYYY-MM-DD-HHMM-<slug>.toml)."""
 import json
 import os
+import re
+import tomllib
+from pathlib import Path
 
 from pl import config as C
 from pl import jsonout
@@ -12,7 +15,7 @@ def _e(key, title, where, try_):
     return {"key": key, "title": title, "where": where, "try": try_}
 
 
-ENTRIES = [
+_LEGACY = [
     _e("2026-09-30.01", "Standup panel with Slack copy", "Dashboard: press s; y copies it for Slack", "pl standup --slack"),
     _e("2026-09-30.02", "Token spend per card, account, model and loop", "Dashboard Health: tokens; Loops tab: tokens 1h",
        "pl usage --by card"),
@@ -300,9 +303,71 @@ ENTRIES = [
     _e("2026-10-26.78", "Extend shows your pipeline's pod first", "Extend tab (press 6): Active pod", "pl pods show"),
     _e("2026-10-26.79", "Add a chat connector from the console",
        "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
-    _e("2026-10-26.80", "Customer-support pipeline template: triage and owner-approved replies",
-       "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
 ]
+
+
+DIR = Path(__file__).with_name("whatsnew.d")
+MIGRATED_THROUGH = "2026-10-26"   # the last day of the old <date>.<n> keys; their files carry that key as id
+NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.toml$")
+_FIELDS = ("title", "where", "try")
+
+
+def _entry(path):
+    """(entry, None) for a good entry file, else (None, what is wrong)."""
+    m = NAME_RE.match(path.name)
+    if not m:
+        return None, "name must be YYYY-MM-DD-HHMM-<slug>.toml"
+    date, hhmm = m.groups()
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        return None, f"does not parse ({e})"
+    for k in data:
+        if k not in (*_FIELDS, "id"):
+            return None, f"unknown key {k}"
+    for k in _FIELDS:
+        v = data.get(k)
+        if not isinstance(v, str) or not v.strip() or "\n" in v:
+            return None, f"{k} must be a non-empty one-line string"
+    if date <= MIGRATED_THROUGH:
+        want = f"{date}.{hhmm[2:]}"
+        if data.get("id") != want:
+            return None, f"a file dated {date} or earlier must carry id = \"{want}\""
+    else:
+        if "id" in data:
+            return None, "id is not allowed on a new file (the file name is the id)"
+        if int(hhmm[:2]) > 23 or int(hhmm[2:]) > 59:
+            return None, f"{hhmm} is not a time of day"
+    return _e(data.get("id", path.stem), data["title"], data["where"], data["try"]), None
+
+
+def load(d=DIR):
+    """The entries of every good file in d, in file-name order. A bad file is skipped; problems() names it."""
+    out = [_entry(p)[0] for p in sorted(d.glob("*.toml"))]
+    return [e for e in out if e]
+
+
+def problems(d=DIR, legacy=None):
+    """One "<file name>: <problem>" per bad file, duplicate id or id out of order."""
+    seen = {e["key"] for e in (_LEGACY if legacy is None else legacy)}
+    previous = max(seen, default="")
+    out = []
+    for p in sorted(d.glob("*.toml")):
+        e, problem = _entry(p)
+        if problem:
+            out.append(f"{p.name}: {problem}")
+        elif e["key"] in seen:
+            out.append(f"{p.name}: duplicate id {e['key']}")
+        elif e["key"] < previous:
+            out.append(f"{p.name}: id {e['key']} sorts before {previous}")
+        else:
+            previous = e["key"]
+        if e:
+            seen.add(e["key"])
+    return out
+
+
+ENTRIES = _LEGACY + load()
 
 
 def _path():
