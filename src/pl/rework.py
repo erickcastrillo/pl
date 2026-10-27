@@ -63,6 +63,20 @@ def flagged(repos, lab):
     return out
 
 
+def look_at_ready(repos, lab):
+    """Record the labels of the open PRs carrying the ready label, one REST call per repo, so SEEN has them
+    without the auto-merge loop. A repo that cannot be read is skipped."""
+    for repo in sorted(repos):
+        q = urllib.parse.urlencode({"state": "open", "labels": lab["ready"], "per_page": 100})
+        try:
+            items = json.loads(github._gh(["api", f"repos/{repo}/issues?{q}"]) or "[]")
+        except (SystemExit, Exception):  # noqa: BLE001 - a failed look is tried again at the next one
+            continue
+        for it in items:
+            if it.get("pull_request"):
+                saw(it.get("html_url") or "", "open", {x.get("name") for x in it.get("labels") or []})
+
+
 def _give_up(c, todo, n, lab, dry):
     head = short_id(c["id"])
     print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} still fails review after {n} rework rounds; "

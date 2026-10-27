@@ -257,8 +257,24 @@ P7, P8 = "https://github.com/o/r/pull/7", "https://github.com/o/r/pull/8"
 def labeled(monkeypatch):
     C.CODE_HOST = {**C.CODE_HOST, "labels": {"ready": "pl:ready", "rework": "pl:rw", "failed": "pl:bad"}}
     rework.SEEN.clear()
+    notifications._LOOKED["at"] = None
     yield rework.SEEN
     rework.SEEN.clear()
+
+
+@pytest.fixture(autouse=True)
+def github(monkeypatch):
+    """GitHub faked: ns.ready = {repo: [(number, labels)]} the ready-label search returns; ns.calls records each call."""
+    import types
+    ns = types.SimpleNamespace(ready={}, calls=[])
+
+    def fake_gh(args):
+        ns.calls.append(args)
+        repo = args[1].split("/issues")[0].removeprefix("repos/")
+        return json.dumps([{"number": n, "pull_request": {"url": "u"}, "html_url": f"https://github.com/{repo}/pull/{n}",
+                            "labels": [{"name": x} for x in labs]} for n, labs in ns.ready.get(repo, [])])
+    monkeypatch.setattr(rework.github, "_gh", fake_gh)
+    return ns
 
 
 def _cols():
@@ -331,3 +347,36 @@ def test_keys_of_done_cards_are_pruned(desktop, labeled):
     assert f"review_passed:{P7}" in st["notified"]
     notifications.review_passed([_pr_card("Done")], {"card0001": "Done"}, st)
     assert not [k for k in st["notified"] if k.startswith("review_passed:")]
+
+
+def test_a_ready_pr_is_found_without_the_merge_loop_or_a_rework_label(desktop, labeled, github):
+    github.ready = {"o/r": [(7, ["pl:ready"])]}
+    notifications.review_passed([_pr_card()], _cols(), {})
+    assert len(desktop) == 1 and "#7" in desktop[0][0]
+    assert len(github.calls) == 1 and "labels=pl%3Aready" in github.calls[0][1]
+
+
+def test_one_lookup_per_repo_and_a_wait_between_looks(desktop, labeled, github, monkeypatch):
+    cards = [_card(1, "PR open", pr_urls=[P7]), _card(2, "PR open", pr_urls=["https://github.com/o/r/pull/9"])]
+    cols = {"card0001": "PR open", "card0002": "PR open"}
+    monkeypatch.setattr(notifications.time, "time", lambda: 1000.0)
+    notifications.review_passed(cards, cols, {})
+    assert len(github.calls) == 1
+    notifications.review_passed(cards, cols, {})
+    assert len(github.calls) == 1
+    monkeypatch.setattr(notifications.time, "time", lambda: 1000.0 + rework.REWORK_EVERY)
+    notifications.review_passed(cards, cols, {})
+    assert len(github.calls) == 2
+
+
+def test_no_lookup_when_every_pr_is_already_notified(desktop, labeled, github):
+    notifications.review_passed([_pr_card()], _cols(), {"notified": {f"review_passed:{P7}": 1.0}})
+    assert github.calls == []
+
+
+def test_a_failing_lookup_does_not_stop_the_pass(desktop, labeled, monkeypatch):
+    def boom(args):
+        raise SystemExit("gh: rate limited")
+    monkeypatch.setattr(rework.github, "_gh", boom)
+    notifications.review_passed([_pr_card()], _cols(), {})
+    assert desktop == []

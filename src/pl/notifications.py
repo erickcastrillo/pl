@@ -8,6 +8,8 @@ from pl import config as C
 from pl import manager, trackers
 from pl.util import notify, short_id
 
+_LOOKED = {"at": None}   # when review_passed last asked GitHub for the ready-labeled PRs
+
 
 def send(event, title, message) -> bool:
     if event not in C.NOTIFY["events"] or trackers.dry_run():
@@ -65,9 +67,13 @@ def review_passed(all_cards, now_col, st):
         del notified[key]
     if not lab["ready"]:
         return
-    for c in all_cards:
-        if now_col[c["id"]] != "PR open" or (c.get("metadata") or {}).get("dropped_at"):
-            continue
+    open_cards = [c for c in all_cards if now_col[c["id"]] == "PR open" and not (c.get("metadata") or {}).get("dropped_at")]
+    pending = {repo for c in open_cards for repo, _, url in rework._prs(c) if f"review_passed:{url}" not in notified}
+    now = time.time()
+    if pending and (_LOOKED["at"] is None or now - _LOOKED["at"] >= rework.REWORK_EVERY):
+        _LOOKED["at"] = now
+        rework.look_at_ready(pending, lab)
+    for c in open_cards:
         new = []
         for _, num, url in rework._prs(c):
             names = rework.SEEN.get(url) or frozenset()
