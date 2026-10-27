@@ -11,7 +11,7 @@ from collections import deque
 from pathlib import Path
 
 from pl import config as C
-from pl import events
+from pl import events, ghquota
 from pl.agents import registry, run_blocked, worker_status
 from pl.board import cards, col_name
 from pl.util import mask, slug_of
@@ -161,8 +161,8 @@ def _pr_info(url: str) -> dict | None:
     known = _settled()
     if url in known:
         return known[url]
-    r = _run(["gh", "pr", "view", url, "--json", "state,mergedAt,headRefName"],
-             capture_output=True, text=True, env=C.gh_env())
+    r = ghquota.gh(_run, ["pr", "view", url, "--json", "state,mergedAt,headRefName"],
+                   capture_output=True, text=True, env=C.gh_env())
     if r.returncode != 0:
         return None
     try:

@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, confirm, events, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, confirm, events, ghquota, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.trackers.github import OverBudget
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
@@ -1124,8 +1124,8 @@ def cmd_intent(a):
     m = PR_URL.match(a.pr)
     if not m:
         raise SystemExit("pl intent: give the full PR URL, https://github.com/<owner>/<repo>/pull/<n>")
-    r = subprocess.run(["gh", "pr", "view", m.group(3), "--repo", f"{m.group(1)}/{m.group(2)}", "--json", "body"],
-                       capture_output=True, text=True, timeout=60, env=C.gh_env())
+    r = ghquota.gh(subprocess.run, ["pr", "view", m.group(3), "--repo", f"{m.group(1)}/{m.group(2)}", "--json", "body"],
+                   capture_output=True, text=True, timeout=60, env=C.gh_env())
     body = (json.loads(r.stdout).get("body") or "") if r.returncode == 0 else ""
     if getattr(a, "json", False):
         emit({"pr": a.pr, "cards": [{"id": c["id"], "title": c["title"], "spec": (secs.get("SPEC") or "").strip(),

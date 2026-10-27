@@ -11,12 +11,14 @@ The rules, from most to least protected:
 - periodic reads (the dispatcher's pass, the console's refresh) stop below PERIODIC of the limit, and below LOW of the
   limit each profile keeps to its fair share: the limit split evenly among the profiles that spent points this window.
 A stop lasts until GitHub's reset: before it the points left only go down, so an old reading is never too strict.
-No subprocess here: github._gh calls check() before and record() after each gh call.
+No subprocess here: github._gh calls check() before and record() after each gh call; other modules pass their own
+runner to gh(), which records after the call.
 """
 import fcntl
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -161,7 +163,7 @@ def ledger(acct=None):
     return _load(_path(acct))
 
 
-def record(points=1, rate=None):
+def record(points=1, rate=None, sub=None):
     """Count points spent by this profile and role; rate is a GraphQL rateLimit object ({cost, remaining, resetAt,
     limit}) when the answer carried one, and then its cost is what was spent. Without one, an estimate counts only
     against a reading of this window. A failure to write never fails the call."""
@@ -183,9 +185,47 @@ def record(points=1, rate=None):
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
             spent[prof] = spent.get(prof, 0) + points
             by[f"{prof} {role}"] = by.get(f"{prof} {role}", 0) + points
+            if sub:
+                subs = led.setdefault("subs", {}).setdefault(f"{prof} {role}", {})
+                subs[sub] = subs.get(sub, 0) + points
             _write(_path(), led)
     except OSError:
         pass
+
+
+def _rate(out):
+    """The rateLimit object in a gh answer, or None."""
+    if not isinstance(out, str) or not out.strip():
+        return None
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return None
+    if not isinstance(d, dict):
+        return None
+    return d.get("rateLimit") or (d.get("data") or {}).get("rateLimit")
+
+
+def _count(args, out):
+    from pl import ghwrap   # lazy: ghwrap imports this module
+    from pl.trackers import github
+    if ghwrap.kind(args) != "graphql" or github._is_search(args):
+        return
+    words = [a for a in args if re.fullmatch(r"[a-z][a-z-]*", a)]
+    record(ghwrap.ESTIMATE, rate=_rate(out), sub=" ".join(words[:2]) or None)
+
+
+def gh(run, args, **kw):
+    """Run `gh ARGS` through the caller's own runner and count the call; the caller gets what the runner returned or raised."""
+    r = None
+    try:
+        r = run(["gh", *args], **kw)
+        return r
+    finally:
+        try:
+            _count(args, getattr(r, "stdout", None))
+        except Exception:
+            pass   # counting never changes what the caller's gh call returned
 
 
 def record_agent(acct, caller, sub, points, remaining, reset, rest=False):
