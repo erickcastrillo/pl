@@ -227,10 +227,11 @@ def worktrees_dir():
     return Path(d)
 
 
-def _with_model(template, h, account, stage, worktrees=None, small=False):
+def _with_model(template, h, account, stage, worktrees=None, small=False, model=None):
     """(template, values): the model, effort and worktrees folder flags after the program name, unless the template
-    sets that flag."""
-    model, effort = model_effort(h, account, stage, small)
+    sets that flag. model: an agent's model name, which replaces the configured one when it is a valid name."""
+    picked, effort = model_effort(h, account, stage, small)
+    model = model if model and h.name in MODEL_FLAGS and MODEL_RE.fullmatch(model) else picked
     add = []
     if model and not any(MODEL_FLAG_RE.search(t) for t in template):
         add += MODEL_FLAGS[h.name]
@@ -427,7 +428,7 @@ def xdist_auto_workers():
     return max(1, worker_budget.max_workers() // manager._limits(manager.managed())["max_live_agents"])
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None):
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None, pod=None, model=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
@@ -435,13 +436,15 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
     small: the stage's small-change model for h's harness wins over its normal one.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
     hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook.
-    servers: connector names this stage agent's harness gets, through the pl proxy."""
+    servers: connector names this stage agent's harness gets, through the pl proxy.
+    pod: the pod whose skills the launch is limited to, in place of the profile's (a stage's named agent).
+    model: that agent's model name, which wins over the configured one."""
     from pl import hooks as pl_hooks, pods, skills
-    pod = pods.launch_pod()
+    pod = pod if pod is not None else pods.launch_pod()
     pdir = skills.launch_plugin(h, plugin, pod)
     prompt = skills.library_prompt(h, account, prompt, pdir, pod) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
-    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small)
+    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small, model)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
                               pdir)
     if hooks and stage and h.name == "claude" and pl_hooks.enabled():
