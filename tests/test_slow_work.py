@@ -2,11 +2,12 @@
 import io
 import json
 import sys
+import time
 from contextlib import redirect_stderr, redirect_stdout
 
 import pytest
 
-from pl import agents, cli, dispatch, slowwork
+from pl import agents, cli, dispatch, slowwork, util
 from pl import config as C
 from test_dispatch_slots import _card, _pass
 
@@ -199,3 +200,189 @@ def test_a_dry_run_pass_logs_no_slow_work_entries(monkeypatch, agent, clock):
     clock(30)
     _pass_once(monkeypatch, agent, dry=True)
     assert _events() == []
+
+
+# ---------- plan 48 slice 4: slow stages and long slot waits ----------
+
+def _iso(epoch):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(epoch))
+
+
+def _run_worker(started, **extra):
+    return {"stage": "run", "window": "run-1", "pane": "%1", "profile": "claude", "harness": "claude",
+            "session_id": "s1", "started_at": _iso(started), **extra}
+
+
+def _slow_card(n, started, **extra):
+    c = _card(n, worker=_run_worker(started, **extra))
+    c["list_id"] = "In progress"
+    return c
+
+
+def _history(minutes_list, stage="run"):
+    return {"notified": {}, "stage_lengths": {stage: [[f"h{i}", m] for i, m in enumerate(minutes_list)]}}
+
+
+def test_record_length_keeps_the_last_20_and_skips_a_session_already_recorded(clock):
+    st = {}
+    for i in range(25):
+        slowwork.record_length(st, "run", {"session_id": f"s{i}", "started_at": _iso(slowwork._clock() - 600)})
+    kept = st["stage_lengths"]["run"]
+    assert len(kept) == 20 and kept[0][0] == "s5" and kept[0][1] == pytest.approx(10)
+    slowwork.record_length(st, "run", {"session_id": "s24", "started_at": _iso(slowwork._clock() - 60)})
+    assert len(st["stage_lengths"]["run"]) == 20 and st["stage_lengths"]["run"][-1][1] == pytest.approx(10)
+    slowwork.record_length(st, "spec", {"session_id": "x"})
+    assert "spec" not in st["stage_lengths"]
+
+
+def _stage_slow_events():
+    return [e for e in _events() if e["kind"].startswith("stage_slow")]
+
+
+def _begin(agent, clock, started_minutes_ago):
+    agent["card"]["metadata"]["worker"] = _run_worker(slowwork._clock() - started_minutes_ago * 60)
+
+
+def test_stage_slow_past_slow_factor_times_the_median_logs_one_warning_with_minutes_and_median(monkeypatch, agent, clock):
+    _begin(agent, clock, 0)
+    util.save_state(_history([10, 10, 10, 10, 10]))
+    _pass_once(monkeypatch, agent)
+    clock(19)
+    _pass_once(monkeypatch, agent)
+    assert _stage_slow_events() == []
+    clock(2)
+    _pass_once(monkeypatch, agent)
+    [e] = _stage_slow_events()
+    assert (e["card"], e["level"], e["stage"], e["median"], e["minutes"]) == ("o/r#1", "warning", "run", 10, 21)
+
+
+def test_stage_slow_with_fewer_than_5_runs_waits_for_slow_minutes(monkeypatch, agent, clock):
+    _begin(agent, clock, 0)
+    util.save_state(_history([1, 1, 1, 1]))
+    _pass_once(monkeypatch, agent)
+    clock(89)
+    _pass_once(monkeypatch, agent)
+    assert _stage_slow_events() == []
+    clock(2)
+    _pass_once(monkeypatch, agent)
+    [e] = _stage_slow_events()
+    assert (e["minutes"], e["stage"], "median" in e) == (91, "run", False)
+
+
+def test_stage_slow_cleared_when_the_worker_is_gone_or_the_card_leaves_the_stage(monkeypatch, agent, clock):
+    _begin(agent, clock, 0)
+    _pass_once(monkeypatch, agent)
+    clock(91)
+    _pass_once(monkeypatch, agent)
+    agent["card"]["list_id"] = "PR open"
+    _pass_once(monkeypatch, agent)
+    _pass_once(monkeypatch, agent)
+    assert [(e["kind"], e["level"]) for e in _stage_slow_events()] == [("stage_slow", "warning"), ("stage_slow_cleared", "info")]
+
+
+def test_a_retried_attempt_starts_its_clock_at_its_own_started_at(monkeypatch, agent, clock):
+    _begin(agent, clock, 0)
+    _pass_once(monkeypatch, agent)
+    clock(91)
+    _pass_once(monkeypatch, agent)
+    agent["card"]["metadata"]["worker"] = _run_worker(slowwork._clock(), session_id="s2")
+    _pass_once(monkeypatch, agent)
+    clock(30)
+    _pass_once(monkeypatch, agent)
+    assert [e["kind"] for e in _stage_slow_events()] == ["stage_slow", "stage_slow_cleared"]
+
+
+def test_a_stage_still_slow_on_the_next_pass_logs_no_second_warning(monkeypatch, agent, clock):
+    _begin(agent, clock, 0)
+    _pass_once(monkeypatch, agent)
+    for _ in range(3):
+        clock(91)
+        _pass_once(monkeypatch, agent)
+    assert [e["kind"] for e in _stage_slow_events()] == ["stage_slow"]
+
+
+def test_stage_slow_uses_default_thresholds_without_an_activity_table(monkeypatch, agent, clock):
+    assert not C.ACTIVITY
+    _begin(agent, clock, 89)
+    _pass_once(monkeypatch, agent)
+    assert _stage_slow_events() == []
+    clock(2)
+    _pass_once(monkeypatch, agent)
+    assert [e["kind"] for e in _stage_slow_events()] == ["stage_slow"]
+
+
+def test_a_stage_on_a_limit_screen_keeps_its_clock_and_says_so(monkeypatch, agent, clock):
+    _begin(agent, clock, 91)
+    agent["card"]["metadata"]["worker"]["limit_hit"] = {"account": "claude", "until": 1}
+    _pass_once(monkeypatch, agent)
+    [e] = _stage_slow_events()
+    assert e["limit_screen"] is True
+
+
+# ---------- slot waits ----------
+
+def _wait_events():
+    return [e for e in _events() if e["kind"].startswith("slot_wait_long")]
+
+
+def _prep_queue():
+    holder = _card(1, worker={"stage": "spec", "window": "spec-1", "pane": "%1", "profile": "claude", "harness": "claude"})
+    holder["list_id"] = "Inbox"
+    waiting = _card(2)
+    waiting["list_id"] = "Inbox"
+    return holder, waiting
+
+
+@pytest.fixture
+def prep(monkeypatch, agent):
+    holder, waiting = _prep_queue()
+    return [holder, waiting]
+
+
+def test_a_card_waiting_for_a_prep_slot_past_wait_minutes_logs_slot_wait_long_naming_slot_and_holders(monkeypatch, prep, clock):
+    _pass(monkeypatch, prep, max_prep=1)
+    clock(61)
+    _pass(monkeypatch, prep, max_prep=1)
+    [e] = _wait_events()
+    assert (e["kind"], e["card"], e["level"], e["slot"], e["minutes"]) == ("slot_wait_long", "o/r#2", "warning", "prep", 61)
+    assert e["holders"] == ["r#1"]
+
+
+def test_a_card_waiting_for_a_run_slot_names_slot_run(monkeypatch, agent, clock):
+    holder = agent["card"]
+    waiting = _card(2)
+    waiting["list_id"] = "Approved"
+    _pass(monkeypatch, [holder, waiting], max_prep=1)
+    clock(61)
+    _pass(monkeypatch, [holder, waiting], max_prep=1)
+    [e] = _wait_events()
+    assert (e["slot"], e["card"]) == ("run", "o/r#2")
+
+
+def test_the_waiting_card_starting_logs_slot_wait_long_cleared(monkeypatch, prep, clock):
+    _pass(monkeypatch, prep, max_prep=1)
+    clock(61)
+    _pass(monkeypatch, prep, max_prep=1)
+    prep[0]["metadata"]["worker"], prep[0]["list_id"] = None, "Done"
+    started, _ = _pass(monkeypatch, prep, max_prep=1)
+    assert [c["id"] for c in started] == ["o/r#2"]
+    assert [(e["kind"], e["level"]) for e in _wait_events()] == [("slot_wait_long", "warning"), ("slot_wait_long_cleared", "info")]
+
+
+def test_a_card_moved_out_of_the_queue_logs_slot_wait_long_cleared(monkeypatch, prep, clock):
+    _pass(monkeypatch, prep, max_prep=1)
+    clock(61)
+    _pass(monkeypatch, prep, max_prep=1)
+    prep[1]["list_id"] = "Done"
+    _pass(monkeypatch, prep, max_prep=1)
+    assert [e["kind"] for e in _wait_events()] == ["slot_wait_long", "slot_wait_long_cleared"]
+
+
+def test_a_run_blocked_by_a_dependency_is_not_a_slot_wait(monkeypatch, agent, clock):
+    waiting = _card(2, depends_on=["o/r#9"])
+    waiting["list_id"] = "Approved"
+    cs = [agent["card"], waiting]
+    _pass(monkeypatch, cs, max_prep=1)
+    clock(120)
+    _pass(monkeypatch, cs, max_prep=1)
+    assert _wait_events() == []

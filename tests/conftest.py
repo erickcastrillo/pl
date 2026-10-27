@@ -32,6 +32,13 @@ def no_real_screen_reads(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_idle_clock(monkeypatch):
+    """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
+    from pl import agents
+    monkeypatch.setattr(agents, "idle_seconds", lambda w, reg, st=None: None)
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
@@ -218,7 +225,14 @@ def no_stage_hooks(monkeypatch):
 def trusted_work_dir(monkeypatch):
     """The dispatcher's trust gate reads the account's .claude.json: off unless a test turns it on."""
     from pl import dispatch
-    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account: None)
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account, folder=None: None)
+
+
+@pytest.fixture(autouse=True)
+def run_worktree_is_work_dir(monkeypatch):
+    """Run agents start in a worktree git makes: off unless a test turns it on (tests/test_run_worktree.py)."""
+    from pl import config, worktrees
+    monkeypatch.setattr(worktrees, "for_run", lambda c: (config.WORK_DIR, None))
 
 
 @pytest.fixture(autouse=True)

@@ -77,7 +77,7 @@ def test_every_pl_command_a_skill_names_exists_in_the_cli():
                 continue
             assert cmd in top, f"{n}: pl {cmd}"
             assert cmd not in subs or not sub or sub in subs[cmd], f"{n}: pl {cmd} {sub}"
-    assert {"card", "move", "section", "depends"} <= seen
+    assert {"card", "move", "section", "depends", "tests"} <= seen
 
 
 def test_pl_stage_skill_ships_with_a_version_and_names_its_commands():
@@ -612,6 +612,7 @@ def _start(monkeypatch, tmp_path, prompt=None, cfg="rel/profile", stage="run"):
     monkeypatch.setattr(dispatch, "_launch", lambda pane, name, script, p=None: tmp_path / "l.sh")
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (tmp_path / "wt", None))
     dispatch.start_worker({"id": "c" * 36, "title": "T", "description": ""}, stage, 0, False)
     return seen
 
@@ -628,7 +629,7 @@ LIMITS = " max_lines=300 max_files=10 target_lines=150 target_files=6"
 
 def test_the_builtin_run_stage_gets_the_review_label_and_pr_limits(monkeypatch, tmp_path):
     seen = _start(monkeypatch, tmp_path)
-    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS}") in seen
+    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS} worktree={tmp_path / 'wt'}") in seen
     seen = _start(monkeypatch, tmp_path, prompt="/my-run {id}")
     assert ("prompt", f"/my-run {'c' * 36}") in seen
 
@@ -745,7 +746,7 @@ def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 5" in text
+    assert "pl-builtin-version: 6" in text
 
 
 def test_pl_run_assigns_the_pull_request_to_you():
@@ -753,3 +754,83 @@ def test_pl_run_assigns_the_pull_request_to_you():
     create = next(l for l in text.splitlines() if "gh pr create" in l)
     assert "--assignee @me" in create
     assert int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 8
+
+
+def _run_steps():
+    return (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Steps")[1].split("\n## ")[0]
+
+
+def _step3():
+    return " ".join(_run_steps().split("3. For each work package")[1].split("\n4. ")[0].split())
+
+
+def _rework():
+    return " ".join((skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Rework mode")[1].split("\n## ")[0].split())
+
+
+def test_pl_run_runs_affected_tests_per_package():
+    step = _step3()
+    for words in ("pl tests affected --json", "lint", "`full` true", "not JSON"):
+        assert words in step, words
+
+
+def test_pl_run_has_no_final_full_suite_step():
+    text = _flat("pl-run")
+    assert "run the full test suite once more" not in text
+    assert [int(n) for n in re.findall(r"^(\d+)\. ", _run_steps(), re.M)] == [1, 2, 3, 4, 5, 6]
+    assert len(re.findall(r"full (?:test )?suite", text)) == 3
+
+
+def test_pl_run_rework_uses_the_same_test_rule():
+    rework = _rework()
+    assert ("step 3.3" in rework or "pl tests affected" in rework) and "`full`" in rework
+    assert rework.index("`full`") < rework.index("push to the same branch")
+
+
+def test_pl_run_tests_run_in_the_foreground_with_a_limit():
+    for part in (_step3(), _rework()):
+        assert "foreground" in part and "timeout" in part
+    assert "in the background" not in _flat("pl-run")
+
+
+def test_pl_run_pr_body_lists_the_tests_run():
+    text = _shipped("pl-run")
+    body = text.split("gh pr create")[1].split("7.")[0]
+    assert "affected test files" in body and "full suite" in body and "why" in body
+
+
+def _older_copy_is_updated(lib, shipped, name, old, new):
+    real = (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+    older = shipped / name / "SKILL.md"
+    older.write_text(re.sub(r"^pl-builtin-version: \d+$", f"pl-builtin-version: {old}", real, count=1, flags=re.M))
+    skills.install_builtins()
+    older.write_text(real)
+    assert f"pl-builtin-version: {new}\n" in real
+    assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
+
+
+def test_an_unedited_pl_run_v8_is_updated_to_v9(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 8, 9)
+
+
+def test_an_unedited_pl_review_v5_is_updated_to_v6(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 5, 6)
+
+
+def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
+    text = _shipped("pl-review")
+    step = text.split("4. Run the repository's")[1].split("5. Apply")[0]
+    assert "full test suite once" in step and '"ready"' in step and '"Review finds problems" row' in step
+
+
+def test_pl_review_never_asks_for_a_full_rerun():
+    text = _shipped("pl-review")
+    assert "never ask the builder to rerun the full suite" in text
+    assert "run the full suite" not in text.replace("rerun the full suite", "")
+
+
+def test_pl_run_does_not_add_worktrees():
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    assert "git worktree add" not in text
+    assert "started you in" in text
+    assert "main checkout" in text and "stop" in text
