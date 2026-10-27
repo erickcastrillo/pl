@@ -88,6 +88,31 @@ def test_bad_front_matter_agent_is_skipped_not_fatal(fake_home):
     assert not {"broken", "no-front-matter", "Bad Name"} & set(agents)
 
 
+@pytest.mark.parametrize("front", [
+    "approval: send",
+    "approval: [1]",
+    "approval: [mail-everyone]",
+    "skills: [1, 2]",
+    "skills: sales",
+    "connector_roles: [email, 3]",
+    "connector_roles: email",
+    "model: [opus]",
+    "pod: 7",
+])
+def test_badly_typed_profile_agent_is_skipped(fake_home, front):
+    d = _profile(fake_home)
+    _agent_md(d, "odd", f"---\n{front}\n---\nx\n")
+    agents = agent_defs.load()
+    assert TEN <= set(agents)
+    assert "odd" not in agents
+
+
+def test_well_typed_profile_agent_with_null_model_and_pod_is_kept(fake_home):
+    d = _profile(fake_home)
+    _agent_md(d, "ok", "---\nskills: [a]\napproval: [send]\nmodel: null\n---\nx\n")
+    assert agent_defs.load()["ok"]["approval"] == ["send"]
+
+
 def test_agents_list_json_is_a_list_with_ac1_fields_exit_0(fake_home, capsys, monkeypatch):
     _profile(fake_home)
     assert _pl(monkeypatch, "agents", "list", "--json") in (0, None)

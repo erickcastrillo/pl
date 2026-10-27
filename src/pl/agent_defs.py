@@ -30,6 +30,16 @@ def _parse(text: str) -> tuple[dict, str]:
     return front, parts[2].strip()
 
 
+def _well_typed(front: dict) -> bool:
+    for field in _LISTS:
+        value = front.get(field, [])
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            return False
+    if not set(front.get("approval", [])) <= set(APPROVAL):
+        return False
+    return all(front.get(f) is None or isinstance(front[f], str) for f in ("model", "pod"))
+
+
 def _profile() -> dict:
     found = {}
     root = C.CONFIG_DIR / "agents"
@@ -41,6 +51,8 @@ def _profile() -> dict:
         try:
             front, body = _parse((folder / "agent.md").read_text())
         except (OSError, ValueError):
+            continue
+        if not _well_typed(front):
             continue
         found[folder.name] = {**front, "instructions": body}
     return found
