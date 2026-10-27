@@ -127,6 +127,7 @@ EFFORT_FLAG_RE = re.compile(r"^--effort(?:=|$)|reasoning_effort=", re.I)
 ADD_DIR_FLAGS = {h: ["--add-dir={worktrees_dir}"] for h in ("claude", "codex", "antigravity")}
 ADD_DIR_RE = re.compile(r"^--add-dir(?:=|$)")
 WORKTREES_ENV = "PL_WORKTREES_DIR"   # the same folder for the agent's shell commands (the built-in skills use it)
+XDIST_ENV = "PYTEST_XDIST_AUTO_NUM_WORKERS"
 # a model id pl passes: no whitespace, quote or backslash, and no leading dash (it is never read as a flag)
 MODEL_RE = re.compile(r"[^\s\"'\\-][^\s\"'\\]*")
 
@@ -420,6 +421,12 @@ def _ledger_account():
         return None
 
 
+def xdist_auto_workers():
+    """pytest -n auto's worker count for one agent: the machine's test worker budget split over max_live_agents, at least 1."""
+    from pl import manager, worker_budget
+    return max(1, worker_budget.max_workers() // manager._limits(manager.managed())["max_live_agents"])
+
+
 def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
@@ -443,12 +450,13 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
         argv = [argv[0], *mcp_flags(h, servers, C.PROFILE_NAME, hooks[0], stage, hooks[1]), *argv[1:]]
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
+    n = str(xdist_auto_workers())
     from pl import sandbox
     sb = sandbox.settings()
     if sb.get("enabled") and stage:
         vm = sandbox.vm_name()
         workdir = cwd or wt or C.WORK_DIR
-        env_args = []
+        env_args = [f"{XDIST_ENV}={n}"]
         if stage:
             env_args.append(f"PL_STAGE={_typeable(str(stage))}")
         if wt:
@@ -469,6 +477,7 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
             lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
         if wt:
             lines.append(f"export {WORKTREES_ENV}={shlex.quote(_typeable(wt))}")
+        lines.append(f"export {XDIST_ENV}={n}")
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in argv))
     return "\n".join(lines) + "\n"
 
@@ -589,6 +598,7 @@ def headless_script(h, account, prompt, name, log_path, record_path, writes=True
     if "PL_GH_LEDGER" in env:
         lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(env['PL_GH_LEDGER']))}")
     lines += [f"export {k}={shlex.quote(v)}" for k, v in loop_env(name, writes).items()]
+    lines.append(f"export {XDIST_ENV}={xdist_auto_workers()}")
     if h.env_var and C.PROFILES.get(account):
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(C.PROFILES[account]))}")
     if C.GH_CONFIG_DIR:
