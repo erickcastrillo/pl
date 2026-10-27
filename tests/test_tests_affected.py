@@ -135,7 +135,7 @@ def test_json_has_tests_reasons_and_full(repo, monkeypatch, capsys):
     fake_git(monkeypatch, repo, ["src/app/core.py"])
     assert T.cmd_tests(["affected", "--json", "--base", "abc"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert set(out) == {"tests", "reasons", "full"}
+    assert set(out) == {"tests", "reasons", "full", "command"}
     assert out["tests"] == sorted(out["tests"])
 
 
@@ -261,3 +261,118 @@ def test_pl_repo_settings_list_the_always_tests():
     always = T._settings(Path(__file__).parents[1])["always"]
     for name in ("tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"):
         assert name in always
+
+
+@pytest.fixture
+def budget(tmp_path_factory, monkeypatch):
+    from pl import worker_budget
+    machine = tmp_path_factory.mktemp("machine")
+    monkeypatch.setenv("PL_MACHINE_DIR", str(machine))
+    monkeypatch.setattr(worker_budget, "_cpus", lambda: 12)
+    return machine
+
+
+def _lease(machine, workers):
+    import os
+    d = machine / "test-workers"
+    d.mkdir(exist_ok=True)
+    (d / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "workers": workers, "at": "now"}))
+
+
+def test_full_prints_a_pytest_command_with_half_the_cores(repo, budget, monkeypatch, capsys):
+    fake_git(monkeypatch, repo)
+    assert T.cmd_tests(["full"]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("pl tests run -- ") and "pytest -n 6" in out
+
+
+def test_full_takes_running_workers_off_the_machine_budget(repo, budget, monkeypatch, capsys):
+    (budget / "machine.toml").write_text("[tests]\nmax_workers = 6\n")
+    _lease(budget, 4)
+    fake_git(monkeypatch, repo)
+    T.cmd_tests(["full"])
+    assert "pytest -n 2" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("workers,expected", [(3, 3), (9, 6)])
+def test_repo_workers_is_a_ceiling(repo, budget, monkeypatch, capsys, workers, expected):
+    settings(repo, f"[tests]\nworkers = {workers}\n")
+    fake_git(monkeypatch, repo)
+    T.cmd_tests(["full"])
+    assert f"pytest -n {expected}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("action", ["full", "affected"])
+@pytest.mark.parametrize("value", ['"auto"', "0", "true"])
+def test_workers_auto_is_an_error_for_full_and_affected(repo, budget, monkeypatch, capsys, action, value):
+    settings(repo, f"[tests]\nworkers = {value}\n")
+    fake_git(monkeypatch, repo, ["src/app/core.py"])
+    assert T.cmd_tests([action]) == 2
+    err = capsys.readouterr().err
+    assert ".pl/tests.toml" in err and "whole number of at least 1" in err
+
+
+def test_uv_lock_picks_uv_run_pytest(repo, budget, monkeypatch, capsys):
+    (repo / "uv.lock").write_text("")
+    fake_git(monkeypatch, repo)
+    T.cmd_tests(["full"])
+    assert "-- uv run pytest -n 6 -q" in capsys.readouterr().out
+    (repo / "uv.lock").unlink()
+    T.cmd_tests(["full"])
+    assert "-- python -m pytest -n 6 -q" in capsys.readouterr().out
+
+
+def test_affected_text_ends_with_the_command_for_its_files(repo, budget, monkeypatch, capsys):
+    fake_git(monkeypatch, repo, ["src/app/core.py"])
+    T.cmd_tests(["affected", "--base", "abc"])
+    last = capsys.readouterr().out.strip().splitlines()[-1]
+    assert last.startswith("pl tests run -- ") and "-n 6 -q tests/test_core.py tests/test_direct.py" in last
+
+
+def test_affected_full_ends_with_the_full_suite_command(repo, budget, monkeypatch, capsys):
+    fake_git(monkeypatch, repo, ["uv.lock"])
+    T.cmd_tests(["affected", "--base", "abc"])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0] == "full suite: uv.lock changed"
+    assert lines[-1].endswith("pytest -n 6 -q") or lines[-1].endswith("-n 6 -q")
+
+
+def test_affected_with_no_tests_prints_no_command(repo, budget, monkeypatch, capsys):
+    fake_git(monkeypatch, repo, [])
+    T.cmd_tests(["affected", "--base", "abc"])
+    assert capsys.readouterr().out.strip() == "no tests affected"
+    T.cmd_tests(["affected", "--base", "abc", "--json"])
+    assert json.loads(capsys.readouterr().out)["command"] is None
+
+
+def test_json_adds_command_and_keeps_its_fields(repo, budget, monkeypatch, capsys):
+    fake_git(monkeypatch, repo, ["src/app/core.py"])
+    T.cmd_tests(["affected", "--json", "--base", "abc"])
+    out = json.loads(capsys.readouterr().out)
+    assert set(out) == {"tests", "reasons", "full", "command"}
+    assert out["command"].startswith("pl tests run -- ") and "tests/test_direct.py" in out["command"]
+
+
+def test_run_holds_the_workers_named_by_n_while_the_command_runs(budget, monkeypatch):
+    from pl import worker_budget
+    (budget / "machine.toml").write_text("[tests]\nmax_workers = 8\n")
+    seen = []
+
+    def run(argv, cwd, timeout=60, capture=True):
+        seen.append((argv, capture, worker_budget.in_use()))
+        return 7, "", ""
+
+    monkeypatch.setattr(T, "_run", run)
+    assert T.cmd_tests(["run", "--", "pytest", "-n", "4", "-q"]) == 7
+    assert seen == [(["pytest", "-n", "4", "-q"], False, 4)]
+    assert worker_budget.in_use() == 0
+
+
+def test_run_without_n_holds_one_worker(budget, monkeypatch):
+    from pl import worker_budget
+    (budget / "machine.toml").write_text("[tests]\nmax_workers = 8\n")
+    seen = []
+    monkeypatch.setattr(T, "_run", lambda argv, cwd, timeout=60, capture=True: seen.append(worker_budget.in_use()) or (0, "", ""))
+    assert T.cmd_tests(["run", "--", "pytest", "-n8", "x"]) == 0
+    assert T.cmd_tests(["run", "--", "pytest"]) == 0
+    assert seen == [8, 1]
