@@ -182,7 +182,7 @@ def test_high_alert_opened_at_23_is_sent_and_not_held(quiet, attention):
 
 def test_warn_alert_opened_at_23_is_held(quiet, attention):
     quiet("23:00")
-    alerts.open("loop_stale:x", "warn", "Near cap", "wait")
+    alerts.open("dep_broken:x", "warn", "Near cap", "wait")
     util.notify("Near cap", "msg")
     assert attention == [] and len(held_lines()) == 1
     assert not (machine_dir() / "chat-outbox.jsonl").exists()
@@ -191,7 +191,7 @@ def test_warn_alert_opened_at_23_is_held(quiet, attention):
 def test_urgent_mark_does_not_outlive_the_next_open(quiet, attention):
     quiet("23:00")
     alerts.open("memory_low", "high", "Memory low", "free some")
-    alerts.open("loop_stale:x", "warn", "Near cap", "wait")
+    alerts.open("dep_broken:x", "warn", "Near cap", "wait")
     util.notify("Near cap", "msg")
     assert attention == [] and len(held_lines()) == 1
 
