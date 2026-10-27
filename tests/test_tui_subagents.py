@@ -14,6 +14,7 @@ from pl.tui.chrome import NEW_ROW
 from pl.tui.loops import LoopsView
 from pl.tui import subagents as sa
 from pl.tui.app import PlApp
+from tui_wait import settle
 
 SESSION = "11111111-2222-4333-8444-555555555555"
 TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
@@ -216,12 +217,6 @@ def _row_text(app, key):
     return str(t.get_row(key)[0])
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
-
-
 def _running_app(monkeypatch):
     C.SERVICES = C.LOOPS_OFF = {}
     app = PlApp(snapshot_provider=lambda: {"snapshot": {"rows": []}}, interval=3600, autostart=False)
@@ -260,16 +255,16 @@ async def test_running_lists_agents_after_loops_shows_tail_and_skips_unchanged_r
         assert "tool Bash" in text and TOKEN not in text and "***" in text
         n = view.redraws
         view.tick()
-        await settle(pilot)
+        await settle(pilot)   # nothing changes on screen, so there is no state to wait for
         assert view.redraws == n          # the file did not change: no redraw
         await pilot.press("down")
-        await settle(pilot)
+        await settle(pilot, lambda: "tool Read: /x/app.py" in _screen(app), "the second agent's tail")
         assert "tool Read: /x/app.py" in _screen(app)
         copied = []
         monkeypatch.setattr(PlApp, "copy_to_clipboard", lambda self, t: copied.append(t))
         monkeypatch.setattr(loops.shutil, "which", lambda name: None)
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: copied, "the copy")
         assert copied and "tool Read: /x/app.py" in copied[0]
         assert view.check_action("pause", ()) is False
         assert view.check_action("copy", ()) is True

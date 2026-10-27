@@ -73,3 +73,22 @@ def test_the_real_gh_is_refused_and_a_fake_one_runs(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     assert subprocess.run(["gh", "auth", "status"], capture_output=True, text=True).stdout == "fake gh\n"
+
+
+def test_config_paths_are_under_the_temp_home(tmp_path_factory):
+    from pl import config as C
+    base = os.path.realpath(tmp_path_factory.getbasetemp()) + os.sep
+    for name in ("HOME", "ATTN", "STATE_DIR", "PLANS", "LOCK_FILE", "WORK_DIR"):
+        assert os.path.realpath(getattr(C, name)).startswith(base), name
+
+
+def test_config_starts_from_the_defaults():
+    from pl import config as C
+    assert C.PIPELINE is None and C.CONFIG_DIR is None
+    assert C.GATES == C._defaults()["GATES"]
+    C.PIPELINE = {"stages": {}}   # leaks on purpose: the next test must not see it
+
+
+def test_a_leaked_config_value_does_not_reach_the_next_test():
+    from pl import config as C
+    assert C.PIPELINE is None

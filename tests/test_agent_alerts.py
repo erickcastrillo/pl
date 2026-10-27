@@ -1,7 +1,7 @@
-"""Plan 41 slice 2: alerts for agents that wait, finish without moving their card, or are blocked on an unmerged card."""
+"""Plan 41 slice 2: alerts for agents that wait for a person or are blocked on an unmerged card."""
 import pytest
 
-from pl import accounts, agent_alerts, agent_screen, agents, alerts, dispatch, notifications
+from pl import accounts, agent_alerts, agent_screen, agents, alerts, dispatch, harnesses, notifications
 from pl import config as C
 from pl.trackers import github
 
@@ -116,17 +116,36 @@ def test_waiting_under_limit_opens_nothing(clock, sent, screen):
     assert _open_keys() == [] and sent == []
 
 
-def test_release_waiting_after_zero_uses_30_minutes(clock, sent, screen, monkeypatch):
-    monkeypatch.setitem(C.DISPATCH, "release_waiting_after", 0)
+@pytest.mark.parametrize("value", [5, 0])
+def test_the_waiting_threshold_ignores_release_waiting_after(clock, sent, screen, monkeypatch, value):
+    monkeypatch.setitem(C.DISPATCH, "release_waiting_after", value)
     _wait(screen)
     c = _card("o/r#7", worker=_worker())
     st = _pass([c])
-    clock["now"] += 29 * MIN
+    clock["now"] += 10 * MIN
+    _pass([c], st)
+    assert _open_keys() == []
+    clock["now"] += 19 * MIN
     _pass([c], st)
     assert _open_keys() == []
     clock["now"] += 2 * MIN
     _pass([c], st)
     assert _open_keys() == ["agent_waiting:o/r#7"]
+
+
+def test_a_waiting_agent_gets_no_keys_no_stop_and_no_stall(clock, sent, screen, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("pl must not touch a waiting agent")
+    monkeypatch.setattr(dispatch, "stop_worker", boom)
+    monkeypatch.setattr(harnesses, "_run", boom)
+    _wait(screen)
+    c = _card("o/r#7", worker=_worker())
+    st = _pass([c])
+    clock["now"] += 31 * MIN
+    _pass([c], st)
+    assert _open_keys() == ["agent_waiting:o/r#7"]
+    assert alerts.get("stalled:o/r#7") is None
+    assert agent_alerts._excused(c, c["metadata"]["worker"], "waiting for you")
 
 
 def test_waiting_skipped_while_permission_wait_alert_open(clock, sent, screen):
@@ -157,70 +176,52 @@ def test_waiting_alert_not_duplicated_and_resolves_when_agent_resumes(clock, sen
     assert st["agent_waits"] == {}
 
 
-# ---------- WP2: agent_unmoved ----------
+# ---------- finished without moving: the watchdog's, not an alert here ----------
 
 def _finished(screen):
     screen.update(text="$ ", word="finished", why="$")
 
 
-def test_run_agent_finished_with_pr_not_moved_alerts_move_fix(clock, sent, screen):
+@pytest.mark.parametrize("case", ["run_with_pr", "plan_finished_screen", "plan_finished_turn"])
+def test_a_finished_agent_that_did_not_move_its_card_opens_nothing(clock, sent, screen, case):
+    if case == "run_with_pr":
+        _finished(screen)
+        c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
+    elif case == "plan_finished_screen":
+        _finished(screen)
+        c = _card("o/r#7", "Spec ready", worker=_worker("plan"))
+    else:
+        c = _card("o/r#7", "Spec ready", worker=_worker("plan", finished_turn=True))
+    st = _pass([c])
+    assert _open_keys() == [] and sent == []
+    clock["now"] += 31 * MIN
+    _pass([c], st)
+    assert _open_keys() == [] and sent == []
+
+
+def test_an_old_agent_unmoved_alert_resolves_quietly(clock, sent, screen, monkeypatch):
+    log = _events(monkeypatch)
+    alerts.open("agent_unmoved:o/r#7", "warn", "old", "fix", cards=["o/r#7"])
+    sent.clear()
     _finished(screen)
     c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
     _pass([c])
-    (a,) = alerts.listing()
-    assert a["key"] == "agent_unmoved:o/r#7" and a["severity"] == "warn"
-    assert "finished with a PR but the card was not moved" in a["title"]
-    assert a["fix"] == f'pl move \'r#7\' "PR open" --pr {PR}'
+    assert _open_keys() == [] and sent == []
+    assert [k for k, _ in log].count("alert_resolved") == 1
 
 
-def test_stage_agent_finished_without_change_alerts_retry_fix(clock, sent, screen):
-    _finished(screen)
-    c = _card("o/r#7", "Spec ready", worker=_worker("plan"))
-    _pass([c])
-    (a,) = alerts.listing()
-    assert a["key"] == "agent_unmoved:o/r#7"
-    assert "plan agent finished without moving the card" in a["title"]
-    assert "pl retry 'r#7'" in a["fix"] and "pl drop 'r#7'" in a["fix"]
-
-
-def test_finished_turn_hook_counts_as_finished(clock, sent, screen):
-    c = _card("o/r#7", "Spec ready", worker=_worker("plan", finished_turn=True))
-    _pass([c])
-    assert _open_keys() == ["agent_unmoved:o/r#7"]
-
-
-def test_unmoved_alert_resolves_when_card_reaches_pr_open(clock, sent, screen):
-    _finished(screen)
-    c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
-    _pass([c])
-    assert _open_keys() == ["agent_unmoved:o/r#7"]
-    moved = _card("o/r#7", "PR open", worker=_worker(), pr_urls=[PR])
-    _pass([moved])
-    assert _open_keys() == []
+def test_an_old_agent_unmoved_alert_resolves_quietly_when_the_pane_is_unreadable(clock, sent, screen, monkeypatch):
+    alerts.open("agent_unmoved:o/r#7", "warn", "old", "fix", cards=["o/r#7"])
+    sent.clear()
+    monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (None, "", ""))
+    _pass([_card("o/r#7", worker=_worker(), pr_urls=[PR])])
+    assert _open_keys() == [] and sent == []
 
 
 def test_dead_agent_being_restarted_opens_no_alert(clock, sent, screen):
     _finished(screen)
     c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
     _pass([c], restarting={"o/r#7"})
-    assert _open_keys() == []
-
-
-def test_unmoved_repeat_pass_no_duplicate(clock, sent, screen, monkeypatch):
-    log = _events(monkeypatch)
-    _finished(screen)
-    c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
-    _pass([c])
-    clock["now"] += 5 * MIN
-    _pass([c])
-    assert _open_keys() == ["agent_unmoved:o/r#7"]
-    assert [k for k, _ in log].count("alert_opened") == 1
-    assert len(sent) == 1
-
-
-def test_working_agent_opens_no_unmoved_alert(clock, sent, screen):
-    c = _card("o/r#7", worker=_worker())
-    _pass([c])
     assert _open_keys() == []
 
 
@@ -320,11 +321,13 @@ def test_detectors_make_no_github_call(clock, sent, screen, monkeypatch):
 
 
 def test_dropped_card_resolves_its_alerts(clock, sent, screen):
-    _finished(screen)
-    c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
-    _pass([c])
-    assert _open_keys() == ["agent_unmoved:o/r#7"]
-    _pass([_card("o/r#7", worker=_worker(), pr_urls=[PR], dropped_at="2026-10-26T00:00:00Z")])
+    _wait(screen)
+    c = _card("o/r#7", worker=_worker())
+    st = _pass([c])
+    clock["now"] += 31 * MIN
+    _pass([c], st)
+    assert _open_keys() == ["agent_waiting:o/r#7"]
+    _pass([_card("o/r#7", worker=_worker(), dropped_at="2026-10-26T00:00:00Z")])
     assert _open_keys() == []
 
 
@@ -346,16 +349,18 @@ def test_dispatch_once_runs_agent_alerts(monkeypatch):
 
 
 def test_unreadable_pane_keeps_open_alert_and_notifies_once(clock, sent, screen, monkeypatch):
-    _finished(screen)
-    c = _card("o/r#7", worker=_worker(), pr_urls=[PR])
-    _pass([c])
+    _wait(screen)
+    c = _card("o/r#7", worker=_worker())
+    st = _pass([c])
+    clock["now"] += 31 * MIN
+    _pass([c], st)
     assert len(sent) == 1
     monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (None, "", ""))
-    _pass([c])
-    assert _open_keys() == ["agent_unmoved:o/r#7"]
+    _pass([c], st)
+    assert _open_keys() == ["agent_waiting:o/r#7"]
     monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (screen["text"], screen["word"], screen["why"]))
-    _pass([c])
-    assert _open_keys() == ["agent_unmoved:o/r#7"] and len(sent) == 1
+    _pass([c], st)
+    assert _open_keys() == ["agent_waiting:o/r#7"] and len(sent) == 1
 
 
 def test_unreadable_pane_opens_nothing_new(clock, sent, monkeypatch):

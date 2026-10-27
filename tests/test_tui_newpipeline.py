@@ -13,6 +13,7 @@ from pl.trackers import github
 from pl.tui import newpipeline
 from pl.tui.home import HomeView
 from pl.tui.newpipeline import NewPipelineScreen, board_label, check_board, name_problem
+from tui_wait import settle, wait_until
 
 ACCOUNTS = {"main": {"harness": "claude", "config_dir": "~/.claude"}, "alt": {"harness": "codex", "config_dir": "~/.codex"}}
 
@@ -44,21 +45,29 @@ def text(app):
 
 async def open_wizard(pilot):
     await pilot.press("n")
-    await pilot.pause()
-    assert isinstance(pilot.app.screen, NewPipelineScreen)
+    await wait_until(pilot, lambda: isinstance(pilot.app.screen, NewPipelineScreen), "the New pipeline wizard")
+    await settle(pilot)
     return pilot.app.screen
 
 
-async def next_step(pilot):
+async def next_step(pilot, refused=False):
+    before = text(pilot.app)
     pilot.app.screen.query_one("#np-next", Button).press()
-    await pilot.pause()
+    if refused:
+        await settle(pilot)
+    else:
+        await wait_until(pilot, lambda: text(pilot.app) != before, "the next wizard step")
+
+
+async def set_name(pilot, screen, name):
+    screen.query_one("#np-name", Input).value = name
+    await wait_until(pilot, lambda: f"will create ~/.pl-{name}" in text(pilot.app), "the name check")
 
 
 async def to_review(pilot, name="sales"):
     screen = await open_wizard(pilot)
     await next_step(pilot)
-    screen.query_one("#np-name", Input).value = name
-    await pilot.pause()
+    await set_name(pilot, screen, name)
     await next_step(pilot)
     await next_step(pilot)
     await next_step(pilot)
@@ -71,8 +80,7 @@ async def test_n_on_home_opens_step_1_of_5_with_back_and_next():
         assert "Step 1 of 5" in text(pilot.app)
         assert screen.query_one("#np-back", Button) and screen.query_one("#np-next", Button)
         await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(pilot.app.screen, NewPipelineScreen)
+        await wait_until(pilot, lambda: not isinstance(pilot.app.screen, NewPipelineScreen), "the wizard to close")
 
 
 async def test_step_1_lists_the_builtin_templates_and_copy_existing():
@@ -99,12 +107,10 @@ async def test_name_step_shows_the_folder_it_will_create():
         screen = await open_wizard(pilot)
         await next_step(pilot)
         assert "Step 2 of 5" in text(pilot.app)
-        screen.query_one("#np-name", Input).value = "sales"
-        await pilot.pause()
-        assert "will create ~/.pl-sales" in text(pilot.app)
+        await set_name(pilot, screen, "sales")
         assert not screen.query_one("#np-next", Button).disabled
         screen.query_one("#np-name", Input).value = "Bad Name"
-        await pilot.pause()
+        await wait_until(pilot, lambda: "use a-z, 0-9" in text(pilot.app), "the name problem")
         assert "use a-z, 0-9" in text(pilot.app)
         assert screen.query_one("#np-next", Button).disabled
 
@@ -113,8 +119,7 @@ async def test_step_3_offers_a_local_board():
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await open_wizard(pilot)
         await next_step(pilot)
-        screen.query_one("#np-name", Input).value = "sales"
-        await pilot.pause()
+        await set_name(pilot, screen, "sales")
         await next_step(pilot)
         assert "Step 3 of 5" in text(pilot.app)
         assert "Local board" in text(pilot.app) or any("Local board" in str(b.label) for b in screen.query_one("#np-board", RadioSet).query(RadioButton))
@@ -138,8 +143,7 @@ def pinned_template(monkeypatch, stages):
 async def at_step_4(pilot):
     screen = await open_wizard(pilot)
     await next_step(pilot)
-    screen.query_one("#np-name", Input).value = "sales"
-    await pilot.pause()
+    await set_name(pilot, screen, "sales")
     await next_step(pilot)
     await next_step(pilot)
     assert "Step 4 of 5" in text(pilot.app)
@@ -191,7 +195,7 @@ async def test_checking_two_accounts_with_the_same_name_is_refused(monkeypatch):
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await at_step_4(pilot)
         screen.query_one("#np-accounts", SelectionList).select_all()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "two accounts named main; uncheck one" in text(pilot.app), "the duplicate-name message")
         assert "two accounts named main; uncheck one" in text(pilot.app)
         assert screen.query_one("#np-next", Button).disabled
 
@@ -201,9 +205,9 @@ async def test_unchecking_every_account_keeps_step_4_and_says_one_is_needed(monk
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await at_step_4(pilot)
         screen.query_one("#np-accounts", SelectionList).deselect_all()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "pick at least one account" in text(pilot.app), "the pick-one message")
         assert "pick at least one account" in text(pilot.app) and screen.query_one("#np-next", Button).disabled
-        await next_step(pilot)
+        await next_step(pilot, refused=True)
         assert "Step 4 of 5" in text(pilot.app)
 
 
@@ -215,7 +219,7 @@ async def test_unchecking_a_pinned_stages_account_blocks_next(monkeypatch):
         sel = screen.query_one("#np-accounts", SelectionList)
         sel.select(1)
         sel.deselect(0)
-        await pilot.pause()
+        await wait_until(pilot, lambda: "stage plan uses main, which is unchecked" in text(pilot.app), "the pinned-stage message")
         assert "stage plan uses main, which is unchecked" in text(pilot.app)
         assert screen.query_one("#np-next", Button).disabled
 
@@ -225,9 +229,9 @@ async def test_going_back_and_forward_keeps_the_picks(monkeypatch):
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await at_step_4(pilot)
         screen.query_one("#np-accounts", SelectionList).select_all()
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(checked(screen)) == 2, "both accounts checked")
         screen.query_one("#np-back", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "Step 3 of 5" in text(pilot.app), "step 3")
         await next_step(pilot)
         assert sorted(checked(screen)) == ["codex1", "main"]
 
@@ -237,10 +241,10 @@ async def test_create_writes_exactly_the_checked_accounts_with_their_settings(mo
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await at_step_4(pilot)
         screen.query_one("#np-accounts", SelectionList).select_all()
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(checked(screen)) == 2, "both accounts checked")
         await next_step(pilot)
         pilot.app.screen.query_one("#np-create", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: pilot.app.switched, "the profile to be created")
     import tomllib
     written = tomllib.loads((Path.home() / ".pl-sales" / "config.toml").read_text())["accounts"]
     assert written == {"main": {"config_dir": "~/.claude"},
@@ -253,7 +257,7 @@ async def test_step_4_lists_accounts_from_every_profile():
         screen.query_one("#np-switcher").current = "np-step-4"
         assert checked(screen) == ["main", "alt"]
         screen.query_one("#np-accounts", SelectionList).deselect_all()
-        await pilot.pause()
+        await wait_until(pilot, lambda: screen.query_one("#np-next", Button).disabled, "Next to be disabled")
         assert screen.query_one("#np-next", Button).disabled
 
 
@@ -261,7 +265,7 @@ async def test_dry_run_lists_the_file_and_writes_nothing():
     async with HostApp().run_test(size=(120, 50)) as pilot:
         await to_review(pilot)
         pilot.app.screen.query_one("#np-dry", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "would write ~/.pl-sales/config.toml" in text(pilot.app), "the dry-run listing")
         out = text(pilot.app)
         assert "would write ~/.pl-sales/config.toml (mode 0600)" in out and "[pipeline]" in out
         assert not (Path.home() / ".pl-sales").exists()
@@ -272,7 +276,7 @@ async def test_create_writes_the_profile_and_switches_to_its_cards():
     async with app.run_test(size=(120, 50)) as pilot:
         await to_review(pilot)
         pilot.app.screen.query_one("#np-create", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.switched, "the profile to be created")
     assert (Path.home() / ".pl-sales" / "config.toml").is_file()
     assert app.switched == [("sales", "cards")]
 
@@ -286,7 +290,7 @@ async def test_a_failed_create_leaves_no_folder_and_names_step_5(monkeypatch):
     async with app.run_test(size=(120, 50)) as pilot:
         await to_review(pilot)
         pilot.app.screen.query_one("#np-create", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "step 5 (create) failed: disk full" in text(pilot.app), "the create failure")
         assert "step 5 (create) failed: disk full" in text(pilot.app)
         assert isinstance(pilot.app.screen, NewPipelineScreen)
     assert not (Path.home() / ".pl-sales").exists() and app.switched == []
@@ -326,8 +330,7 @@ SIGNED_IN = [(("auth", "status"), done()), (("project", "list"), done(PROJECTS))
 async def to_step_3(pilot, name="sales"):
     screen = await open_wizard(pilot)
     await next_step(pilot)
-    screen.query_one("#np-name", Input).value = name
-    await pilot.pause()
+    await set_name(pilot, screen, name)
     await next_step(pilot)
     return screen
 
@@ -335,8 +338,12 @@ async def to_step_3(pilot, name="sales"):
 async def pick_board(pilot, index):
     screen = pilot.app.screen
     list(screen.query_one("#np-board", RadioSet).query(RadioButton))[index].value = True
-    await pilot.pause()
-    await pilot.pause()
+
+    def form_ready():
+        if screen.query_one("#np-gh").display != (index == 1) or screen.query_one("#np-mcp").display != (index == 2):
+            return False
+        return index != 1 or screen.query_one("#np-gh-note", Static).render().plain or screen.query_one("#np-projects", RadioSet).query(RadioButton)
+    await wait_until(pilot, form_ready, "the board form")
 
 
 async def test_step_3_offers_three_boards_local_selected():
@@ -360,10 +367,9 @@ async def test_github_project_lists_projects_from_a_fake_gh_and_prefills_repo(mo
         assert screen.query_one("#np-repo", Input).value == "acme/web"
         assert screen.query_one("#np-next", Button).disabled
         list(screen.query_one("#np-projects", RadioSet).query(RadioButton))[0].value = True
-        await pilot.pause()
-        assert not screen.query_one("#np-next", Button).disabled
+        await wait_until(pilot, lambda: not screen.query_one("#np-next", Button).disabled, "Next to be enabled")
         screen.query_one("#np-repo", Input).value = "not a repo"
-        await pilot.pause()
+        await wait_until(pilot, lambda: screen.query_one("#np-next", Button).disabled, "Next to be disabled")
         assert screen.query_one("#np-next", Button).disabled
 
 
@@ -392,10 +398,9 @@ async def test_mcp_board_needs_a_name_and_shows_the_config_file(monkeypatch):
         assert "looked up in /w/.mcp.json" in text(pilot.app)
         assert screen.query_one("#np-next", Button).disabled
         screen.query_one("#np-server", Input).value = "board-server"
-        await pilot.pause()
-        assert not screen.query_one("#np-next", Button).disabled
+        await wait_until(pilot, lambda: not screen.query_one("#np-next", Button).disabled, "Next to be enabled")
         screen.query_one("#np-server", Input).value = "  "
-        await pilot.pause()
+        await wait_until(pilot, lambda: screen.query_one("#np-next", Button).disabled, "Next to be disabled")
         assert screen.query_one("#np-next", Button).disabled
 
 
@@ -412,7 +417,7 @@ async def mcp_step_3(pilot, monkeypatch):
     screen = await to_step_3(pilot)
     await pick_board(pilot, 2)
     screen.query_one("#np-server", Input).value = "board-server"
-    await pilot.pause()
+    await wait_until(pilot, lambda: not screen.query_one("#np-next", Button).disabled, "Next to be enabled")
     return screen
 
 
@@ -426,7 +431,7 @@ async def test_next_on_step_3_shows_checking_board_then_moves_on(monkeypatch):
         assert "Checking board…" in text(pilot.app)
         assert screen.query_one("#np-next", Button).disabled and screen.query_one("#np-back", Button).disabled
         gate.set()
-        await pilot.pause(0.3)
+        await wait_until(pilot, lambda: "Step 4 of 5" in text(pilot.app), "the board check to finish")
         assert "Step 4 of 5" in text(pilot.app)
 
 
@@ -435,7 +440,7 @@ async def test_failed_board_check_stays_on_step_3_with_the_reason_and_writes_not
     async with HostApp().run_test(size=(120, 50)) as pilot:
         screen = await mcp_step_3(pilot, monkeypatch)
         await next_step(pilot)
-        await pilot.pause(0.3)
+        await wait_until(pilot, lambda: "board check failed" in text(pilot.app), "the board check to fail")
         assert "Step 3 of 5" in text(pilot.app)
         assert "board check failed: R3: card was not created" in text(pilot.app)
         assert not screen.query_one("#np-back", Button).disabled
@@ -491,9 +496,9 @@ async def pick_github_7(pilot, monkeypatch):
     screen = await to_step_3(pilot)
     await pick_board(pilot, 1)
     list(screen.query_one("#np-projects", RadioSet).query(RadioButton))[0].value = True
-    await pilot.pause()
+    await wait_until(pilot, lambda: not screen.query_one("#np-next", Button).disabled, "Next to be enabled")
     await next_step(pilot)
-    await pilot.pause(0.3)
+    await wait_until(pilot, lambda: "Step 4 of 5" in text(pilot.app), "the board check to finish")
     await next_step(pilot)
     return screen
 
@@ -504,7 +509,7 @@ async def test_create_with_github_project_writes_the_tracker(monkeypatch):
         await pick_github_7(pilot, monkeypatch)
         assert "Board: github-project acme #7" in text(pilot.app)
         pilot.app.screen.query_one("#np-create", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.switched, "the profile to be created")
     import tomllib
     written = tomllib.loads((Path.home() / ".pl-sales" / "config.toml").read_text())
     assert written["tracker"] == GH_TRACKER
@@ -514,7 +519,7 @@ async def test_dry_run_names_the_tracker_and_writes_nothing(monkeypatch):
     async with HostApp().run_test(size=(120, 50)) as pilot:
         await pick_github_7(pilot, monkeypatch)
         pilot.app.screen.query_one("#np-dry", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "board: github-project acme #7" in text(pilot.app), "the dry-run listing")
         assert "board: github-project acme #7" in text(pilot.app)
         assert not (Path.home() / ".pl-sales").exists()
 
@@ -525,5 +530,5 @@ async def test_local_board_flow_unchanged():
         await to_review(pilot)
         assert "Board: local" in text(pilot.app)
         pilot.app.screen.query_one("#np-create", Button).press()
-        await pilot.pause()
+        await wait_until(pilot, lambda: pilot.app.switched, "the profile to be created")
     assert tomllib.loads((Path.home() / ".pl-sales" / "config.toml").read_text())["tracker"] == {"type": "local"}

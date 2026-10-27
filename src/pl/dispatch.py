@@ -564,9 +564,9 @@ def _check_auto_merge(name, svc):
         events.failure("auto_review_check_skipped", "warning", f"could not read allow_auto_merge for {repo}")
     elif allowed:
         alerts.resolve(key)
-    elif why := alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
-                            f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand"):
-        notify(alerts.headline(why, f"Auto-merge is off for {repo}"), "pl alerts")
+    else:
+        alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
+                    f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand")
 
 
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
@@ -1553,8 +1553,7 @@ def check_deps(all_cards):
             title = f"Card {short_id(c['id'])} waits on {short_id(dep_id)}: " + ("it was dropped" if why == "dropped" else "its PR was closed unmerged")
             fix = (f"pl undrop {cmd_id(dep_id)}" if why == "dropped" else f"open a new PR for {cmd_id(dep_id)}") \
                 + f" or pl depends {cmd_id(c['id'])} --clear"
-            if w := alerts.open(key, "warn", title, fix):
-                notify(alerts.headline(w, title), fix)
+            alerts.open(key, "warn", title, fix, cards=[c["id"]])
     alerts.sweep("dep_broken:", active, notify)
 
 
@@ -1637,9 +1636,7 @@ def check_pr_person_alerts(all_cards):
         fix = f"{', '.join(urls)}: fix the PR by hand, remove {lab['failed']} to send it back once more, or close it"
         if any(need in names for names in seen):
             fix += f"; or clear {need} once the merge rule it names is fixed"
-        if opened := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix,
-                                 cards=[c["id"]]):
-            notify(alerts.headline(opened, f"PR needs a person: {c['title'][:40]}"), fix)
+        alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix, cards=[c["id"]])
     alerts.sweep("pr_person:", active, notify)
 
 
@@ -1775,8 +1772,7 @@ def _check_anomaly_alerts(now, st=None):
         act, ts = e.get("action") or e.get("kind") or "", audit.parse_entry_ts(e)
         if act == audit.CHAT_UNKNOWN_SENDER and ts >= window_start:
             chan = e.get("channel") or e.get("connector") or e.get("target") or "unknown"
-            if why := alerts.open(f"chat_unknown:{chan}", "high", f"Unknown chat user in {chan}", "check channel membership or invite them"):
-                notify(alerts.headline(why, f"Unknown chat user: {chan}"), "unauthorized chat message")
+            alerts.open(f"chat_unknown:{chan}", "high", f"Unknown chat user in {chan}", "check channel membership or invite them")
         elif act == audit.CONNECTOR_TOOL and e.get("access") == "write":
             conn = e.get("connector") or e.get("target") or "unknown"
             week_writes[conn] = week_writes.get(conn, 0) + 1
@@ -1794,17 +1790,15 @@ def _check_anomaly_alerts(now, st=None):
         if cnt_1h >= 3 and cnt_1h > 3 * (week_writes.get(conn, 0) / 168.0):
             key = f"send_spike:{conn}"
             active_spikes.add(key)
-            if why := alerts.open(key, "high", f"Send spike on {conn}: {cnt_1h} sends in the last hour",
-                                  f"check connector {conn} for runaway scripts or loops"):
-                notify(alerts.headline(why, f"Send spike: {conn}"), f"{cnt_1h} sends in the last hour")
+            alerts.open(key, "high", f"Send spike on {conn}: {cnt_1h} sends in the last hour",
+                        f"check connector {conn} for runaway scripts or loops")
     alerts.sweep("send_spike:", active_spikes, notify)
 
     for conn, host in recent_auths:
         known = prior_hosts.get(conn)
         if (known and host not in known) or (not known and host != C.HOST):
-            if why := alerts.open(f"connector_new_place:{conn}", "high", f"Sign-in from a new place for {conn}: host {host}",
-                                  f"check recent OAuth sign-ins or token use for connector {conn}"):
-                notify(alerts.headline(why, f"New place sign-in: {conn}"), f"host {host}")
+            alerts.open(f"connector_new_place:{conn}", "high", f"Sign-in from a new place for {conn}: host {host}",
+                        f"check recent OAuth sign-ins or token use for connector {conn}")
 
 
 def busy_agents(reg):

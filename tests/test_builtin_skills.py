@@ -268,6 +268,11 @@ def test_the_builtin_review_loop_uses_pl_review(tmp_path, monkeypatch):
         assert rule in text
 
 
+def test_pl_review_runs_pl_tests_full():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    assert "`pl tests full`" in text and "not available" in text
+
+
 # ---------- pl section: read and write one card section ----------
 
 @pytest.fixture
@@ -717,7 +722,18 @@ def test_pl_plan_splits_into_independent_slices():
                    "(after <id>)"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 6" in text
+    assert "pl-builtin-version: 7" in text
+
+
+def test_pl_plan_orders_slices_that_share_a_file():
+    text = _shipped("pl-plan")
+    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 7
+    later = text.split("## Later slices")[1].split("## Decisions")[0]
+    assert "files:" in later
+    for phrase in ("pl depends <later id> --on <earlier id>", "same file", "src/pl/whatsnew.d/", "CHANGELOG",
+                   "pl plan check <N>"):
+        assert phrase in text
+    assert "can merge in any order." not in text
 
 
 def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
@@ -818,7 +834,7 @@ def test_an_unedited_pl_review_v6_is_updated_to_v7(lib, shipped):
 
 def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
     text = _shipped("pl-review")
-    step = text.split("4. Run the repository's")[1].split("5. Apply")[0]
+    step = text.split("4. Run `pl tests full`")[1].split("5. Apply")[0]
     assert "full test suite once" in step and '"ready"' in step and '"Review finds problems" row' in step
 
 

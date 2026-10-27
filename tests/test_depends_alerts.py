@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from pl import agents, alerts, commands, dispatch
+from pl import agents, alerts, commands, dispatch, notifications
 from pl import config as C
 from pl.agents import dep_broken, deps_open
 from pl.trackers import github
@@ -42,7 +42,15 @@ def clock(monkeypatch):
 
 
 @pytest.fixture
-def sent(monkeypatch):
+def sent(tmp_path, monkeypatch):
+    out = []
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    monkeypatch.setattr(notifications, "notify", lambda title, message: out.append((title, message)))
+    return out
+
+
+@pytest.fixture
+def direct(monkeypatch):
     out = []
     monkeypatch.setattr(dispatch, "notify", lambda title, fix="": out.append((title, fix)))
     return out
@@ -96,7 +104,7 @@ def _board(dep_col="Approved", **dep_meta):
     return [_card("o/r#37", depends_on=["o/r#36"]), _card("o/r#36", dep_col, **dep_meta)]
 
 
-def test_a_dropped_dependency_opens_one_alert_naming_both_cards(clock, sent):
+def test_a_dropped_dependency_opens_one_alert_naming_both_cards(clock, sent, direct):
     cards = _board(dropped_at=DROPPED)
     dispatch.check_deps(cards)
     dispatch.check_deps(cards)
@@ -104,10 +112,10 @@ def test_a_dropped_dependency_opens_one_alert_naming_both_cards(clock, sent):
     assert a["count"] == 2
     assert "r#37" in a["title"] and "r#36" in a["title"]
     assert "pl undrop" in a["fix"] and "pl depends 'r#37' --clear" in a["fix"]
-    assert len(sent) == 1
+    assert len(sent) == 1 and "warn" in sent[0][0] and "waits on" in sent[0][0] and direct == []
     clock["now"] += 3600
     dispatch.check_deps(cards)
-    assert sent[-1][0].startswith("Still open after 1 h")
+    assert "Still open after 1 h" in sent[-1][0]
 
 
 def test_a_pr_closed_unmerged_opens_the_alert(clock, sent, gh):

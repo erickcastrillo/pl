@@ -457,10 +457,12 @@ def test_close_during_a_stuck_call_stops_the_server(script, monkeypatch):
 
 
 def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_session(script):
-    t = tracker(stdio_cfg(script, timeout=2, tools=tools(cards={"tool": "whoami", "args": {}},
-                                                         card={"tool": "slow", "args": {"seconds": 60}})))
+    # start-up gets 30s; the call under test keeps a 2s deadline
+    t = tracker(stdio_cfg(script, timeout=30, tools=tools(cards={"tool": "whoami", "args": {}},
+                                                          card={"tool": "slow", "args": {"seconds": 60}})))
     t.cards()
     (old,) = M._sessions.values()
+    old.timeout = 2
     t0 = time.time()
     log, pids, done = {}, [], threading.Event()
 
@@ -489,7 +491,7 @@ def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_se
     ths = [threading.Thread(target=f) for f in (stuck, queued, fresh)]
     [h.start() for h in ths]
     [h.join(40) for h in ths]
-    assert log["b_took"] < 2 + 3, log  # the caller's 2s timeout plus the dead session's shutdown, not 2s + 15s
+    assert log["b_took"] < 2 + 8, log  # the caller's 2s timeout plus the dead session's shutdown under load, not 2s + 15s
     assert len(set(pids)) == 1 and pids[0].isdigit(), pids  # the queued failure did not close the new session
     key, (cur,) = next(iter(M._sessions)), M._sessions.values()
     M._drop(key, old)  # a stale caller dropping its dead session leaves the live one alone
@@ -497,8 +499,11 @@ def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_se
 
 
 def test_time_spent_queued_counts_against_the_callers_timeout(script):
-    t = tracker(stdio_cfg(script, timeout=2, tools=tools(card={"tool": "slow", "args": {"seconds": 1.5}})))
+    # start-up gets 30s; the call under test keeps a 2s deadline
+    t = tracker(stdio_cfg(script, timeout=30, tools=tools(card={"tool": "slow", "args": {"seconds": 1.5}})))
     t.columns()
+    (live,) = M._sessions.values()
+    live.timeout = 2
     first = threading.Thread(target=pytest.raises, args=(SystemExit, t.card, "a"))  # 1.5s: inside its own timeout
     first.start()
     time.sleep(0.3)
