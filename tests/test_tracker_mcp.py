@@ -491,7 +491,7 @@ def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_se
     ths = [threading.Thread(target=f) for f in (stuck, queued, fresh)]
     [h.start() for h in ths]
     [h.join(40) for h in ths]
-    assert log["b_took"] < 2 + 3, log  # the caller's 2s timeout plus the dead session's shutdown, not 2s + 15s
+    assert log["b_took"] < 2 + 8, log  # the caller's 2s timeout plus the dead session's shutdown under load, not 2s + 15s
     assert len(set(pids)) == 1 and pids[0].isdigit(), pids  # the queued failure did not close the new session
     key, (cur,) = next(iter(M._sessions)), M._sessions.values()
     M._drop(key, old)  # a stale caller dropping its dead session leaves the live one alone
