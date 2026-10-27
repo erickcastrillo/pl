@@ -302,7 +302,7 @@ ENTRIES = [
        "Extend → Connectors: + New chat connector, or n on Chat connectors", "pl chat list"),
     _e("2026-10-26.80", "Customer-support pipeline template: triage and owner-approved replies",
        "pl pipelines list --templates", "pl pipelines add support --template customer-support --board local --yes"),
-    _e("2026-10-26.74", "Tests to run can come from .pl/tests.toml (affected_cmd, always, full_on)",
+    _e("2026-10-26.81", "Tests to run can come from .pl/tests.toml (affected_cmd, always, full_on)",
        ".pl/tests.toml", "pl tests affected --json"),
 ]
 
