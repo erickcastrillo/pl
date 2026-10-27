@@ -13,7 +13,7 @@ import tomllib
 from collections import deque
 from pathlib import Path
 
-from pl import jsonout
+from pl import jsonout, worker_budget
 
 SKIP_DIRS = {"node_modules", "__pycache__", "build", "dist"}
 FULL_FILES = {"conftest.py", "pyproject.toml", "uv.lock"}
@@ -34,8 +34,18 @@ class TestsConfigError(Exception):
     __test__ = False
 
 
-def _run(argv, cwd, timeout=60):
-    """The one subprocess seam of this module (tests fake it): (return code, stdout, stderr)."""
+class UnreadableTestsConfig(TestsConfigError):
+    pass
+
+
+def _run(argv, cwd, timeout=60, capture=True):
+    """The one subprocess seam of this module (tests fake it): (return code, stdout, stderr).
+    capture=False runs attached to the terminal with no timeout and returns empty output."""
+    if not capture:
+        try:
+            return subprocess.run(argv, cwd=cwd).returncode, "", ""
+        except OSError as e:
+            return 1, "", str(e)
     try:
         r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -197,6 +207,28 @@ def _settings(root):
     return found
 
 
+def test_command(root, files=None, strict=True):
+    """The pytest command to run, started through `pl tests run` with the workers the budget allows now."""
+    try:
+        ceiling = _workers(root)
+    except UnreadableTestsConfig:
+        if strict:
+            raise
+        ceiling = None
+    n = worker_budget.allowed(None if ceiling == "auto" else ceiling)
+    base = ["uv", "run", "pytest"] if (Path(root) / "uv.lock").exists() else ["python", "-m", "pytest"]
+    return ["pl", "tests", "run", "--", *base, "-n", str(n), "-q", *(files or [])]
+
+
+def _workers_in(argv):
+    for i, a in enumerate(argv):
+        if a == "-n" and i + 1 < len(argv) and argv[i + 1].isdigit():
+            return int(argv[i + 1])
+        if a.startswith("-n") and a[2:].isdigit():
+            return int(a[2:])
+    return 1
+
+
 def _from_cmd(root, argv, base):
     code, out, err = _run([*argv, base], root, timeout=CMD_TIMEOUT)
     if code:
@@ -248,7 +280,7 @@ def _workers(root):
     except FileNotFoundError:
         return None
     except (OSError, tomllib.TOMLDecodeError) as e:
-        raise TestsConfigError(f"{path}: {e}") from e
+        raise UnreadableTestsConfig(f"{path}: {e}") from e
     tests = data.get("tests")
     value = tests.get("workers") if isinstance(tests, dict) else None
     if value is None or value == "auto" or isinstance(value, int) and not isinstance(value, bool) and value >= 1:
@@ -275,30 +307,44 @@ def cmd_tests(argv):
     aff = sub.add_parser("affected", help="the test files a change can affect")
     aff.add_argument("--base", metavar="REF", help="compare with REF (default: merge base with the default branch)")
     aff.add_argument("--json", action="store_true")
-    sub.add_parser("full", help="the command that runs the whole suite")
+    sub.add_parser("full", help="the command that runs the full suite with the workers the budget allows")
+    run = sub.add_parser("run", help="run a test command while holding its pytest workers (-n N) from the budget")
+    run.add_argument("command", nargs=argparse.REMAINDER, metavar="-- COMMAND")
     args = ap.parse_args(argv)
-    if args.action == "full":
-        try:
-            root = _git(".", "rev-parse", "--show-toplevel")
-        except GitError:
-            root = "."
-        try:
-            print(full_command(root))
-        except TestsConfigError as e:
-            print(f"pl tests: {e}", file=sys.stderr)
+    if args.action == "run":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        if not command:
+            print("pl tests run: give the command after --", file=sys.stderr)
             return 2
-        return 0
+        with worker_budget.hold(_workers_in(command)):
+            return _run(command, ".", capture=False)[0]
     try:
-        res = affected(_git(".", "rev-parse", "--show-toplevel"), args.base)
+        root = _git(".", "rev-parse", "--show-toplevel")
+        if args.action == "full":
+            print(shlex.join(test_command(root)))
+            return 0
+        res = affected(root, args.base)
     except GitError as e:
         print(f"pl tests: {e}", file=sys.stderr)
-        res = {"tests": [], "reasons": {}, "full": True, "full_reason": str(e)}
+        root, res = ".", {"tests": [], "reasons": {}, "full": True, "full_reason": str(e)}
+    except (SettingsError, TestsConfigError) as e:
+        print(f"pl tests: {e}", file=sys.stderr)
+        return 2
+    try:
+        command = test_command(root, strict=False) if res["full"] else test_command(root, res["tests"], strict=False) if res["tests"] else None
+    except (SettingsError, TestsConfigError) as e:
+        print(f"pl tests: {e}", file=sys.stderr)
+        return 2
+    command = shlex.join(command) if command else None
     if args.json:
-        jsonout.emit({k: res[k] for k in ("tests", "reasons", "full")})
-    elif res["full"]:
+        jsonout.emit({**{k: res[k] for k in ("tests", "reasons", "full")}, "command": command})
+        return 0
+    if res["full"]:
         print(f"full suite: {res['full_reason']}")
     elif not res["tests"]:
         print("no tests affected")
     else:
         print("\n".join(f"{t}  {res['reasons'][t]}" for t in res["tests"]))
+    if command:
+        print(command)
     return 0

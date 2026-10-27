@@ -1,0 +1,3 @@
+title = "Test runs share one machine-wide worker budget"
+where = "pl tests full / pl tests affected / pl tests run"
+try = "pl tests full"
