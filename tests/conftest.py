@@ -51,6 +51,8 @@ def no_real_idle_clock(monkeypatch):
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    from pl import config as C
+    vars(C).update(C._defaults())   # pl.config's globals start from the defaults under this HOME: none leak from an earlier test, none point at the real ~/.pl
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
     from pl import local_model
 
