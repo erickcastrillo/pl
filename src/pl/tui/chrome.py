@@ -6,7 +6,11 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
+from pl import pipeline
 
+
+UNUSED = "not used in this pipeline"
+CODE_VIEWS = ("prs",)   # engineering-only views, hidden when the pipeline has no code stage
 
 GROUPS = [
     ("dashboard", "Dashboard", [("dashboard", "Dashboard")]),
@@ -14,7 +18,7 @@ GROUPS = [
     ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
     ("review", "Review", [("waiting", "Waiting"), ("prs", "Pull requests")]),
     ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
-    ("extend", "Extend", [("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
+    ("extend", "Extend", [("extend", "Active pod"), ("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
                           ("extensions", "Extensions")]),
     ("activity", "Activity", [("activity", "Activity"), ("alerts", "Alerts")]),
     ("settings", "Settings", [("settings", "Settings")]),
@@ -74,6 +78,7 @@ HELP = {
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",
+    "extend": "The skills this pipeline's pod gives its agents and the stage that runs each, its connector roles, then every skill and connector on the machine.",
     "skills": "Every account's skills, agents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
     "connectors": "The services agents can reach. n adds a connector, t tests it, R revokes it.",
     "pods": "Pods hold the rules agents follow. r adds a rule to the pod, Enter shows it.",
@@ -143,7 +148,7 @@ def tabs():
     from pl.tui import getstarted
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
     return [(vid, name) for vid, name in TABS
-            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid not in CODE_VIEWS or pipeline.has_code()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
 
 
 def groups():
@@ -151,6 +156,11 @@ def groups():
     shown = {vid for vid, _ in tabs()}
     shown_groups = ((gid, label, [v for v in views if v[0] in shown]) for gid, label, views in GROUPS)
     return [g for g in shown_groups if g[2]]
+
+
+def unused(name):
+    """True for a view this pipeline hides, so opening it gives the UNUSED notice."""
+    return name in CODE_VIEWS and not pipeline.has_code()
 
 
 def resolve(name):

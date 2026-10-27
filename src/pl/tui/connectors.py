@@ -10,6 +10,7 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
 from pl import chat, util
+from pl.tui.chatform import ChatAdapterPicker, ChatConnectorForm
 from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.review import ConfirmScreen
 
@@ -17,7 +18,6 @@ _run = subprocess.run  # the one subprocess runner here; tests fake it
 HINT = "n new connector · t test · R revoke (t works on chat rows too)"
 NEW_CHAT = "new-chat"
 CHAT_NOTE = "Chat connectors send approvals, alerts and the digest to Telegram, Slack or Discord."
-CHAT_ADD_HELP = "pl chat add telegram|slack|discord --token-env VAR --allow ID --name NAME"
 
 
 def _format_expiry(exp):
@@ -270,11 +270,26 @@ class ConnectorsPanel(Widget):
 
     def on_data_table_row_selected(self, m):
         if m.row_key.value == NEW_CHAT:
-            self.app.notify(CHAT_ADD_HELP, markup=False)
+            self.new_chat()
         elif m.row_key.value == NEW_ROW:
             self.action_new()
 
+    def new_chat(self):
+        def on_form(msg):
+            if msg:
+                self.rescan_chat()
+                self.app.notify(msg, markup=False)
+
+        def on_adapter(adapter):
+            if adapter:
+                self.app.push_screen(ChatConnectorForm(adapter), on_form)
+
+        self.app.push_screen(ChatAdapterPicker(), on_adapter)
+
     def action_new(self):
+        if self.query_one("#chat-table", DataTable).has_focus:
+            self.new_chat()
+            return
         self.app.push_screen(AddConnectorScreen(), lambda added: added and self.rescan())
 
     def action_test(self):

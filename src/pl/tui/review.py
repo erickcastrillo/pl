@@ -247,15 +247,26 @@ def run_command(app, fn, after=None, kind=None, says=None, failed="", done=None,
     app.run_worker(run, thread=True, group="review")
 
 
-def confirm_and_approve(app, card_id, title, kind, after=None, busy=None, done=None, agent_pending=False):
+def _approved_says(title, kind):
+    def says(c):
+        msg = f"Approved: {title} → {col_name(c['list_id'])}"
+        if kind != "send":
+            return msg
+        from pl import outward
+        return msg + ("; its outward action waits: the kill switch is on" if outward.state()["on"] else "; queued to send")
+    return says
+
+
+def confirm_and_approve(app, card_id, title, kind, after=None, busy=None, done=None, agent_pending=False, outside=()):
     def answered(yes):
         if yes:
             if busy:
                 busy()
-            run_command(app, commands.cmd_approve, after, kind=kind, id=card_id, force=False,
-                        says=lambda c: f"Approved: {title} → {col_name(c['list_id'])}", failed="Not approved: ",
-                        done=done)
+            run_command(app, commands.cmd_approve, after, kind=kind if kind in KIND_COLUMN else None, id=card_id, force=False,
+                        **({"confirm": True} if outside else {}), says=_approved_says(title, kind), failed="Not approved: ", done=done)
     question = "Confirm the agent's approval?" if agent_pending else f"Approve the {kind} for {short_id(card_id)}  {title}?"
+    if outside:
+        question += f"\nOutside recipients: {', '.join(outside)}"
     app.push_screen(ConfirmScreen(question), answered)
 
 

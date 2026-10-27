@@ -18,6 +18,7 @@ COMMANDS = {
     "DashboardView.inbox_approve": "pl approve <id>",
     "DashboardView.inbox_send_back": "pl reject <id> NOTES",
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
+    "ConnectorsPanel.chat_add": "pl chat add ADAPTER --token-env VAR --allow ID --name NAME --yes",
     "ConnectorsPanel.chat_test": "pl chat test NAME",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardScreen.approve": "pl approve <id>",
