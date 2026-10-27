@@ -1,0 +1,3 @@
+title = "Background agents are listed in Running, under the loops"
+where = "Automate → Running"
+try = "pl watch --tab loops"

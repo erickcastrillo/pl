@@ -122,11 +122,15 @@ class Vikunja:
         out = []
         for bucket in self._http("GET", f"{self._view_path()}/tasks?per_page={PAGE}"):
             tasks, page = bucket.get("tasks") or [], 1
-            while len(tasks) == PAGE * page:
+            size = last = len(tasks)   # the server may cap per_page (max_items_per_page): its first page is the page size
+            while size and last == size:
                 page += 1
                 more = self._http("GET", f"{self._view_path()}/tasks?per_page={PAGE}&page={page}"
-                                  f"&filter={urllib.parse.quote('bucket_id=%d' % bucket['id'])}")
-                tasks += next((b.get("tasks") or [] for b in more if b["id"] == bucket["id"]), [])
+                                  f"&filter={urllib.parse.quote('bucket_id = %d' % bucket['id'])}") or []
+                # Vikunja 2 answers a bucket filter with that bucket's tasks as a flat list; older ones group by bucket
+                got = (next((b.get("tasks") or [] for b in more if b.get("id") == bucket["id"]), [])
+                       if more and "tasks" in more[0] else more)
+                tasks, last = tasks + got, len(got)
             out += [self._card(t, bucket["id"]) for t in tasks]
         return out
 

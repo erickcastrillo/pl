@@ -9,6 +9,7 @@ from pl import config as C
 from pl.tui.app import PlApp
 from pl.tui.chrome import MAIN_KEYS, groups
 from test_tui_views import FakeAssistant, Provider, fake_home, settle  # noqa: F401 - fake_home is an autouse fixture there
+from tui_wait import wait_until
 
 
 @pytest.fixture(autouse=True)
@@ -19,9 +20,28 @@ def state_dir(tmp_path, monkeypatch):
     return d
 
 
-async def start(pilot):
+async def wait_for(pilot, condition, what):
+    await wait_until(pilot, condition, what, timeout=20.0)   # a loaded machine (load average 100) needs more than 5s
+
+
+def saved_tab(state_dir, group="work"):
+    try:
+        saved = json.loads((state_dir / "subtabs.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return saved.get(group) if isinstance(saved, dict) else None
+
+
+async def start(pilot, condition=None, what="the console to start"):
+    await wait_for(pilot, lambda: pilot.app.query(Footer), "the console to mount")
     await settle(pilot)
+    await wait_for(pilot, condition or (lambda: pilot.app.query(Footer)), what)
     return pilot.app
+
+
+async def on_tab(pilot, want):
+    await settle(pilot)
+    await wait_for(pilot, lambda: pilot.app.active_tab == want, f"the {want} sub-tab")
 
 
 async def test_ac1_right_and_left_switch_work_sub_tabs_from_the_list():
@@ -29,11 +49,11 @@ async def test_ac1_right_and_left_switch_work_sub_tabs_from_the_list():
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         await pilot.press("3")
-        await settle(pilot)
+        await on_tab(pilot, "ideas")
         assert app.active_tab == "ideas"
         for key, want in (("right", "cards"), ("left", "ideas"), ("left", "cards"), ("right", "ideas")):
             await pilot.press(key)
-            await settle(pilot)
+            await on_tab(pilot, want)
             assert app.active_tab == want
 
 
@@ -42,7 +62,7 @@ async def test_ac2_a_free_letter_opens_its_sub_tab():
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         await pilot.press("6", "m")   # Extend: m opens Models (Loops lost its l to the full-log key, Plan 42 slice 2)
-        await settle(pilot)
+        await on_tab(pilot, "models")
         assert app.active_tab == "models"
         label = app.query_one("#extend-views").get_tab("models").label
         assert label.plain.startswith("Models") and label.spans[0].style.underline and label.spans[0].start == 0
@@ -59,10 +79,10 @@ async def test_ac3_sub_tab_letters_never_collide():
             assert own == set(letters)
             assert not any(k in w._bindings.key_to_bindings for k in letters for w in app.query(f"#g-{gid} *"))
         await pilot.press("3", "i")
-        await settle(pilot)
+        await on_tab(pilot, "ideas")
         assert app.active_tab == "ideas"
         await pilot.press("7", "a")
-        await settle(pilot)
+        await on_tab(pilot, "activity")
         assert app.active_tab == "activity"
 
 
@@ -73,10 +93,12 @@ async def test_ac4_text_boxes_keep_left_right_and_letters(monkeypatch):
         await start(pilot)
         await pilot.press("2")
         await settle(pilot)
+        await wait_for(pilot, lambda: isinstance(app.focused, Input), "the assistant's text box to take focus")
         box = app.focused
         assert isinstance(box, Input)
         await pilot.press("x", "b", "left")
         await settle(pilot)
+        await wait_for(pilot, lambda: box.value == "xb" and box.cursor_position == 1, "the typed letters and the cursor move")
         assert box.value == "xb" and box.cursor_position == 1
         assert app.active_tab == "assistant"
 
@@ -87,7 +109,7 @@ async def test_ac5_single_view_tabs_ignore_left_right(key):
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         await pilot.press(key)
-        await settle(pilot)
+        await on_tab(pilot, [views[0][0] for _, _, views in groups()][int(key) - 1])
         before = app.active_tab
         await pilot.press("left", "right")
         await settle(pilot)
@@ -98,19 +120,21 @@ async def test_ac6_last_sub_tabs_come_back_after_a_restart(state_dir):
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
-        await pilot.press("3", "right", "5", "right")
+        await pilot.press("3", "right", "4", "right")
         await settle(pilot)
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards" and saved_tab(state_dir, "review") == "prs",
+                         "the cards and prs tabs, saved")
     saved = json.loads((state_dir / "subtabs.json").read_text())
-    assert saved["work"] == "cards" and saved["automate"] == "subagents"
+    assert saved["work"] == "cards" and saved["review"] == "prs"
     again = PlApp(snapshot_provider=Provider())
     async with again.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         await pilot.press("3")
-        await settle(pilot)
+        await on_tab(pilot, "cards")
         assert again.active_tab == "cards"
-        await pilot.press("5")
-        await settle(pilot)
-        assert again.active_tab == "subagents"
+        await pilot.press("4")
+        await on_tab(pilot, "prs")
+        assert again.active_tab == "prs"
 
 
 async def test_ac7_another_profile_starts_on_first_sub_tabs(tmp_path, monkeypatch):
@@ -122,10 +146,10 @@ async def test_ac7_another_profile_starts_on_first_sub_tabs(tmp_path, monkeypatc
     async with app.run_test(size=(120, 40)) as pilot:
         await start(pilot)
         await pilot.press("3")
-        await settle(pilot)
+        await on_tab(pilot, "ideas")
         assert app.active_tab == "ideas"
         await pilot.press("5")
-        await settle(pilot)
+        await on_tab(pilot, "loops")
         assert app.active_tab == "loops"
     assert (a / "subtabs.json").read_text() == '{"work": "cards"}'
 
@@ -147,6 +171,7 @@ async def test_ac8_bad_saved_file_falls_back_quietly(state_dir, saved, assistant
         assert not app._notifications
         await pilot.press("3", "right")
         await settle(pilot)
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards", "the cards tab, saved")
     assert json.loads((state_dir / "subtabs.json").read_text())["work"] == "cards"
 
 
@@ -154,13 +179,19 @@ async def test_ac9_tab_option_wins_and_is_saved(state_dir):
     (state_dir / "subtabs.json").write_text('{"work": "ideas"}')
     app = PlApp(snapshot_provider=Provider(), tab="cards")
     async with app.run_test(size=(120, 40)) as pilot:
-        await start(pilot)
+        await start(pilot, lambda: app.active_tab == "cards" and saved_tab(state_dir) == "cards", "the cards tab, saved")
         assert app.active_tab == "cards"
     assert json.loads((state_dir / "subtabs.json").read_text())["work"] == "cards"
 
 
 def footer_keys(app):
     return [k for k in app.query_one(Footer).query(FooterKey)]
+
+
+def footer_ready(app, view):
+    keys = footer_keys(app)
+    laid_out = all(k.region.width > 0 for k in keys if k.action in MAIN_KEYS[view] or k.action == "help")
+    return laid_out and (app._typing() or any(k.action == "help" for k in keys))
 
 
 @pytest.mark.parametrize("view", sorted(MAIN_KEYS))
@@ -172,6 +203,7 @@ async def test_ac10_footer_at_80x24_shows_each_views_main_keys(view):
             pytest.skip("view not shown")
         app.action_tab(view)
         await settle(pilot)
+        await wait_for(pilot, lambda: footer_ready(app, view), f"the {view} footer keys laid out")
         keys = footer_keys(app)
         for k in keys:
             if k.action in MAIN_KEYS[view] or k.action == "help":
@@ -186,5 +218,7 @@ async def test_footer_keeps_console_keys_after_view_keys():
         await start(pilot)
         app.action_tab("cards")
         await settle(pilot)
+        await wait_for(pilot, lambda: {"move_column", "dispatcher"} <= {k.action for k in footer_keys(app)},
+                         "the view's move_column key and the console's dispatcher key in the footer")
         actions = [k.action for k in footer_keys(app)]
         assert actions.index("move_column") < actions.index("dispatcher")

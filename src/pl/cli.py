@@ -171,8 +171,10 @@
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
   pl tests affected [--base REF] [--json]
                           the test files a change can affect (import graph for Python) and whether it needs the
-                          full suite. No profile needed
-  pl tests full           the command that runs the whole suite, with -n from .pl/tests.toml [tests] workers
+                          full suite, and the command to run them. No profile needed
+  pl tests full | run -- COMMAND
+                          full prints the full-suite pytest command with the workers the machine-wide budget
+                          allows now (capped by .pl/tests.toml [tests] workers); run holds the -n N workers of COMMAND from that budget while it runs
   pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,

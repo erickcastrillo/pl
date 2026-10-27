@@ -12,8 +12,8 @@ import time
 import urllib.parse
 
 from pl import config as C
-from pl import alerts, events, jobs, notifications
-from pl.board import col_name, update
+from pl import alerts, events, heldwrites, jobs, notifications
+from pl.board import card, col_name, update
 from pl.trackers import github
 from pl.util import now_iso, parse_iso, short_id
 
@@ -95,36 +95,78 @@ def look_at_ready(repos, lab):
                 saw(it.get("html_url") or "", "open", {x.get("name") for x in it.get("labels") or []})
 
 
+def _queued(cid, op, args, until):
+    heldwrites.add(cid, op, args, until)
+    print(f"{short_id(cid)}  queued: {heldwrites.target({'op': op, 'args': args})}; GitHub budget held, resets "
+          f"{time.strftime('%H:%M', time.localtime(until))} (pl applies it after the reset)")
+
+
 def _give_up(c, todo, n, lab, dry):
     head = short_id(c["id"])
     print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} still fails review after {n} rework rounds; "
           f"labeled {lab['failed']} for a person")
     if dry:
         return
+    left = [u for _, _, u in todo]
+    try:
+        _do_give_up(c, left, n, lab)
+    except github.OverBudget as e:
+        _queued(c["id"], "give_up", {"prs": left, "rounds": n}, e.until)
+
+
+def _do_give_up(c, urls, n, lab):
+    """urls shrinks as each pull request gets its label and comment, so a budget hold leaves only those not done."""
+    done = list(urls)
     note = (f"pl auto-rework: this pull request still fails review after {n} automatic rework rounds, so it is "
             f"labeled `{lab['failed']}` for a person to decide: fix it by hand, send it back once more "
             f"(remove `{lab['failed']}`), or close it.")
-    for repo, num, _ in todo:
+    for url in list(urls):
+        repo, num = PR_URL.match(url).groups()
         github._gh(["api", "-X", "POST", f"repos/{repo}/issues/{num}/labels", "-f", f"labels[]={lab['failed']}"])
         github._gh(["api", "-X", "POST", f"repos/{repo}/issues/{num}/comments", "-f", f"body={note}"])
+        urls.remove(url)
     rw = (c.get("metadata") or {}).get("rework") or {}
     update(c["id"], metadata={"rework": {**rw, "active": False, "gave_up_at": now_iso()}})
-    events.emit("rework_gave_up", c["id"], prs=[u for _, _, u in todo], rounds=n)
+    events.emit("rework_gave_up", c["id"], prs=done, rounds=n)
 
 
 def _send_back(c, todo, n, dry, mo=False):
-    from pl.commands import move_to
-    head = short_id(c["id"])
-    print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} needs rework: back to In progress (round {n})"
+    """True when the card went back (or would, dry); False when pl's budget hold queued the writes."""
+    print(f"{short_id(c['id'])}  PR {', '.join(f'#{num}' for _, num, _ in todo)} needs rework: back to In progress (round {n})"
           + (", merge-only" if mo else ""))
     if dry:
-        return
-    update(c["id"], metadata={"rework": {"round": n, "prs": [u for _, _, u in todo], "at": now_iso(), "active": True,
-                                                 "merge_only": mo}})
+        return True
+    urls = [u for _, _, u in todo]
+    try:
+        _do_send_back(c, n, urls, mo)
+    except github.OverBudget as e:
+        _queued(c["id"], "rework", {"round": n, "prs": urls, "merge_only": mo}, e.until)
+        return False
+    return True
+
+
+def _do_send_back(c, n, urls, mo=False):
+    from pl.commands import move_to
+    update(c["id"], metadata={"rework": {"round": n, "prs": urls, "at": now_iso(), "active": True, "merge_only": mo}})
     move_to(c["id"], "In progress", c["id"])
-    events.emit("rework", c["id"], prs=[u for _, _, u in todo], round=n)
-    notifications.send("review_rework", f"Rework: {head} {', '.join(f'#{num}' for _, num, _ in todo)}",
+    events.emit("rework", c["id"], prs=urls, round=n)
+    notifications.send("review_rework", f"Rework: {short_id(c['id'])} {', '.join('#' + u.rsplit('/', 1)[-1] for u in urls)}",
                        f"round {n}: {c['title'][:50]}")
+
+
+def replay_send_back(entry):
+    """heldwrites op rework: the reason to skip when the card left PR open or the review no longer asks for rework, else None."""
+    c, urls = card(entry["card"]), entry["args"]["prs"]
+    if col_name(c["list_id"]) != "PR open":
+        return "the card is no longer in PR open"
+    mine = [m.groups() for m in map(PR_URL.match, urls) if m]
+    if not any((repo, int(num)) in flagged({r for r, _ in mine}, labels()) for repo, num in mine):
+        return "the pull request is no longer labeled for rework"
+    _do_send_back(c, entry["args"]["round"], urls, entry["args"].get("merge_only", False))
+
+
+def replay_give_up(entry):
+    _do_give_up(card(entry["card"]), entry["args"]["prs"], entry["args"]["rounds"], labels())
 
 
 def sweep(all_cards, dry, force=False):
@@ -142,7 +184,10 @@ def sweep(all_cards, dry, force=False):
     for c in open_cards:
         rw = (c.get("metadata") or {}).get("rework") or {}
         if rw.get("active") and not dry:
-            update(c["id"], metadata={"rework": {**rw, "active": False}})
+            try:
+                update(c["id"], metadata={"rework": {**rw, "active": False}})
+            except github.OverBudget:
+                continue   # a send-back sets the whole rework value anyway
             c["metadata"] = {**c["metadata"], "rework": {**rw, "active": False}}
     if not open_cards:
         _LAST["at"] = now
@@ -158,8 +203,8 @@ def sweep(all_cards, dry, force=False):
         if n > n_max:
             _give_up(c, todo, n - 1, lab, dry)
         else:
-            _send_back(c, todo, n, dry, all(merge_only(_review_text(r, num)) for r, num, _ in todo))
-            sent.append(c["id"])
+            if _send_back(c, todo, n, dry, all(merge_only(_review_text(r, num)) for r, num, _ in todo)):
+                sent.append(c["id"])
     return sent
 
 

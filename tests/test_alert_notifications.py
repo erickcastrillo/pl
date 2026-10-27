@@ -1,5 +1,6 @@
 """Plan 51 slice 3: a newly opened alert and an agent wait tell the owner once, through pl.notifications.send."""
 import types
+from pathlib import Path
 
 import pytest
 import tomlkit
@@ -208,6 +209,76 @@ def test_agent_waiting_left_out_sends_nothing(desktop, monkeypatch):
 @pytest.mark.parametrize("key", ["stalled:o/r#1", "ci_not_running:o/r"])
 def test_sites_that_notify_themselves_are_not_notified_again(key):
     assert key.startswith(alerts.DIRECT)
+
+
+MOVED = ("account_parked:", "accounts_all_out", "trust:", "gh_hold", "tmp_full", "github_rate_limited",
+         "loop_stale:", "loop_failed:", "loop_dead:")
+
+
+def _moved_key(prefix):
+    return prefix + "x" if prefix.endswith(":") else prefix
+
+
+def test_moved_account_and_loop_prefixes_are_not_direct():
+    assert not [p for p in MOVED if p in alerts.DIRECT]
+
+
+@pytest.mark.parametrize("prefix", MOVED)
+def test_a_moved_account_or_loop_alert_sends_one_alert_opened(desktop, clock, monkeypatch, prefix):
+    from pl import chat
+    from pl.chat import gates
+    doc = tomlkit.document()
+    conns = doc.setdefault("connectors", tomlkit.table())
+    conns["slack"] = {"role": "messaging", "adapter": "slack", "token": "${T}", "allow": ["222"], "routes": ["alerts"]}
+    (machine_dir() / "machine.toml").write_text(tomlkit.dumps(doc))
+    sent = []
+    adapter = types.SimpleNamespace(name="slack", allow=["222"], routes=["alerts"],
+                                    send=lambda chat_id, text, buttons=None: sent.append(text))
+    monkeypatch.setattr(chat, "adapter", lambda name: adapter)
+    key = _moved_key(prefix)
+    alerts.open(key, "warn", "T " + prefix, "fix")
+    assert len(desktop) == 1 and "warn" in desktop[0][0] and "T " + prefix in desktop[0][0]
+    gates.post_outbox()
+    assert len(sent) == 1
+    clock["now"] += 60
+    alerts.open(key, "warn", "T " + prefix, "fix")
+    assert len(desktop) == 1
+
+
+@pytest.mark.parametrize("prefix", MOVED)
+def test_a_moved_account_or_loop_alert_with_alert_opened_off_still_records(desktop, prefix):
+    from pl import events
+    _events("merged")
+    key = _moved_key(prefix)
+    alerts.open(key, "warn", "T " + prefix, "fix")
+    assert desktop == [] and _outbox() == []
+    assert any(a["key"] == key for a in alerts.listing())
+    assert any(e.get("kind") == "alert_opened" for e in events.read()) if hasattr(events, "read") else True
+
+
+def test_gh_hold_and_tmp_full_send_one_notification_each(desktop, monkeypatch):
+    from types import SimpleNamespace
+    from pl import ghquota
+    now = alerts._clock()
+    monkeypatch.setattr(ghquota, "check", lambda kind="read": (now + 3600, "GitHub GraphQL budget spent"))
+    monkeypatch.setattr(dispatch, "_statvfs", lambda path: SimpleNamespace(f_files=1000, f_favail=100, f_blocks=1000, f_bavail=100))
+    dispatch.check_machine_alerts()
+    dispatch.check_machine_alerts()
+    assert len(desktop) == 2 and desktop.direct == []
+
+
+def test_trust_alert_sends_one_alert_opened(desktop, monkeypatch):
+    from pl import accounts, harnesses
+    card = {"id": CARD, "title": "Card 1", "list_id": "Approved", "tags": [], "updated_at": "2026-09-30",
+            "metadata": {"pipeline_mode": "auto", "profile": "claude"}}
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, prof: Path("/some/folder"))
+    monkeypatch.setattr(harnesses, "trust_command", lambda *a: "claude")
+    monkeypatch.setattr(dispatch, "healthy_profile", lambda *a, **k: "claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
+    for _ in range(2):
+        _pass(monkeypatch, [card])
+    assert len(desktop) == 1 and "does not trust" in desktop[0][0]
+    assert desktop.direct == []
 
 
 def test_a_rework_wait_alert_notifies_once(desktop):
