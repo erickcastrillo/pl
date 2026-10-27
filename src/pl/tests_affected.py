@@ -19,6 +19,7 @@ SKIP_DIRS = {"node_modules", "__pycache__", "build", "dist"}
 FULL_FILES = {"conftest.py", "pyproject.toml", "uv.lock"}
 TEST_DIRS = {"tests", "test"}
 CMD_TIMEOUT = 120
+FULL_DEFAULT = "uv run pytest -q"
 
 
 class GitError(Exception):
@@ -26,6 +27,14 @@ class GitError(Exception):
 
 
 class SettingsError(Exception):
+    pass
+
+
+class TestsConfigError(Exception):
+    __test__ = False
+
+
+class UnreadableTestsConfig(TestsConfigError):
     pass
 
 
@@ -198,23 +207,15 @@ def _settings(root):
     return found
 
 
-def _workers_setting(root):
-    """[tests] workers of <root>/.pl/tests.toml, the repo's ceiling; None when unset. A bad value is an error."""
-    try:
-        cfg = tomllib.loads((Path(root) / ".pl" / "tests.toml").read_text()).get("tests")
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
-    if not isinstance(cfg, dict) or "workers" not in cfg:
-        return None
-    value = cfg["workers"]
-    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-        raise SettingsError(".pl/tests.toml: workers must be a whole number of at least 1")
-    return value
-
-
-def test_command(root, files=None):
+def test_command(root, files=None, strict=True):
     """The pytest command to run, started through `pl tests run` with the workers the budget allows now."""
-    n = worker_budget.allowed(_workers_setting(root))
+    try:
+        ceiling = _workers(root)
+    except UnreadableTestsConfig:
+        if strict:
+            raise
+        ceiling = None
+    n = worker_budget.allowed(None if ceiling == "auto" else ceiling)
     base = ["uv", "run", "pytest"] if (Path(root) / "uv.lock").exists() else ["python", "-m", "pytest"]
     return ["pl", "tests", "run", "--", *base, "-n", str(n), "-q", *(files or [])]
 
@@ -272,6 +273,34 @@ def affected(root, ref=None):
     return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason}
 
 
+def _workers(root):
+    path = Path(root) / ".pl" / "tests.toml"
+    try:
+        data = tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise UnreadableTestsConfig(f"{path}: {e}") from e
+    tests = data.get("tests")
+    value = tests.get("workers") if isinstance(tests, dict) else None
+    if value is None or value == "auto" or isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    raise TestsConfigError(f'{path}: [tests] workers must be "auto" or a whole number of at least 1, got {value!r}')
+
+
+def _sets_workers(token):
+    return token.startswith(("-n", "--numprocesses"))
+
+
+def full_command(root, cmd=FULL_DEFAULT):
+    """cmd with `-n <workers>` from <root>/.pl/tests.toml when it is a pytest command that does not set -n itself."""
+    argv = shlex.split(cmd)
+    if not any(Path(t).name in ("pytest", "py.test") for t in argv) or any(_sets_workers(t) for t in argv):
+        return cmd
+    workers = _workers(root)
+    return cmd if workers is None else f"{cmd} -n {workers}"
+
+
 def cmd_tests(argv):
     ap = argparse.ArgumentParser(prog="pl tests")
     sub = ap.add_subparsers(dest="action", required=True)
@@ -298,12 +327,12 @@ def cmd_tests(argv):
     except GitError as e:
         print(f"pl tests: {e}", file=sys.stderr)
         root, res = ".", {"tests": [], "reasons": {}, "full": True, "full_reason": str(e)}
-    except SettingsError as e:
+    except (SettingsError, TestsConfigError) as e:
         print(f"pl tests: {e}", file=sys.stderr)
         return 2
     try:
-        command = test_command(root) if res["full"] else test_command(root, res["tests"]) if res["tests"] else None
-    except SettingsError as e:
+        command = test_command(root, strict=False) if res["full"] else test_command(root, res["tests"], strict=False) if res["tests"] else None
+    except (SettingsError, TestsConfigError) as e:
         print(f"pl tests: {e}", file=sys.stderr)
         return 2
     command = shlex.join(command) if command else None

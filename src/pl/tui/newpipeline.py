@@ -13,7 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, ContentSwitcher, Input, RadioButton, RadioSet, SelectionList, Static
 
 from pl import config as C
-from pl import boardcheck, pipeline, profiles, setup
+from pl import boardcheck, ghquota, pipeline, profiles, setup
 from pl.trackers import github
 
 STEPS = ["What kind", "Name", "Where cards live", "Who does the work", "Review"]
@@ -29,7 +29,7 @@ def name_problem(name):
 
 
 def _project_rows(args):
-    r = github._run(args)
+    r = ghquota.tracker_gh(args)
     if r.returncode:
         return []
     return [{"owner": p["owner"]["login"], "number": p["number"], "title": p["title"]}
@@ -39,10 +39,10 @@ def _project_rows(args):
 def gh_projects():
     """(projects, None) for the person and each organisation, or (None, why not)."""
     try:
-        if github._run(["auth", "status"]).returncode:
+        if ghquota.tracker_gh(["auth", "status"]).returncode:
             return None, "gh is not signed in: run gh auth login"
         rows = _project_rows(["project", "list", "--format", "json", "--limit", "100"])
-        for org in github._run(["api", "user/orgs", "--jq", ".[].login"]).stdout.split():
+        for org in ghquota.tracker_gh(["api", "user/orgs", "--jq", ".[].login"]).stdout.split():
             rows += _project_rows(["project", "list", "--owner", org, "--format", "json", "--limit", "100"])
     except SystemExit as e:
         return None, str(e.code).removeprefix("pl: ")
@@ -78,7 +78,7 @@ def _check_github(tracker, columns):
         have = {o.get("name") for o in field.get("options") or []}
         if missing := [c for c in columns if c not in have]:
             return f'the "pl stage" field lacks: {", ".join(missing)}'
-        r = github._run(["repo", "view", repo, "--json", "name"])
+        r = ghquota.tracker_gh(["repo", "view", repo, "--json", "name"])
         if r.returncode:
             return f"repository {repo} is not reachable: {r.stderr.strip()}"
     except SystemExit as e:

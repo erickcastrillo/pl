@@ -174,7 +174,7 @@
                           full suite, and the command to run them. No profile needed
   pl tests full | run -- COMMAND
                           full prints the full-suite pytest command with the workers the machine-wide budget
-                          allows now; run holds the -n N workers of COMMAND from that budget while it runs
+                          allows now (capped by .pl/tests.toml [tests] workers); run holds the -n N workers of COMMAND from that budget while it runs
   pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,

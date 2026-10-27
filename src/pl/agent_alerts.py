@@ -1,4 +1,4 @@
-"""Alerts for stage agents that wait for a person, finish without moving their card, or are blocked on an unmerged card."""
+"""Alerts for stage agents that wait for a person or are blocked on an unmerged card."""
 import re
 import time
 
@@ -9,13 +9,14 @@ from pl.util import cmd_id, short_id
 BLOCK_RE = re.compile(r"missing prerequisite|not (?:yet )?merged|needs? .* merged|depends on|prerequisite slice", re.I)
 CARD_RE = re.compile(r"[\w.-]+/[\w.-]+#\d+|[\w.-]+#\d+")
 SLICE_RE = re.compile(r"slice (\d+)", re.I)
-DEFAULT_WAIT = 30   # minutes; [dispatch] release_waiting_after = 0 turns release off, not the alert
+WAIT_MINUTES = 30   # minutes an agent waits for a person before agent_waiting opens
 BLOCK_LINES = 8
 TITLE_WIDTH = 80
 NUDGE = "pl: this stage looks stalled. Finish it now, or write one line saying what blocks you."
 STALL_RETRIES = 2   # restarts of a stalled stage per card per day, then the alert only
 NUDGE_ECHO_SLACK = 60   # idle this close to the time since the nudge means only the nudge's own echo moved the pane
-KINDS = ("agent_waiting:", "agent_unmoved:", "agent_blocked_dep:")
+KINDS = ("agent_waiting:", "agent_blocked_dep:")
+RETIRED = "agent_unmoved:"   # the stall watchdog acts on an agent that finished without moving its card
 
 
 def _dispatch():
@@ -40,24 +41,22 @@ def check(all_cards, st, restarting):
         text, word, why = agent_screen.read(w["pane"])
         if text is None:   # an unreadable pane keeps its alerts: resolving them would notify again on the next good read
             active.update(k for k in (f"{p}{c['id']}" for p in KINDS) if alerts.get(k))
+            if c["id"] in waits:
+                seen[c["id"]] = waits[c["id"]]
             continue
         lines = agent_screen.plain(text).splitlines()
-        for found in (_waiting(c, w, text, word, why, waits, seen), _unmoved(c, w, col, word) if not alerts.get(f"stalled:{c['id']}") else None,
-                      _blocked(c, w, all_cards, lines)):
+        for found in (_waiting(c, w, text, word, why, waits, seen), _blocked(c, w, all_cards, lines)):
             if found:
                 active.add(found)
     st["agent_waits"] = seen   # a card no longer waiting starts a new clock next time
     for prefix in KINDS:
         alerts.sweep(prefix, active, _dispatch().notify)
+    alerts.sweep(RETIRED, set(), _dispatch().notify)
 
 
 def _raise(key, severity, title, fix, cards):
     alerts.open(key, severity, title, fix, cards=cards)
     return key
-
-
-def _limit():
-    return C.DISPATCH.get("release_waiting_after") or DEFAULT_WAIT
 
 
 def _waiting(c, w, text, word, why, waits, seen):
@@ -70,27 +69,13 @@ def _waiting(c, w, text, word, why, waits, seen):
     if rec.get("session") != w.get("session_id") or not isinstance(rec.get("since"), (int, float)):
         rec = {"since": time.time(), "session": w.get("session_id")}
     seen[c["id"]] = rec
-    if time.time() - rec["since"] < _limit() * 60:
+    if time.time() - rec["since"] < WAIT_MINUTES * 60:
         return None
     first_line = (why or gate or (asked if isinstance(asked, str) else "") or "a prompt")[:TITLE_WIDTH]
     cid = c["id"]
     return _raise(f"agent_waiting:{cid}", "high" if gate else "warn",
                   f"Card {short_id(cid)}: its {w['stage']} agent waits for you: {first_line}",
                   f"see tmux window {w.get('window')} in {C.TMUX_SESSION}; pl drop {cmd_id(cid)} or pl retry {cmd_id(cid)}", [cid])
-
-
-def _unmoved(c, w, col, word):
-    d = _dispatch()
-    stage, cid = w["stage"], c["id"]
-    if not (word == "finished" or w.get("finished_turn")) or d.stage_complete(c, col, stage):
-        return None
-    prs = (c.get("metadata") or {}).get("pr_urls") or []
-    if stage == "run" and prs:
-        return _raise(f"agent_unmoved:{cid}", "warn",
-                      f"Card {short_id(cid)}: its run agent finished with a PR but the card was not moved",
-                      f'pl move {cmd_id(cid)} "PR open" --pr {prs[-1]}', [cid])
-    return _raise(f"agent_unmoved:{cid}", "warn", f"Card {short_id(cid)}: its {stage} agent finished without moving the card",
-                  f"pl retry {cmd_id(cid)} or pl drop {cmd_id(cid)}", [cid])
 
 
 def _named_cards(lines, c, all_cards):
@@ -122,7 +107,7 @@ def _blocked(c, w, all_cards, lines):
 
 
 def _excused(c, w, word):
-    """True when the agent waits on a person or a reset, or has finished (agent_unmoved covers that): not a stall."""
+    """True when the agent waits on a person or a reset, or has finished: not a stall."""
     d = _dispatch()
     if (c.get("metadata") or {}).get("question") or w.get("limit_hit") or w.get("permission_wait") or w.get("trust_wait"):
         return True

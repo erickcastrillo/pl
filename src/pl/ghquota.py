@@ -43,8 +43,8 @@ PERIODIC_ROLES = ("dispatcher", "console")
 ROLE = {"name": "command"}   # who this process is: "dispatcher", "console", or the pl command it runs ("pl card")
 
 
-def set_role(name):
-    ROLE["name"] = name
+def set_role(name, profile=None):
+    ROLE["name"], ROLE["profile"] = name, profile
 
 
 def _dir():
@@ -163,14 +163,14 @@ def ledger(acct=None):
     return _load(_path(acct))
 
 
-def record(points=1, rate=None, sub=None):
+def record(points=1, rate=None, sub=None, acct=None):
     """Count points spent by this profile and role; rate is a GraphQL rateLimit object ({cost, remaining, resetAt,
     limit}) when the answer carried one, and then its cost is what was spent. Without one, an estimate counts only
     against a reading of this window. A failure to write never fails the call."""
-    prof, role = C.PROFILE_NAME or "-", ROLE["name"]
+    prof, role = ROLE.get("profile") or C.PROFILE_NAME or "-", ROLE["name"]
     try:
         with _locked():
-            led = ledger()
+            led = ledger(acct)
             if isinstance(rate, dict) and isinstance(rate.get("remaining"), int):
                 reset = _epoch(rate.get("resetAt")) or led.get("reset")
                 points = int(rate.get("cost") or 0)
@@ -188,7 +188,7 @@ def record(points=1, rate=None, sub=None):
             if sub:
                 subs = led.setdefault("subs", {}).setdefault(f"{prof} {role}", {})
                 subs[sub] = subs.get(sub, 0) + points
-            _write(_path(), led)
+            _write(_path(acct), led)
     except OSError:
         pass
 
@@ -206,13 +206,13 @@ def _rate(out):
     return d.get("rateLimit") or (d.get("data") or {}).get("rateLimit")
 
 
-def _count(args, out):
+def _count(args, out, folder=None):
     from pl import ghwrap   # lazy: ghwrap imports this module
     from pl.trackers import github
     if ghwrap.kind(args) != "graphql" or github._is_search(args):
         return
     words = [a for a in args if re.fullmatch(r"[a-z][a-z-]*", a)]
-    record(ghwrap.ESTIMATE, rate=_rate(out), sub=" ".join(words[:2]) or None)
+    record(ghwrap.ESTIMATE, rate=_rate(out), sub=" ".join(words[:2]) or None, acct=account(folder) if folder else None)
 
 
 def gh(run, args, **kw):
@@ -223,9 +223,15 @@ def gh(run, args, **kw):
         return r
     finally:
         try:
-            _count(args, getattr(r, "stdout", None))
+            _count(args, getattr(r, "stdout", None), (kw.get("env") or {}).get("GH_CONFIG_DIR"))
         except Exception:
             pass   # counting never changes what the caller's gh call returned
+
+
+def tracker_gh(args):
+    """The tracker's own gh runner (timeout, env, SystemExit messages) with the call counted."""
+    from pl.trackers import github
+    return gh(lambda argv, **kw: github._run(argv[1:]), args)
 
 
 def record_agent(acct, caller, sub, points, remaining, reset, rest=False):

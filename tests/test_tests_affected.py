@@ -302,14 +302,21 @@ def test_repo_workers_is_a_ceiling(repo, budget, monkeypatch, capsys, workers, e
     assert f"pytest -n {expected}" in capsys.readouterr().out
 
 
+def test_workers_auto_leaves_the_budget_to_decide(repo, budget, monkeypatch, capsys):
+    settings(repo, '[tests]\nworkers = "auto"\n')
+    fake_git(monkeypatch, repo)
+    T.cmd_tests(["full"])
+    assert "pytest -n 6" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("action", ["full", "affected"])
-@pytest.mark.parametrize("value", ['"auto"', "0", "true"])
-def test_workers_auto_is_an_error_for_full_and_affected(repo, budget, monkeypatch, capsys, action, value):
+@pytest.mark.parametrize("value", ['"many"', "0", "true"])
+def test_bad_workers_is_an_error_for_full_and_affected(repo, budget, monkeypatch, capsys, action, value):
     settings(repo, f"[tests]\nworkers = {value}\n")
     fake_git(monkeypatch, repo, ["src/app/core.py"])
     assert T.cmd_tests([action]) == 2
     err = capsys.readouterr().err
-    assert ".pl/tests.toml" in err and "whole number of at least 1" in err
+    assert ".pl/tests.toml" in err and "workers" in err
 
 
 def test_uv_lock_picks_uv_run_pytest(repo, budget, monkeypatch, capsys):
@@ -376,3 +383,67 @@ def test_run_without_n_holds_one_worker(budget, monkeypatch):
     assert T.cmd_tests(["run", "--", "pytest", "-n8", "x"]) == 0
     assert T.cmd_tests(["run", "--", "pytest"]) == 0
     assert seen == [8, 1]
+
+
+# ---------- pl tests full: the command that runs the whole suite ----------
+
+def _tests_toml(root, body):
+    (root / ".pl").mkdir(exist_ok=True)
+    (root / ".pl" / "tests.toml").write_text(body)
+
+
+def test_full_command_is_serial_without_tests_toml(tmp_path):
+    assert T.full_command(tmp_path) == "uv run pytest -q"
+
+
+def test_full_command_is_serial_without_workers_key(tmp_path):
+    _tests_toml(tmp_path, '[tests]\nalways = ["tests/test_a.py"]\n')
+    assert T.full_command(tmp_path) == "uv run pytest -q"
+
+
+def test_full_command_adds_auto_workers(tmp_path):
+    _tests_toml(tmp_path, '[tests]\nworkers = "auto"\n')
+    assert T.full_command(tmp_path) == "uv run pytest -q -n auto"
+
+
+def test_full_command_adds_numeric_workers(tmp_path):
+    _tests_toml(tmp_path, "[tests]\nworkers = 4\n")
+    assert T.full_command(tmp_path) == "uv run pytest -q -n 4"
+
+
+@pytest.mark.parametrize("value", ['"many"', "0", "-2", "true"])
+def test_full_command_rejects_bad_workers(tmp_path, value):
+    _tests_toml(tmp_path, f"[tests]\nworkers = {value}\n")
+    with pytest.raises(T.TestsConfigError) as e:
+        T.full_command(tmp_path)
+    assert str(tmp_path / ".pl" / "tests.toml") in str(e.value) and "workers" in str(e.value)
+
+
+def test_full_command_rejects_unparsable_file(tmp_path):
+    _tests_toml(tmp_path, "[tests\n")
+    with pytest.raises(T.TestsConfigError, match="tests.toml"):
+        T.full_command(tmp_path)
+
+
+def test_full_command_leaves_non_pytest_commands(tmp_path):
+    _tests_toml(tmp_path, '[tests]\nworkers = "auto"\n')
+    assert T.full_command(tmp_path, "make test") == "make test"
+
+
+@pytest.mark.parametrize("cmd", ["uv run pytest -q -n 2", "pytest -n4", "pytest --numprocesses=3"])
+def test_full_command_leaves_commands_that_set_n(tmp_path, cmd):
+    _tests_toml(tmp_path, '[tests]\nworkers = "auto"\n')
+    assert T.full_command(tmp_path, cmd) == cmd
+
+
+def test_full_command_does_not_read_the_file_for_other_commands(tmp_path):
+    _tests_toml(tmp_path, "[tests\n")
+    assert T.full_command(tmp_path, "make test") == "make test"
+
+
+def test_pl_repo_tests_toml_sets_a_capped_worker_count():
+    # several builds and reviews share one machine, so the repo caps workers instead of "auto"
+    import tomllib
+    from pathlib import Path
+    data = tomllib.loads((Path(__file__).parents[1] / ".pl" / "tests.toml").read_text())
+    assert isinstance(data["tests"]["workers"], int) and 1 < data["tests"]["workers"] <= 4

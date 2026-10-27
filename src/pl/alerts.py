@@ -21,18 +21,6 @@ _clock = time.time
 WAITING = ("permission_wait:", "agent_waiting:")
 # transitional: these call sites still notify themselves; plan 51 slices 6-8 empty it
 DIRECT = (
-    "dep_broken:",
-    "pr_person:",
-    "auto_merge_off:",
-    "account_parked:",
-    "accounts_all_out",
-    "trust:",
-    "gh_hold",
-    "tmp_full",
-    "github_rate_limited",
-    "loop_stale:",
-    "loop_failed:",
-    "loop_dead:",
     "memory_low",
     "runaway:",
     "stalled:",

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from pl import accounts, agents, alerts, dispatch, events, manager, merges, rework
+from pl import accounts, agents, alerts, dispatch, events, manager, merges, notifications, rework
 from pl import config as C
 from pl.trackers import github
 
@@ -47,6 +47,15 @@ def clock(monkeypatch):
 def sent(monkeypatch):
     out = []
     monkeypatch.setattr(dispatch, "notify", lambda title, fix="": out.append((title, fix)))
+    monkeypatch.setattr(notifications, "notify", lambda title, fix="": out.append((title, fix)))
+    return out
+
+
+@pytest.fixture
+def pr_sent(tmp_path, monkeypatch):
+    out = []
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    monkeypatch.setattr(notifications, "notify", lambda title, message: out.append((title, message)))
     return out
 
 
@@ -140,7 +149,7 @@ def _person(cards):
     return alerts.get("pr_person:o/r#9")
 
 
-def test_last_rework_round_opens_pr_person(clock, sent):
+def test_last_rework_round_opens_pr_person(clock, pr_sent):
     C.DISPATCH["rework_rounds"] = 3
     a = _person([_pr_card(round=3)])
     assert alerts._live(a)
@@ -148,12 +157,12 @@ def test_last_rework_round_opens_pr_person(clock, sent):
     assert a["cards"] == ["o/r#9"]
 
 
-def test_gave_up_opens_pr_person(clock, sent):
+def test_gave_up_opens_pr_person(clock, pr_sent):
     C.DISPATCH["rework_rounds"] = 3
     assert "gave up" in _person([_pr_card(round=1, gave_up_at="2026-10-26T00:00:00Z")])["title"]
 
 
-def test_failed_and_needs_person_labels_from_seen(clock, sent):
+def test_failed_and_needs_person_labels_from_seen(clock, pr_sent):
     C.DISPATCH["rework_rounds"] = 3
     rework.SEEN[URL] = frozenset({"pl:review-failed", "needs-person"})
     a = _person([_pr_card(round=3)])
@@ -162,16 +171,16 @@ def test_failed_and_needs_person_labels_from_seen(clock, sent):
     assert len([x for x in alerts.listing() if x["key"].startswith("pr_person:")]) == 1
 
 
-def test_pr_person_not_duplicated(clock, sent):
+def test_pr_person_not_duplicated(clock, sent, pr_sent):
     C.DISPATCH["rework_rounds"] = 3
     card = _pr_card(round=3)
     dispatch.check_alerts([card], set())
     dispatch.check_alerts([card], set())
     assert len([x for x in alerts.listing() if x["key"].startswith("pr_person:")]) == 1
-    assert len(sent) == 1
+    assert len(pr_sent) == 1 and "Card r#9" in pr_sent[0][0] and sent == []
 
 
-def test_pr_person_closes_when_card_leaves_pr_open(clock, sent):
+def test_pr_person_closes_when_card_leaves_pr_open(clock, pr_sent):
     C.DISPATCH["rework_rounds"] = 3
     card = _pr_card(round=3)
     assert alerts._live(_person([card]))
@@ -179,7 +188,7 @@ def test_pr_person_closes_when_card_leaves_pr_open(clock, sent):
     assert not alerts._live(_person([card]))
 
 
-def test_pr_person_closes_when_pr_merged(clock, sent):
+def test_pr_person_closes_when_pr_merged(clock, pr_sent):
     C.DISPATCH["rework_rounds"] = 3
     rework.SEEN[URL] = frozenset({"needs-person"})
     card = _pr_card(round=0)
@@ -188,7 +197,7 @@ def test_pr_person_closes_when_pr_merged(clock, sent):
     assert not alerts._live(_person([card]))
 
 
-def test_rounds_zero_ignores_round_rule_keeps_labels(clock, sent):
+def test_rounds_zero_ignores_round_rule_keeps_labels(clock, pr_sent):
     C.DISPATCH["rework_rounds"] = 0
     assert _person([_pr_card(round=3)]) is None
     rework.SEEN[URL] = frozenset({"pl:review-failed"})

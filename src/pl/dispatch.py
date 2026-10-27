@@ -564,9 +564,9 @@ def _check_auto_merge(name, svc):
         events.failure("auto_review_check_skipped", "warning", f"could not read allow_auto_merge for {repo}")
     elif allowed:
         alerts.resolve(key)
-    elif why := alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
-                            f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand"):
-        notify(alerts.headline(why, f"Auto-merge is off for {repo}"), "pl alerts")
+    else:
+        alerts.open(key, "warn", f"Auto-merge is off for {repo}: pl-review will leave passing PRs for a person to merge",
+                    f"turn on \"Allow auto-merge\" in {repo}'s settings (General > Pull Requests), or merge by hand")
 
 
 def ensure_services(st, all_cards, reg, dry, pause, hold=None):
@@ -1173,12 +1173,10 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                       + (f"moved under {to}, same session" if moved else f"not moved: {why}" if changed
                          else f"{f'not moved ({why}); ' if why else ''}restarting under {alt} (agent was {int(age // 60)} min old)" if switch
                          else "left to resume by itself at the reset time" if auto_resumes else "no profile left with credits; waiting"))
-                if not back and (why := alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
-                                      f"parked until {until[11:16]} UTC; {accounts.check_note(prof)}; "
-                                      f"pl accounts --reset {prof} un-parks it")):
-                    notify(alerts.headline(why, f"Profile {prof} hit its usage limit"), f"parked until {until[11:16]} UTC; "
-                           + (f"moved and resumed its agent under {to}" if moved
-                              else f"young agents move to {alt}" if alt else "no other profile has credits"))
+                if not back:
+                    alerts.open(f"account_parked:{prof}", "warn", f"Account {prof} is parked: usage limit",
+                                f"parked until {until[11:16]} UTC; {accounts.check_note(prof)}; "
+                                f"pl accounts --reset {prof} un-parks it")
                 if changed and not dry:
                     m = c["metadata"]
                     w = m.get("worker") or {}
@@ -1440,9 +1438,8 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 print(f"{short_id(c['id'])}  {stage} waits: " + (f"its account {pinned} is parked" if pinned else
                       f"its accounts {', '.join(pool)} are parked") + " (pl accounts)")
                 continue
-            if why := alerts.open("accounts_all_out", "high", "Every account is out of credits",
-                                  "cards wait for the first reset; pl accounts shows when"):
-                notify(alerts.headline(why, "Every Claude profile is out of credits"), f"{c['title'][:40]} waits; pl profiles")
+            alerts.open("accounts_all_out", "high", "Every account is out of credits",
+                        "cards wait for the first reset; pl accounts shows when")
             print(f"{short_id(c['id'])}  {stage} waits: every profile is out of credits (pl profiles)")
             continue
         h = harnesses.harness_for(stage, {**c, "metadata": {**(c.get("metadata") or {}), "profile": prof}})[0] if C.PROFILES else None
@@ -1451,10 +1448,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             if dry:
                 print(f"{short_id(c['id'])}  {stage} would wait for trust: account {prof} does not trust {folder}")
                 continue
-            if why := alerts.open(f"trust:{prof}:{folder}", "warn",
-                                  f"Account {prof} does not trust {folder}: run {fix}, choose \"Yes, I trust this folder\" and exit",
-                                  "cards for this account wait; pl starts no agent on it until then and never answers the prompt"):
-                notify(alerts.headline(why, f"Trust {folder} for account {prof}"), f"run {fix} and answer once")
+            alerts.open(f"trust:{prof}:{folder}", "warn",
+                        f"Account {prof} does not trust {folder}: run {fix}, choose \"Yes, I trust this folder\" and exit",
+                        "cards for this account wait; pl starts no agent on it until then and never answers the prompt")
             print(f"{short_id(c['id'])}  {stage} waits: account {prof} does not trust {folder} ({fix})")
             continue
         if stage == "run":
@@ -1553,8 +1549,7 @@ def check_deps(all_cards):
             title = f"Card {short_id(c['id'])} waits on {short_id(dep_id)}: " + ("it was dropped" if why == "dropped" else "its PR was closed unmerged")
             fix = (f"pl undrop {cmd_id(dep_id)}" if why == "dropped" else f"open a new PR for {cmd_id(dep_id)}") \
                 + f" or pl depends {cmd_id(c['id'])} --clear"
-            if w := alerts.open(key, "warn", title, fix):
-                notify(alerts.headline(w, title), fix)
+            alerts.open(key, "warn", title, fix, cards=[c["id"]])
     alerts.sweep("dep_broken:", active, notify)
 
 
@@ -1567,9 +1562,8 @@ def check_machine_alerts():
     hold = ghquota.check("read")
     if hold and hold[0] > alerts._clock():
         until, why = hold
-        if opened := alerts.open("gh_hold", "warn", f"GitHub budget hold: {why}",
-                                 f"waits until {time.strftime('%H:%M', time.gmtime(until))} UTC by itself; pl doctor shows the ledger"):
-            notify(alerts.headline(opened, f"GitHub budget hold: {why}"), "pl doctor shows the ledger")
+        alerts.open("gh_hold", "warn", f"GitHub budget hold: {why}",
+                    f"waits until {time.strftime('%H:%M', time.gmtime(until))} UTC by itself; pl doctor shows the ledger")
     else:
         hold = None
     alerts.sweep("gh_hold", {"gh_hold"} if hold else set(), notify)
@@ -1584,8 +1578,7 @@ def check_machine_alerts():
         full.add("tmp_full")
         title = f"Temp folder {path} is {round(max(inodes, space) * 100)}% full ({'inodes' if inodes >= space else 'space'})"
         fix = f"clean {path} (old pytest-of-*, pl worktree leftovers); pl doctor"
-        if why := alerts.open("tmp_full", "high", title, fix):
-            notify(alerts.headline(why, title), fix)
+        alerts.open("tmp_full", "high", title, fix)
     alerts.sweep("tmp_full", full, notify)
 
 
@@ -1602,10 +1595,9 @@ def check_parked_alerts(all_cards):
                 ids.append(c["id"])
         shown = ", ".join(short_id(i) for i in ids[:10]) + (f" +{len(ids) - 10} more" if len(ids) > 10 else "")
         until = accounts.parking(a).get("until") or ""
-        if why := alerts.open(f"account_parked:{a}", "warn", f"Account {a} is parked: usage limit",
-                              f"parked until {until[11:16]} UTC; {accounts.check_note(a)}; waiting: {shown or 'none'}; pl accounts --reset {a} un-parks it",
-                              cards=ids):
-            notify(alerts.headline(why, f"Account {a} is parked"), f"pl accounts --reset {a}")
+        alerts.open(f"account_parked:{a}", "warn", f"Account {a} is parked: usage limit",
+                    f"parked until {until[11:16]} UTC; {accounts.check_note(a)}; waiting: {shown or 'none'}; pl accounts --reset {a} un-parks it",
+                    cards=ids)
     alerts.sweep("account_parked:", {f"account_parked:{p}" for p in parked}, notify)
     return parked
 
@@ -1637,9 +1629,7 @@ def check_pr_person_alerts(all_cards):
         fix = f"{', '.join(urls)}: fix the PR by hand, remove {lab['failed']} to send it back once more, or close it"
         if any(need in names for names in seen):
             fix += f"; or clear {need} once the merge rule it names is fixed"
-        if opened := alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix,
-                                 cards=[c["id"]]):
-            notify(alerts.headline(opened, f"PR needs a person: {c['title'][:40]}"), fix)
+        alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR needs a person ({'; '.join(why)})", fix, cards=[c["id"]])
     alerts.sweep("pr_person:", active, notify)
 
 
@@ -1732,9 +1722,8 @@ def check_alerts(all_cards, failed, st=None):
             continue
         key = f"loop_stale:{name}"
         stale.add(key)
-        if why := alerts.open(key, "warn", f"Loop {name} has not run for {age(ran)} (it fires every {every // 60} min)",
-                              s.get("waits") or "its window is gone; the dispatcher starts it again on its next pass"):
-            notify(alerts.headline(why, f"Loop {name} has not run for {age(ran)}"), s.get("waits") or "see the Loops tab")
+        alerts.open(key, "warn", f"Loop {name} has not run for {age(ran)} (it fires every {every // 60} min)",
+                    s.get("waits") or "its window is gone; the dispatcher starts it again on its next pass")
     alerts.sweep("loop_stale:", stale, notify)
     failing = set()
     for name in C.SERVICES if st is not None else ():
@@ -1742,8 +1731,7 @@ def check_alerts(all_cards, failed, st=None):
         if len(last) == 3 and all(r.get("exit") not in (0, None) for r in last):
             key = f"loop_failed:{name}"
             failing.add(key)
-            if why := alerts.open(key, "high", f"Loop {name} failed its last 3 runs", f"see its log under state/loops/{name}.log"):
-                notify(alerts.headline(why, f"Loop {name} failed 3 runs in a row"), last[-1].get("result") or "see the Loops tab")
+            alerts.open(key, "high", f"Loop {name} failed its last 3 runs", f"see its log under state/loops/{name}.log")
     alerts.sweep("loop_failed:", failing, notify)
     _check_anomaly_alerts(now, st)
     if not C.SERVICES:
@@ -1755,8 +1743,7 @@ def check_alerts(all_cards, failed, st=None):
     dead = {f"loop_dead:{n}" for n, u in loops.items() if n in C.SERVICES and (u or {}).get("dead")}
     for key in sorted(dead):
         name = key.split(":", 1)[1]
-        if why := alerts.open(key, "warn", f"Loop {name} looks dead: no tokens for 3 fires", f"open the Loops tab and restart {name}"):
-            notify(alerts.headline(why, f"Loop {name} looks dead"), "no tokens spent for 3 of its fires; see the Loops tab")
+        alerts.open(key, "warn", f"Loop {name} looks dead: no tokens for 3 fires", f"open the Loops tab and restart {name}")
     alerts.sweep("loop_dead:", dead, notify)
 
 
@@ -2099,10 +2086,10 @@ def _passes(a):
                 raise
             if not a.dry_run:
                 summary.mark_failed(str(e))
-            if isinstance(e, RateLimited) and (why := alerts.open(
+            if isinstance(e, RateLimited):
+                alerts.open(
                     "github_rate_limited", "warn", "GitHub rate limit: pl is backing off",
-                    "pl waits out the back-off and tries again by itself; nothing to do")):
-                notify(alerts.headline(why, "GitHub rate limit"), e.note)
+                    "pl waits out the back-off and tries again by itself; nothing to do")
             if not (isinstance(e, RateLimited) and e.until == noted):   # one event per rate-limit window
                 events.emit("error", message=str(e))
             noted = e.until if isinstance(e, RateLimited) else None

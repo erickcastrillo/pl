@@ -14,6 +14,7 @@ from pl.board import sections
 from pl.tui.app import PlApp
 from pl.tui.chrome import NEW_ROW
 from pl.tui.ideas import IdeasView
+from tui_wait import settle, view_app, wait_until
 
 CARD_ID = "cccccccc-3333-4333-8333-333333333333"
 CLEAR_BRIEF = {"problem": "Leads wait for replies", "who": "agents", "outcome": "replies in a minute",
@@ -326,12 +327,12 @@ async def test_pilot_typing_an_answer_shows_the_fake_question(harness):
         await pilot.press("3")
         box = app.query_one("#idea-input", TextArea)
         box.focus()
-        await pilot.pause()
+        await wait_until(pilot, lambda: box.has_focus, "the input to take focus")
         for ch in "Auto reply":
             await pilot.press("space" if ch == " " else ch)
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
+        await settle(pilot, lambda: "Which channel should reply first?" in str(app.query_one("#idea-transcript", Static).render())
+                     and not box.disabled, "the fake question to be shown")
         shown = str(app.query_one("#idea-transcript", Static).render())
         assert "Which channel should reply first?" in shown
         assert "Auto reply" in shown
@@ -346,17 +347,15 @@ async def test_pilot_failed_approve_reloads_the_idea_from_disk(harness, board):
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.press("3")
         app.query_one("#idea-input", TextArea).focus()
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.query_one("#idea-input", TextArea).has_focus, "the input to take focus")
         for ch in "hi":
             await pilot.press(ch)
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
         view = app.query_one("IdeasView")
+        await settle(pilot, lambda: view.current is not None and ideas.is_clear(view.current), "the brief to be clear")
         assert view.current["status"] == "interviewing" and ideas.is_clear(view.current)
         view.action_approve()
-        await app.workers.wait_for_complete()
-        await pilot.pause()
+        await settle(pilot, lambda: not view.approving and view.check_action("approve", ()) is True, "the failed approve to be handled")
         assert view.current["status"] == "interviewing"
         assert view.check_action("approve", ()) is True
 
@@ -369,7 +368,7 @@ async def test_pilot_failed_approve_does_not_reenable_input_mid_turn(harness, bo
         box = app.query_one("#idea-input", TextArea)
         view.busy, box.disabled = True, True            # a turn is running
         view._approve_failed({"id": "a" * 12, "status": "interviewing"}, "pl: tracker down")
-        await pilot.pause()
+        await pilot.pause()   # nothing to wait for: checks the input stays off
         assert view.busy and box.disabled
         view.busy, box.disabled, view.approving = False, False, True
         view._send("more")                              # send is off while approving
@@ -383,7 +382,7 @@ async def test_pilot_border_title_treats_the_harness_name_as_plain_text(harness)
         view = app.query_one("IdeasView")
         view.current = {**ideas.new_idea("x"), "harness": "[/oops]"}
         view._redraw()
-        await pilot.pause()
+        await wait_until(pilot, lambda: "\\[/oops]" in app.query_one("#idea-center").border_title, "the border title")
         assert "\\[/oops]" in app.query_one("#idea-center").border_title
 
 
@@ -396,7 +395,7 @@ async def test_pilot_an_approve_held_by_another_console_shows_no_success_message
         app.notify = lambda msg, **kw: shown.append(msg)
         view._approved({"id": "a" * 12, "status": "approving", "card_id": None})
         view._approved({"id": "a" * 12, "status": "approved", "card_id": CARD_ID})
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(shown) == 2, "both notifications")
         assert shown[0] == "another console is creating this card"
         assert shown[1].startswith("card cccccccc created")
 
@@ -572,12 +571,10 @@ def _save_ideas(*texts):
 
 async def test_pilot_ideas_list_starts_with_a_dim_new_idea_row(harness):
     _save_ideas("First idea", "Second idea")
-    app = PlApp(snapshot_provider=_no_data)
+    app = view_app(IdeasView)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
         ol = app.query_one("#idea-list", OptionList)
+        await settle(pilot, lambda: ol.border_title.startswith("Ideas ·"), "the ideas list to fill")
         first = ol.get_option_at_index(0)
         assert first.id == NEW_ROW and first.prompt.plain == "+ New idea" and "dim" in str(first.prompt.style)
         assert [ol.get_option_at_index(n).id for n in (1, 2)] == [i["id"] for i in ideas.list_ideas()]
@@ -585,12 +582,10 @@ async def test_pilot_ideas_list_starts_with_a_dim_new_idea_row(harness):
 
 
 async def test_pilot_ideas_list_with_no_ideas_holds_only_the_new_idea_row(harness):
-    app = PlApp(snapshot_provider=_no_data)
+    app = view_app(IdeasView)
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("3")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
         ol = app.query_one("#idea-list", OptionList)
+        await settle(pilot, lambda: ol.border_title.startswith("Ideas ·"), "the ideas list to fill")
         assert [o.id for o in ol.options if not o.disabled] == [NEW_ROW]   # the empty state is a disabled, id-less option
         assert ol.option_count == 2 and ol.get_option_at_index(1).disabled
         assert ol.border_title == "Ideas · 0"
@@ -601,20 +596,19 @@ async def test_pilot_enter_on_the_new_idea_row_opens_the_composer(harness):
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.press("3")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
         view = app.query_one(IdeasView)
         ol = app.query_one("#idea-list", OptionList)
+        await settle(pilot, lambda: ol.border_title.startswith("Ideas ·"), "the ideas list to fill")
         ol.focus()
         ol.highlighted = 1
-        await pilot.pause()
+        await wait_until(pilot, lambda: view.current is not None, "the idea to be picked")
         picked = view.current
         assert picked is not None
         await pilot.press("up")
-        await pilot.pause()
+        await wait_until(pilot, lambda: ol.highlighted == 0, "the new idea row to be highlighted")
         assert ol.highlighted == 0 and view.current is picked
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: view.current is None, "the composer to open")
         assert view.current is None
         assert "Describe an idea and press enter" in str(app.query_one("#idea-transcript", Static).render())
         assert "PROBLEM  …" in str(app.query_one("#idea-brief", Static).render())
@@ -627,16 +621,15 @@ async def test_pilot_n_on_any_row_opens_the_composer_and_highlights_the_new_row(
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.press("3")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
         view = app.query_one(IdeasView)
         ol = app.query_one("#idea-list", OptionList)
+        await settle(pilot, lambda: ol.border_title.startswith("Ideas ·"), "the ideas list to fill")
         ol.focus()
         ol.highlighted = 1
-        await pilot.pause()
+        await wait_until(pilot, lambda: view.current is not None, "the idea to be picked")
         assert view.current is not None
         await pilot.press("n")
-        await pilot.pause()
+        await wait_until(pilot, lambda: view.current is None and ol.highlighted == 0, "the composer to open")
         assert view.current is None and ol.highlighted == 0
         assert app.query_one("#idea-input", TextArea).has_focus
     keys = [b for b in IdeasView.BINDINGS if b.key == "n"]
@@ -650,19 +643,16 @@ async def test_pilot_an_idea_from_the_new_row_is_filed_through_ideas_approve(har
     app = PlApp(snapshot_provider=_no_data)
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.press("3")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
+        view = app.query_one(IdeasView)
+        await settle(pilot, lambda: app.query_one("#idea-list", OptionList).border_title.startswith("Ideas ·"), "the ideas list to fill")
         app.query_one("#idea-list", OptionList).focus()
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.query_one("#idea-input", TextArea).has_focus, "the composer to take focus")
         for ch in "hi":
             await pilot.press(ch)
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
-        view = app.query_one(IdeasView)
+        await settle(pilot, lambda: view.current is not None and ideas.is_clear(view.current), "the brief to be clear")
         view.action_approve()
-        await app.workers.wait_for_complete()
-        await pilot.pause()
+        await settle(pilot, lambda: not view.approving and calls, "the idea to be filed")
     assert len(calls) == 1
     assert [c["list_id"] for c in board.created] == ["col-Inbox"]
