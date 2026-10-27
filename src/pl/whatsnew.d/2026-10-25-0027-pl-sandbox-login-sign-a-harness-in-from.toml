@@ -1,0 +1,4 @@
+id = "2026-10-25.27"
+title = "pl sandbox login: sign a harness in from inside the profile's Multipass VM"
+where = "pl sandbox create, status, start, stop, destroy, login; [sandbox] in the profile config"
+try = "pl sandbox login <account>"

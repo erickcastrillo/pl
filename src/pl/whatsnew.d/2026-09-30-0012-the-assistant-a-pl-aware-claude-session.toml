@@ -1,0 +1,4 @@
+id = "2026-09-30.12"
+title = "The Assistant: a pl-aware Claude session you chat with"
+where = "tab 0 Assistant"
+try = "open it and ask \"what is stuck?\""

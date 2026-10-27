@@ -1,0 +1,4 @@
+id = "2026-10-25.32"
+title = "Memory: run summaries and approval reasons, searchable"
+where = "pl mcp serve --memory (tool memory_search); [connectors.<name>] role = [\"memory\"]"
+try = "pl memory search \"split into 3 PRs\""

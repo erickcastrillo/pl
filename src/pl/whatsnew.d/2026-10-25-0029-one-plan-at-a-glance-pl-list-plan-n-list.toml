@@ -1,0 +1,4 @@
+id = "2026-10-25.29"
+title = "One plan at a glance: pl list --plan N lists that plan's cards in slice order"
+where = "Done cards included; the Product board is skipped"
+try = "pl list --plan 21"

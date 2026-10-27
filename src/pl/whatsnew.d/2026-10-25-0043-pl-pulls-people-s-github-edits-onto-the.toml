@@ -1,0 +1,4 @@
+id = "2026-10-25.43"
+title = "pl pulls people's GitHub edits onto the local board and alerts on conflicts"
+where = "dispatcher: every 5 min with [sync] github; conflicts in pl alerts"
+try = "pl sync now"

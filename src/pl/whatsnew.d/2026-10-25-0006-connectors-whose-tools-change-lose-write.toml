@@ -1,0 +1,4 @@
+id = "2026-10-25.06"
+title = "Connectors whose tools change lose write access until you approve them"
+where = "Alerts tab; pl connectors approve-tools <name>"
+try = "pl connectors approve-tools <name>"

@@ -75,7 +75,7 @@ def tile_values(data, window):
     return {"specs": m.get("specs_written", 0), "plans": m.get("plans_written", 0),
             "opened": count_since(act.get("opened"), seconds) if act else "?",
             "merged": count_since(act.get("merged"), seconds) if act else "?",
-            "ready": len(pr_groups(rows)["merge"]), "waiting": needs_you_count(data)}
+            "ready": len(pr_groups(rows)["merge"]), "waiting": needs_you_count(data) + len(data.get("watchdog") or [])}
 
 
 # row key → (tab, Needs-you card group to select on the Pipeline with its attention filter on, or None)
@@ -87,10 +87,19 @@ def decide_rows(data):
     """(key, count, headline, sub line, colour) for the Decide-next list: "Needs you" first, then every group with
     something in it, then the Health row that opens the details panel."""
     rows = data["snapshot"]["rows"]
-    total = needs_you_count(data)
+    wd = data.get("watchdog") or []
+    total = needs_you_count(data) + len(wd)
+    sub = "gates, manual tasks, PRs, stuck work" if wd else "gates, manual tasks, PRs to decide or merge"
     lead = ("needs", total, f"Needs you · {total}" if total else "Nothing needs you",
-            "gates, manual tasks, PRs to decide or merge" if total else "agents work on their own", "#e0a040")
-    return [lead, *(r for r in _groups(rows) if r[1]), ("health", 0, "Health", "agents, loops, errors, tokens", "dim")]
+            sub if total else "agents work on their own", "#e0a040")
+    return [lead, *(_alert_row(w, rows) for w in wd), *(r for r in _groups(rows) if r[1]),
+            ("health", 0, "Health", "agents, loops, errors, tokens", "dim")]
+
+
+def _alert_row(w, rows):
+    title = next((r["card"].get("title", "") for r in rows if (r.get("card") or {}).get("id") == w["card"]), "")
+    sub = f"{w['kind']} · open {age(w['opened_at'])} · {w['tried']}" + (" · acked" if w["acked"] else "")
+    return (f"alert:{w['key']}", 1, f"  {short_id(w['card'])} {title}".rstrip(), sub, "red")
 
 
 def _groups(rows):

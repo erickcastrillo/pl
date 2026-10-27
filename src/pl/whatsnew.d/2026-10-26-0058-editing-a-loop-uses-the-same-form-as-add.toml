@@ -1,0 +1,4 @@
+id = "2026-10-26.58"
+title = "Editing a loop uses the same form as adding one"
+where = "Loops tab: e opens the add form filled in, with the skill list and schedule check"
+try = "pl loops edit"

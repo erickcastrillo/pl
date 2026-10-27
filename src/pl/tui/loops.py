@@ -16,7 +16,7 @@ from textual.widgets import Checkbox, DataTable, Input, Label, OptionList, Selec
 
 from pl import agents, events, loops, pipeline, schedule, skills, util
 from pl import config as C
-from pl.tui.chrome import NEW_ROW, empty_state, new_row
+from pl.tui.chrome import NEW_ROW, empty_state, skip_headings
 from pl.tui.review import ConfirmScreen
 from pl.tui.runlog import RunLogScreen
 from pl.usage import human
@@ -26,10 +26,8 @@ TAIL_LINES = 40
 ACTIVE_RE = re.compile(r"active (\d+)([mhd]) ago")
 UNIT = {"m": 60, "h": 3600, "d": 86400}
 HINT = "n/a: no Claude turn seen yet · an idle loop restarts fresh over max_context (80% unless set; 0 = off)"
-COLUMNS = (("loop", "label"), ("state", "state"), ("context", "context"), ("tokens 1h", "tokens"), ("tokens 7d", "tokens7d"),
-           ("account", "account"), ("does", "does"), ("schedule", "schedule"), ("last active", "last"), ("next run", "next"),
-           ("last result", "output"))
 LOG_LINES = 200
+LOOP_KEYS = {"edit", "pause", "run_now", "delete", "open_window", "restart"}
 CODE_LOOPS = ("merge-gate", "auto-merge")
 DOES_CHARS = 60
 LOOP_PREFIX_RE = re.compile(r"/loop (\d+)([mhd]) ")
@@ -99,6 +97,27 @@ def sentence(row):
     """The loop as one sentence for the top of the right pane."""
     nxt = f"; next at {row['next']}" if row["next"] != "-" else ""
     return f"{row['does']} {row['schedule']}{nxt}; last run {row['output']}"
+
+
+def loop_sentence(x):
+    """The loop as one list row: name, schedule, state when it is not on, next run and last result."""
+    line = Text(no_wrap=True, overflow="ellipsis")
+    line.append(x["name"], style="bold")
+    if x["state"] == "paused":
+        line.append(f" is paused ({x['schedule']})")
+    else:
+        line.append(f" runs {x['schedule']}")
+        if x["state"] != "on":
+            line.append(f" ({x['state']})", style="dim" if x["state"] == "off" else "red")
+    if x["next"] != "-":
+        line.append(f"; next {x['next']}")
+    line.append(f"; last result: {x['output']}")
+    return line
+
+
+def loop_stats(x):
+    return (f"account {x['account']} · context {x['context']} · tokens 1h {x['tokens']} · tokens 7d {x['tokens7d']} "
+            f"· last active {x['last']}")
 
 
 def _clock(at, fmt="%H:%M"):
@@ -517,7 +536,7 @@ class LogScreen(ModalScreen):
 class LoopsView(Widget):
     DEFAULT_CSS = """
     LoopsView { height: 1fr; }
-    #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
+    #loops-table { width: 2fr; height: 1fr; border: round $panel-lighten-2; }
     #loops-right { width: 1fr; height: 1fr; }
     #loops-screen { height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     #loops-runs { height: auto; max-height: 12; border: round $panel-lighten-2; }
@@ -533,51 +552,68 @@ class LoopsView(Widget):
 
     def compose(self):
         with Horizontal():
-            yield DataTable(id="loops-table", cursor_type="row", zebra_stripes=True)
+            yield DataTable(id="loops-table", cursor_type="row", show_header=False, zebra_stripes=False)
             with Vertical(id="loops-right"):
                 yield Static(Text("select a loop", style="dim"), id="loops-screen")
                 yield OptionList(id="loops-runs")
 
     def on_mount(self):
         t = self.query_one(DataTable)
-        t.add_columns(*(label for label, _ in COLUMNS))
+        t.add_column("loops")
         t.border_subtitle = HINT
+        self._last = 0
         runs = self.query_one("#loops-runs", OptionList)
         runs.border_title = "Earlier runs · enter opens the log"
         runs.display = False
 
-    def selected(self):
+    @staticmethod
+    def _is_item(key):
+        return key == NEW_ROW or key.startswith("loop:")
+
+    def _key(self):
         t = self.query_one(DataTable)
         if not t.row_count:
             return None
-        key = t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
-        return next((x for x in self.loops if x["name"] == key), None)
+        return t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
 
-    def show(self, data):
-        t = self.query_one(DataTable)
-        keep = t.cursor_row
-        loops = loop_rows(data)
-        if loops != self.loops:   # an unchanged table is not rebuilt
-            self.loops = loops
-            t.clear()
-            t.add_row(new_row("loop"), *[""] * (len(COLUMNS) - 1), key=NEW_ROW)
-            for x in self.loops:
-                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS), key=x["name"])
-            if not self.loops:
-                for line in empty_state("loops"):
-                    t.add_row(Text(line, style="dim"), *(Text("") for _ in COLUMNS[1:]))
-            t.move_cursor(row=min(max(keep, 0), len(self.loops)))
-        self.load_tail()
-
-    def on_data_table_row_highlighted(self, _):
-        self.refresh_bindings()
-        self.load_tail()
+    def selected(self):
+        key = self._key() or ""
+        return next((x for x in self.loops or [] if f"loop:{x['name']}" == key), None)
 
     def check_action(self, action, parameters):
         if action == "open_log":
             x = self.selected()
             return bool(x and x.get("every"))
+        if action in LOOP_KEYS:
+            return self.selected() is not None
         return True
+
+    def show(self, data):
+        t = self.query_one(DataTable)
+        keep, keep_row = self._key(), t.cursor_row
+        rows = loop_rows(data)
+        if rows != self.loops:   # an unchanged table is not rebuilt
+            self.loops = rows
+            t.clear()
+            t.add_row(Text("Loops", style="bold"), key="head:loops")
+            for x in self.loops:
+                t.add_row(loop_sentence(x), key=f"loop:{x['name']}")
+            if not self.loops:
+                for i, line in enumerate(empty_state("loops")):
+                    t.add_row(Text(line, style="dim"), key=f"none:loops:{i}")
+            t.add_row(Text(f"+ New loop from a template ({len(loops.TEMPLATES)})", style="#e0a040"), key=NEW_ROW)
+            if keep in [r.key.value for r in t.ordered_rows]:
+                t.move_cursor(row=t.get_row_index(keep))
+            else:
+                t.move_cursor(row=min(max(keep_row, 0), t.row_count - 1))
+            self._last = skip_headings(t, self._is_item)
+        self.refresh_bindings()
+        self.load_tail()
+
+    def on_data_table_row_highlighted(self, _):
+        self._last = skip_headings(self.query_one(DataTable), self._is_item, self._last)
+        self.refresh_bindings()
+        self.load_tail()
 
     def action_open_log(self):
         x = self.selected()
@@ -607,6 +643,11 @@ class LoopsView(Widget):
     def load_tail(self):
         x = self.selected()
         if x is None:
+            if self._key() == NEW_ROW:
+                body = Text("New loop from a template\n", style="bold")
+                body.append("\n".join(loops.TEMPLATES) + "\n\nEnter or n opens the new-loop form", style="not bold")
+                self.query_one("#loops-screen", Static).update(body)
+                self.query_one("#loops-runs", OptionList).display = False
             return
         name, pane = x["name"], x["pane"]
 
@@ -642,13 +683,14 @@ class LoopsView(Widget):
         if x is None or x["name"] != name:
             return
         body = Text(sentence(x) + "\n", style="bold")
+        body.append(loop_stats(x) + "\n", style="dim")
         body.append(f"{name} loop\n" if pane else f"{name} loop is off; showing the dispatcher\n")
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
         self.query_one("#loops-runs", OptionList).display = False
 
     def on_data_table_row_selected(self, event):
-        if event.row_key.value == NEW_ROW:   # "+ New loop" opens the add form; any other row opens its log
+        if event.row_key.value == NEW_ROW:   # the template row opens the add form; a loop row opens its log
             self.action_new()
             return
         x = self.selected()

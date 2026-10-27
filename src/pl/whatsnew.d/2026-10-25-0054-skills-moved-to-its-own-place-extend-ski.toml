@@ -1,0 +1,4 @@
+id = "2026-10-25.54"
+title = "Skills moved to its own place: Extend → Skills"
+where = "Extend tab, Skills (ctrl+p \"Skills\"); Settings keeps a link line until the next minor release"
+try = "pl skills list"

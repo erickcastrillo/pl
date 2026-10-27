@@ -15,7 +15,7 @@ KEEP_DAYS = 30          # the Dashboard needs 14 days; never prune younger than 
 ERROR_CHARS = 200
 LEVELS = ("info", "warning", "error")
 ERROR_KINDS = {"error", "rework_gave_up", "runaway"}
-WARNING_KINDS = {"github_budget_wait", "github_budget_gap", "alert_opened", "agent_restarted", "loop_restart", "held", "worktree_removed"}
+WARNING_KINDS = {"github_budget_wait", "github_budget_gap", "alert_opened", "agent_restarted", "loop_restart", "held", "worktree_removed", "rework_waiting"}
 
 
 def _now():

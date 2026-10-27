@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -2636,6 +2637,8 @@ async def test_palette_runs_an_action_on_the_current_tab(monkeypatch):
 
 async def test_palette_switches_tab_then_runs_the_action(monkeypatch):
     _fake_card_read(monkeypatch, [])
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 80)) as pilot:
         await settle(pilot)
@@ -3227,10 +3230,12 @@ async def test_loops_keys_edit_pause_run_delete_and_window(monkeypatch):
         await pilot.press("5")
         await settle(pilot)
         assert [r["name"] for r in app.query_one(tui_loops.LoopsView).loops] == ["invoices"]
+        await pilot.press("down")
+        await settle(pilot)
         await pilot.press("p")
         await settle(pilot)
-        assert calls == []   # the cursor starts on the "+ New" row, so p does nothing there
-        await pilot.press("down")
+        assert calls == []   # the template row is last, so p does nothing there
+        await pilot.press("up")
         await settle(pilot)
         await pilot.press("p")
         await settle(pilot)
@@ -3405,7 +3410,6 @@ async def _open_edit_form(app, pilot, monkeypatch, edit=None):
     await settle(pilot)
     await pilot.press("5")
     await settle(pilot)
-    await pilot.press("down")
     await pilot.press("e")
     await settle(pilot)
     assert isinstance(app.screen, tui_loops.LoopForm)
@@ -3749,7 +3753,7 @@ async def test_loop_log_hides_secrets(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down", "enter")   # row 0 is + New loop
+        await pilot.press("enter")   # the cursor starts on the first loop
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LogScreen)
         assert "ghp_" not in screen_text(app)
@@ -3766,7 +3770,7 @@ async def test_enter_on_a_loop_opens_its_log(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down", "enter")   # row 0 is + New loop
+        await pilot.press("enter")   # the cursor starts on the first loop
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.LogScreen)
         text = screen_text(app)
@@ -3788,7 +3792,7 @@ async def test_enter_without_a_log_says_so(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down", "enter")   # row 0 is + New loop
+        await pilot.press("enter")   # the cursor starts on the first loop
         await settle(pilot)
         assert not isinstance(app.screen, tui_loops.LogScreen)
         assert any("no log yet for invoices" in n for n in notes)
@@ -3801,10 +3805,12 @@ def test_new_row_reads_plus_new_thing_and_is_dim():
     assert NEW_ROW == "+new"
 
 
-async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(monkeypatch):
+async def test_loops_view_lists_heading_loops_and_template_row(monkeypatch):
     from pl import loops
     from pl.tui import loops as tui_loops
-    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    from pl.tui.chrome import NEW_ROW
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False},
+                  "triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
     C.LOOPS_OFF = {}
     monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
     app = PlApp(snapshot_provider=Provider(fake_data()))
@@ -3813,14 +3819,16 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         await pilot.press("5")
         await settle(pilot)
         t = app.query_one("#loops-table", DataTable)
-        assert t.get_row_at(0)[0].plain == "+ New loop" and t.row_count == 2
+        assert [r.key.value for r in t.ordered_rows] == ["head:loops", "loop:invoices", "loop:triage", NEW_ROW]
+        assert t.get_row_at(3)[0].plain == f"+ New loop from a template ({len(loops.TEMPLATES)})"
+        assert app.query_one(tui_loops.LoopsView).selected()["name"] == "invoices"
+        await pilot.press("up")
+        await settle(pilot)
+        assert t.cursor_row == 1   # the heading is skipped
+        await pilot.press("down", "down")
         await pilot.press("enter")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.TemplateGallery)
-        await pilot.press("escape")
-        await settle(pilot)
-        await pilot.press("n")
-        await settle(pilot)
         app.screen.query_one("#gallery-table").move_cursor(row=len(loops.TEMPLATES))
         await pilot.press("enter")
         await settle(pilot)
@@ -3828,11 +3836,89 @@ async def test_loops_tab_first_row_is_new_loop_and_enter_and_n_open_the_form(mon
         assert app.screen.query_one("#loop-kind").value is Select.NULL
         await pilot.press("escape")
         await settle(pilot)
-        assert not isinstance(app.screen, tui_loops.LoopForm)
-        await pilot.press("down")
+        await pilot.press("up")
         await pilot.press("n")
         await settle(pilot)
         assert isinstance(app.screen, tui_loops.TemplateGallery)
+
+
+def test_loop_sentence_names_schedule_next_and_last_result():
+    from pl.tui import loops as tui_loops
+    soon = (datetime.now() + timedelta(minutes=90)).replace(microsecond=0).isoformat()
+    _loops_state(soon, {"result": "3 invoices overdue", "exit": 0, "tokens": 900})
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False},
+                  "triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
+    C.LOOPS_OFF = {"stale": {"prompt": "find stale cards", "every": "daily 09:00", "enabled": False}}
+    rows = {r["name"]: r for r in tui_loops.loop_rows({"snapshot": {"rows": []}})}
+    invoices = tui_loops.loop_sentence(rows["invoices"]).plain
+    assert invoices.startswith("invoices runs every hour") and "; next " in invoices
+    assert invoices.endswith("; last result: ok, 3 invoices overdue")
+    assert invoices.count("(") == 1 and "(off)" in invoices   # no worker in the fake snapshot: a state that is not "on" is said
+    assert "(" not in tui_loops.loop_sentence({**rows["invoices"], "state": "on"}).plain
+    assert tui_loops.loop_sentence(rows["triage"]).plain == "triage runs every 30 minutes (off); last result: not reported"
+    assert tui_loops.loop_sentence(rows["stale"]).plain == "stale is paused (every day at 09:00); last result: not reported"
+    assert tui_loops.loop_sentence({**rows["invoices"], "state": "dead?"}).plain.startswith("invoices runs every hour (dead?)")
+
+
+async def test_loop_keys_are_hidden_and_inert_on_the_template_row(monkeypatch):
+    from pl import loops
+    from pl.tui import loops as tui_loops
+    C.SERVICES = {"invoices": {"prompt": "list overdue invoices", "profile": "acme", "every": "hourly", "writes": False}}
+    C.LOOPS_OFF = {}
+    for name in ("edit", "set_enabled", "run", "remove"):
+        monkeypatch.setattr(loops, name, lambda *a, **kw: pytest.fail("a loop key acted on the template row"))
+    monkeypatch.setattr(tui_loops.LoopsView, "load_tail", lambda self: None)
+    app = PlApp(snapshot_provider=Provider(fake_data()))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        view = app.query_one(tui_loops.LoopsView)
+        assert view.check_action("pause", ()) is True
+        await pilot.press("down")
+        await settle(pilot)
+        assert view.check_action("pause", ()) is False and view.check_action("new", ()) is True
+        depth = len(app.screen_stack)
+        await pilot.press("e", "p", "g", "d", "w", "R")
+        await settle(pilot)
+        assert len(app.screen_stack) == depth
+
+
+async def test_loops_view_with_no_loops_shows_no_loops_and_the_template_row():
+    from pl import loops
+    from pl.tui.chrome import NEW_ROW, empty_state
+    from pl.tui.loops import LoopsView
+    _no_loops()
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_tab(pilot, app, "loops")
+        t = app.query_one("#loops-table", DataTable)
+        keys = [r.key.value for r in t.ordered_rows]
+        assert keys[0] == "head:loops" and keys[-1] == NEW_ROW and len(keys) == len(empty_state("loops")) + 2
+        assert all(k.startswith("none:loops") for k in keys[1:-1])
+        assert t.cursor_row == len(keys) - 1 and app.query_one(LoopsView).selected() is None
+        assert f"+ New loop from a template ({len(loops.TEMPLATES)})" in screen_text(app)
+
+
+async def test_loop_pane_shows_tokens_and_context_and_the_template_row_lists_templates(monkeypatch):
+    from pl import agents, loops
+    C.SERVICES = {"triage": {"prompt": "/loop 30m /triage", "profile": "acme"}}
+    C.LOOPS_OFF = {}
+    monkeypatch.setattr(agents, "pane_tail", lambda *a, **k: ["hello"])
+    data = fake_data()
+    data["usage"] = {"loops": {"triage": {"tokens_1h": 1200, "tokens_7d": 12_500, "context": 40, "dead": False}}}
+    data["snapshot"]["rows"].append({"loop": "triage", "kind": "loop_idle", "worker": {"pane": "%1", "window": "@7"}})
+    app = PlApp(snapshot_provider=Provider(data))
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
+        await pilot.press("5")
+        await settle(pilot)
+        text = str(app.query_one("#loops-screen").visual)
+        assert "account acme · context 40% · tokens 1h 1200" in text and "hello" in text
+        await pilot.press("down")
+        await settle(pilot)
+        text = str(app.query_one("#loops-screen").visual)
+        assert all(name in text for name in loops.TEMPLATES) and "hello" not in text
 
 
 async def test_add_form_shows_a_refusal_of_pl_loops_add_under_its_field_and_stays_open(monkeypatch, tmp_path):
@@ -4069,7 +4155,7 @@ async def test_an_empty_loops_tab_says_what_it_is_for():
         await _open_tab(pilot, app, "loops")
         text = screen_text(app)
         assert all(line in text for line in empty_state("loops"))
-        assert str(app.query_one("#loops-screen").render()) == "select a loop"
+        assert "New loop from a template" in str(app.query_one("#loops-screen").visual)
 
 
 async def test_the_first_loop_replaces_the_empty_state():
@@ -4099,15 +4185,16 @@ async def test_empty_loops_row_keys_do_nothing(monkeypatch):
         await _open_tab(pilot, app, "loops")
         table = app.query_one("#loops-table", DataTable)
         table.focus()
-        table.move_cursor(row=1)   # row 0 is "+ New loop"
+        table.move_cursor(row=1)   # a line of the empty state: the cursor moves on to the template row
+        await settle(pilot)
+        assert table.cursor_row == table.row_count - 1
         depth = len(app.screen_stack)
         told = []
         monkeypatch.setattr(app, "notify", lambda msg, **kw: told.append(msg))
-        await pilot.press("e", "p", "g", "d", "enter", "w", "R")
+        await pilot.press("e", "p", "g", "d", "w", "R")
         await settle(pilot)
         assert len(app.screen_stack) == depth and app.query_one(LoopsView).selected() is None
-        assert told == ["this loop has no window: the dispatcher restarts stopped loops",
-                        "this loop is not running: the dispatcher starts it on its next pass"]
+        assert told == []
 
 
 async def test_question_mark_on_an_empty_loops_tab_opens_its_help():
@@ -4325,7 +4412,7 @@ async def test_the_assistant_keeps_its_empty_screen_text(monkeypatch):
 
 # ---------- waiting for you (plan 40, slice 4) ----------
 
-def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None, blocked=None,
+def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", status="alive", reg=None,
                   tmux_calls=None, **meta):
     from pl import agents
     from pl.tui import needs
@@ -4341,7 +4428,6 @@ def _waiting_card(monkeypatch, cid="wait0001aaaa", desc="", col="In progress", s
     monkeypatch.setattr(watch, "registry", lambda: reg or {})
     monkeypatch.setattr(watch, "worker_status", lambda w, r: (status, None))
     monkeypatch.setattr(agents, "worker_status", lambda w, r: (status, None))
-    monkeypatch.setattr(watch, "run_blocked", lambda card: blocked)
     monkeypatch.setattr(agents, "pane_exists", lambda pane: False)
     monkeypatch.setattr(watch.subprocess, "run", fake_run)
     monkeypatch.setattr(agents.harnesses, "_run", fake_run)
@@ -4385,7 +4471,7 @@ def test_ac4_a_live_run_agent_at_a_gate_reads_the_gate_line(monkeypatch):
 
 def test_ac5_a_waiting_card_counts_once_in_needs_you(monkeypatch):
     from pl.tui.needs import needs_me
-    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?", blocked="nothing-runnable")
+    row, out, snap = _waiting_card(monkeypatch, question="h1", desc="# PIPELINE: QUESTIONS\nQ: Which?")
     assert row["kind"] == "needs" and needs_me(row)
     assert [r["card"]["id"] for r in out] == ["wait0001aaaa"]
 
@@ -4472,8 +4558,6 @@ async def test_loops_view_shows_run_detail_for_a_scheduled_loop(monkeypatch):
         await settle(pilot)
         await pilot.press("5")
         await settle(pilot)
-        await pilot.press("down")
-        await settle(pilot)
         await settle(pilot)
         assert "Last run" in str(app.query_one("#loops-screen").visual)
 
@@ -4503,7 +4587,7 @@ async def _open_loops(pilot, rows=1):
     await settle(pilot)
     await pilot.press("5")
     await settle(pilot)
-    await pilot.press(*["down"] * rows)
+    await pilot.press(*["down"] * (rows - 1))
     await settle(pilot)
     await settle(pilot)
 
@@ -4600,3 +4684,36 @@ async def test_l_is_hidden_for_a_persistent_loop_and_background_agents():
         assert view.selected() and not view.selected().get("every")
         assert view.check_action("open_log", ()) is False
     assert all(b.key != "l" for b in subagents.SubagentsView.BINDINGS)
+
+
+def _watchdog_row(**kw):
+    return {"card": "4a000001aaaa", "kind": "stalled", "opened_at": time.time() - 720, "age_seconds": 720,
+            "tried": "nudged, retried 2 times today", "acked": False, "key": "stalled:4a000001aaaa", **kw}
+
+
+def test_decide_rows_count_and_list_a_stalled_alert():
+    from pl.tui.dashboard import decide_rows
+    data = fake_data()
+    base = decide_rows(data)[0][1]
+    rows = decide_rows({**data, "watchdog": [_watchdog_row()]})
+    assert rows[0][1] == base + 1 and rows[1][0] == "alert:stalled:4a000001aaaa"
+    assert all(s in rows[1][2] + rows[1][3] for s in ("4a000001", "stalled", "12m", "nudged, retried 2 times today"))
+
+
+def test_decide_rows_drop_a_resolved_alert():
+    from pl.tui.dashboard import decide_rows
+    data = fake_data()
+    rows = decide_rows({**data, "watchdog": []})
+    assert not any(r[0].startswith("alert:") for r in rows) and rows[0][1] == decide_rows(data)[0][1]
+
+
+def test_decide_rows_mark_an_acked_alert():
+    from pl.tui.dashboard import decide_rows
+    rows = decide_rows({**fake_data(), "watchdog": [_watchdog_row(acked=True)]})
+    assert "acked" in rows[1][3]
+
+
+def test_waiting_tile_counts_watchdog_alerts():
+    from pl.tui.dashboard import tile_values
+    data = fake_data()
+    assert tile_values({**data, "watchdog": [_watchdog_row()]}, 0)["waiting"] == tile_values(data, 0)["waiting"] + 1

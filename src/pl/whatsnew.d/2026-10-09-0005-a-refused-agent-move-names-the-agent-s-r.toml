@@ -1,0 +1,4 @@
+id = "2026-10-09.05"
+title = "A refused agent move names the agent's real harness (Antigravity, Codex)"
+where = "Activity tab: agent_move_refused"
+try = "pl move-agent <card> <account>"
