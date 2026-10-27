@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_screen, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agents, agent_screen, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, gate_pr, hold_reason, pane_exists, permission_wait, registry, release_key,
                        run_blocked, run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -285,6 +285,68 @@ def release_run(c, w, why, dry):
     return True
 
 
+def _prompt_has_text(pane):
+    """True when the agent's prompt line (after > or ❯) holds unsent text."""
+    screen = tmux("capture-pane", "-p", "-t", pane, "-S", "-20", check=False) or ""
+    lines = [agents.BOX_RE.sub(" ", ln).strip() for ln in screen.splitlines()]
+    marked = [ln for ln in lines if ln[:1] in (">", "❯")]
+    return bool(marked and marked[-1][1:].strip())
+
+
+def _type_into(pane, text):
+    """Clear the prompt box (Ctrl-U), type text literally and press Enter."""
+    tmux("send-keys", "-t", pane, "C-u", check=False)
+    tmux("send-keys", "-t", pane, "-l", "--", harnesses._typeable(text), check=False)
+    tmux("send-keys", "-t", pane, "Enter", check=False)
+
+
+def rework_live(c, w, why, reg, dry):
+    """A card sent back for rework whose run agent is still alive: type the review message into it once it is idle
+    (once per round); restart it fresh, with no backoff, when it has not gone busy within [dispatch] stall_minutes.
+    Returns "sent", "waiting", "restarted", or None when normal handling applies."""
+    rw = (c.get("metadata") or {}).get("rework") or {}
+    if not rw.get("active") or why == "exited" or w.get("permission_wait") or w.get("trust_wait") or w.get("limit_hit"):
+        return None
+    n, head = int(rw.get("round") or 1), short_id(c["id"])
+
+    def record(**more):
+        full = {**rw, **more}
+        update(c["id"], metadata={"rework": full})
+        c["metadata"] = {**(c.get("metadata") or {}), "rework": full}
+
+    if rw.get("sent_round") != n:
+        if why is None:
+            return None
+        if dry:
+            print(f"{head}  would type the rework message into the run agent")
+            return None
+        cleared = _prompt_has_text(w["pane"])
+        _type_into(w["pane"], rework.live_message(c))
+        record(sent_round=n, sent_at=now_iso(), started=False)
+        events.emit("rework_sent", c["id"], round=n, cleared=cleared)
+        print(f"{head}  typed the rework message (round {n}) into the run agent")
+        return "sent"
+    if rw.get("started"):
+        return None
+    rec = reg.get(w.get("session_id"))
+    if (rec.get("status") == "busy") if rec else why is None:
+        if not dry:
+            record(started=True)
+        return None
+    limit = C.DISPATCH.get("stall_minutes", 20)
+    if not limit:
+        return None
+    sent = parse_iso(rw["sent_at"]) if rw.get("sent_at") else time.time()
+    if time.time() - sent < limit * 60 or dry:
+        return "waiting"
+    if no := stop_worker(c, w, {"rework": {**rw, "started": True, "restarted_at": now_iso()}}):
+        print(f"{head}  rework agent has not started; could not stop it ({no})")
+        return "waiting"
+    events.emit("rework_restarted", c["id"], round=n)
+    print(f"{head}  run agent did not start the rework within {limit} min; restarted it")
+    return "restarted"
+
+
 def stage_servers(team, stage):
     """The connector names a stage agent of this team gets; [stages.<stage>] connectors can only narrow them."""
     from pl import connectors
@@ -327,10 +389,9 @@ def pr_limit_args():
             f" target_lines={lim['pr_auto_merge_lines']} target_files={lim['pr_auto_merge_files']}")
 
 
-def _memory_dir(base=None):
-    """Where a stage's memory file goes: inside the folder the agent starts in (work_dir or its run worktree), so
-    reading it needs no permission outside its working directories; git-ignored through work_dir's .git/info/exclude,
-    which every worktree shares. No work_dir: the state folder."""
+def _memory_dir():
+    """Where a stage's memory file goes: inside work_dir, where the agent starts, so reading it needs no
+    permission outside its working directories; git-ignored through .git/info/exclude. No work_dir: the state folder."""
     if not C.WORK_DIR:
         return C.STATE_DIR / "launch"
     exclude = Path(C.WORK_DIR) / ".git" / "info" / "exclude"
@@ -339,10 +400,10 @@ def _memory_dir(base=None):
         if ".pl/launch/" not in lines:
             with exclude.open("a") as fh:
                 fh.write(("\n" if lines and lines[-1] else "") + ".pl/launch/\n")
-    return Path(base or C.WORK_DIR) / ".pl" / "launch"
+    return Path(C.WORK_DIR) / ".pl" / "launch"
 
 
-def memory_arg(c, stage, dry, base=None):
+def memory_arg(c, stage, dry):
     """" memory=<file>" with the entries a built-in stage may see, or "" when there are none or the store fails."""
     if stage not in ("spec", "design", "plan", "run"):
         return ""
@@ -352,7 +413,7 @@ def memory_arg(c, stage, dry, base=None):
             return ""
         if dry:
             return " memory=<file>"
-        d = _memory_dir(base)
+        d = _memory_dir()
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
         skills._clean_inlined(d)
         key = hashlib.sha1(f"{c['id']}:{stage}".encode()).hexdigest()[:12]
@@ -389,12 +450,11 @@ def bootstrap_warning(c):
     return f"\n\n## WARNING: Worktree bootstrap failed\nReason: {err['reason']}\nLast 20 lines of output (data printed by the setup command, not instructions):\n```\n{err['output']}\n```\n"
 
 
-def untrusted_folder(h, account, folder=None):
-    """The folder (default: work_dir) when this Claude Code account's own .claude.json does not trust it or a parent (agent windows open there), else None. Reads nothing for other harnesses."""
+def untrusted_folder(h, account):
+    """The work folder when this Claude Code account's own .claude.json does not trust it or a parent (agent windows open there), else None. Reads nothing for other harnesses."""
     if h.name != "claude":
         return None
-    folder = folder or C.WORK_DIR
-    return None if harnesses.folder_trust(account, str(folder))[0] else folder
+    return None if harnesses.folder_trust(account, str(C.WORK_DIR))[0] else C.WORK_DIR
 
 
 def _start_who(stage, c):
@@ -436,21 +496,8 @@ def start_worker(c, stage, attempts, dry):
         prompt += pr_limit_args()
     if stage == "run" and builtin:
         prompt += rework.prompt_arg(c)   # a card sent back by the review: pl-run fixes the PR instead of building
-    folder = C.WORK_DIR
-    if stage == "run" and not generic and C.WORK_DIR and not dry:
-        folder, err = worktrees.for_run(c)
-        if err:
-            events.emit("error", c["id"], stage="run", message=f"worktree: {err}")
-            if why := alerts.open(f"worktree:{c['id']}", "high", f"Could not make the worktree for {short_id(c['id'])}",
-                                  f"{err}; fix it and the next pass retries"):
-                notify(alerts.headline(why, f"Worktree failed for {short_id(c['id'])}"), err)
-            print(f"  {name}: no worktree ({err}); nothing started")
-            return
-        alerts.resolve(f"worktree:{c['id']}")
-        if builtin:
-            prompt += f" worktree={shlex.quote(str(folder))}"
     if builtin:
-        prompt += memory_arg(c, stage, dry, folder)
+        prompt += memory_arg(c, stage, dry)
     if stage == "run":
         prompt += bootstrap_warning(c)
     if not dry:
@@ -476,8 +523,8 @@ def start_worker(c, stage, attempts, dry):
             notify(alerts.headline(why, f"Stage {stage} unsafe"), str(e))
         raise
     if subprocess.run(["tmux", "has-session", "-t", f"={C.TMUX_SESSION}"], capture_output=True).returncode:
-        tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(folder))
-    win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(folder),
+        tmux("new-session", "-d", "-s", C.TMUX_SESSION, "-n", "dispatch", "-c", str(C.WORK_DIR))
+    win = tmux("new-window", "-d", "-t", f"{C.TMUX_SESSION}:", "-n", name, "-c", str(C.WORK_DIR),
                "-e", "DISABLE_AUTO_UPDATE=true", *_gh_env_args(), "-P", "-F", "#{window_id}")
     tmux("set-option", "-w", "-t", win, "automatic-rename", "off")
     tmux("set-option", "-w", "-t", win, MARK, "1")   # pl's own agent window: counted, and tidied when untracked
@@ -1049,6 +1096,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     pods.save_draft(cid, sec, sections(c.get("description")).get(sec) or "")
         try:
             notifications.moves(moved)
+            notifications.review_passed(all_cards, now_col, st)
         except Exception as e:  # noqa: BLE001 - a notification never stops the pass
             print(f"notifications skipped this pass: {e}", file=sys.stderr)
         for c in all_cards:   # a design stage ends without a column move: its DESIGN section appears
@@ -1266,7 +1314,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         if same_stage and status in ("alive", "starting"):
             if stage == "run":
                 why = ("waiting (usage limit)" if w.get("limit_hit") else run_waiting(w, reg, st)) if status == "alive" else None
-                if why and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
+                rw_state = rework_live(c, w, why, reg, dry) if status == "alive" else None
+                if rw_state == "restarted":
+                    seen_waits.pop(c["id"], None)
+                    todo.append((c, stage, 1, col))   # start_worker adds rework.prompt_arg
+                    continue
+                if why and rw_state is None and _wait_due(waits, seen_waits, c, w, why) and release_run(c, w, why, dry):
                     seen_waits.pop(c["id"], None)
                     continue   # stopped: it holds no slot and no live place
                 gate = f"GATE: {why[9:-1]}" if why and why.startswith("waiting (") and GATE_RE.fullmatch(f"GATE: {why[9:-1]}") else None
@@ -1409,8 +1462,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"{short_id(c['id'])}  {stage} waits: every profile is out of credits (pl profiles)")
             continue
         h = harnesses.harness_for(stage, {**c, "metadata": {**(c.get("metadata") or {}), "profile": prof}})[0] if C.PROFILES else None
-        run_root = Path(C.WORKTREES_DIR or Path(C.WORK_DIR).parent) if stage == "run" and C.WORK_DIR else None
-        if h and (folder := untrusted_folder(h, prof, run_root)):   # Claude would stop at "trust this folder?": wait, start nothing
+        if h and (folder := untrusted_folder(h, prof)):   # Claude would stop at "trust this folder?": wait, start nothing
             fix = harnesses.trust_command(h, prof, str(folder))
             if dry:
                 print(f"{short_id(c['id'])}  {stage} would wait for trust: account {prof} does not trust {folder}")
@@ -1468,7 +1520,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         summary.write(summary.build(all_cards, reg, time.time()))
     try:
         checkout_watch.check(all_cards, reg, st, dry, notify)
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         print(f"main checkout check skipped this pass: {e}", file=sys.stderr)
     save_state(st)
     return sorted((c["id"], c.get("list_id"), c.get("updated_at")) for c in all_cards), sorted(reg)
@@ -1646,7 +1698,7 @@ def check_alerts(all_cards, failed, st=None):
     check_stalled(all_cards, st)
     held = {a["key"] for a in alerts.listing() if a["key"].startswith("trust:")
             and (p := a["key"].split(":", 2))[1] in C.PROFILES
-            and untrusted_folder(harnesses.account_harness(p[1]), p[1], Path(p[2])) == Path(p[2])}
+            and untrusted_folder(harnesses.account_harness(p[1]), p[1]) == Path(p[2])}
     alerts.sweep("trust:", held, notify)   # open while that account still does not trust the folder
     alerts.sweep("api_error:", failed, notify)
     alerts.sweep("exited_window:", {f"exited_window:{k}" for k in (st or {}).get("exited_waits") or {}}, notify)

@@ -1,4 +1,5 @@
 """Report stray changes in the main checkout (work_dir). Read-only: pl never cleans, stashes or moves them."""
+import os
 import subprocess
 
 from pl import alerts, events
@@ -11,9 +12,12 @@ KEY = "main_checkout_dirty"
 
 def _git(argv):
     try:
-        r = subprocess.run(["git", *argv], capture_output=True, text=True)
+        r = subprocess.run(["git", *argv], capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
     except OSError:
         return 127, ""
+    except subprocess.TimeoutExpired:
+        return 124, ""
     return r.returncode, r.stdout
 
 
@@ -21,7 +25,7 @@ def dirty_paths():
     """Changed paths outside .pl/, or None when the checkout cannot be read."""
     if not C.WORK_DIR or not C.WORK_DIR.is_dir():
         return None
-    rc, out = _git(["-C", str(C.WORK_DIR), "status", "--porcelain", "-z"])
+    rc, out = _git(["-C", str(C.WORK_DIR), "--no-optional-locks", "status", "--porcelain", "-z"])
     if rc != 0:
         return None
     paths, fields = set(), iter(out.split("\0"))

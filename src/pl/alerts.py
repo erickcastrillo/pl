@@ -232,7 +232,6 @@ WATCHES = {
     "tmp_full": "temp folder space or inodes",
     "trigger_cap": "triggers at their cap",
     "trust": "folders an account does not trust",
-    "worktree": "run worktrees git could not make",
 }
 
 

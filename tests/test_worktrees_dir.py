@@ -167,8 +167,7 @@ def test_a_folder_that_cannot_be_made_is_left_out(fake_home, fake_tmux):
 
 # ---------- prompts, skills and Settings ----------
 
-def test_a_stage_prompt_can_name_the_folder(fake_home, fake_tmux, monkeypatch):
-    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (fake_home / "wt", None))
+def test_a_stage_prompt_can_name_the_folder(fake_home, fake_tmux):
     _launch(fake_home, fake_tmux, "claude")
     fake_tmux.clear()
     C.PROMPTS = {"run": "/my-run {id} worktrees={worktrees_dir}"}
@@ -176,23 +175,29 @@ def test_a_stage_prompt_can_name_the_folder(fake_home, fake_tmux, monkeypatch):
     assert _exec(fake_tmux[0])[-1] == f"/my-run abc worktrees={fake_home / 'Code' / 'app-pl-worktrees'}"
 
 
-def test_the_builtin_run_prompt_is_unchanged_and_its_agent_sees_the_folder(fake_home, fake_tmux, monkeypatch):
-    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (fake_home / "wt", None))
+def test_the_builtin_run_prompt_is_unchanged_and_its_agent_sees_the_folder(fake_home, fake_tmux):
     _launch(fake_home, fake_tmux, "claude")
     fake_tmux.clear()
     C.PROMPTS = {"run": C.BUILTIN_PROMPTS["run"]}
     dispatch.start_worker({"id": "abc", "title": "t", "metadata": {"profile": "a"}}, "run", 1, False)
-    assert "worktrees=" not in _exec(fake_tmux[0])[-1]
+    assert "worktrees" not in _exec(fake_tmux[0])[-1]
     assert "export PL_WORKTREES_DIR=" in fake_tmux[0]
 
 
 @pytest.mark.parametrize("name,line", [
+    ("pl-run", 'git worktree add -b pl/<short-name> "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>"'),
     ("pl-review", 'git worktree add --detach "${PL_WORKTREES_DIR:-..}/review-<number>"')])
 def test_the_builtin_skills_make_worktrees_in_the_folder(name, line):
     from pl import skills
     text = (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
     assert line in text and int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 3
     assert "git worktree add -b pl/<short-name> ../" not in text and "--detach ../" not in text
+
+
+def test_pl_run_reuses_an_earlier_worktree_where_it_is():
+    from pl import skills
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    assert "git worktree list" in text and "../<repo>-pl-<short-name>" in text
 
 
 async def test_settings_shows_the_folder_and_saves_an_edit(fake_home, monkeypatch):

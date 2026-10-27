@@ -121,7 +121,7 @@ def test_the_check_runs_only_git_status(git, seen):
     for porcelain in (_z(" M a.py"), _z(" M a.py"), "", _z("?? b")):
         git.porcelain = porcelain
         _check(seen, st)
-    assert git.argvs and all(a == ["-C", str(C.WORK_DIR), "status", "--porcelain", "-z"] for a in git.argvs)
+    assert git.argvs and all(a == ["-C", str(C.WORK_DIR), "--no-optional-locks", "status", "--porcelain", "-z"] for a in git.argvs)
 
 
 def test_a_clean_checkout_resolves_the_alert_and_a_later_change_alerts_again(git, seen):
@@ -136,7 +136,7 @@ def test_a_clean_checkout_resolves_the_alert_and_a_later_change_alerts_again(git
     assert alerts._live(alerts.get("main_checkout_dirty")) and len(seen["events"]) == 2 and len(seen["sent"]) == 2
 
 
-@pytest.mark.parametrize("how", ["rc", "oserror", "no_work_dir"])
+@pytest.mark.parametrize("how", ["rc", "oserror", "no_work_dir", "timeout"])
 def test_git_failing_or_no_work_dir_leaves_state_and_opens_nothing(how, seen, monkeypatch):
     if how == "rc":
         g = Git()
@@ -146,6 +146,10 @@ def test_git_failing_or_no_work_dir_leaves_state_and_opens_nothing(how, seen, mo
         def boom(*a, **k):
             raise OSError("git missing")
         monkeypatch.setattr(subprocess, "run", boom)
+    elif how == "timeout":
+        def hang(argv, **k):
+            raise subprocess.TimeoutExpired(argv, k["timeout"])
+        monkeypatch.setattr(subprocess, "run", hang)
     else:
         C.WORK_DIR = None
     st = {"main_dirty": ["a.py"]}
@@ -168,9 +172,21 @@ def test_renamed_paths_report_the_new_name(git, seen):
     assert seen["events"][0][2]["paths"] == ["b.py", "new.py"]
 
 
-def test_dispatch_goes_on_when_the_check_raises(monkeypatch, capsys):
+def test_git_runs_with_a_timeout_and_no_terminal_prompt(monkeypatch):
+    seen = {}
+
+    def run(argv, **k):
+        seen.update(k)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(subprocess, "run", run)
+    assert checkout_watch._git(["status"]) == (0, "")
+    assert seen["timeout"] == 30 and seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("nope"), SystemExit("nope")])
+def test_dispatch_goes_on_when_the_check_raises(monkeypatch, capsys, exc):
     def boom(*a):
-        raise RuntimeError("nope")
+        raise exc
     monkeypatch.setattr(checkout_watch, "check", boom)
     monkeypatch.setattr(dispatch, "registry", lambda: {})
     monkeypatch.setattr(dispatch, "cards", lambda: [])

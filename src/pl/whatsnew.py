@@ -312,7 +312,9 @@ ENTRIES = [
        "pl notify test; pl doctor warns when nothing is set up", "pl notify test --chat <name>"),
     _e("2026-10-26.85", "Stalled agents are nudged, then restarted", "Alerts tab: stalled; [dispatch] stall_minutes",
        "pl alerts"),
-    _e("2026-10-26.86", "A stray change in the main checkout raises an alert",
+    _e("2026-10-26.86", "Notifications when a review passes or sends a PR back",
+       "[notify] events: review_passed, review_rework", "pl rework"),
+    _e("2026-10-26.87", "A stray change in the main checkout raises an alert",
        "Activity → Alerts: names the live run agents; pl never touches the changes", "pl alerts"),
 ]
 

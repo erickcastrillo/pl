@@ -12,13 +12,14 @@ import time
 import urllib.parse
 
 from pl import config as C
-from pl import events, jobs
+from pl import events, jobs, notifications
 from pl.board import col_name, update
 from pl.trackers import github
 from pl.util import now_iso, short_id
 
 REWORK_EVERY = 600   # seconds between two looks at the rework label (one REST call per repo)
 PR_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
+SAFE_PR = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)$")   # the repo name lands in typed text
 _LAST = {"at": None}
 SEEN = {}   # PR url -> frozenset of its label names, as the last rework or merge look saw it (closed PRs dropped)
 
@@ -63,6 +64,20 @@ def flagged(repos, lab):
     return out
 
 
+def look_at_ready(repos, lab):
+    """Record the labels of the open PRs carrying the ready label, one REST call per repo, so SEEN has them
+    without the auto-merge loop. A repo that cannot be read is skipped."""
+    for repo in sorted(repos):
+        q = urllib.parse.urlencode({"state": "open", "labels": lab["ready"], "per_page": 100})
+        try:
+            items = json.loads(github._gh(["api", f"repos/{repo}/issues?{q}"]) or "[]")
+        except (SystemExit, Exception):  # noqa: BLE001 - a failed look is tried again at the next one
+            continue
+        for it in items:
+            if it.get("pull_request"):
+                saw(it.get("html_url") or "", "open", {x.get("name") for x in it.get("labels") or []})
+
+
 def _give_up(c, todo, n, lab, dry):
     head = short_id(c["id"])
     print(f"{head}  PR {', '.join(f'#{num}' for _, num, _ in todo)} still fails review after {n} rework rounds; "
@@ -89,6 +104,8 @@ def _send_back(c, todo, n, dry):
     update(c["id"], metadata={"rework": {"round": n, "prs": [u for _, _, u in todo], "at": now_iso(), "active": True}})
     move_to(c["id"], "In progress", c["id"])
     events.emit("rework", c["id"], prs=[u for _, _, u in todo], round=n)
+    notifications.send("review_rework", f"Rework: {head} {', '.join(f'#{num}' for _, num, _ in todo)}",
+                       f"round {n}: {c['title'][:50]}")
 
 
 def sweep(all_cards, dry, force=False):
@@ -136,6 +153,18 @@ def prompt_arg(c):
     lab, q = labels(), shlex.quote
     return (f" rework={int(rw.get('round') or 1)} rework_label={q(lab['rework'])}"
             + (f" ready={q(lab['ready'])}" if lab.get("ready") else ""))
+
+
+def live_message(c):
+    """The one line typed into a card's live run agent for a rework round: the round and how to read the review,
+    never card text."""
+    rw = (c.get("metadata") or {}).get("rework") or {}
+    n = int(rw.get("round") or 1)
+    ms = [m for u in rw.get("prs") or [] if (m := SAFE_PR.match(str(u)))]
+    reads = " ; ".join(f"gh api repos/{m.group(1)}/issues/{m.group(2)}/comments --jq '.[-1].body'" for m in ms) \
+        or "read the latest review comment on the card's pull request"
+    return (f"pl: the review sent this card's pull request back for rework (round {n}). Read the review with: {reads} . "
+            f"Fix every finding on the PR's own branch and push, as /pl-run does with rework={n}.")
 
 
 def cmd_rework(a):
