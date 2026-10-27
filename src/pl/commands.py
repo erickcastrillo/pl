@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, confirm, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, confirm, events, harnesses, ideas, move_agent, notifications, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
                       render, sections, share, update)
@@ -368,10 +368,10 @@ def cmd_approve(a):
     from pl import outward
     if outward.is_outward(c) and outward.state().get("on"):
         print(f"approved {short_id(c['id'])}  {c['title']}\n  approved; its outward action waits: the kill switch is on")
-        notify(f"Approved: {c['title'][:50]}", "its outward action waits: the kill switch is on")
+        notifications.send("approved", f"Approved: {short_id(c['id'])} {c['title'][:40]}", "its outward action waits: the kill switch is on")
     else:
         print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
-        notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
+        notifications.send("approved", f"Approved: {short_id(c['id'])} {c['title'][:40]}", "the run starts on the next dispatcher pass")
 
 
 def cmd_reject(a):

@@ -459,6 +459,7 @@ def build_parser():
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     p.add_argument("--open", metavar="CARD", help="open this card on start")
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
+    p.add_argument("--back", action="store_true", help="open on this pipeline's last tab and row (a pipeline switch passes it)")
     for verb in ("pause", "resume"):
         sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("activity"); p.add_argument("action", nargs="?", choices=["demo", "thresholds"]); p.add_argument("--clear", action="store_true", help="with demo: remove the demo entries")

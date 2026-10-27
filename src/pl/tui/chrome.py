@@ -29,10 +29,11 @@ TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 MEANING = {
     "tab": "go to tab", "brain": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
     "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
-    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines",
+    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines", "pipeline": "switch pipeline",
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
+    "inbox_approve": "approve", "inbox_send_back": "send back", "all_pipelines": "all pipelines",
     "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
     "open_window": "open window", "jump": "open window", "live_view": "open window",
     "page_up": "page up", "page_down": "page down", "drop": "remove", "discard": "remove", "delete": "remove",
@@ -42,7 +43,7 @@ MEANING = {
     "edit_brief": "edit", "edit_input": "edit", "external_edit": "edit in $EDITOR", "ack": "acknowledge",
     "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
-    "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
+    "link": "link", "open_log": "full log", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
     "sub_tab": "switch view", "sub_letter": "switch view",
     "get_started": "get started step", "collapse_start": "collapse", "dismiss_start": "dismiss",
 }
