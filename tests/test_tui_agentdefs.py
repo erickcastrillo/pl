@@ -2,7 +2,6 @@
 import json
 import subprocess
 
-from rich.text import Text
 from textual.widgets import DataTable, Static
 
 from pl.tui import agentdefs

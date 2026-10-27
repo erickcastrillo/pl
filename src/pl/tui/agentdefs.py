@@ -50,6 +50,7 @@ class AgentsView(Widget):
     #agents-detail { height: auto; padding: 0 1; }
     """
     BINDINGS = [Binding("escape", "back", "back")]
+    can_focus = True   # the hidden table loses focus, so Escape needs a focused owner
 
     def __init__(self):
         super().__init__()
@@ -115,6 +116,7 @@ class AgentsView(Widget):
         pane = self.query_one("#agents-detail", Static)
         pane.update(detail_text(detail))
         pane.display = True
+        self.focus()
 
     def action_back(self):
         pane = self.query_one("#agents-detail", Static)
