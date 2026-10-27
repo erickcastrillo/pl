@@ -808,8 +808,8 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v8_is_updated_to_v9(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 8, 9)
+def test_an_unedited_pl_run_v9_is_updated_to_v10(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 9, 10)
 
 
 def test_an_unedited_pl_review_v5_is_updated_to_v6(lib, shipped):
@@ -826,3 +826,11 @@ def test_pl_review_never_asks_for_a_full_rerun():
     text = _shipped("pl-review")
     assert "never ask the builder to rerun the full suite" in text
     assert "run the full suite" not in text.replace("rerun the full suite", "")
+
+
+def test_pl_run_says_to_add_one_whatsnew_file():
+    run = (Path(skills.BUILTIN_DIR) / "pl-run" / "SKILL.md").read_text()
+    flat = " ".join(run.split())
+    assert "src/pl/whatsnew.d/" in flat and "UTC" in flat and "never edit another entry" in flat
+    step = (Path(__file__).parents[1] / "CLAUDE.md").read_text().split("## Releasing")[1]
+    assert "src/pl/whatsnew.d/" in step and "src/pl/whatsnew.py" not in step
