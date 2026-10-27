@@ -1,86 +1,70 @@
-"""Long jobs: a file per running job in machine_dir()/jobs, so `pl jobs` can list them while they run."""
-import contextlib
-import json
+"""Background jobs of a stage agent that can never report back: children of the harness whose output goes to a file,
+read from `ps` and /proc only. pl marks them and says so; it never signals them."""
 import os
+import subprocess
 import sys
-import time
 
-from pl.manager import machine_dir
-
-_current = None
+from pl import config as C
+from pl import memory
 
 
-def jobs_dir():
-    return machine_dir() / "jobs"
-
-
-def _write(path, job):
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(job, f)
-    os.replace(tmp, path)
-
-
-@contextlib.contextmanager
-def track(name):
-    global _current
-    jobs_dir().mkdir(parents=True, exist_ok=True)
-    job = {"id": f"{name}-{os.getpid()}", "name": name, "pid": os.getpid(), "argv": sys.argv, "started": time.time(), "progress": None}
-    path = jobs_dir() / f"{job['id']}.json"
-    _write(path, job)
-    _current = (path, job)
+def _run(argv):
+    """The one subprocess seam of this module (tests fake it): stdout, or None when the command fails."""
     try:
-        yield job
-    finally:
-        _current = None
-        path.unlink(missing_ok=True)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
 
 
-def progress(line):
-    print(line, flush=True)
-    if _current:
-        path, job = _current
-        job["progress"] = line
-        _write(path, job)
-
-
-def result(text):
-    print(f"result: {text}", flush=True)
-
-
-def _alive(pid):
+def _link(pid, fd):
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    return True
+        return os.readlink(f"/proc/{pid}/fd/{fd}")
+    except OSError:
+        return None
 
 
-def live():
-    """Jobs whose process still runs; the file of one that died is dropped."""
-    out = []
-    for path in sorted(jobs_dir().glob("*.json")):
-        try:
-            job = json.loads(path.read_text())
-        except (OSError, ValueError):
+def _procs():
+    """pid -> (parent pid, seconds running, command) for every process."""
+    procs = {}
+    for line in (_run(["ps", "-axo", "pid=,ppid=,etimes=,args="]) or "").splitlines():
+        p = line.split(None, 3)
+        if len(p) >= 3 and all(x.isdigit() for x in p[:3]):
+            procs[int(p[0])] = (int(p[1]), int(p[2]), p[3] if len(p) > 3 else "")
+    return procs
+
+
+def _outputs(tree):
+    links = (_link(x, fd) for x in tree for fd in (1, 2))
+    return [x for x in links if x and x.startswith("/") and not x.startswith("/dev/")]
+
+
+def of(harness_pid):
+    """The background jobs of a harness: {"pid", "command", "minutes", "state"} for each direct child whose tree writes
+    to a file. state: "orphaned" (an output file was deleted), "overrun" (past [watchdog] job_minutes) or "ok"."""
+    if not sys.platform.startswith("linux") or not isinstance(harness_pid, int) or isinstance(harness_pid, bool):
+        return []
+    procs, limit, out = _procs(), C.WATCHDOG.get("job_minutes", 45), []
+    for kid in sorted(pid for pid, p in procs.items() if p[0] == harness_pid):
+        tree = [kid, *memory._below(procs, [kid])]
+        files = _outputs(tree)
+        if not files:
             continue
-        if _alive(job.get("pid", 0)):
-            out.append(job)
-        else:
-            path.unlink(missing_ok=True)
+        minutes = procs[kid][1] // 60
+        state = "orphaned" if any(f.endswith(" (deleted)") for f in files) else "overrun" if limit and minutes >= limit else "ok"
+        out.append({"pid": kid, "command": memory._short(procs[tree[-1]][2]), "minutes": minutes, "state": state})
     return out
 
 
-def cmd_jobs(a):
-    """pl jobs [--json]: the long jobs running now."""
-    items = live()
-    if getattr(a, "json", False):
-        from pl import jsonout
-        return jsonout.emit({"jobs": items})
-    for j in items:
-        print(f"{j['name']:<10} pid {j['pid']:<8} {j['progress'] or ''}")
-    if not items:
-        print("no jobs running")
+def stuck(js):
+    return js if js and all(j["state"] != "ok" for j in js) else []
+
+
+def describe(j):
+    why = "output deleted" if j["state"] == "orphaned" else f"over {C.WATCHDOG.get('job_minutes', 45)} min"
+    return " ".join(f"{j['command']} (pid {j['pid']}, {j['minutes']} min, {why})".split())
+
+
+def nudge(js):
+    return (f"pl: you are waiting on background jobs that cannot report back: {'; '.join(map(describe, js))}. "
+            "Stop them, then re-run what you need in the foreground with a time limit (for example: timeout 1200 <command>).")

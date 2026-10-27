@@ -80,6 +80,8 @@ def _defaults():
     # its card has not moved on before pl opens a "stalled" alert and notifies (0 is off)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
                 "release_waiting_after": 30, "stall_minutes": 20, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+    # [watchdog] job_minutes: a background job of a stage agent running longer is "overrun" (0 is off)
+    WATCHDOG = {"job_minutes": 45}
     GATES = {"spec": False}
     # [notify] events: the moments pl tells the owner about (desktop attention_cmd and chat connectors routed for alerts)
     NOTIFY = {"events": list(NOTIFY_EVENTS)}
@@ -227,6 +229,7 @@ def _apply(g, t):
     if isinstance(ch.get("gh_config_dir"), str) and ch["gh_config_dir"]:
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
+    g["WATCHDOG"] = {**g["WATCHDOG"], **t.get("watchdog", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
     g["NOTIFY"] = {**g["NOTIFY"], **t.get("notify", {})}
     from pl import pipeline
@@ -363,6 +366,9 @@ def validate(doc) -> list[str]:
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
+    v = doc.get("watchdog", {}).get("job_minutes")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+        errs.append("watchdog.job_minutes must be a whole number of at least 0")
     ev = doc.get("notify", {}).get("events")
     if ev is not None and not (isinstance(ev, list) and all(e in NOTIFY_EVENTS for e in ev)):
         errs.append(f"notify.events must be a list of: {', '.join(NOTIFY_EVENTS)}")
