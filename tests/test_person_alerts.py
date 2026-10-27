@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from pl import accounts, agents, alerts, dispatch, events, manager, merges, rework
+from pl import accounts, agents, alerts, dispatch, events, manager, merges, notifications, rework
 from pl import config as C
 from pl.trackers import github
 
@@ -47,6 +47,7 @@ def clock(monkeypatch):
 def sent(monkeypatch):
     out = []
     monkeypatch.setattr(dispatch, "notify", lambda title, fix="": out.append((title, fix)))
+    monkeypatch.setattr(notifications, "notify", lambda title, fix="": out.append((title, fix)))
     return out
 
 
