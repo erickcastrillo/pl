@@ -205,7 +205,8 @@ PR = "https://github.com/acme/app/pull/{}"
 @pytest.fixture
 def held(gh, monkeypatch, clock):
     """board.update, move_to and the rework gh calls faked; ns.until set = pl's budget hold refuses every write."""
-    ns = types.SimpleNamespace(until=None, writes=[], moves=[], gh=[], flagged=set(), cards={}, now=clock)
+    ns = types.SimpleNamespace(until=None, writes=[], moves=[], gh=[], flagged=set(), cards={}, now=clock, cards_now={},
+                               refuse_on=None)
 
     def refuse():
         if ns.until:
@@ -225,9 +226,13 @@ def held(gh, monkeypatch, clock):
             return json.dumps([{"number": n, "html_url": PR.format(n), "pull_request": {"url": "u"}, "labels": [{"name": "pl:needs-rework"}]}
                                for r, n in ns.flagged if r in args[1]])
         refuse()
+        if ns.refuse_on and any(ns.refuse_on in x for x in args):
+            ns.refuse_on = None
+            raise github.OverBudget(clock[0] + 600, "test hold")
         ns.gh.append(args)
         return "{}"
     monkeypatch.setattr(board, "update", update)
+    monkeypatch.setattr(board, "card", lambda cid: ns.cards_now[cid])
     monkeypatch.setattr(rework, "update", update)
     monkeypatch.setattr(commands, "move_to", move_to)
     monkeypatch.setattr(rework.github, "_gh", fake_gh)
@@ -271,7 +276,8 @@ def test_dispatcher_bookkeeping_write_under_hold_still_raises(held, clock):
 
 
 def test_queued_dispatcher_write_replays_after_the_reset(held, clock):
-    heldwrites.add(CARD3, "update", {"column": "Manual", "tags": ["a", "b"]}, clock[0] + 60)
+    heldwrites.add(CARD3, "update", {"column": "Manual", "add_tags": ["a", "b"]}, clock[0] + 60)
+    held.cards_now[CARD3] = {"list_id": "x", "tags": ["a"]}
     heldwrites.replay(lambda *a: None)
     assert held.writes == [] and len(heldwrites.entries()) == 1
     clock[0] += 61
@@ -288,8 +294,8 @@ def test_dispatcher_write_with_budget_left_queues_nothing(held, capsys):
 def test_doctor_names_the_target_of_each_new_op(gh):
     until = time.time() + 600
     heldwrites.add(CARD3, "update", {"column": "Manual"}, until)
-    heldwrites.add(CARD3, "update", {"tags": ["a", "b"]}, until)
-    heldwrites.add(CARD3, "update", {"metadata": {"pr_urls": [PR.format(1), PR.format(2)]}}, until)
+    heldwrites.add(CARD3, "update", {"add_tags": ["a", "b"]}, until)
+    heldwrites.add(CARD3, "update", {"add_pr_urls": [PR.format(1), PR.format(2)]}, until)
     heldwrites.add(CARD3, "rework", {"round": 2, "prs": [PR.format(1)]}, until)
     heldwrites.add(CARD3, "give_up", {"prs": [PR.format(1), PR.format(2)], "rounds": 3}, until)
     rows = heldwrites.doctor_lines()
@@ -395,3 +401,53 @@ def test_pl_rework_with_budget_left_queues_nothing(held, monkeypatch, capsys):
     rework.cmd_rework(argparse.Namespace(dry_run=False))
     assert "back to In progress (round 1)" in capsys.readouterr().out
     assert held.moves == [("c1", "In progress")] and not heldwrites.path().exists()
+
+
+def test_held_dispatcher_write_records_the_column_the_card_was_in(held, clock):
+    _save_board({"id": CARD3, "list_id": "opt-In progress"})
+    _hold(held, clock)
+    dispatch.update(CARD3, column="Manual")
+    assert heldwrites.entries()[0]["was"] == "opt-In progress"
+
+
+def test_queued_dispatcher_move_is_skipped_when_the_card_left_its_column(held, clock):
+    heldwrites.add(CARD3, "update", {"column": "Manual"}, clock[0], was="opt-In progress")
+    held.cards_now[CARD3] = {"list_id": "opt-Done"}
+    heldwrites.replay(lambda *a: None)
+    assert held.writes == [] and heldwrites.entries() == []
+    (skipped,) = _kinds("write_replay_skipped")
+    assert skipped["op"] == "update" and skipped["why"]
+
+
+def test_queued_labels_are_merged_into_the_current_card_not_replaced(held, clock):
+    _hold(held, clock)
+    dispatch.update(CARD3, tags=["idea", "stuck"])
+    (entry,) = heldwrites.entries()
+    assert entry["args"] == {"add_tags": ["idea", "stuck"]}
+    held.until = None
+    held.cards_now[CARD3] = {"list_id": "x", "tags": ["idea", "added-since"]}
+    clock[0] += 601
+    heldwrites.replay(lambda *a: None)
+    assert held.writes == [(CARD3, {"tags": ["idea", "added-since", "stuck"]})]
+
+
+def test_queued_pr_link_is_added_to_the_current_pr_urls(held, clock):
+    _hold(held, clock)
+    dispatch.update(CARD3, metadata={"pr_urls": [PR.format(1), PR.format(2)], "note": "n"})
+    (entry,) = heldwrites.entries()
+    assert entry["args"] == {"add_pr_urls": [PR.format(1), PR.format(2)], "metadata": {"note": "n"}}
+    held.until = None
+    held.cards_now[CARD3] = {"list_id": "x", "metadata": {"pr_urls": [PR.format(1), PR.format(3)]}}
+    clock[0] += 601
+    heldwrites.replay(lambda *a: None)
+    assert held.writes == [(CARD3, {"metadata": {"note": "n", "pr_urls": [PR.format(1), PR.format(3), PR.format(2)]}})]
+
+
+def test_give_up_held_midway_queues_only_the_pull_requests_not_done(held, clock):
+    held.refuse_on = "repos/acme/app/issues/2/labels"
+    rework._give_up(_rcard("c1", prs=(1, 2)), [("acme/app", 1, PR.format(1)), ("acme/app", 2, PR.format(2))], 3,
+                    {"failed": "pl:failed"}, False)
+    (entry,) = heldwrites.entries()
+    assert entry["args"] == {"prs": [PR.format(2)], "rounds": 3}
+    done = [a for a in held.gh if any(x.endswith("/comments") for x in a)]
+    assert len(done) == 1 and "repos/acme/app/issues/1/comments" in done[0]

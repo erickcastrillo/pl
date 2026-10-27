@@ -217,8 +217,8 @@ def update(cid, **fields):
     except OverBudget as e:
         if not ({"column", "tags"} & set(fields) or "pr_urls" in (fields.get("metadata") or {})):
             raise
-        heldwrites.add(cid, "update", fields, e.until)
-        print(f"{short_id(cid)}  queued: {heldwrites.target({'op': 'update', 'args': fields})}; GitHub budget held, "
+        entry = heldwrites.add_update(cid, fields, e.until)
+        print(f"{short_id(cid)}  queued: {heldwrites.target(entry)}; GitHub budget held, "
               f"resets {time.strftime('%H:%M', time.localtime(e.until))}")
 
 

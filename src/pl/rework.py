@@ -107,23 +107,27 @@ def _give_up(c, todo, n, lab, dry):
           f"labeled {lab['failed']} for a person")
     if dry:
         return
-    urls = [u for _, _, u in todo]
+    left = [u for _, _, u in todo]
     try:
-        _do_give_up(c, urls, n, lab)
+        _do_give_up(c, left, n, lab)
     except github.OverBudget as e:
-        _queued(c["id"], "give_up", {"prs": urls, "rounds": n}, e.until)
+        _queued(c["id"], "give_up", {"prs": left, "rounds": n}, e.until)
 
 
 def _do_give_up(c, urls, n, lab):
+    """urls shrinks as each pull request gets its label and comment, so a budget hold leaves only those not done."""
+    done = list(urls)
     note = (f"pl auto-rework: this pull request still fails review after {n} automatic rework rounds, so it is "
             f"labeled `{lab['failed']}` for a person to decide: fix it by hand, send it back once more "
             f"(remove `{lab['failed']}`), or close it.")
-    for repo, num in (m.groups() for m in map(PR_URL.match, urls)):
+    for url in list(urls):
+        repo, num = PR_URL.match(url).groups()
         github._gh(["api", "-X", "POST", f"repos/{repo}/issues/{num}/labels", "-f", f"labels[]={lab['failed']}"])
         github._gh(["api", "-X", "POST", f"repos/{repo}/issues/{num}/comments", "-f", f"body={note}"])
+        urls.remove(url)
     rw = (c.get("metadata") or {}).get("rework") or {}
     update(c["id"], metadata={"rework": {**rw, "active": False, "gave_up_at": now_iso()}})
-    events.emit("rework_gave_up", c["id"], prs=urls, rounds=n)
+    events.emit("rework_gave_up", c["id"], prs=done, rounds=n)
 
 
 def _send_back(c, todo, n, dry, mo=False):

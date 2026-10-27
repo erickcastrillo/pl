@@ -88,6 +88,20 @@ def add(card, op, args, until, was=None) -> dict:
     return entry
 
 
+def add_update(card, fields, until) -> dict:
+    """Queue a refused board.update. Labels and PR links are kept as additions that the replay merges into the card as
+    it is then; a column move records the column the card was in."""
+    args = {k: v for k, v in fields.items() if k not in ("tags", "metadata")}
+    if "tags" in fields:
+        args["add_tags"] = list(fields["tags"])
+    meta = dict(fields.get("metadata") or {})
+    if "pr_urls" in meta:
+        args["add_pr_urls"] = list(meta.pop("pr_urls"))
+    if meta:
+        args["metadata"] = meta
+    return add(card, "update", args, until, was=cached_list(card) if "column" in args else None)
+
+
 def _drop(seq):
     with _lock():   # re-read under the lock: a command may have queued another write since the replay began
         _write([e for e in entries() if e["seq"] != seq])
@@ -102,11 +116,28 @@ def target(entry) -> str:
         return "failed label on " + ", ".join(f"#{u.rsplit('/', 1)[-1]}" for u in a["prs"])
     if a.get("column"):
         return a["column"]
-    if a.get("tags"):
-        return "labels " + ", ".join(a["tags"])
-    if urls := (a.get("metadata") or {}).get("pr_urls"):
-        return f"link {urls[-1]}"
+    if a.get("add_tags"):
+        return "labels " + ", ".join(a["add_tags"])
+    if a.get("add_pr_urls"):
+        return f"link {a['add_pr_urls'][-1]}"
     return "update"
+
+
+def _apply_update(entry):
+    from pl import board
+    args = dict(entry["args"])
+    if "column" in args and entry.get("was") is not None and board.card(entry["card"])["list_id"] != entry["was"]:
+        return False
+    tags, urls = args.pop("add_tags", []), args.pop("add_pr_urls", [])
+    if tags or urls:
+        now = board.card(entry["card"])
+        have_tags, have_urls = now.get("tags") or [], (now.get("metadata") or {}).get("pr_urls") or []
+        if tags:
+            args["tags"] = have_tags + [t for t in tags if t not in have_tags]
+        if urls:
+            args["metadata"] = {**args.get("metadata", {}), "pr_urls": have_urls + [u for u in urls if u not in have_urls]}
+    board.update(entry["card"], **args)
+    return True
 
 
 def _apply(entry):
@@ -114,8 +145,7 @@ def _apply(entry):
     from pl import board, commands, rework   # commands imports the dispatcher, which imports this module
     op = entry["op"]
     if op == "update":
-        board.update(entry["card"], **entry["args"])
-        return True
+        return _apply_update(entry)
     if op == "rework":
         return rework.replay_send_back(entry) or True
     if op == "give_up":
