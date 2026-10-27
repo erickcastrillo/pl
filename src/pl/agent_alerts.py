@@ -2,7 +2,7 @@
 import re
 import time
 
-from pl import agent_screen, agents, alerts, events
+from pl import agent_screen, agents, alerts, events, stuck_jobs
 from pl import config as C
 from pl.util import cmd_id, short_id
 
@@ -142,7 +142,19 @@ def stall(c, w, reg, st, seen):
     if rec.get("session") != w.get("session_id"):
         rec = {"session": w.get("session_id")}
     seen[cid] = rec
-    idle, limit = agents.idle_seconds(w, reg, st), (C.DISPATCH.get("stall_minutes") or 0) * 60
+    rec.pop("jobs", None)
+    rec.pop("jobs_ok", None)
+    r = reg.get(w.get("session_id")) or next((x for x in reg.values() if agents._on_pane(x, w)), {})
+    js = stuck_jobs.of(r.get("pid"))
+    stuck = stuck_jobs.stuck(js)
+    if js and not stuck:
+        rec["jobs_ok"] = True   # waiting on a job that can still report
+        return False
+    if stuck:   # the "N shells still running" footer keeps the pane's activity fresh: the registry says how long it has been at its prompt
+        idle = None if r.get("status") == "busy" else now - r.get("statusUpdatedAt", 0) / 1000
+    else:
+        idle = agents.idle_seconds(w, reg, st)
+    limit = (C.DISPATCH.get("stall_minutes") or 0) * 60
     if not limit or idle is None or _excused(c, w, agent_screen.read(w["pane"])[1]) or (
             idle < limit and idle < now - rec.get("nudged_at", now) - NUDGE_ECHO_SLACK):
         rec.pop("nudged_at", None)   # working or waiting again: the next stall starts with a fresh nudge
@@ -150,16 +162,18 @@ def stall(c, w, reg, st, seen):
         return False
     if idle < limit:
         return False
+    if stuck:
+        rec["jobs"] = [stuck_jobs.describe(j) for j in stuck]
     if not rec.get("reported"):
         rec["reported"] = True
         events.emit("stalled", cid, stage=stage, minutes=int(idle // 60))
     if not rec.get("nudged_at"):
-        d.tmux("send-keys", "-t", w["pane"], "-l", "--", NUDGE)
+        d.tmux("send-keys", "-t", w["pane"], "-l", "--", stuck_jobs.nudge(stuck) if stuck else NUDGE)
         d.tmux("send-keys", "-t", w["pane"], "Enter")
         rec["nudged_at"] = now
         events.emit("stall_nudged", cid, stage=stage)
         return False
-    if now - rec["nudged_at"] < limit:
+    if stuck or now - rec["nudged_at"] < limit:   # pl never stops an agent for jobs: that would end them; the alert re-notifies
         return False
     times = [t for t in (st.setdefault("stall_retries", {}).get(cid) or []) if isinstance(t, (int, float)) and now - t < 86400]
     if len(times) >= STALL_RETRIES:
