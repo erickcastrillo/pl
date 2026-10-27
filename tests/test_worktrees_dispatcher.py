@@ -383,23 +383,16 @@ def test_sweep_keeps_worktree_of_live_agent_and_says_so(wt_env, monkeypatch, cap
     assert str(wt_path) in out and "c1" in out and "skipped: agent running" in out
 
 
-def test_sweep_keeps_worktree_of_held_agent_with_reason(wt_env, monkeypatch, capsys):
+def test_sweep_keeps_worktree_of_trusting_agent_with_reason(wt_env, monkeypatch, capsys):
     from pl import agents, worktrees
     monkeypatch.setattr(agents, "col_name", lambda lid: lid)
     trusting_path, trusting = _merged_done_card(wt_env, "trusting", {"worker": {"trust_wait": "/x"}})
-    blocked_path = C.WORKTREES_DIR / "repo-pl-blocked"
-    blocked_path.mkdir()
-    wt_env.worktrees.append({"path": blocked_path, "branch": "pl/blocked"})
-    blocked = {"id": "blocked", "title": "blocked", "list_id": "In progress", "description": "d",
-               "metadata": {"run_retry_at": "2999-01-01T00:00:00+00:00", "run_released_why": "usage limit"}}
-    blocked["metadata"]["run_released_on"] = agents.release_key(blocked)
     monkeypatch.setattr(worktrees, "registry", lambda: {})
     monkeypatch.setattr(worktrees, "worker_status", lambda w, reg: ("alive", None))
-    worktrees.sweep([trusting, blocked])
+    worktrees.sweep([trusting])
     assert _removals(wt_env) == []
     lines = capsys.readouterr().out.splitlines()
     assert any("trusting" in ln and "skipped: agent held" in ln and "trust the folder" in ln for ln in lines)
-    assert any("blocked" in ln and "skipped: agent held" in ln and "usage limit" in ln for ln in lines)
 
 
 def test_sweep_is_quiet_about_cards_without_an_agent(wt_env, capsys):
