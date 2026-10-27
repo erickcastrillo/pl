@@ -46,6 +46,7 @@ def text(app):
 async def open_wizard(pilot):
     await pilot.press("n")
     await wait_until(pilot, lambda: isinstance(pilot.app.screen, NewPipelineScreen), "the New pipeline wizard")
+    await settle(pilot)
     return pilot.app.screen
 
 
