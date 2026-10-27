@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+from textual.app import App
 
 from pl import config as C
 from pl import manager
@@ -10,6 +11,7 @@ from pl.tui.app import PlApp, StoppedScreen
 from pl.tui.chrome import header_text
 from pl.tui.switcher import PipelinesScreen, picker_rows
 from test_tui_views import FakeAssistant, _open_assistant
+from tui_wait import settle, wait_until
 
 
 def _three_summaries():
@@ -36,6 +38,28 @@ def current_profile(monkeypatch):
 
 def _app():
     return PlApp(snapshot_provider=_data, autostart=False, whatsnew=False, updates=False, restarts=False)
+
+
+class _PickerHost(App):
+    """The picker alone, pushed over an empty app."""
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
+
+    def on_mount(self):
+        self.push_screen(PipelinesScreen(self.data))
+
+
+def _screen_is(app, kind):
+    return lambda: isinstance(app.screen, kind)
+
+
+def _back_to_one_screen(app):
+    return lambda: len(app.screen_stack) == 1
+
+
+def _switched(app):
+    return lambda: app.restart_into is not None
 
 
 def test_header_shows_the_pipeline_chip_and_type():
@@ -71,32 +95,29 @@ async def test_P_opens_the_picker_and_enter_switches_on_the_same_tab():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         app.action_tab("prs")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab == "prs", "the Pull requests tab")
         await pilot.press("P")
-        await pilot.pause()
-        assert isinstance(app.screen, PipelinesScreen)
+        await wait_until(pilot, _screen_is(app, PipelinesScreen), "the pipeline picker")
         await pilot.press("down", "enter")
-        await pilot.pause()
+        await wait_until(pilot, _switched(app), "the switch to sales")
         assert app.restart_into == ("profile", "sales", None, "prs")
 
 
 async def test_escape_closes_the_picker_without_switching():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("P")
-        await pilot.pause()
+        await _open_picker(app, pilot)
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, _back_to_one_screen(app), "the picker to close")
         assert len(app.screen_stack) == 1 and app.restart_into is None
 
 
 async def test_enter_on_the_current_pipeline_does_not_switch():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("P")
-        await pilot.pause()
+        await _open_picker(app, pilot)
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, _back_to_one_screen(app), "the picker to close")
         assert len(app.screen_stack) == 1 and app.restart_into is None
 
 
@@ -104,14 +125,15 @@ async def test_a_click_on_the_header_opens_the_picker():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.click("#header")
-        await pilot.pause()
+        await wait_until(pilot, _screen_is(app, PipelinesScreen), "the pipeline picker")
         assert isinstance(app.screen, PipelinesScreen)
 
 
 async def test_initial_tab_the_pipeline_does_not_show_is_ignored():
     app = PlApp(snapshot_provider=_data, autostart=False, whatsnew=False, updates=False, restarts=False, tab="nope")
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab, "a tab to open")
+        await settle(pilot)
         assert app.active_tab
 
 
@@ -133,15 +155,15 @@ class _FakeManager:
 
 async def _tab_and_press(pilot, app, *keys, tab="prs"):
     app.action_tab(tab)
-    await pilot.pause()
+    await wait_until(pilot, lambda: app.active_tab == tab, f"the {tab} tab")
     await pilot.press(*keys)
-    await pilot.pause()
 
 
 async def test_alt_2_switches_to_the_second_pipeline_on_the_same_tab():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+2")
+        await wait_until(pilot, _switched(app), "the switch to sales")
         assert app.restart_into == ("profile", "sales", None, "prs")
 
 
@@ -151,7 +173,7 @@ async def test_alt_2_switches_while_the_assistant_box_has_focus(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_assistant(pilot)
         await pilot.press("h", "i", "alt+2")
-        await pilot.pause()
+        await wait_until(pilot, _switched(app), "the switch to sales")
         assert app.restart_into == ("profile", "sales", None, "assistant")
 
 
@@ -159,6 +181,7 @@ async def test_alt_5_notes_no_pipeline_5_and_does_not_switch():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+5")
+        await wait_until(pilot, lambda: app._notifications, "the no-pipeline note")
         assert app.restart_into is None
         assert [n.message for n in app._notifications] == ["no pipeline 5"]
 
@@ -168,30 +191,31 @@ async def test_alt_1_on_the_current_pipeline_does_nothing(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+1")
+        await settle(pilot)
         assert app.restart_into is None and not list(app._notifications) and fm.calls == []
 
 
 async def test_ctrl_digit_and_digits_open_tabs_and_alt_digit_does_not():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab, "a tab to open")
         await pilot.press("2")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab != "dashboard", "the second tab")
         work = app.active_tab
         assert work != "dashboard"
         await pilot.press("ctrl+1")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab == "dashboard", "the dashboard")
         assert app.active_tab == "dashboard"
         await pilot.press("2", "alt+1")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab == work, "the second tab")
+        await settle(pilot)
         assert app.active_tab == work and app.restart_into is None
 
 
 async def test_picker_rows_show_their_alt_keys():
-    app = _app()
+    app = _PickerHost(_data())
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("P")
-        await pilot.pause()
+        await _open_picker(app, pilot)
         ol = app.screen.query_one("#pipeline-options")
         prompts = [str(ol.get_option_at_index(i).prompt) for i in range(3)]
         assert [p.startswith(f"alt+{i + 1}") for i, p in enumerate(prompts)] == [True] * 3
@@ -201,10 +225,9 @@ async def test_choosing_a_stopped_pipeline_in_the_picker_asks_first(monkeypatch)
     _FakeManager(monkeypatch)
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
-        await pilot.press("P")
-        await pilot.pause()
+        await _open_picker(app, pilot)
         await pilot.press("down", "down", "enter")
-        await pilot.pause()
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
         assert isinstance(app.screen, StoppedScreen)
         assert "support is stopped" in str(app.screen.query("Static").first().render())
         assert app.restart_into is None
@@ -215,10 +238,10 @@ async def test_alt_3_on_a_stopped_pipeline_asks_first(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await pilot.press("alt+3")
-        await pilot.pause()
-        assert isinstance(app.screen, StoppedScreen) and app.restart_into is None
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
+        assert app.restart_into is None
         await pilot.press("alt+2")
-        await pilot.pause()
+        await settle(pilot)
         assert len(app.screen_stack) == 2
 
 
@@ -227,9 +250,9 @@ async def test_enter_starts_the_dispatcher_and_switches(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+3")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
+        await wait_until(pilot, lambda: len(fm.calls) == 2 and app.restart_into, "the dispatcher start and the switch")
         assert fm.calls == [("restart", "support", "restart", "console-D"), ("start",)]
         assert app.restart_into == ("profile", "support", None, "prs")
 
@@ -239,8 +262,9 @@ async def test_s_switches_without_starting(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+3")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
         await pilot.press("s")
-        await pilot.pause()
+        await wait_until(pilot, _switched(app), "the switch to support")
         assert app.restart_into == ("profile", "support", None, "prs") and fm.calls == []
 
 
@@ -249,8 +273,9 @@ async def test_escape_cancels_and_stays(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+3")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, _back_to_one_screen(app), "the prompt to close")
         assert len(app.screen_stack) == 1 and app.restart_into is None and fm.calls == []
 
 
@@ -259,9 +284,10 @@ async def test_a_failed_start_is_shown_and_still_switches(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+3")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
         await pilot.press("enter")
-        await app.workers.wait_for_complete()
-        await pilot.pause(0.1)
+        await wait_until(pilot, lambda: any("disk full" in n.message for n in app._notifications) and app.restart_into,
+                         "the start failure notice and the switch")
         assert any("disk full" in n.message and n.severity == "error" for n in app._notifications)
         assert app.restart_into == ("profile", "support", None, "prs")
 
@@ -271,6 +297,7 @@ async def test_a_running_pipeline_switches_without_a_prompt(monkeypatch):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         await _tab_and_press(pilot, app, "alt+2")
+        await wait_until(pilot, _switched(app), "the switch to sales")
         assert len(app.screen_stack) == 1 and app.restart_into == ("profile", "sales", None, "prs")
 
 
@@ -283,20 +310,21 @@ def _only_current():
 
 
 async def _open_picker(app, pilot):
-    await pilot.press("P")
-    await pilot.pause()
-    assert isinstance(app.screen, PipelinesScreen)
+    if not isinstance(app, _PickerHost):
+        await pilot.press("P")
+    await wait_until(pilot, _screen_is(app, PipelinesScreen), "the pipeline picker")
+    await settle(pilot)
 
 
 async def _select_new_pipeline(app, pilot):
     ol = app.screen.query_one("#pipeline-options")
     await pilot.press(*["down"] * (len(ol.options) - 1 - (ol.highlighted or 0)), "enter")
-    await pilot.pause()
+    await wait_until(pilot, lambda: not isinstance(app.screen, PipelinesScreen), "the picker to close")
+    await settle(pilot)
 
 
 async def test_the_picker_ends_with_new_pipeline_when_only_the_current_pipeline_exists():
-    app = PlApp(snapshot_provider=lambda: {**_data(), "home": _only_current()}, autostart=False,
-                whatsnew=False, updates=False, restarts=False)
+    app = _PickerHost({**_data(), "home": _only_current()})
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_picker(app, pilot)
         options = _picker_options(app)
@@ -306,7 +334,7 @@ async def test_the_picker_ends_with_new_pipeline_when_only_the_current_pipeline_
 
 
 async def test_the_picker_ends_with_new_pipeline_after_three_pipelines():
-    app = _app()
+    app = _PickerHost(_data())
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_picker(app, pilot)
         options = _picker_options(app)
@@ -330,11 +358,11 @@ async def test_cancelling_the_wizard_from_the_picker_changes_nothing(temp_home):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
         app.action_tab("prs")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.active_tab == "prs", "the Pull requests tab")
         await _open_picker(app, pilot)
         await _select_new_pipeline(app, pilot)
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, _back_to_one_screen(app), "the wizard to close")
         assert len(app.screen_stack) == 1
         assert app.active_tab == "prs"
         assert app.restart_into is None
@@ -354,6 +382,7 @@ async def test_a_finished_wizard_switches_to_the_new_pipeline(monkeypatch):
     async with app.run_test(size=(176, 48)) as pilot:
         await _open_picker(app, pilot)
         await _select_new_pipeline(app, pilot)
+        await wait_until(pilot, _switched(app), "the switch to ops")
         assert app.restart_into == ("profile", "ops", None, "cards")
 
 
