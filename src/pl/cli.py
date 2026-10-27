@@ -45,6 +45,10 @@
                           copy every column and card to another board, check the copy, then point [tracker] at it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
+  pl plan check N [--json]
+                          list slices of plan N that change the same file with no depends_on between them (append-only
+                          files, src/pl/whatsnew.py and CHANGELOG*, do not count); exits 1 when it finds any
+                          (--json: a list of {a, b, files})
   pl titles check [--json] [--fix [--dry-run]]
                           list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
                           one side, or share a pair with another card (Done left out); exits 1 when it finds
@@ -357,6 +361,7 @@ def _main():
      "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,
+     "plan": lambda a: __import__("pl.plancheck").plancheck.cmd_plan(a),
      "hook": hooks.cmd_hook,
      "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
      "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
@@ -431,6 +436,8 @@ def build_parser():
     p = sub.add_parser("section"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
+    p = sub.add_parser("plan"); pp = p.add_subparsers(dest="plan_cmd", required=True)
+    q = pp.add_parser("check"); q.add_argument("n", type=int); q.add_argument("--json", action="store_true", help="print the overlapping pairs as a JSON list")
     p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
     q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     q.add_argument("--fix", action="store_true", help="add the missing title prefix or plan/slice metadata; clashes are left for a person")
