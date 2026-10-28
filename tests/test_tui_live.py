@@ -123,14 +123,15 @@ async def test_live_view_stays_where_the_user_scrolled_and_follows_again_at_the_
         up = scroll.scroll_y
         tmux.screen += "new line\n"
         live._poll()
-        await settle(pilot)
+        await settle(pilot, lambda: "new line" in body(live))
         assert scroll.scroll_y == up
         scroll.scroll_end(animate=False)
         await settle(pilot)
         tmux.screen += "newer line\n"
         live._poll()
-        await settle(pilot)
-        assert scroll.scroll_y == scroll.max_scroll_y > up
+        await settle(pilot, lambda: "newer line" in body(live))
+        await settle(pilot, lambda: scroll.scroll_y == scroll.max_scroll_y)
+        assert scroll.scroll_y > up
 
 
 async def test_live_view_keeps_the_final_screen_when_the_agent_exits(monkeypatch):
