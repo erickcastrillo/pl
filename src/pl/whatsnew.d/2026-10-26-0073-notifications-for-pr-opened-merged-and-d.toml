@@ -1,0 +1,4 @@
+id = "2026-10-26.73"
+title = "Notifications for PR opened, merged and done"
+where = "[notify] events in the profile config; chat connectors routed for alerts"
+try = "pl chat route alerts <name>"

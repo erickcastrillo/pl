@@ -10,7 +10,7 @@ from datetime import datetime
 
 from pl import config as C
 from pl import harnesses
-from pl.board import col_name
+from pl.board import col_name, sections
 from pl.util import mask, parse_iso, short_id
 
 # ---------- claude session registry (which agents are alive) ----------
@@ -140,6 +140,23 @@ def screen_quiet(st, pane):
     return now - rec["since"]
 
 
+def _quiet_seconds(w, st):
+    h = _harness(w)
+    if st is not None and h is not None and not h.session_registry:
+        return screen_quiet(st, w["pane"])
+    act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
+    return time.time() - int(act) if act.isdigit() else 0
+
+
+def idle_seconds(w, reg, st=None):
+    """Seconds a live agent's pane has been quiet, or None when its session is busy or its pane is gone. With the
+    dispatcher state st, a harness with no session registry (agy) is idle by an unchanged screen."""
+    rec = reg.get(w.get("session_id")) or next((r for r in reg.values() if _on_pane(r, w)), {})
+    if rec.get("status") == "busy" or not pane_exists(w.get("pane")):
+        return None
+    return _quiet_seconds(w, st)
+
+
 def run_waiting(w, reg, st=None):
     """'waiting (<why>)' when a live run agent is not working: its session is not busy and its screen shows a
     /run-plan GATE line or its pane has been idle WAIT_IDLE seconds. Such an agent does not hold a run slot.
@@ -154,46 +171,36 @@ def run_waiting(w, reg, st=None):
         return f"waiting ({gates[-1]})"
     if w.get("finished_turn"):   # the Stop hook said so: no waiting out the quiet screen
         return "waiting (finished turn)"
-    h = _harness(w)
-    if st is not None and h is not None and not h.session_registry:
-        idle = screen_quiet(st, w["pane"])
-    else:
-        act = (harnesses._run(["tmux", "display-message", "-p", "-t", w["pane"], "#{window_activity}"]).stdout or "").strip()
-        idle = time.time() - int(act) if act.isdigit() else 0
+    idle = _quiet_seconds(w, st)
     return f"waiting (idle {int(idle // 60)} min)" if idle >= WAIT_IDLE else None
 
 
-PR_RE = re.compile(r"(?<![\w&#])#(\d{1,7})\b")   # a PR or issue reference like #1757
-# card metadata of a released run agent (dispatch.release_run): why, when it may start again, how many releases, and
-# the card's column and description at release (a change clears the hold)
-RELEASE_KEYS = ("run_released_at", "run_released_why", "run_retry_at", "run_releases", "run_released_on")
+WAIT_WIDTH = 48   # characters of a "waiting for you" reason: the state column sizes itself to its text
 
 
-def gate_pr(pane):
-    """The first PR reference like "#1757" within 3 lines of the last /run-plan GATE line on the pane's screen, or
-    None. Read from the screen only; nothing is looked up."""
-    lines = (harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-60"]).stdout or "").splitlines()
-    at = next((i for i in range(len(lines) - 1, -1, -1) if GATE_RE.search(lines[i])), None)
-    if at is None:
-        return None
-    m = next((m for ln in lines[max(0, at - 3):at + 4] if (m := PR_RE.search(ln))), None)
-    return f"#{m.group(1)}" if m else None
-
-
-def release_key(c):
-    """The card's column and a hash of its description: a released run card is held while this stays the same."""
-    d = str(c.get("description") or "").encode()
-    return f"{col_name(c['list_id'])}:{hashlib.sha256(d).hexdigest()[:16]}"
-
-
-def run_blocked(c, now=None):
-    """'blocked: <why> · retry HH:MM' while a released run card waits out its backoff (the card unchanged since),
-    else None."""
+def person_wait(c, status):
+    """"waiting for you: <what>" when the card's agent waits on a person, else None. Read from card metadata only
+    (no tmux call): an open question, then a trust prompt, a permission prompt, a run agent at a GATE."""
     m = c.get("metadata") or {}
-    t = parse_iso(str(m.get("run_retry_at") or ""))
-    if not t or (now or time.time()) >= t or m.get("run_released_on") != release_key(c):
+    w = m.get("worker") or {}
+    if m.get("question"):
+        asked = [ln[3:] for ln in sections(c.get("description")).get("QUESTIONS", "").splitlines() if ln.startswith("Q: ")]
+        reason = asked[-1] if asked else "open question"
+    elif w.get("trust_wait"):
+        reason = f"trust {w['trust_wait']}"
+    elif w.get("permission_wait"):
+        reason = "permission" if w["permission_wait"] == "waiting: permission" else f"permission {w['permission_wait']}"
+    elif w.get("run_waiting") and w.get("stage") == "run" and status == "alive":
+        reason = w["run_waiting"]
+    else:
         return None
-    return f"blocked: {m.get('run_released_why') or 'waiting'} \u00b7 retry {datetime.fromtimestamp(t):%H:%M}"
+    text = "waiting for you: " + mask(str(reason).splitlines()[0] if str(reason).strip() else "open question")
+    limit = len("waiting for you: ") + WAIT_WIDTH
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+# release metadata left by pl before plan 54: the dispatcher clears it
+RELEASE_KEYS = ("run_released_at", "run_released_why", "run_retry_at", "run_releases", "run_released_on")
 
 
 MAX_ATTEMPTS = 3   # a stage whose agent died this many times waits for a person (pl retry)
@@ -306,14 +313,13 @@ def worker_view(c, reg):
         return hold_reason(c)
     if m.get("pipeline_mode") != "auto":
         return "manual"
-    if not w and (blocked := run_blocked(c)):
-        return blocked
     if col_name(c["list_id"]) == "Plan for review":
         return "ready for your review"
     if col_name(c["list_id"]) == "Manual":
         return "manual: yours to do"
     if not w:
-        return "waiting"
+        rw = m.get("rework") or {}
+        return "waiting: merge-only rework" if rw.get("active") and rw.get("merge_only") else "waiting"
     if int(w.get("attempts") or 0) >= MAX_ATTEMPTS and worker_status(w, reg)[0] == "dead":
         return died_label(c, "pl retry")
     if (hit := w.get("limit_hit")) and isinstance(hit, dict):   # set by the dispatcher while the agent sits on a limit screen

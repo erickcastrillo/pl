@@ -15,6 +15,7 @@ from pl import board, dispatch, events, trackers, watch
 from pl.trackers import github
 from pl.tui import app as tui_app
 from pl.tui.app import PlApp
+from tui_wait import settle, wait_until
 
 FAKE_GH = r'''#!{python}
 import json, os, sys
@@ -436,23 +437,16 @@ def test_console_header_shows_the_resume_time_and_keeps_the_numbers(gh):
     async def run():
         app = PlApp(snapshot_provider=tui_app.default_provider, interval=3600)
         async with app.run_test(size=(176, 48)) as pilot:
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if app.data is not None:
-                    break
+            await wait_until(pilot, lambda: app.data is not None, "the first board read")
             first = app.data
             assert first is not None
-            await pilot.pause()
-            await app.workers.wait_for_complete()   # the first render's standup and review workers call gh too
+            await settle(pilot)   # the first render's standup and review workers call gh too
             gh.set(mode="ratelimit", reset=reset, headers=_spent(reset))
             trackers.reset()
             for _ in range(3):
                 app.error = None   # wait for this refresh to land: overlapping ones all call gh before the back-off is saved
                 app.refresh_data()
-                for _ in range(1200):
-                    await pilot.pause(0.05)
-                    if app.error:
-                        break
+                await wait_until(pilot, lambda: app.error, "the refresh to fail", timeout=60)
             header = str(app.query_one("#header").render())
             assert f"GitHub rate-limited, retrying at {hhmm}" in header
             assert "refresh failed" not in header
@@ -667,13 +661,7 @@ def test_a_write_through_pl_or_r_makes_the_next_console_read_fresh(gh):
     _pass()
     trackers.reset()
     board.share("read")
-    _move("3", "Plan for review")                         # an agent's pl move
-    gh.clear()
-    board.cards()
-    assert reads(gh) == 1
-    _pass()
-    trackers.reset()
-    board.share("read")
+    _move("3", "Plan for review")                         # an agent's pl move patches its card in the save
     gh.clear()
     board.cards()
     assert reads(gh) == 0
@@ -754,6 +742,7 @@ def test_an_hour_with_an_idle_dispatcher_the_console_reads_no_board_and_40_searc
     """Measured before: a pass every 300 s (an idle board) and a console refresh every 60 s made 36 board reads
     (24 by the console: it reused a save for 120 s only) and 48 PR searches (4 every 5 minutes)."""
     C.DISPATCH["interval"] = 300                          # the dispatcher's wait on an idle board
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     _hour(monkeypatch, 60, pass_every=300)
     assert reads(gh) == 12                                # the dispatcher's own reads; the console reuses every one
     assert gh.count("search", "prs") <= 40                # open PRs 3 every 5 minutes, PR activity 2 every 30
@@ -827,7 +816,10 @@ def test_an_mcp_board_is_shared_the_same_way(mcp_calls):
     trackers.reset()
     tui_app.default_provider()
     assert mcp_calls.count("item_list") == 1              # the console reused the dispatcher's read
-    board.update("c3", verify=False, title="renamed")     # a write through pl
+    board.update("c3", verify=False, title="renamed")     # a write through pl patches its card in the save
+    board.cards()
+    assert mcp_calls.count("item_list") == 1
+    board.fresh_next()
     board.cards()
     assert mcp_calls.count("item_list") == 2
 
@@ -880,6 +872,7 @@ def test_a_second_read_in_one_pass_after_another_process_write_is_fresh(gh):
 
 
 def test_readers_reuse_a_save_for_at_most_330_seconds_however_long_the_dispatcher_waits(gh, monkeypatch):
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     now = [time.time()]                                   # one fake clock from the save on: a slow fake gh adds no age
     monkeypatch.setattr(board, "_clock", lambda: now[0])
     monkeypatch.setattr(github, "_clock", lambda: now[0])
@@ -1078,6 +1071,7 @@ def test_a_refresh_seeding_between_fresh_next_and_the_write_does_not_feed_it_an_
 
 
 def test_a_seeded_copy_never_outlives_the_saves_hold(gh, monkeypatch):
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
     t0 = time.time()
     _at(monkeypatch, t0)
     _pass()                                               # the dispatcher's save at t0, held 270 s
@@ -1384,7 +1378,7 @@ def _pl(monkeypatch, capsys, *argv):
 
 
 @pytest.mark.parametrize("argv", [("idea", "x"), ("list",), ("card", "acme/app#3"), ("section", "acme/app#3", "SPEC"),
-                                  ("move", "acme/app#3", "Approved"), ("approve", "acme/app#3")])
+                                  ("approve", "acme/app#3")])
 def test_a_held_command_says_so_on_stderr_and_exits_3(gh, monkeypatch, capsys, argv):
     reset = _ledger(10, {})
     code, out, err = _pl(monkeypatch, capsys, *argv)
@@ -1396,8 +1390,10 @@ def test_a_held_command_says_so_on_stderr_and_exits_3(gh, monkeypatch, capsys, a
 
 def test_a_held_move_changes_nothing_and_runs_again_after_the_reset(gh, monkeypatch, capsys):
     reset = _ledger(10, {})
-    code, _, _ = _pl(monkeypatch, capsys, "move", "acme/app#3", "Approved")
-    assert code == 3
+    monkeypatch.setenv("PL_CONFIG_DIR", str(C.CONFIG_DIR))
+    monkeypatch.setattr(sys, "argv", ["pl", "move", "acme/app#3", "Approved"])
+    cli.main()   # queued, exit 0 (Plan 54 slice 3)
+    assert "queued" in capsys.readouterr().out
     assert gh.count("project", "item-edit") == 0 and gh.count("issue", "edit") == 0
     monkeypatch.setattr(github, "_clock", lambda: reset + 120)
     gh.set(remaining=5000, reset=reset + 3600)
@@ -1466,10 +1462,7 @@ def test_console_header_says_the_board_is_held_until_the_reset(gh):
     async def run():
         app = PlApp(snapshot_provider=tui_app.default_provider, interval=3600)
         async with app.run_test(size=(176, 48)) as pilot:
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if app.data is not None:
-                    break
+            await wait_until(pilot, lambda: app.data is not None, "the first board read")
             first = app.data
             assert first is not None
             await app.workers.wait_for_complete()
@@ -1477,10 +1470,7 @@ def test_console_header_says_the_board_is_held_until_the_reset(gh):
             trackers.reset()
             app.error = None
             app.refresh_data()
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if app.error:
-                    break
+            await wait_until(pilot, lambda: app.error, "the refresh to fail", timeout=5)
             header = str(app.query_one("#header").render())
             assert "GitHub budget held" in header
             assert time.strftime("%H:%M", time.localtime(reset)) in header
@@ -1633,14 +1623,14 @@ def _hhmm(epoch):
     return time.strftime("%H:%M", time.localtime(epoch))
 
 
-def _usage_github(capsys):
+def _usage_github(capsys, json=False):
     from pl import usage
-    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None))
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None, json=json))
     out = capsys.readouterr().out
     for tok in (TOKEN_A, TOKEN_B):
         assert tok not in out
     assert not github.TOKEN_RE.search(out)
-    return out
+    return __import__("json").loads(out) if json else out
 
 
 def _line(out, text):
@@ -1710,3 +1700,300 @@ def test_usage_github_with_no_ledger_yet(gh, mine, capsys):
 def test_usage_github_without_fresh_reading_keeps_the_old_output(gh, mine):
     _ledger(4200, {})
     assert "pl 4200" not in ghquota.report() and "4200 of 5000 GraphQL points left" in ghquota.report()
+
+
+# ---------- pl usage --github by caller (Plan 53 slice 2) ----------
+
+CALLERS = {"agent run pl#10": 40, "agent review pl#11": 12, "claude board": 5}
+
+
+def _ledger_by(by, reset=None, remaining=4943, **extra):
+    reset = reset or int(time.time()) + 1800
+    ghquota._write(ghquota._path(), {"limit": 5000, "remaining": remaining, "reset": reset, "at": time.time(),
+                                     "window": reset, "spent": {"main": sum(by.values())}, "by": by, **extra})
+    return reset
+
+
+def test_usage_github_lists_callers_most_first_and_outside_pl(gh, mine, capsys):
+    reset = _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=reset)
+    lines = [l.strip() for l in _usage_github(capsys).splitlines()]
+    rows = [l for l in lines if l in ("agent run pl#10 40", "agent review pl#11 12", "claude board 5")]
+    assert rows == ["agent run pl#10 40", "agent review pl#11 12", "claude board 5"]
+    assert "outside pl 143" in lines
+
+
+def test_usage_github_json_matches_the_rows(gh, mine, capsys):
+    reset = _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=reset)
+    got = _usage_github(capsys, json=True)
+    entry = next(e for e in got["accounts"] if _hash(TOKEN_A) in e["account"])
+    assert (entry["limit"], entry["remaining"], entry["reset"]) == (5000, 4800, reset)
+    assert entry["callers"] == [{"caller": k, "points": v} for k, v in CALLERS.items()]
+    assert entry["outside_pl"] == 143
+    assert "does not apply" not in capsys.readouterr().out
+
+
+def test_outside_pl_never_negative(gh, mine, capsys):
+    reset = _ledger_by({"claude board": 57})
+    gh.set(remaining=4970, reset=reset)
+    assert "outside pl 0" in _usage_github(capsys).splitlines()[-1]
+    gh.set(remaining=4970, reset=reset)
+    got = _usage_github(capsys, json=True)
+    assert next(e for e in got["accounts"] if _hash(TOKEN_A) in e["account"])["outside_pl"] == 0
+
+
+@pytest.mark.parametrize("state, why", [({"mode": "ratelimit", "remaining": 0}, "GitHub refused: rate limited"),
+                                        ({"reset": None}, "gh could not read the budget")])
+def test_outside_pl_unknown_without_a_reading(gh, mine, capsys, state, why):
+    _ledger_by(dict(CALLERS))
+    gh.set(**state)
+    out = _usage_github(capsys)
+    assert "agent run pl#10 40" in out and "outside pl: no GitHub reading" in out and why in out
+    gh.set(**state)
+    entry = next(e for e in _usage_github(capsys, json=True)["accounts"] if _hash(TOKEN_A) in e["account"])
+    assert entry["outside_pl"] is None and why in entry["why"] and len(entry["callers"]) == 3
+
+
+def test_callers_from_the_previous_window_are_not_listed(gh, mine, capsys):
+    _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=int(time.time()) + 5400)
+    assert "agent run pl#10" not in _usage_github(capsys)
+    gh.set(remaining=4800, reset=int(time.time()) + 5400)
+    entry = next(e for e in _usage_github(capsys, json=True)["accounts"] if _hash(TOKEN_A) in e["account"])
+    assert entry["callers"] == []
+
+
+def test_usage_github_json_holds_no_token(gh, mine, capsys, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", TOKEN_A)
+    monkeypatch.setenv("GITHUB_TOKEN", TOKEN_B)
+    reset = _ledger_by(dict(CALLERS))
+    gh.set(remaining=4800, reset=reset)
+    _usage_github(capsys)
+    gh.set(remaining=4800, reset=reset)
+    _usage_github(capsys, json=True)
+
+
+def _grow(ledger_by, **extra):
+    reset = int(time.time()) + 1800
+    ghquota._write(ghquota._path(), {"limit": 5000, "remaining": 4900, "reset": reset, "at": time.time(),
+                                     "window": reset, "spent": {}, "by": ledger_by, **extra})
+    return reset
+
+
+def test_gap_event_names_the_top_three_callers_since_the_last_reading(gh):
+    first = {"agent run pl#10": 10}
+    reset = _grow({"agent run pl#10": 100, "agent spec pl#12": 30, "agent review pl#11": 20, "claude board": 2},
+                  seen=first)
+    ghquota.refresh(3000, reset)
+    top = [{"caller": "agent run pl#10", "points": 90}, {"caller": "agent spec pl#12", "points": 30},
+           {"caller": "agent review pl#11", "points": 20}]
+    gap = _gap_events()
+    assert len(gap) == 1 and gap[0]["top_callers"] == top
+    assert ghquota.ledger()["seen"] == ghquota.ledger()["by"]
+
+
+def test_gap_event_with_fewer_or_no_callers(gh):
+    reset = _grow({"claude board": 7})
+    ghquota.refresh(3000, reset)
+    assert _gap_events()[-1]["top_callers"] == [{"caller": "claude board", "points": 7}]
+    reset = _grow({})
+    ghquota.refresh(3000, reset)
+    last = _gap_events()[-1]
+    assert last["top_callers"] == [] and last["message"].endswith("top callers: none recorded")
+
+
+def test_activity_tab_shows_the_top_callers(gh):
+    from pl.tui import loops
+    reset = _grow({"agent run pl#10": 100, "agent spec pl#12": 30, "agent review pl#11": 20, "claude board": 2},
+                  seen={"agent run pl#10": 10})
+    ghquota.refresh(3000, reset)
+    e = _gap_events()[0]
+    want = "top callers: agent run pl#10 90, agent spec pl#12 30, agent review pl#11 20"
+    assert want in loops._fields(e, ("ts", "kind", "card", "profile", "level", "demo"))
+    assert want in loops.event_text(e)
+
+
+def test_gap_event_holds_no_token(gh, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", TOKEN_A)
+    monkeypatch.setenv("GITHUB_TOKEN", TOKEN_B)
+    reset = _grow({"claude board": 7})
+    ghquota.refresh(3000, reset)
+    event = str(_gap_events()[0])
+    assert TOKEN_A not in event and TOKEN_B not in event
+
+
+# ---------- Plan 53 slice 6: one shared board read for every process ----------
+
+def _process(share=None):
+    board._SHARE.clear()
+    trackers.reset()
+    if share:
+        board.share(share)
+
+
+def _saved():
+    return json.loads((C.STATE_DIR / "board-cache.json").read_text())
+
+
+def _col_of(cid, cs=None):
+    c = next(c for c in (cs or board.cards()) if c["id"] == cid)
+    return board.col_name(c["list_id"])
+
+
+def test_ten_commands_in_share_seconds_read_the_board_once(gh, monkeypatch):
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    for _ in range(10):
+        _process()
+        board.cards()
+    assert reads(gh) == 1
+
+
+def test_a_save_older_than_share_seconds_is_read_again(gh, monkeypatch):
+    t = [1000.0]
+    _at(monkeypatch, t[0])
+    _process()
+    board.cards()
+    t[0] += 119
+    _at(monkeypatch, t[0])
+    _process()
+    board.cards()
+    assert reads(gh) == 1
+    t[0] += 2
+    _at(monkeypatch, t[0])
+    _process()
+    board.cards()
+    assert reads(gh) == 2
+
+
+@pytest.mark.parametrize("damage", ["key", "garbage", "cards"])
+def test_a_save_from_another_tracker_key_or_garbage_is_ignored(gh, damage):
+    _process()
+    board.cards()
+    path = C.STATE_DIR / "board-cache.json"
+    if damage == "garbage":
+        path.write_text("{not json")
+    else:
+        got = _saved()
+        got["key" if damage == "key" else "cards"] = "other" if damage == "key" else "x"
+        path.write_text(json.dumps(got))
+    _process()
+    gh.clear()
+    assert board.cards()
+    assert reads(gh) == 1
+
+
+def test_a_stopped_dispatchers_long_hold_counts_only_share_seconds(gh, monkeypatch):
+    _at(monkeypatch, 1000.0)
+    _process("write")
+    board.share("write", hold=300)
+    board.cards()
+    _at(monkeypatch, 1200.0)
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    _process()
+    board.cards()
+    assert reads(gh) == 1
+    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    _process()
+    board.cards()
+    assert reads(gh) == 2
+
+
+def test_the_save_is_0600_and_holds_at_key_and_cards(gh):
+    import stat
+    _process()
+    board.cards()
+    path = C.STATE_DIR / "board-cache.json"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert {"at", "key", "cards"} <= set(_saved())
+
+
+def test_a_move_patches_the_save_and_the_next_reader_sees_it_without_a_board_read(gh):
+    _process()
+    board.cards()
+    _move("3", "Plan for review")
+    _process()
+    gh.clear()
+    assert _col_of("acme/app#3") == "Plan for review"
+    assert reads(gh) == 0
+
+
+def test_an_update_of_a_section_and_of_metadata_patches_the_save(gh):
+    _process()
+    board.cards()
+    cid = "acme/app#3"
+    desc = board.render({"SPEC": "new spec"})
+    board.update(cid, description=desc, metadata={"pr": "x"}, verify=False)
+    _process()
+    gh.clear()
+    c = next(c for c in board.cards() if c["id"] == cid)
+    assert board.sections(c["description"])["SPEC"] == "new spec"
+    assert c["metadata"]["pr"] == "x"
+    assert reads(gh) == 0
+
+
+def test_a_new_card_is_added_to_the_save(gh):
+    _process()
+    n = len(board.cards())
+    res = trackers.get("tracker").create("Inbox", title="fresh idea")
+    _process()
+    gh.clear()
+    cs = board.cards()
+    assert len(cs) == n + 1 and res["id"] in {c["id"] for c in cs}
+    assert reads(gh) == 0
+
+
+def test_a_delete_leaves_the_save_stale(gh):
+    _process()
+    board.cards()
+    trackers.get("tracker").delete("acme/app#3")
+    _process()
+    gh.clear()
+    board.cards()
+    assert reads(gh) == 1
+
+
+def test_a_write_after_a_stale_save_does_not_revive_it(gh):
+    _process()
+    board.cards()
+    board.dirty()                                         # another process wrote: the save is stale
+    _move("3", "Plan for review")
+    _process()
+    gh.clear()
+    board.cards()
+    assert reads(gh) == 1
+
+
+def test_list_inbox_card_and_section_reuse_a_fresh_dispatcher_save(gh, capsys):
+    from pl import commands, inbox
+    _pass()
+    gh.clear()
+    commands.cmd_list(argparse.Namespace(json=False, all=False, product=False, plan=None))
+    commands.cmd_list(argparse.Namespace(json=True, all=False, product=False, plan=None))
+    inbox.cmd_inbox(argparse.Namespace(json=True))
+    commands.cmd_card(argparse.Namespace(id="#3", delete=False, json=True))
+    commands.cmd_section(argparse.Namespace(id="#3", name="", from_=None))
+    assert reads(gh) == 0
+
+
+def test_fresh_reads_the_board_and_rewrites_the_save(gh, capsys, monkeypatch):
+    from pl import commands, inbox
+    runs = {
+        "list": lambda f: commands.cmd_list(argparse.Namespace(json=False, all=False, product=False, plan=None, fresh=f)),
+        "list-json": lambda f: commands.cmd_list(argparse.Namespace(json=True, all=False, product=False, plan=None, fresh=f)),
+        "inbox": lambda f: inbox.cmd_inbox(argparse.Namespace(json=True, fresh=f)),
+        "card": lambda f: commands.cmd_card(argparse.Namespace(id="#3", delete=False, json=True, fresh=f)),
+        "section": lambda f: commands.cmd_section(argparse.Namespace(id="#3", name="", from_=None, fresh=f)),
+    }
+    for name, run in runs.items():
+        _pass()
+        t = _saved()["at"]
+        _at(monkeypatch, t + 1)
+        _process()
+        gh.clear()
+        run(False)
+        assert reads(gh) == 0, name
+        _process()
+        run(True)
+        assert reads(gh) == 1, name
+        assert _saved()["at"] > t, name

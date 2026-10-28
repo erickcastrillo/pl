@@ -37,12 +37,12 @@ def _card(n, col, **extra):
             "metadata": {"pipeline_mode": "auto"}, **extra}
 
 
-def _pass(monkeypatch, cs):
+def _pass(monkeypatch, cs, update=lambda cid, **f: None):
     started = []
     monkeypatch.setattr(dispatch, "registry", lambda: {})
     monkeypatch.setattr(dispatch, "cards", lambda: cs)
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
-    monkeypatch.setattr(dispatch, "update", lambda cid, **f: None)
+    monkeypatch.setattr(dispatch, "update", update)
     monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: started.append((c["id"], stage)))
     monkeypatch.setattr(dispatch, "sweep_untracked", lambda *a, **k: 0)
     monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
@@ -192,3 +192,295 @@ def test_approve_off_a_gate_exits_2(store, cmd, args):
         cmd(argparse.Namespace(id="o/r#1", **args))
     assert e.value.code == 2 or isinstance(e.value, commands.BadInput)
     assert "Working" in str(e.value.code)
+
+
+# ---------- plan 61 slice 4: the dispatcher runs the agent a stage names ----------
+
+def _dry_line(capsys, stage):
+    dispatch.start_worker(_card(1, "Inbox"), stage, 1, True)
+    return capsys.readouterr().out
+
+
+def test_ac6_no_agent_dry_run_line_is_unchanged_engineering(monkeypatch, capsys):
+    C.PIPELINE = {**pipeline.engineering(), "template": "engineering"}
+    C.STAGES = {"spec": {}}
+    C.PROMPTS = {"spec": "/pl-spec {id}"}
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
+    assert _dry_line(capsys, "spec") == "  would start spec-card-1 under claude model sonnet (account claude): /pl-spec o/r#1\n"
+
+
+def test_ac6_no_agent_dry_run_line_is_unchanged_generic(monkeypatch, capsys):
+    _sales()
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
+    assert _dry_line(capsys, "prepare") == "  would start prepare-card-1 under claude model sonnet (account claude): /pl-stage o/r#1 stage=prepare\n"
+
+
+COPYWRITER = {"name": "marketing-copywriter", "source": "built-in", "instructions": "Write warm copy.",
+              "skills": ["pl-stage"], "connector_roles": ["messaging"], "model": "sonnet", "approval": [], "pod": None}
+
+
+def _agent_stage(monkeypatch, tmp_path, agent=COPYWRITER, name="marketing-copywriter"):
+    stage = {**SALES["stages"]["prepare"], "agent": name}
+    C.PIPELINE, C.COLUMNS = {**SALES, "stages": {"prepare": stage}}, SALES["columns"]
+    C.STAGES = {"prepare": {"agent": name}}
+    C.PROFILES = {"claude": tmp_path / ".claude", "codex-a": tmp_path / ".codex"}
+    C.ACCOUNTS = {"claude": {"harness": "claude"}, "codex-a": {"harness": "codex"}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: {agent["name"]: agent} if agent else {})
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("opus", "account claude"))
+
+
+def _real_start(monkeypatch):
+    """start_worker for real with tmux and the launch faked; (launch_script kwargs, update metadata) lists."""
+    kws, metas = [], []
+    monkeypatch.setattr(C, "TMUX_SESSION", "pl-t", raising=False)
+    monkeypatch.setattr(C, "WORK_DIR", "/w", raising=False)
+    monkeypatch.setattr(C, "ATTENTION", None, raising=False)
+    monkeypatch.setattr(dispatch.harnesses, "unattended", lambda h: h)
+    monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: kws.append(kw) or "")
+    monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, s, p, **kw: p)
+    monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: argparse.Namespace(returncode=0))
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "%1")
+    monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: metas.append(f.get("metadata")))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    return kws, metas
+
+
+def test_ac2_launch_offers_exactly_the_agent_skills(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    kws, _ = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert kws[0]["pod"]["skills"] == ["pl-stage"] and kws[0]["pod"]["name"] == "agent-marketing-copywriter"
+    assert kws[0]["pod"]["roles"] == ["messaging"]
+
+
+def test_agent_without_the_stage_skill_still_offers_it(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "skills": ["pl-sales-proposal"]})
+    kws, _ = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert kws[0]["pod"]["skills"] == ["pl-sales-proposal", "pl-stage"]
+
+
+def test_ac3_agent_model_is_used_and_reason_names_agent(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["model"], w["model_reason"], w["agent"]) == ("sonnet", "agent marketing-copywriter", "marketing-copywriter")
+    assert kws[0]["model"] == "sonnet"
+
+
+def test_ac3_agent_account_moves_the_harness(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "model": "codex-a"})
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["harness"], w["profile"], w["model_reason"]) == ("codex", "codex-a", "agent marketing-copywriter")
+    assert "model" not in kws[0]
+
+
+def test_ac4_agent_without_model_keeps_stage_model_and_reason(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "model": None})
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["model"], w["model_reason"], w["profile"]) == ("opus", "account claude", "claude")
+    assert "model" not in kws[0]
+
+
+def test_a_stage_without_an_agent_passes_no_agent_keywords(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    C.PIPELINE["stages"]["prepare"].pop("agent")
+    C.STAGES = {"prepare": {}}
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert not {"pod", "model"} & kws[0].keys() and "agent" not in metas[0]["worker"]
+
+
+def test_with_model_override_wins_only_for_a_valid_model_name(monkeypatch):
+    h = dispatch.harnesses.get("claude")
+
+    def picked(model):
+        return dispatch.harnesses._with_model(h.interactive, h, "claude", None, model=model)[1]["model"]
+
+    assert picked("haiku") == "haiku"
+    assert picked("bad name;") != "bad name;"
+
+
+def _two_stage_sales(monkeypatch, tmp_path, agents):
+    _agent_stage(monkeypatch, tmp_path, None, name="ghost")
+    other = {"column": "Working", "done": "Review", "skill": "pl-stage", "section": "PROPOSAL", "gate": "owner", "next": "Done"}
+    C.PIPELINE = {**C.PIPELINE, "stages": {**C.PIPELINE["stages"], "review": other}}
+    C.STAGES = {**C.STAGES, "review": {}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: agents)
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda *a, **k: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda *a: None)
+
+
+def _alert_log(monkeypatch):
+    log = {"open": [], "sweep": []}
+    monkeypatch.setattr(dispatch.alerts, "open", lambda key, sev, title, fix, **kw: log["open"].append((key, title, kw)))
+    monkeypatch.setattr(dispatch.alerts, "sweep", lambda prefix, keys, notify: log["sweep"].append((prefix, set(keys))))
+    return log
+
+
+def test_ac7_unknown_agent_starts_nothing_and_opens_alert(monkeypatch, tmp_path):
+    _two_stage_sales(monkeypatch, tmp_path, {})
+    log = _alert_log(monkeypatch)
+    started = _pass(monkeypatch, [_card(1, "Inbox"), _card(2, "Working")])
+    assert started == [("o/r#2", "review")]
+    assert [(t, kw["cards"]) for _, t, kw in log["open"] if t.startswith("stage prepare")] == [
+        ("stage prepare names unknown agent ghost", ["o/r#1"])]
+    assert ("agent_unknown:", {"agent_unknown:o/r#1:prepare"}) in log["sweep"]
+
+
+def test_ac7_restored_agent_starts_and_clears_the_alert(monkeypatch, tmp_path):
+    _two_stage_sales(monkeypatch, tmp_path, {"ghost": {**COPYWRITER, "name": "ghost"}})
+    log = _alert_log(monkeypatch)
+    assert _pass(monkeypatch, [_card(1, "Inbox")]) == [("o/r#1", "prepare")]
+    assert ("agent_unknown:", set()) in log["sweep"] and not log["open"]
+
+
+def test_ac8_dry_run_line_names_agent_and_model(monkeypatch, tmp_path, capsys):
+    _agent_stage(monkeypatch, tmp_path)
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: pytest.fail("tmux called"))
+    assert "agent marketing-copywriter model sonnet (agent marketing-copywriter)" in _dry_line(capsys, "prepare")
+
+
+# ---------- plan 61 slice 5: an agent's send, publish, post or quote-prices waits for the owner ----------
+
+DRAFTER = {"name": "sales-follow-up", "source": "built-in", "instructions": "x", "skills": ["pl-stage"], "connector_roles": [],
+           "model": None, "approval": ["send"], "pod": None}
+HOLD_COLUMNS = ["Inbox", "Working", "Ready", "Review", "Done"]
+HOLD = {"name": "sales", "template": "new-client", "columns": HOLD_COLUMNS, "stages": {
+    "draft": {"column": "Inbox", "done": "Ready", "skill": "pl-stage", "section": "PROPOSAL", "gate": "none", "agent": "sales-follow-up"},
+    "deliver": {"column": "Ready", "done": "Done", "skill": "pl-stage", "section": "DELIVERY", "gate": "none"}}}
+
+
+def _hold(monkeypatch, approval=("send",), agent=True, gate="none", outward=None):
+    stage = {**HOLD["stages"]["draft"], "gate": gate, **({"outward": outward} if outward is not None else {})}
+    if not agent:
+        stage.pop("agent")
+    C.PIPELINE, C.COLUMNS = {**HOLD, "stages": {**HOLD["stages"], "draft": stage}}, HOLD_COLUMNS
+    C.STAGES = {"draft": {}, "deliver": {}}
+    defs = {"sales-follow-up": {**DRAFTER, "approval": list(approval)}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: defs)
+
+
+def _writes(monkeypatch, cs):
+    metas = []
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.notifications, "send", lambda *a, **k: None)
+    return _pass(monkeypatch, cs, update=lambda cid, **f: metas.append(f.get("metadata"))), metas
+
+
+def test_ac1_agent_send_hold_keeps_the_card_and_starts_no_next_stage(monkeypatch):
+    _hold(monkeypatch)
+    started, metas = _writes(monkeypatch, [_card(1, "Ready")])
+    assert started == []
+    pending = metas[0]["approval_pending"]
+    assert pending["stage"] == "draft" and pending["actions"] == ["send"]
+
+
+@pytest.mark.parametrize("action", ["send", "publish", "post", "quote-prices"])
+def test_ac4_each_approval_action_holds(monkeypatch, action):
+    _hold(monkeypatch, approval=[action])
+    name, stage = dispatch.held_gate(_card(1, "Ready"), "Ready")
+    assert name == "draft" and stage["gate"] == "owner" and stage["outward"] is (action == "send")
+
+
+def test_ac1_held_card_after_approval_starts_the_next_stage(monkeypatch):
+    _hold(monkeypatch)
+    c = _card(1, "Ready")
+    c["metadata"]["gates"] = {"draft": {"review_round": 0}}
+    started, metas = _writes(monkeypatch, [c])
+    assert started == [("o/r#1", "deliver")] and not any("approval_pending" in (m or {}) for m in metas)
+
+
+@pytest.mark.parametrize("agent,approval", [(False, ["send"]), (True, [])])
+def test_ac8_no_agent_or_empty_approval_moves_as_today(monkeypatch, agent, approval):
+    _hold(monkeypatch, approval=approval, agent=agent)
+    started, metas = _writes(monkeypatch, [_card(1, "Ready")])
+    assert started == [("o/r#1", "deliver")] and not any("approval_pending" in (m or {}) for m in metas)
+
+
+def test_ac6_outward_stage_with_agent_without_send_still_stops_at_its_gate(monkeypatch):
+    _hold(monkeypatch, approval=["publish"], gate="owner", outward=True)
+    C.PIPELINE["stages"]["draft"]["done"] = "Review"
+    assert dispatch.held_gate(_card(1, "Review"), "Review") is None
+    assert pipeline.gate_for("Review")[0] == "draft"
+    started, _ = _writes(monkeypatch, [_card(1, "Review")])
+    assert started == []
+
+
+@pytest.fixture
+def held(store, monkeypatch):
+    monkeypatch.delenv("PL_SOURCE", raising=False)
+    monkeypatch.delenv("PL_ASSISTANT", raising=False)
+    store["list_id"] = "Ready"
+    store["description"] = board.render({"PROPOSAL": "To: client@example.com\n\nHello"})
+    queued = []
+    monkeypatch.setattr(commands.outbound, "enqueue", lambda c, section: queued.append(section))
+    monkeypatch.setattr(commands.outbound, "flagged_recipients", lambda c, section: [])
+    monkeypatch.setattr(commands.outward, "state", lambda: {"on": False})
+    store["queued"] = queued
+    return store
+
+
+def _approve(**kw):
+    commands.cmd_approve(argparse.Namespace(id="o/r#1", force=False, **kw))
+
+
+def test_ac2_owner_approve_at_a_send_hold_queues_and_records_the_gate(held, monkeypatch):
+    _hold(monkeypatch)
+    _approve()
+    assert "approved_by" in held["metadata"]["gates"]["draft"]
+    assert held["metadata"]["approval_pending"] is None
+    assert held["queued"] == ["PROPOSAL"] and held["list_id"] == "Ready"
+
+
+def test_ac2_send_hold_without_to_line_is_refused(held, monkeypatch):
+    _hold(monkeypatch)
+    held["description"] = board.render({"PROPOSAL": "Hello"})
+    with pytest.raises(SystemExit, match="no recipient in PROPOSAL: add a To: line"):
+        _approve()
+    assert held["queued"] == [] and "gates" not in held["metadata"]
+
+
+def test_ac2_outside_recipient_needs_confirm(held, monkeypatch):
+    _hold(monkeypatch)
+    monkeypatch.setattr(commands.outbound, "flagged_recipients", lambda c, section: ["x@other.com"])
+    with pytest.raises(SystemExit, match="pass --confirm"):
+        _approve()
+    assert held["queued"] == []
+    _approve(confirm=True)
+    assert held["queued"] == ["PROPOSAL"]
+
+
+@pytest.mark.parametrize("action", ["send", "publish", "post", "quote-prices"])
+def test_ac3_agent_session_approve_holds_for_the_owner(held, monkeypatch, action):
+    _hold(monkeypatch, approval=[action])
+    monkeypatch.setenv("PL_SOURCE", "mcp")
+    codes = []
+    monkeypatch.setattr(commands.confirm, "new_code", lambda c: codes.append(c["id"]) or "123456")
+    monkeypatch.setattr(commands.confirm, "send_to_chat", lambda *a, **k: None)
+    _approve()
+    assert held["queued"] == [] and held["list_id"] == "Ready"
+    assert held["metadata"]["approval_pending"]["by"] == "agent session" and len(codes) == 1
+
+
+def test_ac4_publish_hold_approve_records_gate_and_queues_nothing(held, monkeypatch):
+    _hold(monkeypatch, approval=["publish"])
+    held["description"] = board.render({"PROPOSAL": "Post text, no recipient"})
+    _approve()
+    assert "draft" in held["metadata"]["gates"] and held["queued"] == []
+
+
+def test_ac9_kill_switch_on_says_the_action_waits(held, monkeypatch, capsys):
+    _hold(monkeypatch)
+    monkeypatch.setattr(commands.outward, "state", lambda: {"on": True})
+    _approve()
+    assert "approved; its outward action waits: the kill switch is on" in capsys.readouterr().out

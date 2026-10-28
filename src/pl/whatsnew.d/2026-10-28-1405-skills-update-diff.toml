@@ -1,0 +1,3 @@
+title = "Skills screen: update available on GitHub skills, diff before updating"
+where = "Settings tab, Skills section: u on a row"
+try = "pl skills update NAME --dry-run"

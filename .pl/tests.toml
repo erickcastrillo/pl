@@ -1,0 +1,5 @@
+# pl tests affected: tests every build runs, beyond the ones the import graph finds
+[tests]
+# review and merge runs read the worker count through `pl tests full`
+workers = 4   # capped: several builds and reviews run at once on one machine
+always = ["tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"]

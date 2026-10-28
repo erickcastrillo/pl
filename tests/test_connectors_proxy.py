@@ -193,5 +193,5 @@ def test_pl_approve_records_the_review_round_with_the_gate(monkeypatch):
     monkeypatch.setattr(commands, "col_id", lambda name: name)
     monkeypatch.setattr(commands.events, "emit", lambda *a, **k: None)
     monkeypatch.setattr(commands.audit, "append", lambda *a, **k: None)
-    commands._approve_gate({"id": "c1", "title": "t", "list_id": "x", "metadata": {"review_round": 2}})
+    commands._approve_gate({"id": "c1", "title": "t", "list_id": "x", "metadata": {"review_round": 2}}, None)   # a: the CLI args (Plan 44 slice 5)
     assert updates[0]["metadata"]["gates"]["draft"]["review_round"] == 2

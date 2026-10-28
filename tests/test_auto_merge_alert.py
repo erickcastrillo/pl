@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from pl import accounts, alerts, dispatch
+from pl import accounts, alerts, dispatch, notifications
 from pl import config as C
 from pl.trackers import github
 
@@ -51,13 +51,15 @@ def profile(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def loop(monkeypatch):
-    seen = {"launches": 0, "notes": [], "panes": ""}
+def loop(tmp_path, monkeypatch):
+    seen = {"launches": 0, "notes": [], "direct": [], "panes": ""}
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    monkeypatch.setattr(notifications, "notify", lambda title, message: seen["notes"].append((title, message)))
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: types.SimpleNamespace(returncode=0, stdout=seen["panes"], stderr=""))
     monkeypatch.setattr(dispatch, "_launch", lambda *a, **kw: seen.update(launches=seen["launches"] + 1))
     monkeypatch.setattr(dispatch, "_loop_pane", lambda name: "%9")
     monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h: None)
-    monkeypatch.setattr(dispatch, "notify", lambda *a, **kw: seen["notes"].append(a))
+    monkeypatch.setattr(dispatch, "notify", lambda *a, **kw: seen["direct"].append(a))
     return seen
 
 
@@ -83,7 +85,8 @@ def test_auto_merge_off_opens_one_warn_alert(monkeypatch, loop):
     _tick()
     a = alerts.get(KEY)
     assert a["severity"] == "warn" and a["title"].startswith("Auto-merge is off for o/r")
-    assert "Allow auto-merge" in a["fix"] and len(loop["notes"]) == 1
+    assert "Allow auto-merge" in a["fix"]
+    assert len(loop["notes"]) == 1 and "Auto-merge is off for o/r" in loop["notes"][0][0] and loop["direct"] == []
 
 
 def test_the_setting_is_read_once_per_loop_start_and_alerts_once(monkeypatch, loop):
@@ -94,12 +97,13 @@ def test_the_setting_is_read_once_per_loop_start_and_alerts_once(monkeypatch, lo
     assert len(calls) == 1
     loop["panes"] = ""
     _tick()
-    assert len(calls) == 2
+    assert len(calls) == 2 and len(loop["notes"]) == 1
     assert [a["key"] for a in alerts.listing() if a["key"].startswith("auto_merge_off:")] == [KEY]
 
 
 def test_auto_merge_on_resolves_the_open_alert(monkeypatch, loop):
     alerts.open(KEY, "warn", "Auto-merge is off for o/r", "fix")
+    loop["notes"].clear()
     _gh_says(monkeypatch, _ok("true\n"))
     _tick()
     assert alerts.get(KEY)["resolved_at"] and loop["notes"] == []

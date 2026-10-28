@@ -1,0 +1,4 @@
+id = "2026-10-26.78"
+title = "Extend shows your pipeline's pod first"
+where = "Extend tab (press 6): Active pod"
+try = "pl pods show"

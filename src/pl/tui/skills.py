@@ -1,4 +1,4 @@
-"""Settings section "Skills": every account's skills, agents and commands, a read-only Markdown preview, an in-app
+"""Settings section "Skills": every account's skills, subagents and commands, a read-only Markdown preview, an in-app
 editor (backup + diff confirm before saving), new from a template, delete to .pl-trash, and the shared library."""
 import io
 import json
@@ -17,12 +17,14 @@ from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
 from pl import config as C
 from pl import skill_sources, skills
+from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.extensions import TargetScreen
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 HINT = ("e edit · E $EDITOR · n new (install or write) · d remove (a skill: its users are shown first) · S share to the library · l link a library skill "
         "to an account · I install from GitHub · u update the selected skill (diff first) · plugin files are read-only")
+KIND_LABEL = {"agent": "subagent"}
 DIFF_LINES = 30
 PINNED_RE = re.compile(r"^Source: (github:\S+@[0-9a-f]{40})$", re.M)
 INSTALL_PROMPT = "Install from GitHub: github:owner/repo[/path][@ref] or a github.com URL"
@@ -367,7 +369,7 @@ class SkillsView(Widget):
     #skills-reasons { color: $text-muted; height: auto; }
     #skills-meta { height: auto; }
     """
-    BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new"),
+    BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new skill"),
                 Binding("d", "delete", "remove"), Binding("S", "share", "share to library"),
                 Binding("l", "link", "link to account"), Binding("I", "install", "install"),
                 Binding("u", "update", "update")]
@@ -431,7 +433,8 @@ class SkillsView(Widget):
         t = self.query_one(DataTable)
         keep = t.cursor_row
         t.clear()
-        self.rows = []
+        t.add_row(new_row("skill"), *[""] * 5, key=NEW_ROW)
+        self.rows = [None]   # rows[i] is table row i; None for "+ New skill" and the headings
         for n, (heading, rows) in enumerate(groups):
             t.add_row(Text(heading, style="bold"), "", "", "", "", "", "", key=f"h{n}")
             self.rows.append(None)
@@ -439,13 +442,12 @@ class SkillsView(Widget):
                 lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
                 label = update_label(it, self.checks)
                 style = "bold" if label.startswith("update available") else "red" if label == "check failed" else ""
-                t.add_row(Text(it["name"]), Text(it["kind"]), Text(it["origin_label"]), Text(label, style=style),
+                t.add_row(Text(it["name"]), Text(KIND_LABEL.get(it["kind"], it["kind"])), Text(it["origin_label"]), Text(label, style=style),
                           Text(it["used_by"]), Text(lib), Text(it["description"][:80]), key=f"r{len(self.rows)}")
                 self.rows.append(it)
         self.items = [r for r in self.rows if r]
-        if self.rows:
-            row = min(keep, len(self.rows) - 1)
-            t.move_cursor(row=row + 1 if self.rows[row] is None and row + 1 < len(self.rows) else row)
+        row = min(keep, len(self.rows) - 1)
+        t.move_cursor(row=row + 1 if row and self.rows[row] is None and row + 1 < len(self.rows) else row)
         self._preview()
 
     def _item(self):
@@ -492,6 +494,10 @@ class SkillsView(Widget):
 
     def on_data_table_row_highlighted(self, _):
         self._preview()
+
+    def on_data_table_row_selected(self, m):
+        if m.row_key.value == NEW_ROW:
+            self.action_new()
 
     def focus_table(self):
         t = self.query_one(DataTable)
@@ -608,7 +614,10 @@ class SkillsView(Widget):
 
     def action_share(self):
         it = self._item()
-        if it is None or it["kind"] != "skill" or it["account"] in (skills.LIBRARY,) or it["library"]:
+        if it is None:
+            self._say("nothing selected", "information")
+            return
+        if it["kind"] != "skill" or it["account"] in (skills.LIBRARY,) or it["library"]:
             self._say("select one of an account's own skills to share it", "information")
             return
 
@@ -626,7 +635,10 @@ class SkillsView(Widget):
 
     def action_link(self):
         it = self._item()
-        if it is None or it["account"] != skills.LIBRARY:
+        if it is None:
+            self._say("nothing selected", "information")
+            return
+        if it["account"] != skills.LIBRARY:
             self._say("select a library skill (account: library) to link it; S shares a skill into the library",
                       "information")
             return

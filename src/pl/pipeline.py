@@ -15,13 +15,24 @@ GATES = ("owner", "none", "auto-merge")
 SECTION_RE = re.compile(r"^[A-Z][A-Z ]*$")
 RESERVED_SECTIONS = ("INPUT", "REVIEW NOTES")
 OUTWARD_REFUSAL = "a stage that writes or sends outward needs a gate"
+UI_DEFAULT = {"item": "card", "items": "cards", "fields": []}
+
+
+def _ui(t) -> dict:
+    ui = {**UI_DEFAULT, **{k: v for k, v in (t or {}).items() if k in UI_DEFAULT}}
+    return {**ui, "fields": list(ui["fields"]) if isinstance(ui["fields"], (list, tuple)) else ui["fields"]}
+
+
+def ui() -> dict:
+    """The words and board fields of the current pipeline."""
+    return (C.PIPELINE or {}).get("ui") or {**UI_DEFAULT, "fields": []}
 
 
 def engineering() -> dict:
     """The built-in engineering pipeline, built from today's constants."""
     skill = {s: p.split()[0].lstrip("/") for s, p in C.BUILTIN_PROMPTS.items()}
     done = C.STAGE_DONE_AT
-    return {"name": "engineering", "template": "engineering", "columns": list(C.COLUMNS), "stages": {
+    return {"name": "engineering", "template": "engineering", "columns": list(C.COLUMNS), "ui": _ui(None), "stages": {
         "spec": {"column": "Inbox", "done": done["spec"], "skill": skill["spec"], "section": "SPEC",
                  "gate": "owner" if C.GATES.get("spec") else "none"},
         "design": {"column": "Spec ready", "done": "Spec ready", "skill": skill["design"], "section": "DESIGN",
@@ -37,12 +48,15 @@ def from_toml(t) -> dict:
         return engineering()
     stages = {n: dict(s) for n, s in (t.get("stages") or {}).items() if isinstance(s, dict)}
     return {"name": t.get("name", "pipeline"), "template": t.get("template"), "columns": list(t.get("columns") or []),
-            "stages": stages}
+            "ui": _ui(t.get("ui")), "stages": stages, **({"pod": t["pod"]} if t.get("pod") else {})}
 
 
 def errors(p, connectors=None) -> list[str]:
     """Problems in a pipeline, each starting with its key path."""
     cols, errs, owner = p["columns"], [], {}
+    errs += _ui_errors(p.get("ui", UI_DEFAULT))
+    if "pod" in p and not isinstance(p["pod"], str):
+        errs.append("pipeline.pod: must be a pod name (a string)")
     for name, s in p["stages"].items():
         at = f"pipeline.stages.{name}"
         for key in ("column", "done", "next"):
@@ -63,6 +77,17 @@ def errors(p, connectors=None) -> list[str]:
     return errs
 
 
+def _ui_errors(u) -> list[str]:
+    errs = [f"pipeline.ui.{k}: must be a non-empty string" for k in ("item", "items")
+            if not (isinstance(u.get(k), str) and u[k])]
+    fields = u.get("fields")
+    if not (isinstance(fields, list) and all(isinstance(f, str) and f for f in fields)):
+        errs.append("pipeline.ui.fields: must be a list of non-empty strings")
+    elif len(set(fields)) != len(fields):
+        errs.append("pipeline.ui.fields: names must be unique")
+    return errs
+
+
 def _outward(stage, connectors) -> bool:
     if stage.get("outward") is True:
         return True
@@ -73,6 +98,12 @@ def is_config() -> bool:
     """True for a profile that defines stages of its own; no [pipeline], or one without stages, is engineering."""
     p = C.PIPELINE or {}
     return bool(p.get("stages")) and p.get("template") != "engineering"
+
+
+def has_code() -> bool:
+    """A stage writes code (gate auto-merge or skill pl-run); no [pipeline], or one without stages, is engineering."""
+    stages = (C.PIPELINE or {}).get("stages") or {}
+    return not stages or any(s.get("gate") == "auto-merge" or s.get("skill") == "pl-run" for s in stages.values())
 
 
 def stage_at(col) -> str | None:
@@ -148,7 +179,7 @@ def _print_show(d):
     print(f"pipeline {d['name']}" + (f" (template {d['template']})" if d["template"] else ""))
     print("columns: " + " → ".join(d["columns"]))
     for n, s in d["stages"].items():
-        fields = [f"{k} {s[k]}" for k in ("skill", "account", "section", "gate", "next") if k in s]
+        fields = [f"{k} {s[k]}" for k in ("skill", "account", "agent", "section", "gate", "next") if k in s]
         print(f"  {n}: {s.get('column')} → {s.get('done')}; " + ", ".join(fields))
     print("gates: " + (", ".join(f"{n} {g}" for n, g in d["gates"].items()) or "none"))
 
@@ -188,16 +219,17 @@ def _add(name, p, a):
         return
     p = {k: v for k, v in {**p, "name": name}.items() if v is not None}
     chosen = getattr(a, "accounts", None)
+    known = chosen if isinstance(chosen, dict) else C.ACCOUNTS
     for n in chosen or ():
-        if n not in C.ACCOUNTS:
+        if n not in known:
             _fail(f"unknown account {n!r}")
-    acc = {n: C.ACCOUNTS[n] for n in chosen} if chosen else C.ACCOUNTS
-    account = a.account or (chosen[0] if chosen and len(chosen) == 1 else None)
+    acc = {n: dict(known[n]) for n in chosen} if chosen else C.ACCOUNTS
+    account = a.account or (next(iter(chosen)) if chosen and len(chosen) == 1 else None)
     if account:
-        if account not in C.ACCOUNTS:
+        if account not in known:
             _fail(f"unknown account {account!r}")
         p["stages"] = {n: {"account": account, **s} for n, s in p["stages"].items()}
-    tracker = _tracker(a.board)
+    tracker = getattr(a, "tracker", None) or _tracker(a.board)
     if a.dry_run:
         print(tomlkit.dumps(profiles.pipeline_config(p, tracker, acc)), end="")
     elif not (a.yes or sys.stdin.isatty()):
@@ -244,7 +276,7 @@ def cmd_pipelines(a):
         else:
             _print_show(d)
     elif a.templates:
-        rows = [{"name": n, "stages": len(p["stages"])} for n, p in sorted(templates().items())]
+        rows = [{"name": n, "stages": len(p["stages"]), "pod": p.get("pod")} for n, p in sorted(templates().items())]
         if a.json:
             print(json.dumps(rows))
         else:

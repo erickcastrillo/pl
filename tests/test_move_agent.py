@@ -9,13 +9,14 @@ import types
 
 import pytest
 
-from pl import accounts, dispatch, harnesses, move_agent
+from pl import accounts, dispatch, harnesses, move_agent, notifications
 from pl import config as C
 
 SID = "11111111-2222-3333-4444-555555555555"
 SLUG = "-work-repo"
 BANNER = "Claude usage limit reached · resets 5pm"
 NOTES = []
+SENT = []
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +33,9 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr(move_agent, "_sleep", lambda s: None)
     monkeypatch.setattr(move_agent, "alive", lambda pid: pid == os.getpid())
     monkeypatch.setattr(move_agent, "notify", lambda t, m: NOTES.append((t, m)))
+    monkeypatch.setattr("pl.notifications.notify", lambda t, m: SENT.append((t, m)))
     NOTES.clear()
+    SENT.clear()
 
     def no_signal(pid, sig):
         raise AssertionError(f"a test tried to signal pid {pid}")
@@ -530,6 +533,7 @@ def test_a_successful_move_notifies_moved_and_resumed(fake_home, pane, monkeypat
     _updates(monkeypatch, c)
     assert move_agent.move(c, "acme2", "usage limit")[0]
     assert any("moved card0001 to acme2 and resumed it" in m for _, m in NOTES)
+    assert SENT == []
 
 
 # ---------- pl move-agent ----------
@@ -759,19 +763,38 @@ def test_a_failed_relaunch_after_the_stop_clears_the_worker_and_alerts(fake_home
     ok, msg, _ = move_agent.move(c, "acme2", "usage limit")
     assert not ok and "relaunch failed" in msg and c["metadata"].get("worker") is None
     assert any(e["kind"] == "agent_move_failed" for e in _events())
-    assert any("relaunch failed for card0001" in m for _, m in NOTES)
+    assert len(SENT) == 1 and "relaunch failed" in SENT[0][0]
+    assert not any(t.startswith("Agent move failed") for t, _ in NOTES)
     from pl import alerts
     assert any("relaunch" in str(a.get("title")) for a in alerts._load().values())
 
 
-def test_the_parked_alert_after_a_move_says_moved_and_resumed(fake_home, pane, monkeypatch):
+def test_a_failed_relaunch_with_alert_opened_off_sends_nothing(fake_home, pane, monkeypatch):
+    C.NOTIFY = {"events": ["merged"]}
+    _transcript(fake_home)
+    c = _card()
+    _updates(monkeypatch, c)
+
+    def tmux(*args, check=True):
+        if args[0] == "send-keys":
+            raise SystemExit("pl: tmux send-keys: no such pane")
+        return ""
+    monkeypatch.setattr(dispatch, "tmux", tmux)
+    assert not move_agent.move(c, "acme2", "usage limit")[0]
+    from pl import alerts
+    assert SENT == [] and any("relaunch" in str(a.get("title")) for a in alerts._load().values())
+
+
+def test_the_parked_alert_after_a_move_notifies_once_and_the_move_is_printed(fake_home, pane, monkeypatch, capsys):
     _transcript(fake_home)
     c = _card(age=3 * 3600)
     _updates(monkeypatch, c)
-    said = []
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: said.append(m))
+    said, direct = [], []
+    monkeypatch.setattr(notifications, "notify", lambda t, m: said.append(t))
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: direct.append(t))
     _dispatch(monkeypatch, c, BANNER)
-    assert any("moved and resumed" in m for m in said) and not any("young agents" in m for m in said)
+    assert len([t for t in said if "is parked: usage limit" in t]) == 1 and direct == []
+    assert "same session" in capsys.readouterr().out
 
 
 # ---------- the test guard ----------

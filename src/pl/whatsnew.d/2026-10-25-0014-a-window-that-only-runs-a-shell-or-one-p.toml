@@ -1,0 +1,4 @@
+id = "2026-10-25.14"
+title = "A window that only runs a shell, or one pl did not start, is not counted as an agent"
+where = "pl closes its stage windows left holding a shell; a restored window running something else (a resume picker) is left open and opens one alert"
+try = "pl manager status"

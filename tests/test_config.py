@@ -1,4 +1,5 @@
 """WP2: profile config layer: a profile loads <dir>/config.toml and moves state. WP14: no profile = neutral defaults."""
+import inspect
 import stat
 import tomllib
 import sys
@@ -378,3 +379,23 @@ def test_vikunja_tracker_needs_numeric_ids():
 def test_vikunja_token_must_be_env_reference():
     errs = C.validate(tomllib.loads(VIKUNJA_OK.replace("${VIKUNJA_TOKEN}", "tk_literal")))
     assert any("tracker.token must be a ${VAR} reference" in e for e in errs)
+
+
+def test_a_fresh_profile_has_no_release_waiting_after(fake_home):
+    C.load(config_dir=str(_write(fake_home, "rw0", "")))
+    assert "release_waiting_after" not in C.DISPATCH
+    lines = inspect.getsource(C).splitlines()
+    start = next(i for i, l in enumerate(lines) if "MEMORY_DEFAULTS =" in l)
+    end = next(i for i, l in enumerate(lines) if "GATES =" in l)
+    assert not any("release_waiting_after" in l for l in lines[start:end])
+
+
+@pytest.mark.parametrize("value", ["30", "0", "-5", '"soon"'])
+def test_an_old_release_waiting_after_validates_loads_and_saves(fake_home, value):
+    import tomlkit
+    text = f"[dispatch]\nrelease_waiting_after = {value}\n"
+    d = _write(fake_home, "rw1", text)
+    assert not any("release_waiting_after" in e for e in C.validate(tomlkit.parse(text)))
+    C.load(config_dir=str(d))
+    C.save(tomlkit.parse(text), target=d / "config.toml")
+    tomllib.loads((d / "config.toml").read_text())

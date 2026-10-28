@@ -1,0 +1,4 @@
+id = "2026-10-03.03"
+title = "Profiles no longer block each other: each gets its own agent share"
+where = "pl manager status"
+try = "pl manager status"

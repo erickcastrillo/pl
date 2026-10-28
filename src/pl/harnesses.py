@@ -127,6 +127,7 @@ EFFORT_FLAG_RE = re.compile(r"^--effort(?:=|$)|reasoning_effort=", re.I)
 ADD_DIR_FLAGS = {h: ["--add-dir={worktrees_dir}"] for h in ("claude", "codex", "antigravity")}
 ADD_DIR_RE = re.compile(r"^--add-dir(?:=|$)")
 WORKTREES_ENV = "PL_WORKTREES_DIR"   # the same folder for the agent's shell commands (the built-in skills use it)
+XDIST_ENV = "PYTEST_XDIST_AUTO_NUM_WORKERS"
 # a model id pl passes: no whitespace, quote or backslash, and no leading dash (it is never read as a flag)
 MODEL_RE = re.compile(r"[^\s\"'\\-][^\s\"'\\]*")
 
@@ -226,10 +227,11 @@ def worktrees_dir():
     return Path(d)
 
 
-def _with_model(template, h, account, stage, worktrees=None, small=False):
+def _with_model(template, h, account, stage, worktrees=None, small=False, model=None):
     """(template, values): the model, effort and worktrees folder flags after the program name, unless the template
-    sets that flag."""
-    model, effort = model_effort(h, account, stage, small)
+    sets that flag. model: an agent's model name, which replaces the configured one when it is a valid name."""
+    picked, effort = model_effort(h, account, stage, small)
+    model = model if model and h.name in MODEL_FLAGS and MODEL_RE.fullmatch(model) else picked
     add = []
     if model and not any(MODEL_FLAG_RE.search(t) for t in template):
         add += MODEL_FLAGS[h.name]
@@ -386,7 +388,47 @@ def mcp_flags(h, servers, profile, card_id, stage, window):
     return [f"--mcp-config={f}", "--strict-mcp-config"]
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None):
+# Without pl's python or package (upgraded, environment replaced) the agent's gh still runs: the next gh on the PATH.
+_SHIM = """#!/bin/sh
+dir=$(dirname "$0")
+if {py} -c 'import importlib.util as u, sys; sys.exit(u.find_spec("pl.ghwrap") is None)' 2>/dev/null; then
+  PL_GH_SHIM_DIR=$dir exec {py} -m pl.ghwrap "$@"
+fi
+PATH=$(printf %s "$PATH" | tr ':' '\\n' | grep -vxF "$dir" | paste -sd: -)
+export PATH
+exec gh "$@"
+"""
+
+
+def gh_shim():
+    """Write the gh wrapper agents find first on their PATH (the real gh stays behind it); returns its folder."""
+    folder = C.STATE_DIR / "bin"
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder.chmod(0o700)
+    tmp = folder / f".gh.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w") as f:
+        f.write(_SHIM.format(py=shlex.quote(sys.executable)))
+    os.replace(tmp, folder / "gh")
+    return folder
+
+
+def _ledger_account():
+    """The GitHub ledger key the wrapper records under (a login and a short token hash, never a token); None if unknown."""
+    from pl import ghquota
+    try:
+        return ghquota.account()
+    except (SystemExit, OSError):
+        return None
+
+
+def xdist_auto_workers():
+    """pytest -n auto's worker count for one agent: the machine's test worker budget split over max_live_agents, at least 1."""
+    from pl import manager, worker_budget
+    return max(1, worker_budget.max_workers() // manager._limits(manager.managed())["max_live_agents"])
+
+
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None, pod=None, model=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
@@ -394,13 +436,15 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
     small: the stage's small-change model for h's harness wins over its normal one.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
     hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook.
-    servers: connector names this stage agent's harness gets, through the pl proxy."""
+    servers: connector names this stage agent's harness gets, through the pl proxy.
+    pod: the pod whose skills the launch is limited to, in place of the profile's (a stage's named agent).
+    model: that agent's model name, which wins over the configured one."""
     from pl import hooks as pl_hooks, pods, skills
-    pod = pods.launch_pod()
+    pod = pod if pod is not None else pods.launch_pod()
     pdir = skills.launch_plugin(h, plugin, pod)
     prompt = skills.library_prompt(h, account, prompt, pdir, pod) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
-    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small)
+    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small, model)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
                               pdir)
     if hooks and stage and h.name == "claude" and pl_hooks.enabled():
@@ -409,12 +453,13 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
         argv = [argv[0], *mcp_flags(h, servers, C.PROFILE_NAME, hooks[0], stage, hooks[1]), *argv[1:]]
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
+    n = str(xdist_auto_workers())
     from pl import sandbox
     sb = sandbox.settings()
     if sb.get("enabled") and stage:
         vm = sandbox.vm_name()
         workdir = cwd or wt or C.WORK_DIR
-        env_args = []
+        env_args = [f"{XDIST_ENV}={n}"]
         if stage:
             env_args.append(f"PL_STAGE={_typeable(str(stage))}")
         if wt:
@@ -422,12 +467,20 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
         exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *argv]
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in exec_argv))
     else:
+        lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
+        if card := (hooks[0] if hooks else card_id):
+            lines.append(f"export PL_CARD={shlex.quote(_typeable(card))}")
+        if not stage:
+            lines.append(f"export PL_LOOP={shlex.quote(_typeable(label))}")
+        if ledger := _ledger_account():
+            lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(ledger))}")
         if stage:
             lines.append(f"export PL_STAGE={shlex.quote(str(stage))}")
         if h.env_var and d:
             lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
         if wt:
             lines.append(f"export {WORKTREES_ENV}={shlex.quote(_typeable(wt))}")
+        lines.append(f"export {XDIST_ENV}={n}")
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in argv))
     return "\n".join(lines) + "\n"
 
@@ -508,6 +561,9 @@ def headless_argv(h, account, prompt, stage=None):
         env[h.env_var] = str(d)
     if C.GH_CONFIG_DIR:
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
+    env["PATH"] = f"{gh_shim()}{os.pathsep}{env.get('PATH', '')}"
+    if ledger := _ledger_account():
+        env["PL_GH_LEDGER"] = ledger
     from pl import pods, skills
     pod = pods.launch_pod()
     pdir = skills.launch_plugin(h, pod=pod)
@@ -539,9 +595,13 @@ def headless_script(h, account, prompt, name, log_path, record_path, writes=True
     """The sh script a scheduled loop's window runs: the harness once, headless and unattended (read-only when writes
     is false), its output in a 0600 log, then a 0600 run record (start, end, result, tokens, exit status). It deletes
     itself first."""
-    argv, _ = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
+    argv, env = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
     lines = ["#!/bin/sh", 'rm -f -- "$0"', "umask 077"]
+    lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
+    if "PL_GH_LEDGER" in env:
+        lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(env['PL_GH_LEDGER']))}")
     lines += [f"export {k}={shlex.quote(v)}" for k, v in loop_env(name, writes).items()]
+    lines.append(f"export {XDIST_ENV}={xdist_auto_workers()}")
     if h.env_var and C.PROFILES.get(account):
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(C.PROFILES[account]))}")
     if C.GH_CONFIG_DIR:

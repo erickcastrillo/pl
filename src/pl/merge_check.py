@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from pl import config as C
+from pl import tests_affected
 from pl.trackers import github
 from pl.tui.prs import checks
 from pl.worktrees import _stop_group
@@ -82,6 +83,10 @@ def _tests_rule(pr, path):
     cmd = settings.get("test_command")
     if not cmd:
         return {"ok": False, "why": "no test_command configured"}
+    try:
+        cmd = tests_affected.full_command(path, cmd)
+    except tests_affected.TestsConfigError as e:
+        return {"ok": False, "why": str(e)}
     ok, why = run_tests(path, cmd, settings.get("test_timeout", 15), _test_env(settings))
     if not ok:
         return {"ok": False, "why": why}

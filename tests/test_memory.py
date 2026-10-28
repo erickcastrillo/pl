@@ -6,7 +6,7 @@ import pytest
 import tomlkit
 
 from pl import config as C
-from pl import dispatch, memory
+from pl import dispatch, memory, notifications
 from pl.util import load_state
 
 GB = 1024 ** 3
@@ -114,7 +114,7 @@ def _funnel(monkeypatch):
     monkeypatch.setattr(dispatch, "healthy_profile", lambda want, cs: "acme")
     for name in ("sweep_untracked", "mirror_to_product"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
-    monkeypatch.setattr(memory, "notify", lambda title, msg: got["notes"].append((title, msg)))
+    monkeypatch.setattr(notifications, "notify", lambda title, msg: got["notes"].append((title, msg)))
     monkeypatch.setattr(dispatch, "notify", lambda title, msg: got["notes"].append((title, msg)))
     monkeypatch.setattr(dispatch.subprocess, "run", lambda argv, **k: type("R", (), {"returncode": 0, "stdout": ""})())
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: got["windows"].append(a) or {"new-window": "@7", "list-panes": "%9"}.get(a[0], ""))
@@ -125,7 +125,7 @@ def _funnel(monkeypatch):
 def _events():
     p = C.STATE_DIR / "events.jsonl"
     rows = [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
-    return [r for r in rows if not r["kind"].startswith("alert_")]
+    return [r for r in rows if not r["kind"].startswith(("alert_", "pass_step_skipped"))]
 
 
 def test_low_memory_holds_every_start_and_notifies_once_per_episode(monkeypatch, capsys):
@@ -135,7 +135,7 @@ def test_low_memory_holds_every_start_and_notifies_once_per_episode(monkeypatch,
     dispatch.dispatch_once(1, False, pull=False)
     assert got["starts"] == [] and not any(a[0] == "new-window" for a in got["windows"])
     assert "starts paused: only 2.0 GB free" in capsys.readouterr().out
-    assert len(got["notes"]) == 1 and "2.0 GB" in got["notes"][0][1]
+    assert len(got["notes"]) == 1 and "min_free_memory" in got["notes"][0][1]
     assert [e["kind"] for e in _events()] == ["memory_low"]
     mac(monkeypatch, 12)                             # recovered: starts go ahead
     dispatch.dispatch_once(1, False, pull=False)
@@ -180,14 +180,14 @@ def _guard(monkeypatch, n_vite, rss_kb=1000, after_term=None):
             return after_term if after_term is not None and got["kills"] else ps
         return run(argv)
     monkeypatch.setattr(memory, "_run", run_ps)
-    monkeypatch.setattr(memory, "notify", lambda title, msg: got["notes"].append((title, msg)))
+    monkeypatch.setattr(notifications, "notify", lambda title, msg: got["notes"].append((title, msg)))
     monkeypatch.setattr(memory, "_kill", lambda pid, sig: got["kills"].append((pid, sig)))
     monkeypatch.setattr(memory, "_sleep", lambda s: got["sleeps"].append(s))
     cs = [{"id": "card0001aaaa", "title": "Add a thing", "metadata": {"worker": {"window": "@1", "stage": "run"}}}]
     return got, cs
 
 
-def test_a_fat_tree_notifies_with_the_card_window_and_top_command_once(monkeypatch):
+def test_a_fat_tree_notifies_with_the_card_window_and_top_command_once(monkeypatch, capsys):
     got, cs = _guard(monkeypatch, 200)
     C.DISPATCH = {**C.DISPATCH, "kill_runaway": False}   # the opt-out: notify only
     st = {"notified": {}}
@@ -195,26 +195,27 @@ def test_a_fat_tree_notifies_with_the_card_window_and_top_command_once(monkeypat
     memory.guard_runaways(st, cs)
     assert len(got["notes"]) == 1
     title, msg = got["notes"][0]
-    assert "Add a thing" in title
-    assert "card0001" in msg and "run-add-a-thing" in msg and "ruby … bin/vite build ×200" in msg
+    assert "Runaway agent in card card0001" in title
+    out = capsys.readouterr().out
+    assert "card0001" in out and "run-add-a-thing" in out and "ruby … bin/vite build ×200" in out
     ev = [e for e in _events() if e["kind"] == "runaway"]
     assert len(ev) == 1 and ev[0]["card"] == "card0001aaaa" and ev[0]["window"] == "run-add-a-thing"
     assert got["kills"] == []                        # kill_runaway = false: notify only
 
 
-def test_a_small_tree_is_left_alone_and_memory_over_the_cap_counts(monkeypatch):
+def test_a_small_tree_is_left_alone_and_memory_over_the_cap_counts(monkeypatch, capsys):
     got, cs = _guard(monkeypatch, 20)
     memory.guard_runaways({"notified": {}}, cs)
     assert got["notes"] == []
     got, cs = _guard(monkeypatch, 20, rss_kb=500 * 1024)   # 20 × 500 MB = 10 GB > 25 % of 32 GB
     memory.guard_runaways({"notified": {}}, cs)
-    assert len(got["notes"]) == 1 and "GB" in got["notes"][0][1]
+    assert len(got["notes"]) == 1 and "GB" in capsys.readouterr().out
 
 
 SAFE = {1, 100, 101, 200, 201, 300}   # launchd, pane shells, harnesses, the dispatcher's pane
 
 
-def test_kill_by_default_terms_what_the_harness_started_then_kills_what_is_left(monkeypatch):
+def test_kill_by_default_terms_what_the_harness_started_then_kills_what_is_left(monkeypatch, capsys):
     got, cs = _guard(monkeypatch, 200)
     memory.guard_runaways({"notified": {}}, cs)
     victims = {102, *range(1000, 1200)}
@@ -224,7 +225,7 @@ def test_kill_by_default_terms_what_the_harness_started_then_kills_what_is_left(
     assert got["kills"].index((1199, signal.SIGKILL)) > got["kills"].index((1199, signal.SIGTERM))
     assert not {pid for pid, _ in got["kills"]} & SAFE
     assert sum(got["sleeps"]) == memory.KILL_GRACE                  # waited 5 s before SIGKILL
-    assert "stopped 201 child processes" in got["notes"][0][1]
+    assert "stopped 201 child processes" in capsys.readouterr().out
     ev = [e for e in _events() if e["kind"] == "runaway"][0]
     assert ev["card"] == "card0001aaaa" and ev["window"] == "run-add-a-thing" and ev["command"] == "ruby"
     assert ev["stopped"] == 201

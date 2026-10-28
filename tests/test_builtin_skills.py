@@ -77,12 +77,12 @@ def test_every_pl_command_a_skill_names_exists_in_the_cli():
                 continue
             assert cmd in top, f"{n}: pl {cmd}"
             assert cmd not in subs or not sub or sub in subs[cmd], f"{n}: pl {cmd} {sub}"
-    assert {"card", "move", "section", "depends"} <= seen
+    assert {"card", "move", "section", "depends", "tests"} <= seen
 
 
 def test_pl_stage_skill_ships_with_a_version_and_names_its_commands():
     text = (skills.BUILTIN_DIR / "pl-stage" / "SKILL.md").read_text()
-    assert re.search(r"^pl-builtin-version: 1$", text, re.M)
+    assert re.search(r"^pl-builtin-version: 2$", text, re.M)
     for cmd in ("pl pipelines show --json", "pl card <id>", "pl section <id> <SECTION> --from <file>", 'pl move <id> "<done>"'):
         assert cmd in text
 
@@ -266,6 +266,11 @@ def test_the_builtin_review_loop_uses_pl_review(tmp_path, monkeypatch):
     text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
     for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge directly"):
         assert rule in text
+
+
+def test_pl_review_runs_pl_tests_full():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    assert "`pl tests full`" in text and "not available" in text
 
 
 # ---------- pl section: read and write one card section ----------
@@ -612,6 +617,7 @@ def _start(monkeypatch, tmp_path, prompt=None, cfg="rel/profile", stage="run"):
     monkeypatch.setattr(dispatch, "_launch", lambda pane, name, script, p=None: tmp_path / "l.sh")
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (tmp_path / "wt", None))
     dispatch.start_worker({"id": "c" * 36, "title": "T", "description": ""}, stage, 0, False)
     return seen
 
@@ -628,7 +634,7 @@ LIMITS = " max_lines=300 max_files=10 target_lines=150 target_files=6"
 
 def test_the_builtin_run_stage_gets_the_review_label_and_pr_limits(monkeypatch, tmp_path):
     seen = _start(monkeypatch, tmp_path)
-    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS}") in seen
+    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS} worktree={tmp_path / 'wt'}") in seen
     seen = _start(monkeypatch, tmp_path, prompt="/my-run {id}")
     assert ("prompt", f"/my-run {'c' * 36}") in seen
 
@@ -717,7 +723,18 @@ def test_pl_plan_splits_into_independent_slices():
                    "(after <id>)"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 6" in text
+    assert "pl-builtin-version: 7" in text
+
+
+def test_pl_plan_orders_slices_that_share_a_file():
+    text = _shipped("pl-plan")
+    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 7
+    later = text.split("## Later slices")[1].split("## Decisions")[0]
+    assert "files:" in later
+    for phrase in ("pl depends <later id> --on <earlier id>", "same file", "src/pl/whatsnew.d/", "CHANGELOG",
+                   "pl plan check <N>"):
+        assert phrase in text
+    assert "can merge in any order." not in text
 
 
 def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
@@ -742,10 +759,10 @@ def test_pl_review_has_one_merge_rule():
 
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     text = _shipped("pl-review")
-    for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
+    for phrase in ("depends on unmerged PR #N", "pulls?state=open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 5" in text
+    assert "pl-builtin-version: 8" in text
 
 
 def test_pl_run_assigns_the_pull_request_to_you():
@@ -753,3 +770,180 @@ def test_pl_run_assigns_the_pull_request_to_you():
     create = next(l for l in text.splitlines() if "gh pr create" in l)
     assert "--assignee @me" in create
     assert int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 8
+
+
+def _run_steps():
+    return (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Steps")[1].split("\n## ")[0]
+
+
+def _step3():
+    return " ".join(_run_steps().split("3. For each work package")[1].split("\n4. ")[0].split())
+
+
+def _rework():
+    return " ".join((skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Rework mode")[1].split("\n## ")[0].split())
+
+
+def test_pl_run_runs_affected_tests_per_package():
+    step = _step3()
+    for words in ("pl tests affected --json", "lint", "`full` true", "not JSON"):
+        assert words in step, words
+
+
+def test_pl_run_has_no_final_full_suite_step():
+    text = _flat("pl-run")
+    assert "run the full test suite once more" not in text
+    assert [int(n) for n in re.findall(r"^(\d+)\. ", _run_steps(), re.M)] == [1, 2, 3, 4, 5, 6]
+    assert len(re.findall(r"full (?:test )?suite", text)) == 3
+
+
+def test_pl_run_rework_uses_the_same_test_rule():
+    rework = _rework()
+    assert ("step 3.3" in rework or "pl tests affected" in rework) and "`full`" in rework
+    assert rework.index("`full`") < rework.index("push to the same branch")
+
+
+def test_pl_run_tests_run_in_the_foreground_with_a_limit():
+    for part in (_step3(), _rework()):
+        assert "foreground" in part and "timeout" in part
+    assert "in the background" not in _flat("pl-run")
+
+
+def test_pl_run_pr_body_lists_the_tests_run():
+    text = _shipped("pl-run")
+    body = text.split("gh pr create")[1].split("7.")[0]
+    assert "affected test files" in body and "full suite" in body and "why" in body
+
+
+def _older_copy_is_updated(lib, shipped, name, old, new):
+    real = (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+    older = shipped / name / "SKILL.md"
+    older.write_text(re.sub(r"^pl-builtin-version: \d+$", f"pl-builtin-version: {old}", real, count=1, flags=re.M))
+    skills.install_builtins()
+    older.write_text(real)
+    assert f"pl-builtin-version: {new}\n" in real
+    assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
+
+
+def test_an_unedited_pl_run_v11_is_updated_to_v12(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 11, 12)
+
+
+def test_an_unedited_pl_review_v7_is_updated_to_v8(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 7, 8)
+
+
+def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
+    text = _shipped("pl-review")
+    step = text.split("4. Run the full test suite once with the command `pl tests full` prints")[1].split("5. Apply")[0]
+    assert '"ready"' in step and '"Review finds problems" row' in step
+
+
+def test_pl_review_never_asks_for_a_full_rerun():
+    text = _shipped("pl-review")
+    assert "never ask the builder to rerun the full suite" in text
+    assert "run the full suite" not in text.replace("rerun the full suite", "")
+
+
+def test_pl_run_says_to_add_one_whatsnew_file():
+    run = (Path(skills.BUILTIN_DIR) / "pl-run" / "SKILL.md").read_text()
+    flat = " ".join(run.split())
+    assert "src/pl/whatsnew.d/" in flat and "UTC" in flat and "never edit another entry" in flat
+    step = (Path(__file__).parents[1] / "CLAUDE.md").read_text().split("## Releasing")[1]
+    assert "src/pl/whatsnew.d/" in step and "src/pl/whatsnew.py" not in step
+
+
+GH_SKILLS = ["pl-review", "pl-run", "pl-stage"]
+GRAPHQL_READ = re.compile(r"gh pr (?:view|list|status|checks)\b|gh api graphql")
+
+
+def _raw(name):
+    return (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+
+
+def _graphql_reads(name, text):
+    return [(name, m.group(0)) for line in text.splitlines() if "Projects" not in line
+            for m in [GRAPHQL_READ.search(line)] if m]
+
+
+def _rest_commands(text):
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("gh api") and "-X" not in line]
+
+
+def test_skills_read_github_through_rest_only():
+    for n in GH_SKILLS:
+        assert _graphql_reads(n, _raw(n)) == []
+
+
+def test_graphql_scan_names_the_skill_and_command():
+    text = _raw("pl-review") + "\ngh pr list --json number\n"
+    assert _graphql_reads("pl-review", text) == [("pl-review", "gh pr list")]
+    assert _graphql_reads("pl-review", "gh api graphql -f query=... Projects\n") == []
+
+
+def test_skills_say_why_reads_use_rest():
+    for n in GH_SKILLS:
+        text = _shipped(n)
+        for phrase in ("gh api repos/...", "GraphQL points are shared with pl", "Projects"):
+            assert phrase in text, (n, phrase)
+
+
+def test_rest_reads_use_repos_paths_and_known_placeholders():
+    allowed = {"pl-review": {"repo", "review", "number", "headRefName"}, "pl-run": {"owner", "repo", "number", "label"}}
+    for n, names in allowed.items():
+        commands = _rest_commands(_raw(n))
+        assert commands, n
+        for line in commands:
+            assert "'repos/<" in line and "graphql" not in line, (n, line)
+            assert set(re.findall(r"<(\w+)>", line)) <= names, (n, line)
+    assert "https://github.com/<owner>/<repo>/pull/<number>" in _shipped("pl-run")
+
+
+def test_pl_review_lists_review_prs_through_rest():
+    listing = [x for x in _rest_commands(_raw("pl-review")) if "pulls?state=open" in x and '"<review>"' in x]
+    assert len(listing) == 1 and "--paginate" in listing[0]
+    assert all(f in listing[0] for f in (".head.ref", ".base.ref", ".html_url", "title"))
+    deps = re.findall(r"gh api [^`]*pulls\?state=open[^`]*", _raw("pl-review"))
+    assert len(deps) == 2 and ".number" in deps[1] and ".head.ref" in deps[1]
+
+
+def test_pl_run_rework_reads_the_pr_through_rest():
+    lines = _rest_commands(_raw("pl-run"))
+    pr = [x for x in lines if "pulls/<number>" in x]
+    assert len(pr) == 1 and "repos/<owner>/<repo>/pulls/<number>" in pr[0]
+    assert all(f in pr[0] for f in (".head.ref", ".base.ref", ".labels"))
+    assert any("issues/<number>/comments" in x for x in lines)
+
+
+def _builtin(name):
+    return (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+
+
+def test_pl_run_runs_tests_only_through_pl_tests():
+    text = _builtin("pl-run")
+    for phrase in ("pl tests affected", "pl tests full", "one run at a time", "foreground", "own worktree"):
+        assert phrase in text
+
+
+def test_pl_review_runs_the_full_suite_through_pl_tests_full():
+    text = _builtin("pl-review")
+    step = text[text.index("4. Run"):text.index("5.", text.index("4. Run"))]
+    for phrase in ("pl tests full", "one run at a time", "foreground", "review worktree"):
+        assert phrase in step
+
+
+@pytest.mark.parametrize("name", ["pl-run", "pl-review"])
+def test_builtin_run_and_review_never_start_tests_wide_or_in_the_background(name):
+    text = _builtin(name)
+    assert not re.search(r"-n\s*(auto|\d+)", text)
+    assert not re.search(r"nohup|detached|background", text, re.I)
+    assert not re.search(r"(?<!&)&\s*$", text, re.M)
+    for m in re.finditer("main checkout", text):
+        assert "never" in text[max(0, m.start() - 40):m.start()]
+
+
+def test_pl_run_does_not_add_worktrees():
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    assert "git worktree add" not in text
+    assert "started you in" in text
+    assert "main checkout" in text and "stop" in text

@@ -45,6 +45,10 @@
                           copy every column and card to another board, check the copy, then point [tracker] at it
   pl card <id> [--delete|--json]
                           show a card's sections, metadata and stage caps, or delete it
+  pl plan check N [--json]
+                          list slices of plan N that change the same file with no depends_on between them (append-only
+                          files, src/pl/whatsnew.d/ and CHANGELOG*, do not count); exits 1 when it finds any
+                          (--json: a list of {a, b, files})
   pl titles check [--json] [--fix [--dry-run]]
                           list plan cards whose 'Plan N slice M:' title and plan/slice metadata disagree, miss
                           one side, or share a pair with another card (Done left out); exits 1 when it finds
@@ -74,6 +78,11 @@
                           TUI board: every funnel card with its column, agent, profile, tmux window and age; the
                           selected agent's live screen; keys to jump to it, review/approve/reject, open the card.
                           --plain prints a refreshing text frame instead; --once prints one frame and exits
+  pl activity [--level info|warning|error] [--kind KIND] [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--json]
+                          the activity feed, newest first: time, level, kind, card, detail; --json prints one
+                          object per line. demo writes one sample entry per level (tagged demo); demo --clear removes them
+  pl activity thresholds [--json]
+                          the slow-work warning limits ([activity]) the dispatcher uses; exits 2 when one is invalid
   pl standup [--since 24h|7d|YYYY-MM-DD[THH:MM]] [--markdown|--slack] [--summary]
                           a short summary of the window to paste in chat: PRs merged/opened/closed, ideas,
                           specs, plans, cards done, what is in progress, what needs you, errors; --summary adds
@@ -116,9 +125,10 @@
   pl chat add|list|remove|test|route
                           messaging connectors (Telegram, Slack, Discord) for approvals and alerts from chat
   pl brain show CONV [--json] | prune [--dry-run] | end CONV | undo CONV
-                          a brain conversation's turns; prune deletes those older than [brain] keep_days (180)
+                          show, prune, end or undo the conversations pl ask saves; prune deletes those
+                          older than [brain] keep_days (180)
   pl ask "text" [--json] [--conversation ID]
-                          ask the central read-only brain across every pipeline and connector
+                          ask the Assistant from the command line: same assistant as the console's Assistant tab
   pl manager start|stop [--all]|status [--json]|restart NAME
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
@@ -129,7 +139,8 @@
   pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
                           [updates] check = false turns it off)
-  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama and each local job's model)
+  pl doctor [--json]      health checks; exit 1 when one fails (so far: Ollama, each local job's model, the [tracker] and [intake] boards, the assistant's account, notifications)
+  pl notify test [--chat NAME]  send one test notification; says whether attention_cmd (and NAME) got it
   pl local-model [check] [--json]  whether the optional local model ([local_model], Ollama on this machine) is on, its url
                           and model, and whether Ollama answers with that model pulled; [models.local] sets a
                           model per small job (route, summarise, title, embed), each checked with a fallback
@@ -158,6 +169,12 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
+  pl tests affected [--base REF] [--json]
+                          the test files a change can affect (import graph for Python) and whether it needs the
+                          full suite, and the command to run them. No profile needed
+  pl tests full | run -- COMMAND
+                          full prints the full-suite pytest command with the workers the machine-wide budget
+                          allows now (capped by .pl/tests.toml [tests] workers); run holds the -n N workers of COMMAND from that budget while it runs
   pl whatsnew [--json]    what each pl upgrade added, where to see it and a command to try (? in the console)
   pl pods rule add POD "TEXT" [--note N] [--yes] | rollback POD --to N [--yes] | history POD [--json]
                           pod.md is kept as numbered versions; a rule is added under "## Rules" as a new version,
@@ -196,6 +213,13 @@
                           are trusted, with the command to fix each one that is not
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
+  pl agents list [--json] | show NAME [--json] | add NAME [--json] | remove NAME [--yes]
+          | edit NAME [--json] [--skills L] [--connector-roles L] [--model M] [--approval L] [--pod P] [--instructions TEXT]
+          | use STAGE AGENT [--pipeline NAME] [--json]
+                          the named agents: built-in and the profile's own (agents/NAME/agent.md), with role, skills, connector roles, model, approval and pod;
+                          show lists problems in the definition; add starts from the built-in of that name or a placeholder; remove deletes the profile's folder;
+                          edit opens agent.md in $VISUAL/$EDITOR, or sets the given fields with no editor; an invalid result is never saved;
+                          use sets the agent a pipeline stage runs, changing nothing else in config.toml
   pl loops list [--json] | add NAME (--skill S | --prompt P | --template T) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
           | edit NAME [--every E] [--prompt P] [--skill S] [--hours H] [--account A] [--writes|--no-writes] [--convert]
           | pause NAME | resume NAME | rm NAME [--yes]
@@ -225,6 +249,7 @@ from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, 
                          cmd_review, cmd_restart, cmd_hold, cmd_unhold, cmd_depends, cmd_sync)
 from pl.dispatch import cmd_dispatch
 from pl.move_agent import cmd_move_agent
+from pl.activity import cmd_activity
 from pl.standup import cmd_standup
 from pl.usage import cmd_usage
 from pl.watch import cmd_watch
@@ -237,7 +262,7 @@ PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFI
 ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
                      "restart", "hold", "unhold", "depends")
 # commands parsed before the profile loads, each by its own module
-PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "manager", "mcp", "ask")
+PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "tests", "manager", "mcp", "ask")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
 
 
@@ -290,6 +315,9 @@ def _main():
     if pre_a.rest[:1] == ["e2e"]:              # repo-driven: reads .pl/e2e.yaml, needs no tracker
         from pl import e2e
         return e2e.cmd_e2e(pre_a.rest[1:])
+    if pre_a.rest[:1] == ["tests"]:            # repo-driven: reads only the repository, needs no profile
+        from pl import tests_affected
+        return tests_affected.cmd_tests(pre_a.rest[1:])
     if pre_a.rest[:1] == ["manager"]:          # machine-wide: no profile of its own
         from pl import manager
         return manager.cmd_manager(pre_a.rest[1:])
@@ -333,8 +361,9 @@ def _main():
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
-     "standup": cmd_standup, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
+     "standup": cmd_standup, "activity": cmd_activity, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
      "assistant": assistant.cmd_assistant, "skills": skills.cmd_skills, "pods": pods.cmd_pods,
+     "agents": lambda a: __import__("pl.agent_defs").agent_defs.cmd_agents(a),
      "triggers": lambda a: __import__("pl.triggers").triggers.cmd_triggers(a),
      "connectors": lambda a: __import__("pl.connectors").connectors.cmd_connectors(a),
      "forget": retention.cmd_forget,
@@ -343,6 +372,7 @@ def _main():
      "sync": cmd_sync,
      "depends": cmd_depends,
      "titles": titles.cmd_titles,
+     "plan": lambda a: __import__("pl.plancheck").plancheck.cmd_plan(a),
      "hook": hooks.cmd_hook,
      "worktrees": lambda a: __import__("pl.worktrees").worktrees.cmd_worktrees(a),
      "brain": lambda a: __import__("pl.brain").brain.cmd_brain(a),
@@ -350,6 +380,7 @@ def _main():
      "retention": lambda a: __import__("pl.retention").retention.cmd_retention(a),
      "audit": lambda a: __import__("pl.audit").audit.cmd_audit(a),
      "update": lambda a: __import__("pl.update").update.cmd_update(a),
+     "notify": lambda a: __import__("pl.notifications").notifications.cmd_notify(a),
      "doctor": lambda a: __import__("pl.doctor").doctor.cmd_doctor(a),
      "local-model": lambda a: __import__("pl.local_model").local_model.cmd_local_model(a),
      "models": lambda a: (stage_models.cmd_models if a.models_cmd == "set-stage"
@@ -376,7 +407,7 @@ def build_parser():
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("list"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
+    p = sub.add_parser("list"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")
     p.add_argument("--reason", help="why you approve; saved to memory with the card"); p.add_argument("--code", help="the 6-digit code from the owner's notification, to confirm an agent's outward approval"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
@@ -412,10 +443,12 @@ def build_parser():
     p.add_argument("--from", dest="from_", metavar="DIR", help="restore: the backup clone holding board.json")
     p.add_argument("--dry-run", action="store_true", help="migrate: print what would be copied and write nothing")
     p.add_argument("--skip-check", action="store_true", help="migrate: do not run pl board check on the target first (for a board you already checked)")
-    p = sub.add_parser("card"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("section"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("card"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("--delete", action="store_true"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("section"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("id"); p.add_argument("name", help="SPEC, DESIGN, PLAN, INPUT or REVIEW NOTES"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p.add_argument("--from", dest="from_", metavar="FILE", help="replace SPEC, DESIGN or PLAN with this file's text (- = stdin)")
     p.add_argument("--force", action="store_true", help="write a PLAN or SPEC a person already approved (only on their yes)")
+    p = sub.add_parser("plan"); pp = p.add_subparsers(dest="plan_cmd", required=True)
+    q = pp.add_parser("check"); q.add_argument("n", type=int); q.add_argument("--json", action="store_true", help="print the overlapping pairs as a JSON list")
     p = sub.add_parser("titles"); pt = p.add_subparsers(dest="titles_cmd", required=True)
     q = pt.add_parser("check"); q.add_argument("--json", action="store_true", help="print the flagged cards as a JSON list")
     q.add_argument("--fix", action="store_true", help="add the missing title prefix or plan/slice metadata; clashes are left for a person")
@@ -446,8 +479,11 @@ def build_parser():
     p.add_argument("--plain", action="store_true", help="refreshing text frame instead of the TUI")
     p.add_argument("--open", metavar="CARD", help="open this card on start")
     p.add_argument("--tab", metavar="TAB", help="activate this tab on start")
+    p.add_argument("--back", action="store_true", help="open on this pipeline's last tab and row (a pipeline switch passes it)")
     for verb in ("pause", "resume"):
         sub.add_parser(verb).add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("activity"); p.add_argument("action", nargs="?", choices=["demo", "thresholds"]); p.add_argument("--clear", action="store_true", help="with demo: remove the demo entries")
+    p.add_argument("--level", help="info, warning or error"); p.add_argument("--kind"); p.add_argument("--since", help="90m, 24h, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM"); p.add_argument("--json", action="store_true", help="one JSON object per line")
     p = sub.add_parser("standup"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--markdown", action="store_true", help="Markdown for docs instead of plain text for chat")
     p.add_argument("--slack", action="store_true", help="Slack formatting (*bold*, • bullets, links) to paste in a message")
@@ -464,7 +500,7 @@ def build_parser():
     p.add_argument("--json", action="store_true", help="print JSON")
     p = sub.add_parser("usage"); p.add_argument("--since", help="24h (default), 90m, 7d, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--by", choices=["card", "account", "model", "loop"], default="account")
-    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage")
+    p.add_argument("--json", action="store_true", help="print JSON: token usage with hook vs screen state transition counts and each local job's calls, median ms and fallback rate, or with --by card minutes, tokens and caps per card and stage, or with --github each account's callers and outside-pl points")
     p.add_argument("--github", action="store_true", help="GitHub's GraphQL budget this hour: left, reset, per profile and caller, beside GitHub's own reading")
     p = sub.add_parser("hook"); p.add_argument("event", choices=hooks.EVENTS); p.add_argument("--card", required=True)
     p.add_argument("--window", required=True); p.add_argument("text", nargs="*", help="ignored: never run, never stored")
@@ -523,6 +559,17 @@ def build_parser():
     q = pl_.add_parser("rm"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pl_.add_parser("run"); q.add_argument("name"); q.add_argument("--wait", action="store_true", help="follow until the run ends and print its record"); q.add_argument("--json", action="store_true", help="with --wait: print the record as JSON")
     q.add_argument("--dry-run", action="store_true", help="run the loop in the foreground, read-only, and print what it would do")
+    p = sub.add_parser("agents"); pa = p.add_subparsers(dest="agents_cmd", required=True)
+    q = pa.add_parser("list"); q.add_argument("--json", action="store_true")
+    q = pa.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
+    q = pa.add_parser("add"); q.add_argument("name"); q.add_argument("--json", action="store_true")
+    q = pa.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pa.add_parser("edit"); q.add_argument("name"); q.add_argument("--json", action="store_true")
+    for flag, what in (("skills", "comma list"), ("connector-roles", "comma list"), ("model", "model or account; empty = stage default"),
+                       ("approval", "comma list of send, publish, post, quote-prices"), ("pod", "pod name; empty = none"),
+                       ("instructions", "the whole body; - reads stdin")):
+        q.add_argument(f"--{flag}", default=None, help=what)
+    q = pa.add_parser("use"); q.add_argument("stage"); q.add_argument("agent"); q.add_argument("--pipeline", help="pipeline name: this profile's, or the profile ~/.pl-NAME (edits that profile's config without its lock)"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
@@ -544,6 +591,7 @@ def build_parser():
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
     p.add_argument("--json", action="store_true", help="gc: the list as JSON")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
+    p = sub.add_parser("notify"); p.add_argument("action", choices=["test"]); p.add_argument("--chat", metavar="NAME", help="also send the test to this chat connector")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")
     p = sub.add_parser("local-model"); p.add_argument("action", nargs="?", choices=["check"], default="check"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("models"); pm = p.add_subparsers(dest="models_cmd", required=True)
@@ -554,7 +602,7 @@ def build_parser():
     q = pm.add_parser("set-stage"); q.add_argument("stage"); q.add_argument("harness")
     q.add_argument("model", help='a model id, or "" to remove the key')
     q.add_argument("--small", action="store_true", help="the small-change model ([stages.<stage>.small.models])")
-    p = sub.add_parser("inbox"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
+    p = sub.add_parser("inbox"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="output JSON instead of plain text")
     p = sub.add_parser("kill-switch"); p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--json", action="store_true", help="output as JSON")
     p = sub.add_parser("triggers"); pt = p.add_subparsers(dest="triggers_cmd")

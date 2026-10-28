@@ -44,27 +44,32 @@ Status and the board:
 - `pl section <id> NAME` (`--from FILE`): one section in full; `--from` replaces SPEC, DESIGN or PLAN (it asks).
   An approved PLAN or SPEC needs `--force`: never add it without the person's yes to that exact write.
 - `pl titles check` (`--json`): plan cards whose "Plan N slice M:" title and plan/slice metadata disagree; changes nothing.
+- `pl plan check N` (`--json`): slices of plan N that change the same file with no `depends_on` between them; changes nothing.
 - `pl loops run NAME --dry-run`: runs a loop once, read-only, and prints what it would file; asks first because it starts an agent.
 - `pl alerts` (`--all`, `--ack KEY`): open alerts and their fix line; `--ack` stops reminders until it clears.
 - `pl watch --once`: one text frame of the console board.
 - `pl forget --contact ID_OR_EMAIL --yes`: remove one contact from cards, logs and memory (rule 1 applies: ask first; `--dry-run` counts only).
 - `pl memory forget --contact ID --yes`: delete every memory entry linked to one contact (rule 1 applies: ask first; `--dry-run` counts only).
 - `pl sandbox create|status|start|stop|destroy`: the optional Multipass VM for this profile's stage agents (rule 1 applies; ask first).
-- `pl brain show CONV` (`--json`): the turns of a brain conversation. `pl brain prune` deletes old ones (ask first).
+- `pl brain show CONV` (`--json`): the turns of a conversation `pl ask` saved. `pl brain prune` deletes old ones (ask first).
 - `pl sync status` (`--json`): how many changes wait to be sent to the GitHub board, and when the next window opens.
 - `pl audit` (`--since 7d`, `--json`, `--verify`): the profile's append-only log of who did what; `--verify` checks its hash chain.
 - `pl inbox` (`--json`): every gate waiting on the person, in every profile.
+- `pl activity` (`--level warning --kind K --since 2h --json`): the activity feed, newest first; `demo` / `demo --clear` write and remove sample entries, so it asks first.
 - `pl standup` (`--since 24h`): a short summary to paste in chat; `--summary` adds 2-3 sentences from the local model.
+- `pl notify test [--chat NAME]`: sends a test notification through the profile's notifier (and a chat connector): it asks first.
 - `pl doctor`: health checks (so far Ollama and each local job's model); exit 1 when one fails.
 - `pl local-model`: whether the optional local model (Ollama on this machine) is on and answers.
 - `pl connectors list` (`--json`): the machine's MCP connectors with role, teams, access, tier and status; never a token. It asks first, like the other connectors commands.
 - `pl memory search Q` | `show ID`: look up what pl remembers (read-only). `pl memory add TEXT --kind K` writes an entry (ask first).
 - `pl pipelines list [--templates] [--json]`, `pl pipelines show [PROFILE] [--json]`: each profile's pipeline, and its columns, stages and gates. Read-only.
+- `pl agents list|show NAME [--json]`: the named agents (role, skills, connector roles, model, approval, pod). Read-only.
 - `pl pods list|show NAME [--json]`: the pipeline's pods (rules, knowledge, skills, plugins, budgets). Read-only.
 - `pl loops list` (`--json`): the profile's loops with state, schedule, next run and account. `pl loops add|pause|resume|rm` change `[loops.NAME]`; they ask first.
 - `pl worktrees bootstrap <path>` (`--dry-run`): copy and link the files `.pl/worktree.yaml` lists into a new worktree; asks first.
 - `pl models list|test JOB` (`--json`): the local-model jobs, which models are pulled, and a three-run sample check. Read-only. `pl models set JOB MODEL` changes the config (it asks).
 - `pl usage` (`--since`, `--by card|account|model|loop`): tokens spent.
+- `pl activity thresholds` (`--json`): the slow-work warning limits from `[activity]`.
 - `pl intent <PR URL>`: what a PR was meant to do.
 - `pl worktrees list` | `gc` (`--yes`, `--json`): the worktrees pl-run made, and which are safe to remove; `gc --yes` removes them (it asks).
 
@@ -107,7 +112,7 @@ Running pl:
 - `pl accounts` (`--reset NAME`): which harness account is parked for a usage limit.
 - `pl profiles`: every pl profile; `pl profiles new NAME` creates one.
 - `pl manager status|start|stop|restart NAME`: the machine manager that keeps dispatchers running.
-- `pl brain show <conv>` (`--json`) / `pl brain prune` (`--dry-run`): inspect or prune conversations.
+- `pl brain show <conv>` (`--json`) / `pl brain prune` (`--dry-run`): inspect or prune the conversations `pl ask` saves.
 - `pl setup`: create a profile. Interactive; the person runs it.
 - `pl assistant log "..."`: rule 4. The Activity feed also records each pipeline
   command run from this window, but only on a best-effort basis: it is a record, not a guard.

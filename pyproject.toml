@@ -22,7 +22,7 @@ build-backend = "hatchling.build"
 packages = ["src/pl"]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff"]
+dev = ["pytest", "pytest-asyncio", "pytest-xdist", "ruff"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

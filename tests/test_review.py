@@ -17,6 +17,7 @@ from pl.board import sections
 from pl.tui.app import PlApp
 from pl.tui.review import (ConfirmScreen, ReviewScreen, open_questions, plan_checks, review_file, review_text, safe_link,
                            spec_checks, with_answers)
+from tui_wait import settle, wait_until
 
 A_ID = "aaaaaaaa-1111-4111-8111-111111111111"
 B_ID = "bbbbbbbb-2222-4222-8222-222222222222"
@@ -436,10 +437,6 @@ def screen_text(app):
     return console.export_text()
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
 
 
 async def test_plan_approve_through_the_screen_moves_the_card(board):
@@ -453,7 +450,7 @@ async def test_plan_approve_through_the_screen_moves_the_card(board):
         for s in ("Plan: add a thing", "2 non-test / 1 test files", "2 (1 lite, 1 full)", "deliberately not doing"):
             assert s in text, s
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert isinstance(app.screen, ConfirmScreen) and A_ID[:8] in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -510,12 +507,12 @@ async def test_pipeline_keeps_the_selected_card_after_rows_reorder(board):
         await open_pipeline(pilot)
         t = app.query_one("#cards-table")
         t.move_cursor(row=t.get_row_index(B_ID))
-        await pilot.pause()
+        await wait_until(pilot, lambda: t.cursor_row == t.get_row_index(B_ID), "the cursor to reach the second plan")
         prov.data = app_data([row(b), row(a)])      # B moves up; row position 2 is now A
         app.refresh_data()
         await settle(pilot)
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert isinstance(app.screen, ConfirmScreen) and B_ID[:8] in app.screen.message
         await pilot.press("y")
         await settle(pilot)
@@ -580,7 +577,7 @@ async def test_screen_refuses_when_the_card_is_no_longer_in_its_kind_column(boar
         await app.push_screen(screen)
         await settle(pilot)
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         await pilot.press("y")
         await settle(pilot)
         assert board.items[A_ID]["list_id"] == "col-Plan for review"      # the plan was not approved by a spec press
@@ -615,7 +612,7 @@ async def test_edit_survives_a_dangling_symlink(board, tmp_path, monkeypatch):
         await app.push_screen(ReviewScreen("spec", A_ID))
         await settle(pilot)
         await pilot.press("E")      # WP25: e edits in the app; E opens $EDITOR
-        await pilot.pause()
+        await pilot.pause()   # nothing to wait for: checks the press changed nothing
         assert isinstance(app.screen, ReviewScreen)
         assert not (tmp_path / "victim").exists()
 
@@ -648,7 +645,9 @@ async def open_pipeline(pilot):
     await settle(pilot)
     pilot.app.action_tab("cards")   # the Board tab: the first card is selected
     await settle(pilot)
-    await pilot.pause(0.5)
+    detail = pilot.app.query_one("#cards-detail")
+    await wait_until(pilot, lambda: str(detail.render()).strip() and "loading…" not in str(detail.render()),
+                     "the selected card to be shown")
     await settle(pilot)
 
 
@@ -719,7 +718,7 @@ async def test_pipeline_a_and_x_use_the_review_screen_paths(counting, monkeypatc
     async with app.run_test(size=(176, 48)) as pilot:
         await open_pipeline(pilot)
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("y")
         await settle(pilot)
@@ -857,7 +856,7 @@ async def answer(pilot, screen, values):
     boxes = list(screen.query(Input))
     for i, v in values.items():
         boxes[i].value = v
-    await pilot.pause()
+    await wait_until(pilot, lambda: all(boxes[i].value == v for i, v in values.items()), "the answers to be typed")
     return boxes
 
 
@@ -930,12 +929,12 @@ async def test_approve_and_send_back_after_saving_use_the_existing_paths(board, 
         await answer(pilot, screen, {0: "yes, keep it", 2: "180 days"})
         screen.query_one("#review-doc").focus()
         await pilot.press("a")                          # unsaved answers: refused, no dialog
-        await pilot.pause()
+        await pilot.pause()   # nothing to wait for: checks no dialog opened
         assert not isinstance(app.screen, ConfirmScreen) and calls == []
         await pilot.press("ctrl+s")
         await settle(pilot)
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("y")
         await settle(pilot)
@@ -973,15 +972,15 @@ async def test_in_app_editor_saves_the_edited_spec_and_esc_writes_nothing(board)
         await settle(pilot)
         screen.query_one("#review-doc").focus()
         await pilot.press("e")
-        await pilot.pause()
         ed = screen.query_one("#review-editor", TextArea)
+        await wait_until(pilot, lambda: ed.display and ed.has_focus, "the editor to open")
         assert ed.display and ed.has_focus and ed.text.rstrip("\n") == SPEC_OQ.rstrip("\n")
         ed.load_text("## Summary\nrewritten\n")
         await pilot.press("escape")
         await settle(pilot)
         assert board.items[A_ID]["description"] == desc and not ed.display
         await pilot.press("e")
-        await pilot.pause()
+        await wait_until(pilot, lambda: ed.display and ed.has_focus, "the editor to open")
         assert ed.text.rstrip("\n") == SPEC_OQ.rstrip("\n")       # esc threw the edit away
         ed.load_text("## Summary\nrewritten\n# PIPELINE: PLAN\nsmuggled\n")
         await pilot.press("ctrl+s")
@@ -1353,12 +1352,12 @@ async def test_enter_on_a_pipeline_card_opens_the_whole_card(board, monkeypatch)
         assert copied == [desc]
         assert opened == ["https://example.test/" + A_ID]
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, lambda: not isinstance(app.screen, P.CardScreen), "the card screen to close")
         assert not isinstance(app.screen, P.CardScreen)
         await pilot.press("enter")
         await settle(pilot)
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, lambda: not isinstance(app.screen, P.CardScreen), "the card screen to close")
         assert not isinstance(app.screen, P.CardScreen) and app.is_running
 
 
@@ -1439,10 +1438,10 @@ async def test_a_second_ctrl_x_while_sending_does_nothing(board, monkeypatch):
         await app.push_screen(screen)
         await settle(pilot)
         await pilot.press(*"split WP2", "ctrl+x")
-        await pilot.pause()
+        await wait_until(pilot, lambda: "sending back" in str(screen.query_one("#review-notes").border_title), "the send-back to start")
         assert "sending back" in str(screen.query_one("#review-notes").border_title)
         await pilot.press("ctrl+x", "x")
-        await pilot.pause()
+        await pilot.pause()   # nothing to wait for: checks the second press was ignored
         gate.set()
         await settle(pilot)
         assert calls == [A_ID]

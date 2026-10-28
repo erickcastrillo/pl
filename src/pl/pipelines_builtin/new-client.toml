@@ -1,6 +1,7 @@
 [pipeline]
 name = "new-client"
 template = "new-client"
+pod = "sales"
 columns = ["Lead", "Qualify review", "Proposal", "Proposal review", "Onboarding", "Done"]
 
 [pipeline.stages.qualify]
@@ -8,6 +9,7 @@ column = "Lead"
 done = "Qualify review"
 next = "Proposal"
 skill = "pl-stage"
+agent = "sales-sdr"
 section = "PROPOSAL"
 gate = "owner"
 instructions = "Read the lead on the card. Judge fit, budget and timing, and write the qualification and a first outline of the proposal."
@@ -16,6 +18,7 @@ instructions = "Read the lead on the card. Judge fit, budget and timing, and wri
 column = "Proposal"
 done = "Proposal review"
 skill = "pl-stage"
+agent = "sales-proposal-writer"
 section = "PROPOSAL"
 gate = "owner"
 outward = true

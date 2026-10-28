@@ -1,0 +1,4 @@
+id = "2026-10-05.03"
+title = "More Pipeline keys: hand off to Manual, mark done, edit the idea"
+where = "Pipeline: h to Manual, f done (both ask first), e edits the card's INPUT in $EDITOR"
+try = "pl done <id>"

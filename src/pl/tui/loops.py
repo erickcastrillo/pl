@@ -12,12 +12,14 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Checkbox, DataTable, Input, Label, Select, Static
+from textual.widgets import Checkbox, DataTable, Input, Label, OptionList, Select, Static
 
-from pl import agents, loops, schedule, skills, util
+from pl import agents, events, loops, pipeline, schedule, skills, util
 from pl import config as C
-from pl.tui.chrome import NEW_ROW, new_row
+from pl.tui import subagents
+from pl.tui.chrome import NEW_ROW, empty_state, skip_headings
 from pl.tui.review import ConfirmScreen
+from pl.tui.runlog import RunLogScreen
 from pl.usage import human
 from pl.util import load_state, short_id, tmux
 
@@ -25,10 +27,9 @@ TAIL_LINES = 40
 ACTIVE_RE = re.compile(r"active (\d+)([mhd]) ago")
 UNIT = {"m": 60, "h": 3600, "d": 86400}
 HINT = "n/a: no Claude turn seen yet · an idle loop restarts fresh over max_context (80% unless set; 0 = off)"
-COLUMNS = (("loop", "label"), ("state", "state"), ("context", "context"), ("tokens 1h", "tokens"), ("tokens 7d", "tokens7d"),
-           ("account", "account"), ("does", "does"), ("schedule", "schedule"), ("last active", "last"), ("next run", "next"),
-           ("last result", "output"))
 LOG_LINES = 200
+LOOP_KEYS = {"edit", "pause", "run_now", "delete", "open_window", "restart"}
+CODE_LOOPS = ("merge-gate", "auto-merge")
 DOES_CHARS = 60
 LOOP_PREFIX_RE = re.compile(r"/loop (\d+)([mhd]) ")
 
@@ -99,6 +100,63 @@ def sentence(row):
     return f"{row['does']} {row['schedule']}{nxt}; last run {row['output']}"
 
 
+def loop_sentence(x):
+    """The loop as one list row: name, schedule, state when it is not on, next run and last result."""
+    line = Text(no_wrap=True, overflow="ellipsis")
+    line.append(x["name"], style="bold")
+    if x["state"] == "paused":
+        line.append(f" is paused ({x['schedule']})")
+    else:
+        line.append(f" runs {x['schedule']}")
+        if x["state"] != "on":
+            line.append(f" ({x['state']})", style="dim" if x["state"] == "off" else "red")
+    if x["next"] != "-":
+        line.append(f"; next {x['next']}")
+    line.append(f"; last result: {x['output']}")
+    return line
+
+
+def loop_stats(x):
+    return (f"account {x['account']} · context {x['context']} · tokens 1h {x['tokens']} · tokens 7d {x['tokens7d']} "
+            f"· last active {x['last']}")
+
+
+def _clock(at, fmt="%H:%M"):
+    try:
+        return datetime.fromisoformat(at).astimezone().strftime(fmt)
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _duration(run):
+    try:
+        sec = int((datetime.fromisoformat(run["ended_at"]) - datetime.fromisoformat(run["started_at"])).total_seconds())
+    except (KeyError, TypeError, ValueError):
+        return "?"
+    return f"{sec // 60}m {sec % 60}s" if sec >= 60 else f"{sec}s"
+
+
+def run_line(run):
+    result = "ok" if run.get("ok") else f"failed: {run.get('reason') or 'failed'}"
+    return f"{_clock(run.get('started_at'), '%m-%d %H:%M')}  {result}"
+
+
+def run_detail(x, runs):
+    """The right pane of a scheduled loop: what it does and its last run with its output. Runs are newest first."""
+    body = Text(f"{x['name']} loop\n", style="bold")
+    body.append(f"What it does: {x['does']}\n", style="not bold")
+    body.append(f"Account {x['account']} · tokens this week {x['tokens7d']}\n\n")
+    if not runs:
+        body.append(f"No run yet: next run {x['next']}")
+        return body
+    last = runs[0]
+    body.append(f"Last run {_clock(last.get('started_at'))} · {'ok' if last.get('ok') else 'failed'} · {_duration(last)}")
+    if not last.get("ok"):
+        body.append(f" · {last.get('reason') or 'failed'}", style="red")
+    body.append("\n" + "\n".join(last.get("output") or []))
+    return body
+
+
 def _short(sec):
     return f"{sec // 60}m" if sec < 3600 else f"{sec // 3600}h"
 
@@ -119,7 +177,10 @@ def loop_rows(data):
     runs = load_state().get("services") or {}
     now = datetime.now()
     out = []
+    code = pipeline.has_code()
     for name, svc in C.SERVICES.items():
+        if name in CODE_LOOPS and not code:
+            continue
         r = by_name.get(name) or {}
         w = r.get("worker") or {}
         state = {"loop_busy": "working", "loop_off": "off"}.get(r.get("kind"), "on" if w else "off")
@@ -149,21 +210,23 @@ def loop_rows(data):
         tok = human(u["tokens_1h"]) if claude and u else "n/a"
         week = human(u["tokens_7d"]) if svc.get("every") and u.get("tokens_7d") is not None else "-"
         words = svc.get("every") or (f"{int(every[1]) * UNIT[every[2]] // 60}m" if every else "")
-        out.append({"name": name, "state": state, "prompt": svc["prompt"], "does": what_it_does(svc),
+        out.append({"name": name, "state": state, "prompt": svc["prompt"], "does": what_it_does(svc), "every": svc.get("every"),
                     "schedule": schedule.in_words(words), "read_only": bool(svc.get("every") or "writes" in svc) and not svc.get("writes"),
                     "account": svc.get("profile") or "-",
                     "context": ctx, "tokens": tok, "tokens7d": week,
                     "last": f"{m[1]}{m[2]} ago" if m else "-", "next": nxt, "output": output,
                     "pane": w.get("pane"), "window": w.get("window")})
     for name, v in C.LOOPS_OFF.items():
+        if name in CODE_LOOPS and not code:
+            continue
         run = (runs.get(name) or {}).get("last_run")
         out.append({"name": name, "state": "paused", "prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""),
-                    "does": what_it_does(v), "schedule": schedule.in_words(v.get("every")),
+                    "does": what_it_does(v), "every": v.get("every"), "schedule": schedule.in_words(v.get("every")),
                     "read_only": bool(v.get("every") or "writes" in v) and not v.get("writes"),
                     "account": v.get("account") or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-", "last": "-",
                     "next": "-", "output": last_result(run) if run else "not reported",
                     "pane": None, "window": None})
-    if C.TRACKER.get("type") == "github-project":
+    if C.TRACKER.get("type") == "github-project" and code:
         out.append(_auto_merge_row())
     for r in out:
         r["label"] = r["name"] + (" · read-only" if r["read_only"] else "")
@@ -185,47 +248,6 @@ def _call(fn, *args, **kw):
     return None
 
 
-class EditLoopScreen(ModalScreen):
-    """The fields of `pl loops edit`, filled with the loop's current values; dismisses with the fields that changed."""
-    DEFAULT_CSS = """
-    EditLoopScreen { align: center middle; }
-    EditLoopScreen > Vertical { width: 90; height: auto; border: round $accent; padding: 1 2; background: $surface; }
-    """
-    BINDINGS = [Binding("ctrl+s", "save", "save"), Binding("escape", "cancel", "cancel")]
-    FIELDS = (("skill", "skill"), ("prompt", "prompt"), ("every", "every"), ("hours", "hours"), ("account", "account"))
-
-    def __init__(self, name, current):
-        super().__init__()
-        self.loop_name = name
-        self.current = current
-
-    def compose(self):
-        with Vertical():
-            yield Static(Text(f"Edit loop {self.loop_name}", style="bold"))
-            for key, label in self.FIELDS:
-                yield Label(label)
-                yield Input(value=str(self.current.get(key) or ""), id=f"loop-{key}")
-            yield Checkbox("writes (off = read-only)", bool(self.current.get("writes")), id="loop-writes")
-            yield Static(Text("ctrl+s save · esc cancel · a cleared field stays as it was", style="dim"))
-
-    def on_input_submitted(self, _):
-        self.action_save()
-
-    def action_save(self):
-        changes = {}
-        for key, _ in self.FIELDS:
-            value = self.query_one(f"#loop-{key}", Input).value.strip()
-            if value and value != str(self.current.get(key) or ""):
-                changes[key] = value
-        writes = self.query_one("#loop-writes", Checkbox).value
-        if writes != bool(self.current.get("writes")):
-            changes["writes"] = writes
-        self.dismiss(changes)
-
-    def action_cancel(self):
-        self.dismiss(None)
-
-
 def _auto_merge_row():
     from pl import merges   # merges -> merge_check -> tui.prs would loop back into this package
     s = util.load_state().get("services", {}).get("auto-merge", {})
@@ -236,6 +258,45 @@ def _auto_merge_row():
             "schedule": schedule.in_words(C.AUTO_MERGE.get("every", "15m")), "read_only": False, "account": merges.account() or "-", "context": "n/a", "tokens": "n/a", "tokens7d": "-",
             "last": util.ago(last.get("at")), "next": nxt[11:16] if nxt else "-",
             "output": f"waiting: {waits}" if on and waits else last.get("result") or "not run yet", "pane": None, "window": None}
+
+
+def gallery_rows() -> list[tuple[str, str, str, str]]:
+    """(name, what it does, what it needs, schedule) for each template, then the blank loop."""
+    rows = []
+    for name, t in loops.TEMPLATES.items():
+        does = t["prompt"].split(". ", 1)[0] + ("." if ". " in t["prompt"] else "")
+        needs = ", ".join([*([t["needs"]] if t.get("needs") else []), *(["write access"] if t["writes"] else [])]) or "nothing extra"
+        rows.append((name, does, needs, f"every {t['every']}, {t['hours']}"))
+    return [*rows, ("Blank loop", "start from empty fields", "", "")]
+
+
+class TemplateGallery(ModalScreen):
+    """What each template does and needs; the row chosen is the template the add form starts from."""
+    DEFAULT_CSS = """
+    TemplateGallery { align: center middle; }
+    TemplateGallery > Vertical { width: 150; height: auto; max-height: 100%; border: round $accent; padding: 1 2; background: $surface; }
+    TemplateGallery DataTable { height: auto; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text("New loop: pick a template", style="bold"))
+            yield DataTable(id="gallery-table", cursor_type="row")
+            yield Static(Text("enter choose · esc cancel", style="dim"))
+
+    def on_mount(self):
+        table = self.query_one("#gallery-table", DataTable)
+        table.add_columns("template", "what it does", "needs", "schedule")
+        for row in gallery_rows():
+            table.add_row(*(Text(cell) for cell in row))
+        table.focus()
+
+    def on_data_table_row_selected(self, event):
+        self.dismiss([*loops.TEMPLATES, ""][event.cursor_row])
+
+    def action_cancel(self):
+        self.dismiss(None)
 
 
 class LoopForm(ModalScreen):
@@ -252,26 +313,43 @@ class LoopForm(ModalScreen):
     SCHEDULE_IDS = ("loop-kind", "loop-number", "loop-unit", "loop-at", "loop-cron")
     # a refusal goes under the first field whose name it mentions; anything else goes under the form's own problem line
     ERROR_FIELDS = ("hours", "account", "team")
+    EDIT_FIELDS = ("prompt", "hours", "account")
     _now = staticmethod(datetime.now)
 
+    def __init__(self, name=None, current=None, template=None):
+        super().__init__()
+        self.loop_name = name
+        self.current = current or {}
+        self.template = template
+
+    @property
+    def editing(self):
+        return self.loop_name is not None
+
     def compose(self):
+        skill_names = [i["name"] for i in self._skills()]
+        if self.current.get("skill") and self.current["skill"] not in skill_names:
+            skill_names.append(self.current["skill"])   # a Select refuses a value it has no option for
         with Vertical():
-            yield Static(Text("Add a loop", style="bold"))
+            yield Static(Text(f"Edit loop {self.loop_name}" if self.editing else "Add a loop", style="bold"))
             yield Label("name")
-            yield Input(id="loop-name")
-            yield Label("template")
-            yield Select([(t, t) for t in loops.TEMPLATES], prompt="no template", id="loop-template", compact=True)
+            yield Input(value=self.loop_name or "", id="loop-name", disabled=self.editing)
+            if not self.editing:
+                yield Label("template")
+                yield Select([(t, t) for t in loops.TEMPLATES], prompt="no template", id="loop-template", compact=True)
             yield Label("skill")
-            yield Select([(i["name"], i["name"]) for i in self._skills()], prompt="no skill", id="loop-skill", compact=True)
+            yield Select([(n, n) for n in skill_names], prompt="no skill", id="loop-skill", compact=True,
+                         value=self.current.get("skill") or Select.NULL)
             for key, label in self.TEXT_FIELDS:
                 yield Label(label)
-                yield Input(value=self.DEFAULTS.get(key, ""), id=f"loop-{key}")
+                value = str(self.current.get(key) or "") if self.editing else self.DEFAULTS.get(key, "")
+                yield Input(value=value, id=f"loop-{key}", disabled=self.editing and key == "team")   # `pl loops edit` has no team option
                 yield Static(id=f"loop-{key}-error", classes="error")
                 if key == "prompt":
                     yield from self._schedule_widgets()
-            yield Checkbox("writes (off = read-only)", False, id="loop-writes")
+            yield Checkbox("writes (off = read-only)", bool(self.current.get("writes")), id="loop-writes")
             yield Static(id="loop-problem")
-            yield Static(Text("ctrl+s save · esc cancel", style="dim"))
+            yield Static(Text("ctrl+s save · esc cancel" + (" · a cleared field stays as it was" if self.editing else ""), style="dim"))
 
     @staticmethod
     def _schedule_widgets():
@@ -293,10 +371,17 @@ class LoopForm(ModalScreen):
             return []
 
     def on_mount(self):
+        parts = schedule.split(self.current.get("every") or "")
+        self.query_one("#loop-kind", Select).value = parts["kind"] or Select.NULL
+        self.query_one("#loop-unit", Select).value = parts["unit"]
+        for key in ("number", "at", "cron"):
+            self.query_one(f"#loop-{key}", Input).value = parts[key]
         self._show_preview()
+        if self.template:
+            self.query_one("#loop-template", Select).value = self.template
 
     def on_input_changed(self, event):
-        if event.input.id == "loop-name":
+        if event.input.id == "loop-name" and not self.editing:
             self._show_problem(self._name_problem(event.value.strip()) if event.value.strip() else "")
         elif event.input.id in self.SCHEDULE_IDS:
             self._show_preview()
@@ -358,7 +443,29 @@ class LoopForm(ModalScreen):
     def _value(self, key):
         return self.query_one(f"#loop-{key}", Input).value.strip() or None
 
+    def _changes(self):
+        changes = {key: self._value(key) for key in self.EDIT_FIELDS
+                   if self._value(key) and self._value(key) != str(self.current.get(key) or "")}
+        every = self._every()
+        if every and every != str(self.current.get("every") or ""):
+            changes["every"] = every
+        skill = self.query_one("#loop-skill", Select).value
+        if skill is not Select.NULL and skill != self.current.get("skill"):
+            changes["skill"] = skill
+        writes = self.query_one("#loop-writes", Checkbox).value
+        if writes != bool(self.current.get("writes")):
+            changes["writes"] = writes
+        if "every" in changes:
+            try:
+                schedule.preview(changes["every"], self._now(), 1)
+            except ValueError as e:
+                self._show_problem(str(e))
+                return
+        self.dismiss(changes)
+
     def action_save(self):
+        if self.editing:
+            return self._changes()
         name = (self._value("name") or "")
         problem = self._name_problem(name)
         skill = self.query_one("#loop-skill", Select).value
@@ -430,62 +537,186 @@ class LogScreen(ModalScreen):
 class LoopsView(Widget):
     DEFAULT_CSS = """
     LoopsView { height: 1fr; }
-    #loops-table { width: 130; height: 1fr; border: round $panel-lighten-2; }
-    #loops-screen { width: 1fr; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
+    #loops-table { width: 2fr; height: 1fr; border: round $panel-lighten-2; }
+    #loops-right { width: 1fr; height: 1fr; }
+    #loops-screen { height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
+    #loops-runs { height: auto; max-height: 12; border: round $panel-lighten-2; }
     """
     BINDINGS = [Binding("n", "new", "new"), Binding("e", "edit", "edit"), Binding("p", "pause", "pause/resume"), Binding("g", "run_now", "run now"),
-                Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop")]
+                Binding("d", "delete", "delete"), Binding("w", "open_window", "open window"), Binding("R", "restart", "restart loop"),
+                Binding("l", "open_log", "full log"), Binding("y", "copy", "copy")]
 
     def __init__(self):
         super().__init__()
-        self.loops = []
+        self._runs, self._run_lines = [], None
+        self.loops = None   # None until the first show, so an empty first refresh still draws
+        self.data, self._shown, self.agents, self.notes, self.lines, self.redraws, self._tail_key = None, None, [], [], [], 0, None
 
     def compose(self):
         with Horizontal():
-            yield DataTable(id="loops-table", cursor_type="row", zebra_stripes=True)
-            yield Static(Text("select a loop", style="dim"), id="loops-screen")
+            yield DataTable(id="loops-table", cursor_type="row", show_header=False, zebra_stripes=False)
+            with Vertical(id="loops-right"):
+                yield Static(Text("select a loop", style="dim"), id="loops-screen")
+                yield OptionList(id="loops-runs")
 
     def on_mount(self):
         t = self.query_one(DataTable)
-        t.add_columns(*(label for label, _ in COLUMNS))
+        t.add_column("loops")
         t.border_subtitle = HINT
+        self._last = 0
+        runs = self.query_one("#loops-runs", OptionList)
+        runs.border_title = "Earlier runs · enter opens the log"
+        runs.display = False
+        self.set_interval(subagents.REFRESH, self.tick)
 
-    def selected(self):
+    @staticmethod
+    def _is_item(key):
+        return key == NEW_ROW or key.startswith(("loop:", "agent:"))
+
+    def _key(self):
         t = self.query_one(DataTable)
         if not t.row_count:
             return None
-        key = t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
-        return next((x for x in self.loops if x["name"] == key), None)
+        return t.coordinate_to_cell_key((t.cursor_row, 0)).row_key.value
+
+    def selected(self):
+        key = self._key() or ""
+        return next((x for x in self.loops or [] if f"loop:{x['name']}" == key), None)
+
+    def selected_agent(self):
+        key = self._key() or ""
+        return next((r for r in self.agents if f"agent:{r['path']}" == key), None)
+
+    def check_action(self, action, parameters):
+        if action == "open_log":
+            x = self.selected()
+            return bool(x and x.get("every"))
+        if action in LOOP_KEYS:
+            return self.selected() is not None
+        return True
 
     def show(self, data):
-        t = self.query_one(DataTable)
-        keep = t.cursor_row
-        loops = loop_rows(data)
-        if loops != self.loops:   # an unchanged table is not rebuilt
-            self.loops = loops
-            t.clear()
-            t.add_row(new_row("loop"), *[""] * (len(COLUMNS) - 1), key=NEW_ROW)
-            for x in self.loops:
-                t.add_row(*(Text(str(x[k])) for _, k in COLUMNS), key=x["name"])
-            t.move_cursor(row=min(max(keep, 0), len(self.loops)))
+        self.data = data
+        self._rebuild()
+        self.refresh_bindings()
         self.load_tail()
 
+    def _rebuild(self):
+        t = self.query_one(DataTable)
+        keep, keep_row = self._key(), t.cursor_row
+        rows = loop_rows(self.data)
+        shown = (rows, [(r["path"], subagents.agent_sentence(r).plain) for r in self.agents], self.notes)
+        if shown == self._shown:   # an unchanged table is not rebuilt
+            return
+        self._shown = shown
+        self.loops = rows
+        t.clear()
+        t.add_row(Text("Loops", style="bold"), key="head:loops")
+        for x in self.loops:
+            t.add_row(loop_sentence(x), key=f"loop:{x['name']}")
+        if not self.loops:
+            for i, line in enumerate(empty_state("loops")):
+                t.add_row(Text(line, style="dim"), key=f"none:loops:{i}")
+        heading = Text("Background agents", style="bold")
+        for n in self.notes:
+            heading.append(f"   {n}", style="dim")
+        t.add_row(heading, key="head:agents")
+        for r in self.agents:
+            t.add_row(subagents.agent_sentence(r), key=f"agent:{r['path']}")
+        if not self.agents:
+            t.add_row(Text("no background agents", style="dim"), key="none:agents")
+        t.add_row(Text(f"+ New loop from a template ({len(loops.TEMPLATES)})", style="#e0a040"), key=NEW_ROW)
+        if keep in [r.key.value for r in t.ordered_rows]:
+            t.move_cursor(row=t.get_row_index(keep))
+        else:
+            t.move_cursor(row=min(max(keep_row, 0), t.row_count - 1))
+        self._last = skip_headings(t, self._is_item)
+
+    def tick(self):
+        """Scan and read the selected agent's tail off the UI thread, only while this tab is visible."""
+        if getattr(self.app, "active_tab", None) != "loops" or self.app.screen is not self.screen:
+            return
+        sel = self.selected_agent()
+        want, data, last_key = sel and sel["path"], self.data, self._tail_key
+
+        def run():
+            try:
+                rows, notes = subagents.scan(data)
+                pick = next((r for r in rows if r["path"] == want), None)
+                lines = None
+                if pick and (pick["path"], pick["key"], pick["state"]) != last_key:   # state also moves with time
+                    lines = subagents.tail_lines(pick["path"], pick["ident"])
+            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+                self.app.call_from_thread(self.app.notify, f"could not list background agents: {e}", severity="error", markup=False)
+                return
+            self.app.call_from_thread(self._apply_agents, rows, notes, pick, lines)
+        self.run_worker(run, thread=True, group="loops-agents", exclusive=True)
+
+    def _apply_agents(self, rows, notes, pick, lines):
+        self.agents, self.notes = rows, notes
+        self._rebuild()
+        cur = self.selected_agent()
+        if lines is None or cur is None or cur["path"] != pick["path"]:
+            return
+        self._tail_key, self.lines = (pick["path"], pick["key"], pick["state"]), lines
+        body = Text(f"{pick['what']}  ({pick['state']})\n", style="bold")
+        body.append("\n".join(lines[-subagents.TAIL_ENTRIES:]), style="not bold")
+        self.query_one("#loops-screen", Static).update(body)
+        self.query_one("#loops-runs", OptionList).display = False
+        self.redraws += 1
+
     def on_data_table_row_highlighted(self, _):
+        self._last = skip_headings(self.query_one(DataTable), self._is_item, self._last)
+        self.refresh_bindings()
         self.load_tail()
+
+    def action_open_log(self):
+        x = self.selected()
+        if x is None or not x.get("every"):
+            return
+        runs = loops.read_runs(x["name"])
+        if not runs:
+            self.app.notify("This loop has not run yet.", markup=False)
+            return
+        self.app.push_screen(RunLogScreen(x["name"], runs[0]))
+
+    def on_option_list_option_selected(self, event):
+        x = self.selected()
+        if event.option_list.id == "loops-runs" and x and x.get("every"):
+            self.app.push_screen(RunLogScreen(x["name"], self._runs[event.option_index + 1]))
 
     def action_new(self):
         def added(name):
             if name:
                 self.app.notify(f"added loop {name}", markup=False)
-        self.app.push_screen(LoopForm(), added)
+
+        def chosen(template):
+            if template is not None:
+                self.app.push_screen(LoopForm(template=template or None), added)
+        self.app.push_screen(TemplateGallery(), chosen)
 
     def load_tail(self):
+        agent = self.selected_agent()
+        if agent is not None:
+            if (self._tail_key or (None,))[0] != agent["path"]:
+                self.tick()
+            return
+        self._tail_key, self.lines = None, []
         x = self.selected()
         if x is None:
+            if self._key() == NEW_ROW:
+                body = Text("New loop from a template\n", style="bold")
+                body.append("\n".join(loops.TEMPLATES) + "\n\nEnter or n opens the new-loop form", style="not bold")
+                self.query_one("#loops-screen", Static).update(body)
+                self.query_one("#loops-runs", OptionList).display = False
             return
         name, pane = x["name"], x["pane"]
 
-        def run():   # tmux off the UI thread
+        def run():   # tmux and the run log off the UI thread
+            if x.get("every"):
+                runs = loops.read_runs(name)
+                self.app.call_from_thread(self._show_detail, name, run_detail(x, runs), runs)
+                return
             try:
                 lines = agents.pane_tail(pane, TAIL_LINES)
             except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
@@ -494,17 +725,35 @@ class LoopsView(Widget):
             self.app.call_from_thread(self._show_tail, name, pane, lines)
         self.run_worker(run, thread=True, group="loops-tail")
 
+    def _show_detail(self, name, body, runs):
+        x = self.selected()
+        if x is None or x["name"] != name:
+            return
+        self.query_one("#loops-screen", Static).update(body)
+        self.lines = body.plain.splitlines()
+        self._runs = runs
+        earlier = self.query_one("#loops-runs", OptionList)
+        earlier.display = len(runs) > 1
+        lines = [run_line(r) for r in runs[1:]]
+        if lines != self._run_lines:   # an unchanged list is not rebuilt, so the 3 s refresh keeps the highlight
+            self._run_lines = lines
+            earlier.clear_options()
+            earlier.add_options(lines)
+
     def _show_tail(self, name, pane, lines):
         x = self.selected()
         if x is None or x["name"] != name:
             return
         body = Text(sentence(x) + "\n", style="bold")
+        body.append(loop_stats(x) + "\n", style="dim")
         body.append(f"{name} loop\n" if pane else f"{name} loop is off; showing the dispatcher\n")
         body.append("\n".join(lines), style="not bold")
         self.query_one("#loops-screen", Static).update(body)
+        self.query_one("#loops-runs", OptionList).display = False
+        self.lines = lines
 
     def on_data_table_row_selected(self, event):
-        if event.row_key.value == NEW_ROW:   # "+ New loop" opens the add form; any other row opens its log
+        if event.row_key.value == NEW_ROW:   # the template row opens the add form; a loop row opens its log
             self.action_new()
             return
         x = self.selected()
@@ -520,6 +769,18 @@ class LoopsView(Widget):
             self.app.call_from_thread(self.app.push_screen, LogScreen(name, util.mask(text)))
         self.run_worker(run, thread=True, group="loops-log")
 
+    def action_copy(self):
+        if not self.lines:
+            self.app.notify("nothing to copy on this row", markup=False)
+            return
+        text = "\n".join(self.lines[-subagents.TAIL_ENTRIES:])
+        self.app.copy_to_clipboard(text)
+        for argv in COPIERS:
+            if shutil.which(argv[0]):
+                _copy_run(argv, text)
+                break
+        self.app.notify(f"copied {len(self.lines[-subagents.TAIL_ENTRIES:])} lines", markup=False)
+
     def _change(self, done, fn, *args, **kw):
         def run():
             problem = _call(fn, *args, **kw)
@@ -534,12 +795,12 @@ class LoopsView(Widget):
         svc = C.SERVICES.get(name) or C.LOOPS_OFF.get(name) or {}
         current = {"skill": svc.get("skill"), "prompt": None if svc.get("skill") else svc.get("prompt"),
                    "every": svc.get("every"), "hours": svc.get("hours"), "account": svc.get("profile") or svc.get("account"),
-                   "writes": svc.get("writes")}
+                   "writes": svc.get("writes"), "team": svc.get("team")}
 
         def saved(changes):
             if changes:
                 self._change(f"edited {name}", loops.edit, name, **changes)
-        self.app.push_screen(EditLoopScreen(name, current), saved)
+        self.app.push_screen(LoopForm(name, current), saved)
 
     def action_pause(self):
         x = self.selected()
@@ -602,7 +863,7 @@ class LoopsView(Widget):
 
 MAX_EVENTS = 500
 MAX_BYTES = 500 * 4096
-FILTERS = ["all", "errors", "needs you", "dispatcher", "loops"]
+FILTERS = ["all", "errors", "warnings", "needs you", "dispatcher", "loops"]
 NEEDS_COLUMNS = {"Plan for review", "Manual", "Spec ready"}
 
 
@@ -629,7 +890,9 @@ def read_events(path):
 def matches(e, f):
     kind = str(e.get("kind") or "")
     if f == "errors":
-        return kind == "error"
+        return events.level(e) == "error"
+    if f == "warnings":
+        return events.level(e) == "warning"
     if f == "needs you":
         return kind == "moved" and isinstance(e.get("to"), str) and e["to"] in NEEDS_COLUMNS
     if f == "dispatcher":
@@ -657,24 +920,33 @@ class ActivityView(Widget):
             yield DataTable(id="activity-table", cursor_type="row", zebra_stripes=True)
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("time", "kind", "card", "detail")
+        self.query_one(DataTable).add_columns("time", "level", "kind", "card", "detail")
 
     def show(self, data=None):
+        evs = read_events(C.STATE_DIR / "events.jsonl")
         bar = Text("filter  ")
         for f in FILTERS:
-            bar.append(f" {f} ", style="bold reverse" if f == self.filter else "dim")
+            bar.append(f" {f} {sum(matches(e, f) for e in evs)} ", style="bold reverse" if f == self.filter else "dim")
         bar.append("   f next filter", style="dim")
         self.query_one("#activity-filter", Static).update(bar)
         t = self.query_one(DataTable)
-        shown = [e for e in read_events(C.STATE_DIR / "events.jsonl") if matches(e, self.filter)]
+        shown = [e for e in evs if matches(e, self.filter)]
         if shown == getattr(self, "_shown", None):   # an unchanged table is not rebuilt
             return
         self._shown = shown
         t.clear()
         for e in shown:
-            detail = _fields(e, ("ts", "kind", "card", "profile"))
-            t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")), Text(str(e.get("kind") or "")),
+            detail = _fields(e, ("ts", "kind", "card", "profile", "level", "demo"))
+            lv = events.level(e)
+            kind = Text(str(e.get("kind") or ""))
+            if e.get("demo"):
+                kind.append(" demo", style="dim")
+            t.add_row(Text(str(e.get("ts") or "")[:19].replace("T", " ")),
+                      Text(lv, style="red" if lv == "error" else "yellow" if lv == "warning" else ""), kind,
                       Text(short_id(e.get("card") or "")), Text(detail))
+        if not shown and self.filter == "all":
+            for line in empty_state("activity"):
+                t.add_row(Text(line, style="dim"), Text(""), Text(""), Text(""))
 
     def action_next_filter(self):
         self.filter = FILTERS[(FILTERS.index(self.filter) + 1) % len(FILTERS)]

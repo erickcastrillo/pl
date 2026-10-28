@@ -23,11 +23,21 @@ def _no_dry_run_after():
     yield
     trackers.set_dry_run(False)
 
-READ_TOOLS = {"pl_inbox", "pl_list", "pl_card", "pl_section", "pl_alerts", "pl_standup", "pl_usage"}
-WRITE_TOOLS = {"pl_idea", "pl_section_write", "pl_approve"}
+READ_TOOLS = {"pl_inbox", "pl_list", "pl_card", "pl_section", "pl_alerts", "pl_standup", "pl_usage", "pl_activity",
+              "pl_agents_list", "pl_agents_show"}
+WRITE_TOOLS = {"pl_idea", "pl_section_write", "pl_approve", "pl_agents_use"}
 ALLOWED = READ_TOOLS | WRITE_TOOLS
 CARD = {"id": "acme/app#7", "title": "A card", "list_id": "L1", "tags": [], "updated_at": "2026-10-25T10:00:00+00:00",
         "metadata": {}, "description": "# PIPELINE: SPEC\nthe spec\n"}
+
+
+@pytest.fixture(autouse=True)
+def temp_profile(monkeypatch, tmp_path):
+    """The in-process pl commands need a profile: a throwaway one, never the real one (conftest clears PL_CONFIG_DIR)."""
+    prof = tmp_path / ".pl-test"
+    prof.mkdir()
+    (prof / "config.toml").write_text("[tracker]\ntype = 'memory'\n")
+    monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
 
 
 @pytest.fixture(autouse=True)
@@ -258,3 +268,50 @@ def test_agent_approve_of_a_plain_plan_gate_goes_through_and_is_marked(monkeypat
     assert fake.items["card-app"]["list_id"] == "col-Approved"
     monkeypatch.setenv("PL_SOURCE", "mcp")
     assert audit.who() == "mcp-session"
+
+
+async def test_pl_activity_returns_the_same_entries_as_pl_activity_json(in_process):
+    res = await call("pl_activity", {"level": "warning", "kind": "runaway", "since": "2h"})
+    assert not res.isError
+    assert in_process == [["activity", "--level", "warning", "--kind", "runaway", "--since", "2h", "--json"]]
+    assert [json.loads(c.text) for c in res.content] in ([], [[]])
+
+
+async def test_agent_tools_have_one_line_descriptions():
+    async with create_connected_server_and_client_session(mcp_serve.build()._mcp_server) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    for name in ("pl_agents_list", "pl_agents_show", "pl_agents_use"):
+        assert tools[name].description and "\n" not in tools[name].description
+
+
+async def test_agents_list_and_show_return_the_cli_json(in_process):
+    listed = await call("pl_agents_list", {})
+    shown = await call("pl_agents_show", {"name": "sales-sdr"})
+    assert not listed.isError and not shown.isError
+    assert "sales-sdr" in {json.loads(c.text)["name"] for c in listed.content}
+    assert json.loads(shown.content[0].text)["name"] == "sales-sdr"
+    assert in_process == [["agents", "list", "--json"], ["agents", "show", "sales-sdr", "--json"]]
+
+
+async def test_agents_show_unknown_is_a_tool_error(monkeypatch):
+    monkeypatch.setattr(mcp_serve, "_pl", lambda argv: subprocess.CompletedProcess(argv, 2, "", "no agent named nope\n"))
+    res = await call("pl_agents_show", {"name": "nope"})
+    assert res.isError and "no agent named nope" in res.content[0].text
+
+
+async def test_agents_use_runs_the_cli_and_errors_name_the_value(monkeypatch):
+    seen = []
+
+    def fake(argv, stdin=None):
+        seen.append(argv)
+        if "x" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "pl: pipeline mkt has no stage x\n")
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    monkeypatch.setattr(mcp_serve, "_pl", fake)
+    await call("pl_agents_use", {"stage": "draft", "agent": "sales-sdr", "pipeline": "mkt"})
+    await call("pl_agents_use", {"stage": "draft", "agent": "sales-sdr"})
+    bad = await call("pl_agents_use", {"stage": "x", "agent": "sales-sdr", "pipeline": "mkt"})
+    assert seen[0] == ["agents", "use", "draft", "sales-sdr", "--pipeline", "mkt", "--json"]
+    assert seen[1] == ["agents", "use", "draft", "sales-sdr", "--json"]
+    assert bad.isError and "mkt has no stage x" in bad.content[0].text

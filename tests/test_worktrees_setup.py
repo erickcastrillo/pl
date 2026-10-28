@@ -177,14 +177,15 @@ def test_setup_timeout_appends_note_to_card_with_timeout_limit_and_tail(repo, wt
 def test_a_successful_setup_with_card_leaves_the_card_alone(repo, wt, tmp_path, monkeypatch, board):
     _manifest(repo, 'setup: "true"\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
-    assert board.updates == []
+    assert board.updates == [(board.card["id"], {"metadata": {"worktree": str(wt.resolve())}})]
 
 
 def test_a_successful_setup_clears_an_earlier_failure(repo, wt, tmp_path, monkeypatch, board):
     board.card["metadata"] = {"bootstrap_error": {"reason": "old", "output": "old"}}
     _manifest(repo, 'setup: "true"\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
-    assert board.updates == [(board.card["id"], {"metadata": {"bootstrap_error": None}})]
+    assert board.updates == [(board.card["id"], {"metadata": {"worktree": str(wt.resolve())}}),
+                             (board.card["id"], {"metadata": {"bootstrap_error": None}})]
 
 
 def _prompt_for(monkeypatch, metadata):
@@ -199,12 +200,13 @@ def _prompt_for(monkeypatch, metadata):
     monkeypatch.setattr(dispatch.harnesses, "refuse_bypass", lambda h: None)
     monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: seen.append(p) or "")
     monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, stage, p: p)
-    monkeypatch.setattr(dispatch, "memory_arg", lambda c, stage, dry: "")
+    monkeypatch.setattr(dispatch, "memory_arg", lambda c, stage, dry, base=None: "")
     monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0))
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "%1")
     monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: ("/w", None))
     dispatch.start_worker({"id": "c" * 36, "title": "t", "metadata": metadata}, "run", 0, False)
     return seen[0]
 

@@ -6,15 +6,19 @@ from pathlib import Path
 from rich.text import Text
 
 from pl import config as C
+from pl import pipeline
 
+
+UNUSED = "not used in this pipeline"
+CODE_VIEWS = ("prs",)   # engineering-only views, hidden when the pipeline has no code stage
 
 GROUPS = [
     ("dashboard", "Dashboard", [("dashboard", "Dashboard")]),
-    ("assistant", "Assistant", [("assistant", "Assistant"), ("brain", "Brain")]),
+    ("assistant", "Assistant", [("assistant", "Assistant")]),
     ("work", "Work", [("ideas", "Ideas"), ("cards", "Board")]),
     ("review", "Review", [("waiting", "Waiting"), ("prs", "Pull requests")]),
-    ("automate", "Automate", [("loops", "Loops"), ("subagents", "Running")]),
-    ("extend", "Extend", [("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("models", "Models"),
+    ("automate", "Automate", [("loops", "Running")]),
+    ("extend", "Extend", [("extend", "Active pod"), ("skills", "Skills"), ("connectors", "Connectors"), ("pods", "Pods"), ("agents", "Agents"), ("models", "Models"),
                           ("extensions", "Extensions")]),
     ("activity", "Activity", [("activity", "Activity"), ("alerts", "Alerts")]),
     ("settings", "Settings", [("settings", "Settings")]),
@@ -27,12 +31,13 @@ TABS = [(vid, name) for _, _, views in GROUPS for vid, name in views]
 # What each bound action means to the person at the keys. A key may serve several actions only when they share a meaning;
 # tests/test_tui_views.py fails on a key with two, and on a binding whose action is missing here.
 MEANING = {
-    "tab": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
+    "tab": "go to tab", "brain": "go to tab", "step": "step", "cycle_window": "step", "app.focus_next": "next field",
     "standup": "standup", "refresh": "refresh", "rescan": "refresh", "dispatcher": "dispatcher",
-    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher",
+    "kill_switch": "kill switch", "help": "help", "update": "update", "switcher": "switcher", "pipelines": "pipelines", "pipeline": "switch pipeline",
     "oldest": "oldest waiting", "restart_console": "restart console", "quit": "quit",
     "close": "close", "cancel": "close", "back": "close", "leave_box": "close",
     "approve": "approve", "review('approve')": "approve", "send_back": "send back", "review('send_back')": "send back",
+    "inbox_approve": "approve", "inbox_send_back": "send back", "all_pipelines": "all pipelines",
     "hold": "hold", "pause": "hold", "run_now": "run now", "restart": "restart", "copy": "copy", "open": "open in browser", "open_card": "open in browser",
     "open_window": "open window", "jump": "open window", "live_view": "open window",
     "page_up": "page up", "page_down": "page down", "drop": "remove", "discard": "remove", "delete": "remove",
@@ -42,19 +47,27 @@ MEANING = {
     "edit_brief": "edit", "edit_input": "edit", "external_edit": "edit in $EDITOR", "ack": "acknowledge",
     "select": "select", "details": "details", "merge": "merge", "new": "new", "rename": "rename",
     "harness": "harness", "save": "save", "test": "test connections", "install": "install", "share": "share",
-    "link": "link", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
+    "link": "link", "open_log": "full log", "mode": "chat/idea", "file_idea": "file idea", "skip": "skip question",
     "sub_tab": "switch view", "sub_letter": "switch view",
+    "get_started": "get started step", "collapse_start": "collapse", "dismiss_start": "dismiss",
 }
 
 # The bound actions a view shows first in the footer, so the console-wide keys are the ones cut at 80x24.
 MAIN_KEYS = {
     "cards": ["review('approve')", "move_column", "retry"], "ideas": ["new", "edit_brief"], "dashboard": ["standup", "copy"],
-    "assistant": ["mode", "file_idea"], "brain": ["mode", "undo"], "prs": ["merge"], "loops": ["pause", "run_now", "edit"],
-    "subagents": ["copy"], "activity": ["next_filter", "copy"], "alerts": ["ack"], "settings": ["save", "test"],
+    "assistant": ["mode", "file_idea"], "prs": ["merge"], "loops": ["pause", "run_now", "edit"],
+    "activity": ["next_filter", "copy"], "alerts": ["ack"], "settings": ["save", "test"],
     "home": ["select"],
 }
 
 NEW_ROW = "+new"   # the row key of every list's "+ New <thing>" row
+
+
+def close(screen):
+    """Close a full-screen view only while it is the top screen. A second close (a quick double Esc) or one for a
+    screen with another opened on top of it does nothing, instead of popping the wrong screen or the last one."""
+    if screen.is_attached and screen.app.screen is screen:
+        screen.app.pop_screen()
 
 
 def new_row(thing):
@@ -68,17 +81,17 @@ HELP = {
     "cards": "Every card by column. A card that waits on you shows approve and send back in the footer; the details are on the right.",
     "waiting": "Everything that waits on you, oldest first. a approves, x sends back, Enter opens.",
     "prs": "Pull requests by what they need: a decision, a merge, a rework, or only a wait.",
-    "loops": "The background loops that keep the pipeline moving, with when each last ran.",
+    "loops": "Running: the loops that keep the pipeline moving and the agents working in the background.",
     "alerts": "Things that went wrong or need a look. Pick one to read it.",
     "activity": "A log of what the agents and you did, newest first.",
     "settings": "Accounts, board, stages, models and effort, dispatcher limits and notifications of this profile.",
-    "skills": "Every account's skills, agents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
+    "extend": "The skills this pipeline's pod gives its agents and the stage that runs each, its connector roles, then every skill and connector on the machine.",
+    "skills": "Every account's skills, subagents and commands. Pick one to read or edit it, n makes a new one, s shares it, l links it.",
     "connectors": "The services agents can reach. n adds a connector, t tests it, R revokes it.",
     "pods": "Pods hold the rules agents follow. r adds a rule to the pod, Enter shows it.",
+    "agents": "Named workers a stage can use. Enter shows one; edit with pl agents edit.",
     "models": "Local models: t test, s set.",
     "extensions": "Hooks, plugins and other extensions of every account.",
-    "subagents": "Running: agents working in the background and what each is doing.",
-    "brain": "One read-only brain session per machine, for questions across your pipelines.",
     "home": "Your pipelines, one row each. Press Enter to open one.",
 }
 
@@ -91,10 +104,8 @@ EMPTY = {
     "alerts": ("pl adds one when a thing fails.", None, None),
     "loops": ("n adds one, or pl loops add", "n", "loops"),
     "activity": ("Each card action adds a line.", None, None),
-    "subagents": ("An agent's background task.", None, None),
     "dashboard": ('n on Ideas, or pl idea "..."', "n", "ideas"),
     "home": ("pl setup adds a pipeline.", None, None),
-    "brain": ("Type a question and press Enter.", None, None),
 }
 
 
@@ -139,10 +150,11 @@ def show_first_heading(t, is_item):
 
 
 def tabs():
-    """The views this console shows: Home when >= 2 profiles have config.toml, less Assistant when disabled."""
+    """The views this console shows: Home when >= 2 profiles have config.toml or the Get started checklist is wanted, less Assistant when disabled."""
+    from pl.tui import getstarted
     count = sum(1 for p in Path.home().glob(".pl-*") if (p / "config.toml").is_file())
     return [(vid, name) for vid, name in TABS
-            if (vid != "home" or count >= 2) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
+            if (vid != "home" or count >= 2 or getstarted.wanted()) and (vid not in CODE_VIEWS or pipeline.has_code()) and (vid != "assistant" or C.ASSISTANT.get("enabled", True) is not False)]
 
 
 def groups():
@@ -152,8 +164,17 @@ def groups():
     return [g for g in shown_groups if g[2]]
 
 
+def unused(name):
+    """True for a view this pipeline hides, so opening it gives the UNUSED notice."""
+    return name in CODE_VIEWS and not pipeline.has_code()
+
+
+ALIASES = {"subagents": "loops"}   # the Background view's old tab id
+
+
 def resolve(name):
     """(gid, view_id) for a visible view id, (gid, None) for a group id (its first view), else None."""
+    name = ALIASES.get(name, name)
     shown = groups()
     for gid, _, views in shown:
         if any(vid == name for vid, _ in views):
@@ -187,11 +208,20 @@ def status_sentence(snap, stopped=None):
     parts = ["Running"]
     if working:
         parts.append(f"{_plural(working, 'agent')} working")
-    parts.append(f"{_plural(waiting, 'card')} waiting" if waiting else "no cards waiting")
+    words = pipeline.ui()
+    parts.append(f"{_plural(waiting, words['item'])} waiting" if waiting else f"no {words['items']} waiting")
     sentence = ", ".join(parts)
     if snap.get("parked") and (out := re.search(r"(\S+): PARKED until (.+?)(?:,| \(\d+ running|$)", snap["prof"])):
         sentence += f"; account {out[1]} is out of credits until {out[2]}"
     return sentence
+
+
+def others_need_you(data):
+    """"sales 2 · support 1 need you": the other pipelines with items waiting on the person, "" when none."""
+    from pl.tui.home import home_rows   # home imports this module
+    waiting = [f"{r['name']} {r['needs_you']}" for r in home_rows((data or {}).get("home") or [])
+               if r["name"] != C.PROFILE_NAME and r["needs_you"] > 0]
+    return f"{' · '.join(waiting)} need you" if waiting else ""
 
 
 def header_text(data, error=None, note=None, last_good=None):
@@ -199,7 +229,10 @@ def header_text(data, error=None, note=None, last_good=None):
     from pl.tui.needs import needs_you_count   # needs -> subagents -> loops imports this module
     t = Text(no_wrap=True, overflow="ellipsis")
     t.append(" pl ", style="bold #e0a040")
-    t.append(f" {C.PROFILE_NAME or 'no profile'} ", style="bold #101010 on #e0a040")
+    t.append(f" {C.PROFILE_NAME or 'no profile'} ▾ ", style="bold #101010 on #e0a040")
+    t.append(f" {(getattr(C, 'PIPELINE', None) or {}).get('name', 'engineering')}", style="dim")
+    if others := others_need_you(data):
+        t.append(f"  {others}", style="#e0a040")
     t.append(f"  {(C.TRACKER or {}).get('type') or 'no tracker'}", style="dim")
     snap = (data or {}).get("snapshot")
     if snap:
@@ -223,8 +256,11 @@ def header_text(data, error=None, note=None, last_good=None):
         hhmm = since.split("T")[1][:5] if "T" in since else since[:5]
         since_str = f" since {hhmm}" if hhmm else ""
         t.append(f"   KILL SWITCH ON{since_str}", style="bold red")
-    if snap and (n := needs_you_count(data)):
+    al = (data or {}).get("alerts") or []
+    if snap and (n := needs_you_count(data) + sum(a.get("severity") == "high" for a in al)):
         t.append(f"   needs you {n}", style="bold red")
+    if al:
+        t.append(f"   alerts {len(al)}", style="bold #e0a040")
     if note:
         t.append(f"   {note}", style="bold red" if "fail" in note or "still running" in note else "#e0a040")
     if error:

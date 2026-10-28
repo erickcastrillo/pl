@@ -24,10 +24,41 @@ def no_real_memory_readers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_screen_reads(monkeypatch):
+    """The dispatcher pass reads each live agent's screen once: tests see a working agent, never a real pane."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "agent_screen", types.SimpleNamespace(read=lambda pane, lines=20: ("", "working", "")))
+
+
+@pytest.fixture(autouse=True)
+def no_reconcile_in_dispatch_passes(monkeypatch):
+    """A dispatcher pass in a test does not reconcile finished agents (it would read fake panes and open alerts the
+    test does not expect); tests/test_reconcile.py calls reconcile.sweep itself."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "reconcile", types.SimpleNamespace(sweep=lambda *a, **k: None))
+
+
+@pytest.fixture(autouse=True)
+def no_real_idle_clock(monkeypatch):
+    """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
+    from pl import agents
+    monkeypatch.setattr(agents, "idle_seconds", lambda w, reg, st=None: None)
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    from pl import config as C
+    vars(C).update(C._defaults())   # pl.config's globals start from the defaults under this HOME: none leak from an earlier test, none point at the real ~/.pl
+    from pl import board
+    monkeypatch.setattr(board, "_SHARE", {"mode": None})   # no shared board save unless a test turns one on: an empty one means "read", and a fresh worker would write board-cache.json
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
+    # a test run inside a pl agent inherits the real profile and worktrees folder: never let a test load or touch them
+    for var in ("PL_CONFIG_DIR", "PL_WORKTREES_DIR", "PL_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
     from pl import local_model
 
     def no_model(url, payload, timeout):
@@ -210,7 +241,14 @@ def no_stage_hooks(monkeypatch):
 def trusted_work_dir(monkeypatch):
     """The dispatcher's trust gate reads the account's .claude.json: off unless a test turns it on."""
     from pl import dispatch
-    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account: None)
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account, folder=None: None)
+
+
+@pytest.fixture(autouse=True)
+def run_worktree_is_work_dir(monkeypatch):
+    """Run agents start in a worktree git makes: off unless a test turns it on (tests/test_run_worktree.py)."""
+    from pl import config, worktrees
+    monkeypatch.setattr(worktrees, "for_run", lambda c: (config.WORK_DIR, None))
 
 
 @pytest.fixture(autouse=True)
@@ -220,6 +258,8 @@ def no_live_agent_window(monkeypatch):
     monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda *a, **k: None)   # it reads the agent's screen: tests fake it
     monkeypatch.setattr(dispatch, "death_line", lambda *a, **k: None)
+    from pl import agent_alerts
+    monkeypatch.setattr(agent_alerts, "check", lambda *a, **k: None)   # it reads each agent pane: test_agent_alerts turns it on
 
 
 @pytest.fixture(autouse=True)

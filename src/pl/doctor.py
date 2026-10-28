@@ -2,7 +2,10 @@
 import json
 from urllib.parse import urlsplit
 
-from pl import local_model
+from pl import config as C
+from pl import agent_defs, alerts, heldwrites, local_model, trackers, util
+
+NOT_A_BOARD_KEY = ("columns", "skip_tags", "repo_tags", "enabled")
 
 
 def local_models():
@@ -23,15 +26,113 @@ def local_models():
     return ok, lines
 
 
-CHECKS = [local_models]
+def _board(cfg):
+    return {k: v for k, v in cfg.items() if k not in NOT_A_BOARD_KEY}
+
+
+def tracker():
+    boards = [("tracker", "[tracker]")]
+    if C.INTAKE.get("type"):
+        if _board(C.INTAKE) == _board(C.TRACKER):
+            boards = [("tracker", "[tracker] and [intake]")]
+        else:
+            boards.append(("intake", "[intake]"))
+    ok, lines = True, []
+    for kind, label in boards:
+        try:
+            line = trackers.get(kind).test()
+        except SystemExit as e:
+            line = str(e.code if e.code is not None else "error")
+        except Exception as e:
+            line = f"error: {e}"
+        line = util.mask(line)
+        ok = ok and line.startswith("ok")
+        lines.append(f"{label} {line}")
+    return ok, lines
+
+
+def assistant_account():
+    from pl import assistant, harnesses   # imported here so doctor's import stays light
+    acct, reason = assistant.pick()
+    if acct is None:
+        return False, ["assistant: no account can run it: set [assistant] account in config.toml to a claude or codex account"]
+    return True, [f"assistant: {acct} ({harnesses.account_harness(acct).name}), {reason}"]
+
+
+def notify_settings():
+    from pl import notifications   # imported here so doctor's import stays light
+    if problem := notifications.quiet_problem():
+        return False, [problem]
+    v = C.NOTIFY.get("quiet")
+    return True, [f"quiet hours: {v}" if v else "quiet hours: off"]
+
+
+def notifications():
+    from pl import chat   # imported here so doctor's import stays light
+    routed = [n for n, c in chat.load().items() if "alerts" in c.get("routes", [])]
+    if C.ATTENTION or routed:
+        return True, [f"attention_cmd: {C.ATTENTION or 'not set'}", f"chat alerts: {', '.join(routed) or 'none'}"]
+    return True, ["warning: this profile sends no notifications: set [paths] attention_cmd (pl setup) "
+                  "or run pl chat route alerts <name>"]
+
+
+def queued_writes():
+    rows = heldwrites.doctor_lines()
+    return True, ["Queued writes: none"] if rows == ["none"] else [f"Queued writes: {len(rows)}"] + rows
+
+
+RETIRED = {("dispatch", "release_waiting_after"): "DISPATCH"}   # keys pl no longer reads: doctor says they can go
+
+
+def settings():
+    """Always ok: a key pl no longer reads is reported, never a failure."""
+    return True, [f"[{table}] {key} is no longer used and can be removed"
+                  for (table, key), name in RETIRED.items() if key in getattr(C, name)]
+
+
+def machine_toml():
+    from pl import manager
+    t = manager._machine_toml()
+    errs = C.validate_machine(t) + C.validate_tests(t)
+    return not errs, errs or ["machine.toml: fine"]
+
+
+def agents():
+    problems = agent_defs.problems_in_profile()
+    try:
+        warnings = agent_defs.outward_warnings(agent_defs.pipeline_stages())
+    except Exception:  # noqa: BLE001 - a warning that cannot be computed never fails doctor
+        warnings = []
+    return not problems, problems + warnings
+
+
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings,
+          machine_toml, agents]
+
+
+def _needs_you():
+    try:
+        return alerts.needs_you()
+    except Exception:  # noqa: BLE001 - an unreadable alerts file never fails doctor
+        return []
+
+
+def _needs_you_lines(rows):
+    return [f"  {util.short_id(r['card'])}  {r['kind']}  {util.age(r['opened_at'])}  {r['tried']}" + ("  acked" if r["acked"] else "")
+            for r in rows] or ["  nothing"]
 
 
 def cmd_doctor(a):
     results = [(check.__name__, *check()) for check in CHECKS]
+    rows = _needs_you()
     if getattr(a, "json", False):
-        print(json.dumps({"checks": [{"name": n, "ok": ok, "lines": lines} for n, ok, lines in results]}))
+        keys = ("card", "kind", "opened_at", "age_seconds", "tried", "acked")
+        print(json.dumps({"checks": [{"name": n, "ok": ok, "lines": lines} for n, ok, lines in results],
+                          "needs_you": [{k: r[k] for k in keys} for r in rows]}))
     else:
         for name, ok, lines in results:
             print(f"{'ok' if ok else 'FAIL'} {name}")
             print("\n".join(f"  {ln}" for ln in lines))
+        print("Needs you")
+        print("\n".join(_needs_you_lines(rows)))
     raise SystemExit(0 if all(ok for _, ok, _ in results) else 1)

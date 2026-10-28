@@ -14,6 +14,7 @@ from pl.tui.needs import needs_you_count
 from pl.tui.prs import MergeScreen, PrsView
 from pl.tui.review import ConfirmScreen, ReviewScreen
 from pl.tui.waiting import WaitingView, kind_of, row_text, waiting_rows
+from tui_wait import wait_until
 
 NOW = datetime.now(timezone.utc)
 
@@ -136,11 +137,12 @@ def commands(monkeypatch):
 
 
 async def _select(pilot, app, cid):
+    await wait_until(pilot, lambda: app.query_one("#waiting-table"), "the waiting list")
     table = app.query_one("#waiting-table")
-    await pilot.pause()
+    await wait_until(pilot, lambda: cid in [k.value for k in table.rows], "the row to be listed")
     table.focus()
     table.move_cursor(row=table.get_row_index(cid))
-    await pilot.pause()
+    await wait_until(pilot, lambda: table.cursor_row == table.get_row_index(cid), "the cursor to reach the row")
 
 
 async def test_a_on_a_plan_opens_the_confirm_and_approves(commands):
@@ -149,10 +151,10 @@ async def test_a_on_a_plan_opens_the_confirm_and_approves(commands):
     async with app.run_test(size=(120, 30)) as pilot:
         await _select(pilot, app, "plan0002aaaa")
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ConfirmScreen), "the confirm screen")
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("y")
-        await pilot.pause()
+        await wait_until(pilot, lambda: approved, "the plan to be approved")
         assert approved == ["plan0002aaaa"]
 
 
@@ -161,7 +163,7 @@ async def test_x_on_a_spec_opens_review_notes_first(commands):
     async with app.run_test(size=(120, 30)) as pilot:
         await _select(pilot, app, "spec0001aaaa")
         await pilot.press("x")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ReviewScreen), "the review screen")
         assert isinstance(app.screen, ReviewScreen) and app.screen.notes_first
 
 
@@ -170,7 +172,7 @@ async def test_a_on_a_merge_pr_opens_the_merge_confirm(commands):
     async with app.run_test(size=(120, 30)) as pilot:
         await _select(pilot, app, "https://github.com/o/frontend/pull/1200")
         await pilot.press("a")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, MergeScreen), "the merge confirm")
         assert isinstance(app.screen, MergeScreen) and "frontend#1200" in app.screen.message
 
 
@@ -179,19 +181,20 @@ async def test_enter_opens_the_right_screen(commands):
     async with app.run_test(size=(120, 30)) as pilot:
         await _select(pilot, app, "plan0002aaaa")
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, ReviewScreen), "the review screen")
         assert isinstance(app.screen, ReviewScreen) and not app.screen.notes_first
         await pilot.press("escape")
         for cid in ("manl0003aaaa", "need0004aaaa"):
             await _select(pilot, app, cid)
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(pilot, lambda: isinstance(app.screen, tui_cards.CardScreen), "the card screen")
             assert isinstance(app.screen, tui_cards.CardScreen) and app.screen.card_id == cid
             await pilot.press("escape")
+            await wait_until(pilot, lambda: not isinstance(app.screen, tui_cards.CardScreen), "the card screen to close")
         url = "https://github.com/o/frontend/pull/1117"
         await _select(pilot, app, url)
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.tabs == ["prs"], "the PRs tab")
         assert app.tabs == ["prs"] and app.query_one(PrsView)._current()[0] == url
 
 
@@ -201,7 +204,7 @@ async def test_enter_on_a_failed_agent_shows_the_retry_hint(commands):
     async with app.run_test(size=(120, 30)) as pilot:
         await _select(pilot, app, "dead0005aaaa")
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(pilot, lambda: isinstance(app.screen, tui_cards.CardScreen), "the card screen")
         assert isinstance(app.screen, tui_cards.CardScreen) and app.screen.approved == "died 3× · t to retry"
 
 
@@ -215,7 +218,7 @@ async def test_keys_that_do_not_apply_only_notify(commands, cid, key):
         await _select(pilot, app, cid)
         before = list(app.screen_stack)
         await pilot.press(key)
-        await pilot.pause()
+        await wait_until(pilot, lambda: app._notifications, "the notification")
         assert app.screen_stack == before and not approved and not runner.made
         assert len(app._notifications) == 1
 
@@ -223,6 +226,6 @@ async def test_keys_that_do_not_apply_only_notify(commands, cid, key):
 async def test_empty_list_says_nothing_waits(commands):
     app = Host(_data())
     async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
+        await wait_until(pilot, lambda: not app.query_one("#waiting-table").display, "the empty list")
         assert not app.query_one("#waiting-table").display
         assert "Nothing waits on you" in str(app.query_one("#waiting-empty").render())

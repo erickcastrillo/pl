@@ -1,4 +1,4 @@
-"""Alerts tab: the open alerts, newest first as alerts.listing() gives them, with a detail pane. k acknowledges one."""
+"""Alerts tab: the open, unacknowledged alerts newest first, with a detail pane. a acknowledges one."""
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -7,8 +7,6 @@ from textual.widgets import DataTable, Static
 from pl import alerts
 from pl.tui.chrome import empty_state
 from pl.util import age, short_id
-
-EMPTY = "Alerts: none open (pl alerts --all for history)"
 
 
 def title(a):
@@ -19,19 +17,23 @@ def title(a):
     return t.replace(cid[:8], short_id(cid), 1) if "#" in cid and short_id(cid) not in t else t
 
 
+def _cards(a):
+    return ", ".join(short_id(c) for c in a.get("cards") or []) or "-"
+
+
 def detail(a):
     """Plain text for the detail pane, from the alert's own fields."""
     if a is None:
-        return Text(EMPTY, style="dim")
-    return Text("\n".join([title(a), "", f"fix      {a.get('fix') or ''}", f"alert    {a['key']}",
-                           f"severity {a['severity']}", f"open     {age(a.get('first_seen'))} · seen {a.get('count', 1)} times",
-                           "acked: no more reminders until it clears" if a.get("acked") else "k acknowledges: no more reminders"]))
+        return Text(f"No open alerts. pl watches for: {alerts.watching()}", style="dim")
+    return Text("\n".join([title(a), "", f"severity {a['severity']}",
+                           f"open     {age(a.get('first_seen'))} · seen {a.get('count', 1)} times",
+                           f"cards    {_cards(a)}", f"details  {a.get('details') or '-'}", f"fix      {a.get('fix') or '-'}",
+                           f"alert    {a['key']}", "a acknowledges: hidden until it changes"]))
 
 
 def cells(a):
-    return (Text(f"{a['severity']} {age(a.get('first_seen'))}", style="red" if a["severity"] == "high" else "#e0a040"),
-            Text(f"{title(a)} · {a.get('fix') or ''}"),
-            Text(f"×{a.get('count', 1)}" + (" acked" if a.get("acked") else ""), style="dim"))
+    return (Text(a["severity"], style="red" if a["severity"] == "high" else "#e0a040"), Text(title(a)),
+            Text(age(a.get("first_seen")), style="dim"), Text(_cards(a), style="dim"))
 
 
 class AlertsView(Horizontal):
@@ -39,7 +41,7 @@ class AlertsView(Horizontal):
     #alerts-table { width: 2fr; height: 1fr; border: round $error; }
     #alerts-detail { width: 1fr; height: 1fr; }
     """
-    BINDINGS = [Binding("k", "ack", "acknowledge alert")]
+    BINDINGS = [Binding("a", "ack", "acknowledge alert"), Binding("k", "ack", "acknowledge alert", show=False)]
 
     def __init__(self):
         super().__init__()
@@ -47,7 +49,7 @@ class AlertsView(Horizontal):
 
     def compose(self):
         t = DataTable(id="alerts-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_columns("severity", "alert", "seen")
+        t.add_columns("severity", "alert", "age", "cards")
         yield t
         yield Static(detail(None), id="alerts-detail", classes="panel")
 
@@ -59,7 +61,7 @@ class AlertsView(Horizontal):
         self._rows = {a["key"]: a for a in al}
         built = [(a["key"], cells(a)) for a in self._rows.values()]
         if not built:
-            built = [(f"empty:{i}", (Text(line, style="dim"), Text(""), Text(""))) for i, line in enumerate(empty_state("alerts"))]
+            built = [(f"empty:{i}", (Text(line, style="dim"), Text(""), Text(""), Text(""))) for i, line in enumerate(empty_state("alerts"))]
         if [k for k, _ in built] == [k for k, _ in self._built]:   # same rows: change only the cells that differ
             for (key, new), (_, was) in zip(built, self._built):
                 for col, n, w in zip(t.columns, new, was):
@@ -69,7 +71,7 @@ class AlertsView(Horizontal):
             t.clear()
             for key, row in built:
                 t.add_row(*row, key=key)
-            if keep_key in self._rows:   # the same alert stays selected, so k never acks another one
+            if keep_key in self._rows:   # the same alert stays selected, so a never acks another one
                 t.move_cursor(row=t.get_row_index(keep_key))
         self._built = built
         self._detail_for_cursor()
@@ -90,10 +92,14 @@ class AlertsView(Horizontal):
             self.app.notify("select an alert to acknowledge")
             return
         if alerts.ack(key):
-            a["acked"] = True
-            self.app.notify("acknowledged: no more reminders until it clears")
+            if self.app.data is not None:
+                self.app.data["alerts"] = [x for x in self.app.data.get("alerts") or [] if x["key"] != key]
+            self.app.notify("acknowledged: hidden until its cards or severity change")
         if self.app.data is not None:
-            self.show(self.app.data)
+            self.app.run_worker(self.app.render_views())   # tab label and header count follow the row
 
     def on_data_table_row_highlighted(self, _):
+        self._detail_for_cursor()
+
+    def on_data_table_row_selected(self, _):
         self._detail_for_cursor()

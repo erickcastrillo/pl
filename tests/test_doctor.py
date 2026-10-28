@@ -5,19 +5,44 @@ import json
 import pytest
 
 from pl import config as C
-from pl import doctor, local_model
+from pl import accounts, doctor, local_model
+
+
+class FakeBoard:
+    def __init__(self, line):
+        self.line = line
+
+    def test(self):
+        if isinstance(self.line, BaseException):
+            raise self.line
+        return self.line
+
+
+def fake_trackers(monkeypatch, **lines):
+    """Fake doctor.trackers.get: one board per kind; returns the list of kinds asked for."""
+    asked = []
+
+    def get(kind):
+        asked.append(kind)
+        board = FakeBoard(lines.get(kind, "ok: fake"))
+        return board
+    monkeypatch.setattr(doctor.trackers, "get", get)
+    return asked
 
 
 @pytest.fixture(autouse=True)
 def profile(tmp_path, monkeypatch):
+    fake_trackers(monkeypatch)
     saved = {k: v for k, v in vars(C).items() if k.isupper()}
     monkeypatch.setenv("HOME", str(tmp_path))
     for var in ("PL_CONFIG_DIR", "PL_TMUX_SESSION"):
         monkeypatch.delenv(var, raising=False)
     d = tmp_path / ".pl-t"
     d.mkdir()
-    (d / "config.toml").write_text('[models.local]\nhost = "http://localhost:11434"\nroute = "r:1"\nsummarise = "s:1"\n')
+    (d / "config.toml").write_text('[models.local]\nhost = "http://localhost:11434"\nroute = "r:1"\nsummarise = "s:1"\n'
+                                   '[accounts.acme]\nconfig_dir = "~/.claude-acme"\n')
     C.load("t")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
     yield
     for k, v in saved.items():
         setattr(C, k, v)
@@ -43,13 +68,24 @@ def test_doctor_reports_each_jobs_model_pulled_or_not(capsys, monkeypatch):
     assert "route: r:1 is pulled" in out and "summarise: s:1 is not pulled: run ollama pull s:1" in out
 
 
-def test_doctor_json_lists_each_check(capsys, monkeypatch):
+def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = tmp_path / "attn.sh"
     monkeypatch.setattr(local_model, "_request",
                         lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
     code, out = run(capsys, json=True)
     assert code == 0
-    assert json.loads(out) == {"checks": [{"name": "local_models", "ok": True, "lines": [
-        "Ollama: up, 2 models", "route: r:1 is pulled", "summarise: s:1 is pulled"]}]}
+    assert json.loads(out)["checks"] == [
+        {"name": "local_models", "ok": True,
+         "lines": ["Ollama: up, 2 models", "route: r:1 is pulled", "summarise: s:1 is pulled"]},
+        {"name": "tracker", "ok": True, "lines": ["[tracker] ok: fake"]},
+        {"name": "assistant_account", "ok": True, "lines": ["assistant: acme (claude), first usable account"]},
+        {"name": "notify_settings", "ok": True, "lines": ["quiet hours: off"]},
+        {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]},
+        {"name": "queued_writes", "ok": True, "lines": ["Queued writes: none"]},
+        {"name": "settings", "ok": True, "lines": []},
+        {"name": "machine_toml", "ok": True, "lines": ["machine.toml: fine"]},
+        {"name": "agents", "ok": True, "lines": []}]
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -57,3 +93,326 @@ def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
     monkeypatch.setattr(local_model, "_request", lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}]}))
     _, out = run(capsys)
     assert "192.168.1.9 is on your network, not this machine" in out
+
+
+def test_doctor_ok_tracker_without_intake(capsys, monkeypatch):
+    monkeypatch.setattr(local_model, "_request", lambda *a: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
+    C.INTAKE = {}
+    code, out = run(capsys)
+    assert code == 0
+    assert "ok tracker\n  [tracker] ok: fake" in out
+
+
+def test_doctor_fails_when_intake_test_is_not_ok(capsys, monkeypatch):
+    fake_trackers(monkeypatch, intake="cannot reach board")
+    C.INTAKE = {"type": "local", "path": "elsewhere"}
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL tracker\n  [tracker] ok: fake\n  [intake] cannot reach board" in out
+
+
+def test_doctor_fails_with_the_error_when_building_the_tracker_raises(capsys, monkeypatch):
+    fake_trackers(monkeypatch, tracker=SystemExit("pl: set VIKUNJA_TOKEN to the token"))
+    C.INTAKE = {}
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL tracker" in out and "[tracker] pl: set VIKUNJA_TOKEN" in out
+
+
+def test_doctor_masks_an_error_from_a_tracker(capsys, monkeypatch):
+    monkeypatch.setenv("SOME_TOKEN", "hunter2hunter2")
+    from pl.trackers import mcp
+    mcp._resolve("${SOME_TOKEN}", [])
+    fake_trackers(monkeypatch, tracker=RuntimeError("boom hunter2hunter2"))
+    C.INTAKE = {}
+    _, out = run(capsys)
+    assert "[tracker] error: boom" in out and "hunter2hunter2" not in out
+
+
+@pytest.mark.parametrize("pair", [("local", "vikunja"), ("github-project", "github-issues"), ("mcp", "local")])
+def test_doctor_json_lists_both_boards(capsys, monkeypatch, pair):
+    fake_trackers(monkeypatch)
+    C.TRACKER, C.INTAKE = {"type": pair[0], "name": "a"}, {"type": pair[1], "name": "b"}
+    _, out = run(capsys, json=True)
+    lines = next(c for c in json.loads(out)["checks"] if c["name"] == "tracker")["lines"]
+    assert len(lines) == 2 and lines[0].startswith("[tracker]") and lines[1].startswith("[intake]")
+
+
+def test_doctor_tests_a_shared_board_once(capsys, monkeypatch):
+    asked = fake_trackers(monkeypatch)
+    C.TRACKER = {"type": "vikunja", "url": "http://x", "columns": ["A"]}
+    C.INTAKE = {**C.TRACKER, "columns": ["B"]}
+    _, out = run(capsys, json=True)
+    lines = next(c for c in json.loads(out)["checks"] if c["name"] == "tracker")["lines"]
+    assert asked == ["tracker"] and lines == ["[tracker] and [intake] ok: fake"]
+
+
+def test_doctor_names_the_stage_the_assistant_account_comes_from(capsys):
+    C.STAGES = {"plan": {"accounts": ["acme"]}}
+    _, out = run(capsys)
+    assert "assistant: acme (claude), from stage plan" in out
+
+
+def test_doctor_fails_when_no_account_can_run_the_assistant(capsys):
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL assistant_account" in out and "[assistant] account" in out
+
+
+@pytest.mark.parametrize("value", ["10pm-7am", "25:00-07:00", "22:00"])
+def test_doctor_names_a_bad_notify_quiet(capsys, monkeypatch, value):
+    C.NOTIFY = {**C.NOTIFY, "quiet": value}
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL notify_settings" in out and "notify.quiet" in out and "HH:MM-HH:MM" in out
+
+
+def test_doctor_reports_quiet_hours_when_valid(capsys, monkeypatch):
+    C.NOTIFY = {**C.NOTIFY, "quiet": "22:00-07:00"}
+    _, out = run(capsys)
+    assert "ok notify_settings" in out and "quiet hours: 22:00-07:00" in out
+
+
+def _machine_with_connector(tmp_path, monkeypatch, routes):
+    mdir = tmp_path / "machine"
+    mdir.mkdir(exist_ok=True)
+    monkeypatch.setenv("PL_MACHINE_DIR", str(mdir))
+    (mdir / "machine.toml").write_text('[connectors.tg]\nrole = "messaging"\nadapter = "telegram"\n'
+                                       f'token = "${{T}}"\nallow = ["1"]\nroutes = {json.dumps(routes)}\n')
+
+
+def test_doctor_warns_when_nothing_can_notify(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = None
+    _, out = run(capsys)
+    assert "ok notifications" in out
+    assert "warning:" in out and "pl setup" in out and "[paths] attention_cmd" in out and "pl chat route alerts" in out
+
+
+def test_doctor_json_reports_the_warning_as_ok(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = None
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "notifications")
+    assert check["ok"] is True and check["lines"][0].startswith("warning:")
+
+
+@pytest.mark.parametrize("how", ["attention", "alerts_route"])
+def test_doctor_no_warning_with_attention_or_alerts_route(capsys, monkeypatch, tmp_path, how):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = None
+    if how == "attention":
+        C.ATTENTION = tmp_path / "attn.sh"
+    else:
+        _machine_with_connector(tmp_path, monkeypatch, ["gates", "alerts"])
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "notifications")
+    assert check["ok"] is True and not any(ln.startswith("warning:") for ln in check["lines"])
+
+
+def _checks_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    C.ATTENTION = tmp_path / "attn.sh"
+    monkeypatch.setattr(local_model, "_request",
+                        lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
+
+
+def _open_each_kind(tmp_path, monkeypatch):
+    from pl import alerts
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    for mod in ("_offer", "_logged"):
+        monkeypatch.setattr(alerts, mod, lambda *a, **k: None)
+    monkeypatch.setattr(alerts, "_urgent", lambda on: None)
+    for kind in alerts.WATCHDOG:
+        alerts.open(f"{kind}:o/r#1", "warn", "Card r#1: pl could not move it", "f", cards=["o/r#1"])
+
+
+def test_doctor_lists_watchdog_alerts_under_needs_you(capsys, tmp_path, monkeypatch):
+    _open_each_kind(tmp_path, monkeypatch)
+    _, out = run(capsys)
+    section = out.split("Needs you", 1)[1]
+    assert len(section.strip().splitlines()) == 5
+    assert "r#1  stalled  0m  nothing yet" in section and "queued, replay failed" in section
+
+
+def test_doctor_needs_you_says_nothing_and_exit_is_unchanged(capsys, tmp_path, monkeypatch):
+    _checks_pass(tmp_path, monkeypatch)
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    code, out = run(capsys)
+    assert code == 0 and out.rstrip().endswith("Needs you\n  nothing")
+
+
+def test_doctor_exits_0_with_open_alerts_when_checks_pass(capsys, tmp_path, monkeypatch):
+    _checks_pass(tmp_path, monkeypatch)
+    _open_each_kind(tmp_path, monkeypatch)
+    code, _ = run(capsys)
+    assert code == 0
+
+
+def test_doctor_json_has_needs_you_and_unchanged_checks(capsys, tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    _, before = run(capsys, json=True)
+    _open_each_kind(tmp_path, monkeypatch)
+    _, after = run(capsys, json=True)
+    got = json.loads(after)
+    assert got["checks"] == json.loads(before)["checks"] and json.loads(before)["needs_you"] == []
+    assert len(got["needs_you"]) == 5
+    assert set(got["needs_you"][0]) == {"card", "kind", "opened_at", "age_seconds", "tried", "acked"}
+
+
+BAD_WORKERS = "tests.max_workers must be a whole number of at least 1"
+
+
+def machine_toml(monkeypatch, tmp_path, text):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    if text is not None:
+        (tmp_path / "machine").mkdir()
+        (tmp_path / "machine" / "machine.toml").write_text(text)
+
+
+def test_doctor_fails_machine_toml_with_a_bad_max_workers(capsys, monkeypatch, tmp_path):
+    machine_toml(monkeypatch, tmp_path, "[tests]\nmax_workers = 0\n")
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL machine_toml" in out and f"\n  {BAD_WORKERS}\n" in out
+
+
+def test_doctor_json_lists_the_machine_toml_check(capsys, monkeypatch, tmp_path):
+    machine_toml(monkeypatch, tmp_path, "[tests]\nmax_workers = 0\n")
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "machine_toml")
+    assert check["ok"] is False and check["lines"] == [BAD_WORKERS]
+
+
+@pytest.mark.parametrize("text", [None, "[tests]\nmax_workers = 4\n"])
+def test_doctor_machine_toml_ok_when_missing_or_valid(capsys, monkeypatch, tmp_path, text):
+    machine_toml(monkeypatch, tmp_path, text)
+    _, out = run(capsys)
+    assert "ok machine_toml" in out
+
+
+def test_doctor_machine_toml_names_tests_that_is_not_a_table(capsys, monkeypatch, tmp_path):
+    machine_toml(monkeypatch, tmp_path, "tests = 3\n")
+    _, out = run(capsys)
+    assert "FAIL machine_toml" in out and "\n  tests must be a table ([tests])\n" in out
+
+def _with_old_key(tmp_path):
+    with (tmp_path / ".pl-t" / "config.toml").open("a") as f:
+        f.write("[dispatch]\nrelease_waiting_after = 5\n")
+    C.load("t")
+
+
+def _models_ok(monkeypatch):
+    monkeypatch.setattr(local_model, "_request",
+                        lambda url, payload, timeout: json.dumps({"models": [{"name": "r:1"}, {"name": "s:1"}]}))
+
+
+def test_doctor_says_release_waiting_after_can_be_removed(capsys, monkeypatch, tmp_path):
+    _with_old_key(tmp_path)
+    _models_ok(monkeypatch)
+    code, out = run(capsys)
+    assert code == 0
+    assert "ok settings" in out
+    [line] = [l for l in out.splitlines() if "release_waiting_after" in l]
+    assert "no longer used" in line and "can be removed" in line
+
+
+def test_doctor_json_lists_release_waiting_after_once(capsys, monkeypatch, tmp_path):
+    _with_old_key(tmp_path)
+    _models_ok(monkeypatch)
+    code, out = run(capsys, json=True)
+    named = [c for c in json.loads(out)["checks"] if any("release_waiting_after" in l for l in c["lines"])]
+    assert code == 0 and [c["name"] for c in named] == ["settings"] and named[0]["ok"] is True
+    assert len(named[0]["lines"]) == 1
+
+
+def test_doctor_without_the_key_says_nothing_about_it(capsys, monkeypatch):
+    _models_ok(monkeypatch)
+    _, out = run(capsys)
+    assert "release_waiting_after" not in out
+    _, js = run(capsys, json=True)
+    assert next(c for c in json.loads(js)["checks"] if c["name"] == "settings") == {"name": "settings", "ok": True, "lines": []}
+
+
+def test_doctor_agents_check_names_bad_agent(monkeypatch):
+    d = C.CONFIG_DIR / "agents" / "my-closer"
+    d.mkdir(parents=True)
+    (d / "agent.md").write_text("---\nskills: []\nconnector_roles: [crm]\nmodel: null\napproval: [send]\npod: null\n---\nx\n")
+    monkeypatch.setattr("pl.skills.builtin_names", lambda: [])
+    monkeypatch.setattr("pl.skills.scan", lambda: [])
+    ok, lines = doctor.agents()
+    assert not ok
+    assert lines == ["my-closer: unknown connector role crm"]
+
+
+OUTWARD_PIPELINE = '''[pipeline]
+name = "sales"
+columns = ["Draft", "Followup"]
+
+[pipeline.stages.reply]
+column = "Draft"
+done = "Draft"
+skill = "pl-stage"
+outward = true
+gate = "owner"
+'''
+FOLLOWUP_STAGE = '''
+[pipeline.stages.followup]
+column = "Followup"
+done = "Followup"
+skill = "pl-stage"
+outward = true
+gate = "owner"
+agent = "closer"
+'''
+
+
+def _outward_agents(agent_line, extra=""):
+    (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE + agent_line + extra)
+    C.load("t")
+    d = C.CONFIG_DIR / "agents" / "closer"
+    d.mkdir(parents=True)
+    (d / "agent.md").write_text("---\nskills: []\nconnector_roles: []\nmodel: null\napproval: []\npod: null\n---\nx\n")
+
+
+def _outward_warning(stage="reply", agent="closer"):
+    return (f"warning: stage {stage} is outward but agent {agent} does not hold send for approval; "
+            "the stage's outward gate still applies")
+
+
+def test_doctor_warns_outward_stage_agent_without_send_exit_unchanged(capsys):
+    _outward_agents('agent = "closer"\n')
+    code, out = run(capsys)
+    assert _outward_warning() in out
+    (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE)
+    C.load("t")
+    assert run(capsys)[0] == code
+
+
+def test_doctor_checks_the_loaded_agent_not_the_builtin(capsys, monkeypatch):
+    (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE + 'agent = "sales-follow-up"\n')
+    C.load("t")
+    loaded = {"sales-follow-up": {"approval": []}}
+    monkeypatch.setattr("pl.agent_defs.load", lambda: loaded)
+    _, out = run(capsys)
+    assert _outward_warning(agent="sales-follow-up") in out
+
+
+def test_doctor_json_warning_in_agents_lines_ok_true(capsys):
+    _outward_agents('agent = "closer"\n')
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "agents")
+    assert check["ok"] is True and check["lines"] == [_outward_warning()]
+
+
+def test_doctor_two_matching_stages_two_lines(capsys):
+    _outward_agents('agent = "closer"\n', FOLLOWUP_STAGE)
+    _, out = run(capsys)
+    assert sum("is outward but" in ln for ln in out.splitlines()) == 2
+
+
+def test_doctor_unknown_stage_agent_no_outward_warning(capsys):
+    _outward_agents('agent = "nope"\n')
+    _, out = run(capsys)
+    assert "is outward but" not in out

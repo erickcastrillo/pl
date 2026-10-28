@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import time
 
 from pl import config as C
@@ -12,9 +13,18 @@ from pl.util import age
 
 ESCALATE = (3600, 4 * 3600)   # seconds after first seen: the two escalations
 STEP = {1: "1 h", 2: "4 h"}
+URGENT = {"high", "error"}    # these bypass quiet hours when they open
 KEEP = 7 * 86400              # a resolved alert stays this long for pl alerts --all
-FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards"}
+FIELDS = {"severity", "title", "fix", "first_seen", "last_seen", "count", "level", "acked", "resolved_at", "duration", "cards", "tried"}
 _clock = time.time
+# these keys notify as agent_waiting, every other key as alert_opened
+WAITING = ("permission_wait:", "agent_waiting:")
+# transitional: these call sites still notify themselves; plan 51 slices 6-8 empty it
+DIRECT = (
+    "stalled:",
+    "ci_not_running:",
+    "rework_waiting:",
+)
 
 
 def _path():
@@ -68,22 +78,48 @@ def _step(a, now):
     return None if a.get("acked") else STEP[level]
 
 
+def _notify(key, why, severity, title, fix):
+    """Tell the owner of an alert that opened or escalated, under agent_waiting or alert_opened. It never fails the alert."""
+    try:
+        from pl import notifications   # imported here: the alerts module stays light
+        if key.startswith(WAITING):
+            notifications.send("agent_waiting", headline(why, title), fix)
+        else:
+            notifications.send("alert_opened", f"{severity}: {headline(why, title)}", fix)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _offer(key, why, title):
-    """Queue an alert that opened or escalated for the Assistant and chat. It never fails the alert."""
+    """Queue an alert that opened or escalated for the Assistant, and for chat when its site still notifies itself.
+    It never fails the alert."""
     hl = headline(why, title)
     try:
         from pl import assistant   # imported here: the alerts module stays light
         assistant.offer(key, hl)
     except (SystemExit, Exception):  # noqa: BLE001 - a tmux refusal raises SystemExit
         pass
+    if not key.startswith(DIRECT):
+        return
     try:
+        from pl import notifications
         from pl.manager import machine_dir
+        if notifications.holding():   # the site's own notify put it in the held file
+            return
         mdir = machine_dir()
         mdir.mkdir(parents=True, exist_ok=True, mode=0o700)
         outbox = mdir / "chat-outbox.jsonl"
         fd = os.open(outbox, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as f:
             f.write(json.dumps({"key": key, "headline": hl}) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _urgent(on):
+    try:
+        from pl import notifications
+        notifications.urgent(on)
     except Exception:  # noqa: BLE001
         pass
 
@@ -107,7 +143,7 @@ def _logged(kind, **detail):
         pass
 
 
-def open(key, severity, title, fix, cards=()):
+def open(key, severity, title, fix, cards=(), tried=None):
     """Open the alert, or count one more sighting. Returns what to notify: "open", "1 h", "4 h", or None."""
     now, cards = _clock(), [str(c) for c in cards]
     with _locked() as d:
@@ -115,15 +151,25 @@ def open(key, severity, title, fix, cards=()):
         if not _live(a):
             d[key] = {"severity": severity, "title": title, "fix": fix, "first_seen": now, "last_seen": now,
                       "count": 1, "level": 0, "cards": cards}
+            if tried:
+                d[key]["tried"] = tried
             why = "open"
         else:
+            if a.get("acked") and (a.get("severity") != severity or sorted(a.get("cards") or []) != sorted(cards)):
+                a.pop("acked")
+                a["level"] = 0
             a.update(severity=severity, title=title, fix=fix, cards=cards, last_seen=now,
                      count=int(a.get("count") or 0) + 1)
+            if tried:
+                a["tried"] = tried
             why = _step(a, now)
+    _urgent(bool(why) and severity in URGENT)
     if why == "open":
         _logged("alert_opened", key=key, severity=severity, title=title, cards=cards)
     if why:
         _offer(key, why, title)
+        if not key.startswith(DIRECT):
+            _notify(key, why, severity, title, fix)
     return why
 
 
@@ -161,11 +207,14 @@ def sweep(prefix, active, send):
                 a.update(resolved_at=now, duration=now - a["first_seen"])
                 closed.append((key, a["title"], int(a["duration"])))
             elif why := _step(a, now):
-                out.append((key, why, a["title"], a["fix"]))
+                out.append((key, why, a["severity"], a["title"], a["fix"]))
     for key, title, duration in closed:
         _logged("alert_resolved", key=key, title=title, duration=duration)
-    for key, why, title, fix in out:
-        send(headline(why, title), fix)
+    for key, why, severity, title, fix in out:
+        if key.startswith(DIRECT):
+            send(headline(why, title), fix)
+        else:
+            _notify(key, why, severity, title, fix)
         _offer(key, why, title)
 
 
@@ -181,6 +230,76 @@ def listing(all=False):
     """Open alerts (all: resolved ones too), high severity first, then oldest first."""
     rows = [{"key": k, **v} for k, v in _load().items() if all or _live(v)]
     return sorted(rows, key=lambda a: (bool(a.get("resolved_at")), a.get("severity") != "high", a.get("first_seen") or 0))
+
+
+def shown():
+    """Open, unacknowledged alerts, newest first (the Alerts tab and header)."""
+    return sorted((r for r in listing() if not r.get("acked")), key=lambda a: -(a.get("first_seen") or 0))
+
+
+WATCHDOG = ("stalled", "reconcile_failed", "queued_write_failed", "rework_waiting", "worktree_removed")
+
+
+def _tried(kind, a):
+    """What pl did about a watchdog alert: the text its producer stored, else a default for the kind."""
+    if a.get("tried"):
+        return a["tried"]
+    title = a.get("title") or ""
+    if kind == "reconcile_failed":
+        return title.partition("could not ")[2] or "a board write"
+    if kind == "rework_waiting":
+        m = re.search(r"(\d+) min", title)
+        return f"waited {m.group(1) if m else int((_clock() - a['first_seen']) // 60)} min for a slot"
+    return {"stalled": "nothing yet", "queued_write_failed": "queued, replay failed",
+            "worktree_removed": "removed outside pl"}[kind]
+
+
+def needs_you(now=None):
+    """The open watchdog alerts as rows for "Needs you", oldest first; no title or fix, which can hold card text."""
+    now = _clock() if now is None else now
+    rows = [{"card": (a.get("cards") or [""])[0], "kind": a["key"].split(":", 1)[0], "opened_at": a["first_seen"],
+             "age_seconds": int(now - a["first_seen"]), "tried": _tried(a["key"].split(":", 1)[0], a),
+             "acked": bool(a.get("acked")), "key": a["key"]}
+            for a in listing() if a["key"].split(":", 1)[0] in WATCHDOG]
+    return sorted(rows, key=lambda r: r["opened_at"])
+
+
+WATCHES = {
+    "agent_unknown": "stages naming an unknown agent",
+    "account_parked": "parked accounts",
+    "accounts_all_out": "accounts out of credits",
+    "api_error": "agents stopped by API errors",
+    "card_unreadable": "cards with a broken pl metadata block",
+    "chat_unknown": "unknown chat users",
+    "connector_new_place": "connector sign-ins from a new place",
+    "connector_signin": "connector sign-ins",
+    "connector_tools": "connector tools",
+    "dep_broken": "unmerged prerequisites",
+    "exited_window": "agents that finished without moving their card",
+    "foreign_window": "tmux windows pl did not start",
+    "gh_hold": "the GitHub budget hold",
+    "loop_dead": "loops that burn no tokens",
+    "loop_failed": "loops that keep failing",
+    "loop_stale": "loops that stopped firing",
+    "main_checkout_dirty": "stray changes in the main checkout",
+    "near_cap": "cards near their token or time cap",
+    "permission_wait": "waiting agents",
+    "pr_person": "PRs that need a person",
+    "pr_waiting": "PRs waiting over 24 h",
+    "send_spike": "connector send spikes",
+    "stage_failed": "stages whose agent died",
+    "stage_unsafe": "unsafe stage settings",
+    "stalled": "stage agents idle or finished while their card has not moved",
+    "tmp_full": "temp folder space or inodes",
+    "trigger_cap": "triggers at their cap",
+    "trust": "folders an account does not trust",
+    "worktree": "run worktrees git could not make",
+}
+
+
+def watching():
+    """What pl checks for, as one phrase list for the empty Alerts tab."""
+    return ", ".join(dict.fromkeys(WATCHES.values()))
 
 
 def cmd_alerts(a):

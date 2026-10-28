@@ -11,12 +11,14 @@ The rules, from most to least protected:
 - periodic reads (the dispatcher's pass, the console's refresh) stop below PERIODIC of the limit, and below LOW of the
   limit each profile keeps to its fair share: the limit split evenly among the profiles that spent points this window.
 A stop lasts until GitHub's reset: before it the points left only go down, so an old reading is never too strict.
-No subprocess here: github._gh calls check() before and record() after each gh call.
+No subprocess here: github._gh calls check() before and record() after each gh call; other modules pass their own
+runner to gh(), which records after the call.
 """
 import fcntl
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -41,8 +43,8 @@ PERIODIC_ROLES = ("dispatcher", "console")
 ROLE = {"name": "command"}   # who this process is: "dispatcher", "console", or the pl command it runs ("pl card")
 
 
-def set_role(name):
-    ROLE["name"] = name
+def set_role(name, profile=None):
+    ROLE["name"], ROLE["profile"] = name, profile
 
 
 def _dir():
@@ -161,14 +163,14 @@ def ledger(acct=None):
     return _load(_path(acct))
 
 
-def record(points=1, rate=None):
+def record(points=1, rate=None, sub=None, acct=None):
     """Count points spent by this profile and role; rate is a GraphQL rateLimit object ({cost, remaining, resetAt,
     limit}) when the answer carried one, and then its cost is what was spent. Without one, an estimate counts only
     against a reading of this window. A failure to write never fails the call."""
-    prof, role = C.PROFILE_NAME or "-", ROLE["name"]
+    prof, role = ROLE.get("profile") or C.PROFILE_NAME or "-", ROLE["name"]
     try:
         with _locked():
-            led = ledger()
+            led = ledger(acct)
             if isinstance(rate, dict) and isinstance(rate.get("remaining"), int):
                 reset = _epoch(rate.get("resetAt")) or led.get("reset")
                 points = int(rate.get("cost") or 0)
@@ -179,36 +181,115 @@ def record(points=1, rate=None):
             else:
                 return   # no reading this window: nothing to count against yet
             if led.get("window") != led.get("reset") or (led.get("reset") or 0) <= _clock():
-                led.update(window=led.get("reset"), spent={}, by={})
+                led.update(window=led.get("reset"), spent={}, by={}, subs={}, seen={}, rest={})
             spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
             spent[prof] = spent.get(prof, 0) + points
             by[f"{prof} {role}"] = by.get(f"{prof} {role}", 0) + points
-            _write(_path(), led)
+            if sub:
+                subs = led.setdefault("subs", {}).setdefault(f"{prof} {role}", {})
+                subs[sub] = subs.get(sub, 0) + points
+            _write(_path(acct), led)
     except OSError:
         pass
 
 
-def stale():
+def _rate(out):
+    """The rateLimit object in a gh answer, or None."""
+    if not isinstance(out, str) or not out.strip():
+        return None
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return None
+    if not isinstance(d, dict):
+        return None
+    return d.get("rateLimit") or (d.get("data") or {}).get("rateLimit")
+
+
+def _count(args, out, folder=None):
+    from pl import ghwrap   # lazy: ghwrap imports this module
+    from pl.trackers import github
+    if ghwrap.kind(args) != "graphql" or github._is_search(args):
+        return
+    words = [a for a in args if re.fullmatch(r"[a-z][a-z-]*", a)]
+    record(ghwrap.ESTIMATE, rate=_rate(out), sub=" ".join(words[:2]) or None, acct=account(folder) if folder else None)
+
+
+def gh(run, args, **kw):
+    """Run `gh ARGS` through the caller's own runner and count the call; the caller gets what the runner returned or raised."""
+    r = None
+    try:
+        r = run(["gh", *args], **kw)
+        return r
+    finally:
+        try:
+            _count(args, getattr(r, "stdout", None), (kw.get("env") or {}).get("GH_CONFIG_DIR"))
+        except Exception:
+            pass   # counting never changes what the caller's gh call returned
+
+
+def tracker_gh(args):
+    """The tracker's own gh runner (timeout, env, SystemExit messages) with the call counted."""
+    from pl.trackers import github
+    return gh(lambda argv, **kw: github._run(argv[1:]), args)
+
+
+def record_agent(acct, caller, sub, points, remaining, reset, rest=False):
+    """Count an agent's gh call under its caller key and subcommand, against the reading taken after it; `rest` also counts it as answered through REST. A reading of
+    another window starts the counts over. A failure to write never fails the call."""
+    try:
+        with _locked():
+            led = ledger(acct)
+            if led.get("window") != reset or (led.get("reset") or 0) <= _clock():
+                led.update(window=reset, spent={}, by={}, subs={}, seen={}, rest={})
+            led.update(remaining=remaining, reset=reset, at=_clock(), limit=led.get("limit") or 5000)
+            prof = C.PROFILE_NAME or "-"
+            spent, by = led.setdefault("spent", {}), led.setdefault("by", {})
+            spent[prof] = spent.get(prof, 0) + points
+            by[caller] = by.get(caller, 0) + points
+            subs = led.setdefault("subs", {}).setdefault(caller, {})
+            subs[sub] = subs.get(sub, 0) + points
+            if rest:
+                counts = led.setdefault("rest", {}).setdefault(caller, {})
+                counts[sub] = counts.get(sub, 0) + 1
+            _write(_path(acct), led)
+    except OSError:
+        pass
+
+
+def stale(acct=None):
     """True when the ledger holds a reading of this window that is older than STALE seconds."""
-    led, now = ledger(), _clock()
+    led, now = ledger(acct), _clock()
     return (led.get("reset") or 0) > now and now - (led.get("at") or 0) > STALE
 
 
-def refresh(remaining, reset):
+def _top_callers(led, n=3):
+    """The n callers that spent the most since the previous reading, as [(caller, points)]."""
+    seen = led.get("seen") or {}
+    gained = ((k, v - seen.get(k, 0)) for k, v in (led.get("by") or {}).items())
+    return sorted(((k, v) for k, v in gained if v > 0), key=lambda kv: (-kv[1], kv[0]))[:n]
+
+
+def refresh(remaining, reset, acct=None):
     """Take GitHub's own reading (free) over the ledger's, spending nothing. A gap of more than 10% of the limit is
     logged, with where this process signs in (never a token), so a second token can be traced."""
     try:
         with _locked():
-            led = ledger()
+            led = ledger(acct)
             limit = led.get("limit") or 5000
             if isinstance(led.get("remaining"), int) and abs(led["remaining"] - remaining) > 0.1 * limit:
+                top = _top_callers(led)
                 events.emit("github_budget_gap", None, ledger=led["remaining"], github=remaining, role=ROLE["name"],
                             profile=C.PROFILE_NAME, folder=_folder(),
-                            token_env=bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")))
+                            token_env=bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")),
+                            top_callers=[{"caller": k, "points": v} for k, v in top],
+                            message=f"pl {led['remaining']} vs GitHub {remaining}; top callers: "
+                                    + (", ".join(f"{k} {v}" for k, v in top) or "none recorded"))
             if led.get("window") != reset:
-                led.update(window=reset, spent={}, by={})
+                led.update(window=reset, spent={}, by={}, subs={}, seen={}, rest={})
+            led["seen"] = dict(led.get("by") or {})
             led.update(limit=limit, remaining=remaining, reset=reset, at=_clock())
-            _write(_path(), led)
+            _write(_path(acct), led)
     except OSError:
         pass
 
@@ -219,7 +300,7 @@ def exhausted(until):
         with _locked():
             led = ledger()
             if (led.get("reset") or 0) <= _clock():   # a new window: what was spent before it no longer counts
-                led.update(spent={}, by={})
+                led.update(spent={}, by={}, subs={}, seen={}, rest={})
             led.update(remaining=0, reset=until, window=until, at=_clock(), limit=led.get("limit") or 5000)
             _write(_path(), led)
     except OSError:
@@ -232,9 +313,9 @@ def fair_share(led):
     return int((led.get("limit") or 5000) / n)
 
 
-def check(kind="read"):
+def check(kind="read", acct=None):
     """None when this call may go ahead, else (until, why). kind "write" for a change on GitHub, else "read"."""
-    led, now = ledger(), _clock()
+    led, now = ledger(acct), _clock()
     rem, lim, reset = led.get("remaining"), led.get("limit") or 5000, led.get("reset") or 0
     if not isinstance(rem, int):
         return None
@@ -325,6 +406,40 @@ def _github_side(acct, led, fresh, current):
     return side
 
 
+def callers(led, fresh, mine):
+    """([(caller, points)] most first, points spent outside pl or None) for one ledger. `fresh` is GitHub's reading
+    (remaining, reset) of this process's token, or why there is none; `mine` says the ledger is that token's."""
+    reading = mine and isinstance(fresh, tuple)
+    rows = sorted(((k, v) for k, v in ((led or {}).get("by") or {}).items() if v > 0), key=lambda kv: (-kv[1], kv[0]))
+    if reading and led and fresh[1] != led.get("window"):
+        rows = []   # the window reset since these records
+    if not reading:
+        return rows, None
+    limit = (led or {}).get("limit") or 5000
+    return rows, max(0, (limit - fresh[0]) - sum(v for _, v in rows))
+
+
+def _outside_line(outside):
+    return "  outside pl: no GitHub reading" if outside is None else f"  outside pl {outside}"
+
+
+def report_json(rows, fresh, current):
+    """`pl usage --github --json`: {"accounts": [...]} with the same callers and outside-pl points as the text."""
+    accts = list(rows) + ([] if any(a == current for a, _ in rows) else [(current, None)])
+    out = []
+    for acct, led in accts:
+        mine = acct == current
+        by, outside = callers(led, fresh, mine)
+        reading = fresh if mine and isinstance(fresh, tuple) else None
+        out.append({"account": _label(acct), "limit": (led or {}).get("limit") or 5000,
+                    "remaining": reading[0] if reading else (led or {}).get("remaining"),
+                    "reset": reading[1] if reading else (led or {}).get("reset"),
+                    "callers": [{"caller": k, "points": v} for k, v in by], "outside_pl": outside,
+                    "github": {"remaining": reading[0], "reset": reading[1]} if reading else None,
+                    "why": None if reading else _github_side(acct, led, fresh, current).removeprefix("GitHub: ")})
+    return {"accounts": out}
+
+
 def report(rows=None, fresh=None, current=None):
     """`pl usage --github`: every GitHub user's budget this hour, per profile and per caller. With `fresh` (GitHub's own
     reading of `current`'s token, or why there is none), each line shows pl's reading beside GitHub's."""
@@ -334,6 +449,7 @@ def report(rows=None, fresh=None, current=None):
     out = []
     if fresh is not None and all(acct != current for acct, _ in rows):
         out.append(f"{_label(current)}: pl: no reading yet | {_github_side(current, None, fresh, current)}")
+        out.append(_outside_line(callers(None, fresh, True)[1]))
     for acct, led in rows:
         reset = time.strftime("%H:%M", time.localtime(led["reset"]))
         age = int(_clock() - (led.get("at") or 0))
@@ -343,7 +459,8 @@ def report(rows=None, fresh=None, current=None):
         out.append(head if fresh is None else f"{head} | {_github_side(acct, led, fresh, current)}")
         for p, (v, share) in profile_rows(led).items():
             out.append(f"  {p:<20} spent {v:>5}   fair share {share}")
-        by = sorted((led.get("by") or {}).items(), key=lambda kv: -kv[1])
-        if by:
-            out.append("  by caller: " + ", ".join(f"{k} {v}" for k, v in by[:8]))
+        by, outside = callers(led, fresh, acct == current)
+        out.extend(f"  {k} {v}" for k, v in by)
+        if fresh is not None and acct == current:
+            out.append(_outside_line(outside))
     return "\n".join(out)

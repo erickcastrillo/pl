@@ -17,6 +17,7 @@ from pl import config as C
 from pl.trackers import github
 from pl.tui import settings
 from pl.tui.app import PlApp
+from tui_wait import settle
 
 CONFIG = """# my work profile
 tmux_session = "pl-work"
@@ -165,12 +166,6 @@ def screen_text(app):
     return console.export_text()
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
-
-
 @pytest.fixture
 def gh_signed_in(monkeypatch):
     monkeypatch.setattr(github, "_gh", lambda args: "github.com\n  ✓ Logged in to github.com account octo (keyring)\n")
@@ -179,9 +174,9 @@ def gh_signed_in(monkeypatch):
 async def test_no_profile_settings_are_read_only(gh_signed_in):
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("settings")
-        await settle(pilot)
+        await settle(pilot, lambda: 'no profile loaded: settings are read-only' in screen_text(app), "the read-only notice")
         assert "no profile loaded: settings are read-only" in screen_text(app)
         inputs = [i for i in app.query(Input) if not i.id.endswith("-input")]   # the Assistant and Brain tabs have their own prompt boxes
         assert inputs and all(i.disabled for i in inputs)
@@ -194,9 +189,9 @@ async def test_connections_shows_the_subscription_line(work, gh_signed_in):
     C.GH_CONFIG_DIR = Path("/g/gh-work")             # the path is shown; nothing inside it is read (it need not exist)
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("settings")
-        await settle(pilot)
+        await settle(pilot, lambda: '(gh folder /g/gh-work)' in ' '.join(screen_text(app).split()), "the gh folder line")
         text = " ".join(screen_text(app).split())
         assert settings.SUBSCRIPTION_LINE in text
         assert "Logged in to github.com account octo" in text
@@ -207,13 +202,15 @@ async def test_connections_shows_the_subscription_line(work, gh_signed_in):
 async def test_settings_screen_saves_only_the_edited_field(work, gh_signed_in):
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("settings")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query(settings.SettingsView) and app.query_one(settings.SettingsView).fields, "the settings fields")
         view = app.query_one(settings.SettingsView)
         wid = next(w for w, (p, _, _) in view.fields.items() if p == ("dispatch", "max_runs"))
         app.query_one(f"#{wid}", Input).value = "6"
         view.action_save()
+        await settle(pilot, lambda: C.DISPATCH['max_runs'] == 6, "the saved max_runs")
+        # the tab-activated message is still in flight; quitting before it is handled raises
         await settle(pilot)
     after = doc_of(work)
     assert after["dispatch"]["max_runs"] == 6 and C.DISPATCH["max_runs"] == 6
@@ -223,8 +220,10 @@ async def test_a_stage_with_an_accounts_pool_shows_the_pool_instead_of_one_accou
     C.STAGES = {"run": {"accounts": ["main", "agy"]}}
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("settings")
+        await settle(pilot, lambda: app.query('#pool-run'), "the pool line")
+        # the tab-activated message is still in flight; quitting before it is handled raises
         await settle(pilot)
         view = app.query_one(settings.SettingsView)
         paths = [p for p, _, _ in view.fields.values()]
@@ -243,15 +242,13 @@ async def test_loops_tab_shows_the_selected_loops_screen(monkeypatch):
     monkeypatch.setattr(agents, "pane_tail", lambda pane, n: [f"SCREEN OF {pane} ({n} lines)"])
     app = PlApp(snapshot_provider=lambda: app_data(rows), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("loops")
-        await settle(pilot)
-        await pilot.press("down")   # row 0 is "+ New loop"
-        await settle(pilot)
+        await settle(pilot, lambda: 'SCREEN OF %1 (40 lines)' in screen_text(app), "the first loop's screen")
         text = screen_text(app)
         assert "SCREEN OF %1 (40 lines)" in text and "every 30 minutes" in text
         await pilot.press("down")
-        await settle(pilot)
+        await settle(pilot, lambda: 'SCREEN OF %2 (40 lines)' in screen_text(app), "the second loop's screen")
         assert "SCREEN OF %2 (40 lines)" in screen_text(app)
 
 
@@ -261,11 +258,12 @@ async def test_pressing_f_through_every_filter_survives_a_dict_valued_field(work
                                               + json.dumps({"kind": "moved", "to": ["a"], "loop": {"y": 1}}) + "\n")
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("activity")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query_one('#activity-table').row_count, "the activity rows")
         for _ in range(6):
             await pilot.press("f")
+            # a filter press that must not crash has no state to wait for
             await settle(pilot)
         assert app.is_running
 
@@ -294,11 +292,11 @@ async def test_y_copies_the_full_untruncated_event(work, monkeypatch):
     copied, piped = await open_activity(work, monkeypatch, [EVENT], {"pbcopy", "xclip"})
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("activity")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query_one('#activity-table').row_count, "the activity rows")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: copied, "the copy")
         assert copied == [WANT]
         assert piped == [(["pbcopy"], WANT)]      # the first copier on PATH only
 
@@ -307,11 +305,11 @@ async def test_y_with_no_copier_on_path_still_uses_the_terminal(work, monkeypatc
     copied, piped = await open_activity(work, monkeypatch, [EVENT], set())
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("activity")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query_one('#activity-table').row_count, "the activity rows")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: copied, "the copy")
         assert copied == [WANT] and piped == []
 
 
@@ -321,11 +319,11 @@ async def test_y_with_no_event_says_to_select_one(work, monkeypatch):
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((msg, kw)))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("activity")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query('#activity-table'), "the activity tab")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: notes, "the select-an-event note")
         assert copied == [] and piped == []
         assert ("select an event first", {}) in [(m, {}) for m, _ in notes]
 
@@ -336,11 +334,11 @@ async def test_y_notifies_the_first_60_characters_as_plain_text(work, monkeypatc
     app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
     monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append((msg, kw)))
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("activity")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query_one('#activity-table').row_count, "the activity rows")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: notes, "the copy note")
         assert (f"copied: {WANT[:60]}", False) in [(m, kw.get("markup")) for m, kw in notes]
 
 
@@ -523,10 +521,11 @@ def test_token_reference_never_expands_into_the_file_or_the_screen(work, monkeyp
     async def go():
         app = PlApp(snapshot_provider=lambda: app_data([]), interval=3600)
         async with app.run_test(size=(176, 48)) as pilot:
-            await settle(pilot)
+            await settle(pilot, lambda: app.data is not None, "the first board read")
             app.action_tab("settings")
-            await settle(pilot)
+            await settle(pilot, lambda: app.query(settings.SettingsView), "the settings view")
             app.query_one(settings.SettingsView).action_save()
+            # saving with a token reference has no new state, only an absence to check
             await settle(pilot)
             return screen_text(app)
     import asyncio

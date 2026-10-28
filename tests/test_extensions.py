@@ -15,6 +15,8 @@ from pl import config as C
 from pl import harnesses
 from pl.tui import extensions
 from pl.tui.app import PlApp
+from pl.tui.chrome import NEW_ROW
+from tui_wait import settle
 
 SKILL = "---\nname: {n}\ndescription: {d}\n---\nBody\n"
 
@@ -392,26 +394,24 @@ def screen_text(app):
     return console.export_text()
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
-
-
 class Host(App):
     def compose(self):
         yield extensions.ExtensionsView()
 
 
+def scanned(app):
+    return rows(app, "ext-skills")
+
+
 def rows(app, table):
     t = app.query_one(f"#{table}", DataTable)
-    return [str(t.get_row_at(i)[0]) for i in range(t.row_count)]
+    return [str(t.get_row_at(i)[0]) for i in range(t.row_count) if t.coordinate_to_cell_key((i, 0)).row_key.value != NEW_ROW]
 
 
 async def test_screen_lists_all_three_kinds_and_repeats_the_subscription_line(accounts):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: "AAAA" in screen_text(app), "the selected skill's detail")
         assert rows(app, "ext-skills") == ["alpha", "beta"]
         assert rows(app, "ext-commands") == ["deploy"]
         assert len(rows(app, "ext-hooks")) == 1
@@ -423,9 +423,9 @@ async def test_screen_lists_all_three_kinds_and_repeats_the_subscription_line(ac
 async def test_unsupported_kinds_say_so(accounts):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: scanned(app), "the first scan")
         app.query_one(extensions.ExtensionsView).show("c")
-        await settle(pilot)
+        await settle(pilot, lambda: 'not supported by codex yet' in ' '.join(screen_text(app).split()), "the codex notice")
         assert "not supported by codex yet" in " ".join(screen_text(app).split())
         assert rows(app, "ext-commands") == ["review"]
 
@@ -433,13 +433,13 @@ async def test_unsupported_kinds_say_so(accounts):
 async def test_n_asks_for_a_name_and_creates_the_skill(accounts):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: scanned(app), "the first scan")
         app.query_one("#ext-skills").focus()
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(Input), "the name form")
         app.screen.query_one(Input).value = "fresh-skill"
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: 'fresh-skill' in rows(app, 'ext-skills'), "the new skill row")
         assert (accounts["a"] / "skills/fresh-skill/SKILL.md").exists()
         assert "fresh-skill" in rows(app, "ext-skills")
 
@@ -447,12 +447,13 @@ async def test_n_asks_for_a_name_and_creates_the_skill(accounts):
 async def test_n_with_a_bad_name_creates_nothing_and_keeps_running(accounts):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: scanned(app), "the first scan")
         app.query_one("#ext-skills").focus()
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(Input), "the name form")
         app.screen.query_one(Input).value = "../x"
         await pilot.press("enter")
+        # the bad name creates nothing, so there is no state to wait for
         await settle(pilot)
         assert app.is_running and app._exception is None
         assert not (accounts["a"] / "x").exists() and not (accounts["a"].parent / "x").exists()
@@ -472,10 +473,11 @@ async def test_e_opens_the_selected_file_in_the_editor_without_a_shell(accounts,
     monkeypatch.setattr(Host, "suspend", fake_suspend)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: scanned(app), "the first scan")
         app.query_one("#ext-skills").focus()
+        app.query_one("#ext-skills", DataTable).move_cursor(row=1)   # row 0 is "+ New skill"
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: calls, "the editor to be started")
         assert app.is_running and app._exception is None
     assert suspended == [1]
     argv, kw = calls[0]
@@ -486,27 +488,29 @@ async def test_e_opens_the_selected_file_in_the_editor_without_a_shell(accounts,
 async def test_r_rescans_and_y_copies_to_another_account(accounts):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: scanned(app), "the first scan")
         make_skill(accounts["a"], "gamma")
         await pilot.press("r")
-        await settle(pilot)
+        await settle(pilot, lambda: 'gamma' in rows(app, 'ext-skills'), "the rescan to list gamma")
         assert "gamma" in rows(app, "ext-skills")
         app.query_one("#ext-skills").focus()
+        app.query_one("#ext-skills", DataTable).move_cursor(row=1)
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(OptionList), "the account picker")
         picker = app.screen.query_one(OptionList)
         assert picker.option_count == 1            # only b: same harness, not itself
         await pilot.press("enter")
-        await settle(pilot)
+        await settle(pilot, lambda: (accounts['b'] / 'skills/alpha/SKILL.md').exists(), "the copy to account b")
         assert (accounts["b"] / "skills/alpha/SKILL.md").exists()
 
 
 async def test_y_on_a_hook_copies_nothing(accounts):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: scanned(app), "the first scan")
         app.query_one("#ext-hooks").focus()
         await pilot.press("y")
+        # y on a hook copies nothing, so there is no state to wait for
         await settle(pilot)
         assert app.is_running and not list(accounts["b"].iterdir())
 
@@ -523,16 +527,129 @@ async def test_settings_mounts_the_section_and_warns_about_a_missing_skill(accou
             "daily": {"specs": [0] * 14, "plans": [0] * 14}, "pr_activity": {"opened": [], "merged": []}}
     app = PlApp(snapshot_provider=lambda: data, interval=3600)
     async with app.run_test(size=(176, 100)) as pilot:   # tall: long temporary paths wrap the account lines above
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         app.action_tab("settings")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query('#settings'), "the settings tab")
         assert not app.query_one("#settings").query(extensions.ExtensionsView)
         app.action_tab("extensions")
-        await settle(pilot)
+        await settle(pilot, lambda: app.query_one('#extensions').query(extensions.ExtensionsView), "the extensions section")
         assert app.query_one("#extensions").query(extensions.ExtensionsView)
         app.action_tab("settings")
-        await settle(pilot)
+        await settle(pilot, lambda: '/missing-skill is not a skill or command of account a' in ' '.join(screen_text(app).split()), "the missing-skill warning")
         text = " ".join(screen_text(app).split())
         assert "/missing-skill is not a skill or command of account a" in text
         warns = [str(w.render()) for w in app.query(".stage-warning") if w.display]
         assert len(warns) == 1 and "missing-skill" in warns[0]
+
+
+# ---------- the "+ New" rows ----------
+
+def _footer_keys(app):
+    return {b.description for _, (_, b, enabled, _) in app.screen.active_bindings.items() if enabled}
+
+
+def _first(app, table):
+    return app.query_one(f"#{table}", DataTable).get_row_at(0)[0]
+
+
+async def test_skills_and_commands_tables_start_with_a_new_row(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        for table, text in (("ext-skills", "+ New skill"), ("ext-commands", "+ New command")):
+            assert _first(app, table).plain == text and "dim" in str(_first(app, table).style)
+
+
+async def test_hooks_new_row_is_a_hint_and_opens_no_form(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        assert _first(app, "ext-hooks").plain == "+ New hook: edit settings.json"
+        t = app.query_one("#ext-hooks", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await pilot.press("enter")
+        await settle(pilot, lambda: app._notifications, "the hint")
+        assert not isinstance(app.screen, extensions.NameScreen)
+        assert [n.message for n in app._notifications] == ["hooks live in settings.json: select one and press e"]
+
+
+async def test_unsupported_tables_get_no_new_row(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        app.query_one(extensions.ExtensionsView).show("c")
+        await settle(pilot, lambda: 'not supported by codex yet' in ' '.join(screen_text(app).split()), "the codex notice")
+        assert app.query_one("#ext-skills", DataTable).row_count == 0
+        assert _first(app, "ext-commands").plain == "+ New command"
+
+
+@pytest.mark.parametrize("table,kind,name", [("ext-skills", "skills", "fresh-skill"), ("ext-commands", "commands", "fresh-cmd")])
+async def test_enter_on_a_new_row_opens_the_name_form_and_creates_through_create(accounts, monkeypatch, table, kind, name):
+    made = []
+    real = extensions.create
+    monkeypatch.setattr(extensions, "create", lambda *a: made.append(a) or real(*a))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        t = app.query_one(f"#{table}", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        await pilot.press("enter")
+        await settle(pilot, lambda: isinstance(app.screen, extensions.NameScreen), "the name form")
+        assert isinstance(app.screen, extensions.NameScreen)
+        app.screen.query_one(Input).value = name
+        await pilot.press("enter")
+        await settle(pilot, lambda: name in rows(app, table), "the new row")
+        assert [(a[1], a[2], a[3]) for a in made] == [("a", kind, name)]
+        assert name in rows(app, table) and _first(app, table).plain.startswith("+ New")
+
+
+async def test_e_and_y_on_a_new_row_say_nothing_selected(accounts, monkeypatch):
+    calls = []
+    monkeypatch.setattr(extensions, "_run", lambda argv, **kw: calls.append(argv))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        t = app.query_one("#ext-skills", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        # moving the cursor posts no message to wait for
+        await settle(pilot)
+        for key in ("e", "y"):
+            await pilot.press(key)
+            await settle(pilot, lambda: app._notifications, "the nothing-selected notice")
+            assert len(app.screen_stack) == 1
+            assert [n.message for n in app._notifications] == ["nothing selected"]
+            app.clear_notifications()
+        assert calls == []
+
+
+async def test_footer_follows_the_focused_table(accounts):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        app.query_one("#ext-skills").focus()
+        await settle(pilot, lambda: 'new skill' in _footer_keys(app), "the skills footer")
+        assert "new skill" in _footer_keys(app) and "new command" not in _footer_keys(app)
+        app.query_one("#ext-commands").focus()
+        await settle(pilot, lambda: 'new command' in _footer_keys(app), "the commands footer")
+        assert "new command" in _footer_keys(app) and "new skill" not in _footer_keys(app)
+        app.query_one("#ext-hooks").focus()
+        await settle(pilot, lambda: 'new hook' in _footer_keys(app), "the hooks footer")
+        assert "new hook" in _footer_keys(app)
+
+
+async def test_the_first_real_item_is_acted_on_not_the_one_after_it(accounts, monkeypatch):
+    calls = []
+    monkeypatch.setattr(extensions, "_run", lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr(Host, "suspend", contextlib.contextmanager(lambda self: (yield)), raising=False)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: scanned(app), "the first scan")
+        t = app.query_one("#ext-skills", DataTable)
+        t.focus()
+        t.move_cursor(row=1)
+        await pilot.press("e")
+        await settle(pilot, lambda: calls, "the editor to be started")
+    assert calls[0][-1] == str(accounts["a"] / "skills/alpha/SKILL.md")

@@ -217,3 +217,8 @@ def test_group_of_puts_each_kind_in_its_group():
     assert group_of("new", "pl idea") == "add"
     assert group_of("drop", "pl drop <id>") == "act on the selection"
     assert group_of("standup", "pl standup") == "other"
+
+
+def test_assistant_undo_maps_to_pl_brain_undo():
+    from pl.tui.parity import COMMANDS
+    assert COMMANDS["AssistantView.undo"] == "pl brain undo CONV"

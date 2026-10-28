@@ -1,0 +1,4 @@
+id = "2026-10-25.41"
+title = "Settle a sync conflict in one command"
+where = "pl alerts: the sync-conflict alert names it"
+try = "pl sync resolve <card> --keep remote"

@@ -1,6 +1,7 @@
 [pipeline]
 name = "existing-client"
 template = "existing-client"
+pod = "sales"
 columns = ["Check-in", "Check-in review", "Renewal", "Renewal review", "Issues", "Issues review", "Done"]
 
 [pipeline.stages.check-in]
@@ -8,6 +9,7 @@ column = "Check-in"
 done = "Check-in review"
 next = "Renewal"
 skill = "pl-stage"
+agent = "sales-follow-up"
 section = "CHECK IN"
 gate = "owner"
 instructions = "Read the client card and its history. Write a short check-in: how the account is doing, open risks, and what to raise with the client."

@@ -1,0 +1,4 @@
+id = "2026-10-25.13"
+title = "Plans split work into slices that merge in any order"
+where = "pl-plan: each later slice says independent or after <slice>; pl-review labels a PR for rework when it depends on another unmerged PR"
+try = "pl section <id> PLAN"

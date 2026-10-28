@@ -6,11 +6,12 @@ import time
 
 import pytest
 
-from pl import accounts, alerts, dispatch, memory, usage
+from pl import accounts, alerts, dispatch, memory, notifications, reconcile, usage
 from pl import config as C
 from pl.trackers.github import RateLimited
 
 SECRET = "TOPSECRET card words"
+DESKTOP = []   # what pl.notifications.notify received during _pass
 
 
 @pytest.fixture(autouse=True)
@@ -76,16 +77,16 @@ def test_the_file_is_private_and_written_by_rename(clock):
 
 def test_sweep_resolves_what_cleared_and_notifies_only_escalations(clock):
     sent = []
-    alerts.open("pr_waiting:a", "warn", "Card a: PR waits", "review it")
-    alerts.open("pr_waiting:b", "warn", "Card b: PR waits", "review it")
+    alerts.open("stalled:a", "warn", "Card a: PR waits", "review it")
+    alerts.open("stalled:b", "warn", "Card b: PR waits", "review it")
     alerts.open("other:x", "warn", "t", "f")
-    alerts.sweep("pr_waiting:", {"pr_waiting:a", "pr_waiting:b"}, lambda t, m: sent.append(t))
+    alerts.sweep("stalled:", {"stalled:a", "stalled:b"}, lambda t, m: sent.append(t))
     assert sent == []                                        # no escalation yet
     clock["now"] += 3601
-    alerts.sweep("pr_waiting:", {"pr_waiting:a"}, lambda t, m: sent.append(t))
+    alerts.sweep("stalled:", {"stalled:a"}, lambda t, m: sent.append(t))
     assert sent == ["Still open after 1 h: Card a: PR waits"]
-    assert alerts.get("pr_waiting:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
-    alerts.sweep("pr_waiting:", {"pr_waiting:a"}, lambda t, m: sent.append(t))
+    assert alerts.get("stalled:b")["resolved_at"] and not alerts.get("other:x").get("resolved_at")
+    alerts.sweep("stalled:", {"stalled:a"}, lambda t, m: sent.append(t))
     assert len(sent) == 1                                    # one notification per escalation
 
 
@@ -123,9 +124,18 @@ def _card(cid, col, **meta):
             "metadata": {"pipeline_mode": "auto", "profile": "acme", **meta}}
 
 
+@pytest.fixture(autouse=True)
+def sent(monkeypatch):
+    """Every notification that went through pl.notifications, as (title, message): the DESKTOP list."""
+    DESKTOP.clear()
+    monkeypatch.setattr(notifications, "notify", lambda t, m: DESKTOP.append((t, m)))
+    return DESKTOP
+
+
 def _pass(monkeypatch, cs, status="none", screen=None, parked=(), healthy="acme", loops=None):
     """One dispatcher pass with the board, tmux, the registry and accounts faked. Returns the notifications."""
     notes = []
+    monkeypatch.setattr(notifications, "notify", lambda t, m: DESKTOP.append((t, m)))
     monkeypatch.setattr(dispatch, "registry", lambda: {})
     monkeypatch.setattr(dispatch, "cards", lambda: cs)
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
@@ -140,6 +150,7 @@ def _pass(monkeypatch, cs, status="none", screen=None, parked=(), healthy="acme"
     for name in ("sweep_untracked", "mirror_to_product", "ensure_services"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append((t, m)))
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": loops or {}})
     dispatch.dispatch_once(1, False, pull=False)
@@ -151,22 +162,26 @@ def _open(key):
     return bool(a) and not a.get("resolved_at")
 
 
-def test_an_account_parked_opens_once_and_resolves_when_it_is_back(monkeypatch):
+def test_an_account_parked_opens_once_and_resolves_when_it_is_back(monkeypatch, sent):
     w = {"stage": "spec", "session_id": "s", "pane": "%1", "window": "@1", "started_at": "2020-01-01T00:00:00+00:00"}
     c = _card("card0001aaaa", "Inbox", worker=w)
-    notes = _pass(monkeypatch, [c], status="alive", screen="You've hit your limit", parked={"acme"}, healthy="acme2")
-    assert _open("account_parked:acme") and [t for t, _ in notes] == ["Profile acme hit its usage limit"]
+    assert _pass(monkeypatch, [c], status="alive", screen="You've hit your limit", parked={"acme"}, healthy="acme2") == []
+    assert _open("account_parked:acme") and len(sent) == 1
+    assert "warn" in sent[0][0] and "Account acme is parked: usage limit" in sent[0][0]
     c["metadata"].update(worker=dict(w), profile="acme")      # the same account hits the limit again
     assert _pass(monkeypatch, [c], status="alive", screen="You've hit your limit", parked={"acme"}, healthy="acme2") == []
+    assert len(sent) == 1
     _pass(monkeypatch, [c], status="alive", parked=())
     assert not _open("account_parked:acme")
 
 
-def test_all_accounts_out_opens_and_resolves(monkeypatch):
+def test_all_accounts_out_opens_and_resolves(monkeypatch, sent):
     c = _card("card0001aaaa", "Inbox")
-    notes = _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None)
-    assert _open("accounts_all_out") and [t for t, _ in notes] == ["Every Claude profile is out of credits"]
-    assert _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None) == []   # a repeat: no second note
+    assert _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None) == []
+    out = [t for t, _ in sent if "Every account is out of credits" in t]
+    assert _open("accounts_all_out") and len(out) == 1 and "high" in out[0]
+    before = len(sent)
+    assert _pass(monkeypatch, [c], parked={"acme", "acme2"}, healthy=None) == [] and len(sent) == before   # a repeat: no second note
     _pass(monkeypatch, [c], parked=())
     assert not _open("accounts_all_out")
 
@@ -174,30 +189,32 @@ def test_all_accounts_out_opens_and_resolves(monkeypatch):
 def test_a_stage_that_failed_3_times_opens_and_resolves_on_retry(monkeypatch):
     w = {"stage": "spec", "attempts": 3, "session_id": "s", "pane": "%1", "window": "@1"}
     c = _card("card0001aaaa", "Inbox", worker=w)
-    notes = _pass(monkeypatch, [c], status="dead")
-    assert _open("stage_failed:card0001aaaa:spec") and len(notes) == 1 and notes[0][0].startswith("Needs you")
+    DESKTOP.clear()
     assert _pass(monkeypatch, [c], status="dead") == []
+    assert _open("stage_failed:card0001aaaa:spec") and len(DESKTOP) == 1
+    assert "high" in DESKTOP[0][0] and "the spec agent died 3 times" in DESKTOP[0][0]
+    assert _pass(monkeypatch, [c], status="dead") == [] and len(DESKTOP) == 1
     c["metadata"].pop("worker")                               # pl retry clears the worker
     _pass(monkeypatch, [c])
     assert not _open("stage_failed:card0001aaaa:spec")
 
 
-def test_a_dead_loop_opens_and_resolves(monkeypatch):
+def test_a_dead_loop_opens_and_resolves(monkeypatch, sent):
     C.SERVICES = {"merge-check": {"prompt": "/loop 30m /merge-check", "profile": "acme"}}
-    notes = _pass(monkeypatch, [], loops={"merge-check": {"dead": True}})
-    assert _open("loop_dead:merge-check") and len(notes) == 1
+    assert _pass(monkeypatch, [], loops={"merge-check": {"dead": True}}) == []
+    assert _open("loop_dead:merge-check") and len(sent) == 1
     _pass(monkeypatch, [], loops={"merge-check": {"dead": False}})
     assert not _open("loop_dead:merge-check")
 
 
-def test_a_loop_failing_three_runs_in_a_row_opens_an_alert_and_a_good_run_clears_it(monkeypatch):
+def test_a_loop_failing_three_runs_in_a_row_opens_an_alert_and_a_good_run_clears_it(monkeypatch, sent):
     C.SERVICES = {"invoices": {"prompt": "/pl-billing-chase", "profile": "acme", "every": "daily 09:00"}}
     runs = [{"exit": 0}, {"exit": 1}, {"exit": 2}, {"exit": 1}]
     C.STATE_FILE.parent.mkdir(exist_ok=True)
     C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs}}}))
-    notes = _pass(monkeypatch, [])
-    assert _open("loop_failed:invoices") and len(notes) == 1
     assert _pass(monkeypatch, []) == []
+    assert _open("loop_failed:invoices") and len(sent) == 1
+    assert _pass(monkeypatch, []) == [] and len(sent) == 1
     C.STATE_FILE.write_text(json.dumps({"services": {"invoices": {"runs": runs + [{"exit": 0}]}}}))
     _pass(monkeypatch, [])
     assert not _open("loop_failed:invoices")
@@ -215,10 +232,10 @@ def _ago(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - seconds))
 
 
-def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatch):
-    notes = []
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append((t, m)))
+def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatch, sent):
+    notes = sent
     monkeypatch.setattr(dispatch, "paused", lambda: None)
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     C.SERVICES = {"review": {"prompt": "/loop 30m /pl-review", "profile": "acme"},
@@ -238,8 +255,8 @@ def test_a_loop_that_has_not_run_for_two_intervals_opens_and_resolves(monkeypatc
 
 
 def test_a_stale_loop_is_not_alerted_while_paused(monkeypatch):
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
     monkeypatch.setattr(dispatch, "paused", lambda: {"since": "x"})
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     C.SERVICES = {"review": {"prompt": "/loop 30m /pl-review", "profile": "acme"}}
@@ -260,8 +277,12 @@ def test_a_pr_waiting_over_24_hours_opens_and_resolves(monkeypatch):
     _pass(monkeypatch, [c])
     assert not _open("pr_waiting:card0001aaaa")               # a fresh PR
     c["updated_at"] = "2020-01-01T00:00:00+00:00"
-    notes = _pass(monkeypatch, [c])
-    assert _open("pr_waiting:card0001aaaa") and len(notes) == 1
+    DESKTOP.clear()
+    assert _pass(monkeypatch, [c]) == []
+    assert _open("pr_waiting:card0001aaaa") and len(DESKTOP) == 1
+    assert "its PR waits over 24 h" in DESKTOP[0][0]
+    _pass(monkeypatch, [c])
+    assert len(DESKTOP) == 1
     c["list_id"] = "Done"
     _pass(monkeypatch, [c])
     assert not _open("pr_waiting:card0001aaaa")
@@ -276,9 +297,8 @@ def test_alert_titles_name_a_github_card_by_repo_and_number(monkeypatch):
     assert alerts.get("stage_failed:your-org/your-repo#44:spec")["title"] == "Card your-repo#44: the spec agent died 3 times"
 
 
-def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(monkeypatch):
-    notes = []
-    monkeypatch.setattr(dispatch, "notify", lambda t, m: notes.append(t))
+def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(monkeypatch, sent):
+    notes = sent
     a = argparse.Namespace(dry_run=True, once=True, interval=None, max_runs=None, max_prep=None, no_pull=True)
 
     def limited(*_a, **_k):
@@ -294,7 +314,7 @@ def test_a_github_rate_limit_opens_while_backing_off_and_resolves_when_clear(mon
 
 def test_low_memory_opens_and_resolves(monkeypatch):
     notes = []
-    monkeypatch.setattr(memory, "notify", lambda t, m: notes.append(t))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: notes.append(t))
     monkeypatch.setattr(memory, "status", lambda: {"free": 1, "total": 32 * memory.GB, "low": True})
     st = {}
     memory.check_starts(st)
@@ -318,12 +338,13 @@ def test_a_runaway_opens_and_resolves_once_the_tree_is_small(monkeypatch):
             return "\n".join(rows) + "\n"
     monkeypatch.setattr(memory, "reading", lambda: (20 * memory.GB, 32 * memory.GB))
     monkeypatch.setattr(memory, "_run", run)
-    monkeypatch.setattr(memory, "notify", lambda t, m: notes.append(t))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: notes.append(t))
     cs = [{"id": "card0001aaaa", "title": SECRET, "metadata": {"worker": {"window": "@1"}}}]
     st = {}
     memory.guard_runaways(st, cs)
     memory.guard_runaways(st, cs)
-    assert _open("runaway:@1") and len(notes) == 1 and SECRET in notes[0]   # today's notification text stays
+    assert _open("runaway:@1") and len(notes) == 1
+    assert "Runaway agent in card card0001" in notes[0] and SECRET not in notes[0]
     ps["n"] = 5
     memory.guard_runaways(st, cs)
     assert not _open("runaway:@1")
@@ -366,6 +387,7 @@ def test_a_spec_agent_stuck_on_a_weekly_limit_moves_to_the_other_account(monkeyp
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: calls.append(("tmux", *a)) or "")
     for name in ("sweep_untracked", "mirror_to_product", "ensure_services", "notify"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+    monkeypatch.setattr(reconcile, "sweep", lambda *a, **k: None)
     monkeypatch.setattr(usage, "scan", lambda save=True: {})
     monkeypatch.setattr(usage, "summary", lambda st, now=None: {"loops": {}})
     dispatch.dispatch_once(1, False, pull=False)
@@ -504,11 +526,12 @@ def test_hints_for_a_github_card_use_the_quoted_short_id(monkeypatch):
     import shlex
     w = {"stage": "spec", "attempts": 3, "session_id": "s", "pane": "%1", "window": "@1"}
     c = _card("your-org/your-repo#43", "Inbox", worker=w)
-    notes = _pass(monkeypatch, [c], status="dead")
+    DESKTOP.clear()
+    _pass(monkeypatch, [c], status="dead")
     fix = alerts.get("stage_failed:your-org/your-repo#43:spec")["fix"]
     assert fix == "pl card 'your-repo#43' shows why; pl retry 'your-repo#43' starts it fresh"
     assert shlex.split(fix.split(";")[0]) == ["pl", "card", "your-repo#43", "shows", "why"]
-    assert notes[0][1].endswith("see pl card 'your-repo#43'")
+    assert DESKTOP[0][1] == fix
 
 
 # ---------- affected cards and the Activity log ----------
@@ -537,3 +560,52 @@ def test_sweep_resolve_logs_alert_resolved(clock):
 def test_open_without_cards_still_works(clock):
     assert alerts.open("k1", "warn", "t", "f") == "open"
     assert alerts.get("k1")["cards"] == []
+
+
+# ---------- the Alerts tab: listing, reopen on change, what pl watches ----------
+
+def test_shown_is_newest_first_and_hides_acked(clock):
+    alerts.open("a", "warn", "ta", "fa")
+    clock["now"] += 100
+    alerts.open("b", "high", "tb", "fb")
+    clock["now"] += 100
+    alerts.open("c", "warn", "tc", "fc")
+    alerts.ack("b")
+    assert [a["key"] for a in alerts.shown()] == ["c", "a"]
+    assert {a["key"] for a in alerts.listing()} == {"a", "b", "c"}
+
+
+def test_ack_survives_an_unchanged_repeat(clock):
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1", "o/r#2"])
+    alerts.ack("k1")
+    alerts.open("k1", "warn", "t again", "f", cards=["o/r#2", "o/r#1"])
+    assert alerts.get("k1")["acked"] and alerts.shown() == []
+
+
+@pytest.mark.parametrize("severity,cards", [("warn", ["o/r#2"]), ("high", ["o/r#1"])])
+def test_ack_clears_when_cards_or_severity_change(clock, severity, cards):
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    clock["now"] += 50
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    alerts.ack("k1")
+    alerts.open("k1", severity, "t", "f", cards=cards)
+    a = alerts.get("k1")
+    assert not a.get("acked") and a["level"] == 0 and a["first_seen"] == 1_000_000.0 and a["count"] == 3
+    assert [x["key"] for x in alerts.shown()] == ["k1"]
+
+
+def test_resolved_then_reopened_is_unacked(clock):
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    alerts.ack("k1")
+    alerts.resolve("k1")
+    alerts.open("k1", "warn", "t", "f", cards=["o/r#1"])
+    assert not alerts.get("k1").get("acked") and len(alerts.shown()) == 1
+
+
+def test_every_swept_prefix_is_watched():
+    import re
+    from pathlib import Path
+    src = Path(dispatch.__file__).read_text()
+    prefixes = {re.split(r"[:{]", p)[0] for p in re.findall(r'alerts\.(?:sweep|open)\(f?"([a-z_]+)', src)}
+    assert prefixes and not prefixes - set(alerts.WATCHES), prefixes - set(alerts.WATCHES)
+    assert alerts.watching()

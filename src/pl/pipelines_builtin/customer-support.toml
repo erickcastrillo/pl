@@ -1,0 +1,31 @@
+[pipeline]
+name = "customer-support"
+template = "customer-support"
+columns = ["Inbox", "Triage", "Reply draft", "Reply review", "Waiting on customer", "Resolved"]
+
+[pipeline.ui]
+item = "ticket"
+items = "tickets"
+fields = ["customer", "priority", "response time"]
+
+[pipeline.stages.triage]
+column = "Inbox"
+done = "Triage"
+next = "Reply draft"
+skill = "pl-stage"
+agent = "support-triage"
+section = "TRIAGE"
+gate = "owner"
+instructions = "Read the ticket on the card. Say what the customer needs, set its priority (urgent, high, normal or low) and why, and list what a reply must answer."
+
+[pipeline.stages.reply]
+column = "Reply draft"
+done = "Reply review"
+next = "Waiting on customer"
+skill = "pl-stage"
+agent = "support-reply-drafter"
+section = "REPLY"
+gate = "owner"
+outward = true
+connectors = []
+instructions = "Draft the reply to the customer from the ticket and its triage: plain, specific, and answering every point. A person approves it before it is sent."

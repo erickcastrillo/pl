@@ -1,0 +1,3 @@
+title = "pl manager status shows test workers"
+where = "pl manager status"
+try = "pl manager status"

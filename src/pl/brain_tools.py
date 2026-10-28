@@ -10,7 +10,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.tools.base import Tool
-from pl import brain, commands, manager, mcp_serve, profiles, recall
+from pl import brain, commands, ghquota, manager, mcp_serve, profiles, recall
 from pl import config as C
 from pl.trackers import mcp as M
 
@@ -55,7 +55,7 @@ SOURCES: list[dict] = []   # code-host reads logged by pl_pr / pl_runs
 
 def _gh(argv: list[str]) -> str:
     args = argv[1:] if argv and argv[0] == "gh" else argv
-    r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    r = ghquota.gh(subprocess.run, args, capture_output=True, text=True, timeout=30, env=C.gh_env())
     if r.returncode != 0:
         raise OSError(r.stderr.strip() if r.stderr else f"gh exited with {r.returncode}")
     return r.stdout

@@ -9,6 +9,8 @@ import tomllib
 
 from pl import schedule
 
+NOTIFY_EVENTS = ("plan_ready", "approved", "pr_opened", "review_passed", "review_rework", "merged", "done", "alert_opened",
+                 "agent_waiting")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
@@ -73,11 +75,15 @@ def _defaults():
     # memory: agents start only while min_free_memory is free; a window past max_agent_processes/_memory is stopped
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
     # autostart: the console starts the dispatcher. account_checks: minutes between health checks of a parked account
-    # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. release_waiting_after: minutes a run agent may wait (a GATE line or an idle
-    # screen) before pl stops it and holds its card back (0 is off)
+    # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. stall_minutes: minutes a run
+    # agent may sit idle while its card has not moved on before pl opens a "stalled" alert and notifies (0 is off)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
-                "release_waiting_after": 30, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+                "stall_minutes": 20, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+    # [watchdog] job_minutes: a background job of a stage agent running longer is "overrun" (0 is off)
+    WATCHDOG = {"job_minutes": 45}
     GATES = {"spec": False}
+    # [notify] events: the moments pl tells the owner about (desktop attention_cmd and chat connectors routed for alerts)
+    NOTIFY = {"events": list(NOTIFY_EVENTS)}
     PIPELINE = None       # [pipeline]: columns, stages and gates; the engineering pipeline when absent
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
@@ -91,6 +97,7 @@ def _defaults():
     CAPS = {}             # [caps.<stage>] minutes, tokens ("2M", "500k" or a number): a stage's agent is stopped at the cap
     SYNC = {}
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    ACTIVITY = {}         # [activity] prompt_minutes, slow_factor, slow_minutes, wait_minutes, finished_minutes: slow-work warnings
     TRIGGERS = {}         # [triggers.<name>]
     CONNECTORS = {}       # [connectors.<name>]
     RETENTION = {"email_days": 90}  # [retention] email_days = 90
@@ -221,12 +228,15 @@ def _apply(g, t):
     if isinstance(ch.get("gh_config_dir"), str) and ch["gh_config_dir"]:
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
+    g["WATCHDOG"] = {**g["WATCHDOG"], **t.get("watchdog", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
+    g["NOTIFY"] = {**g["NOTIFY"], **t.get("notify", {})}
     from pl import pipeline
     g["PIPELINE"] = pipeline.from_toml(t.get("pipeline"))
     if t.get("pipeline"):
         g["COLUMNS"] = g["PIPELINE"]["columns"]
     g["USAGE"] = dict(t.get("usage", {}))
+    g["ACTIVITY"] = dict(t.get("activity", {}))
     g["CAPS"] = parse_caps(t.get("caps", {}))
     g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))
@@ -351,10 +361,16 @@ def validate(doc) -> list[str]:
         errs.append("code_host.gh_config_dir must be a folder path (text)")
     errs += _pr_limit_errors({**_defaults()["PR_LIMITS"], **doc.get("code_host", {})})
     for key, low in (("max_runs", 0), ("max_prep", 0), ("interval", 1), ("max_agent_processes", 1),
-                     ("release_waiting_after", 0)):
+                     ("stall_minutes", 0), ("rework_wait_minutes", 0)):
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
+    v = doc.get("watchdog", {}).get("job_minutes")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+        errs.append("watchdog.job_minutes must be a whole number of at least 0")
+    ev = doc.get("notify", {}).get("events")
+    if ev is not None and not (isinstance(ev, list) and all(e in NOTIFY_EVENTS for e in ev)):
+        errs.append(f"notify.events must be a list of: {', '.join(NOTIFY_EVENTS)}")
     if not isinstance(doc.get("permissions", {}).get("unattended", True), bool):
         errs.append("permissions.unattended must be true or false")
     if "cleanup" in doc.get("worktrees", {}) and not isinstance(doc.get("worktrees", {}).get("cleanup"), bool):
@@ -808,6 +824,16 @@ def save(doc, target=None) -> list[str]:
 
 # pl manager's machine.toml [limits]: caps across every profile on the machine
 MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True}
+
+
+def validate_tests(t) -> list[str]:
+    """Problems in machine.toml's [tests] (empty = fine)."""
+    if "tests" in t and not isinstance(t["tests"], dict):
+        return ["tests must be a table ([tests])"]
+    v = t.get("tests", {}).get("max_workers")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
+        return ["tests.max_workers must be a whole number of at least 1"]
+    return []
 
 
 def validate_machine(t) -> list[str]:

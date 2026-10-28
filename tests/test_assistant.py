@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pl import accounts, agents, assistant, cli, dispatch, ideas
+from pl import accounts, agents, assistant, brain, cli, dispatch, ideas
 from pl import config as C
 
 SID = "11111111-2222-3333-4444-555555555555"
@@ -157,7 +157,8 @@ def test_a_harness_without_resume_starts_fresh(tmux):
 
 
 def test_a_harness_that_cannot_be_made_to_ask_is_refused(tmux, monkeypatch):
-    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
+    for a in ("acme", "acme2"):
+        C.ACCOUNTS[a] = {**C.ACCOUNTS[a], "harness": "antigravity"}
     with pytest.raises(SystemExit, match="ask"):
         assistant.ensure()
     from pl import harnesses
@@ -242,6 +243,88 @@ def test_account_skips_a_parked_one_and_honours_the_setting(monkeypatch):
     assert assistant.account() == "acme2"
 
 
+def _accounts(**harness_of):
+    C.ACCOUNTS = {a: {"harness": h} for a, h in harness_of.items()}
+    C.PROFILES = {a: C.CONFIG_DIR / a for a in harness_of}
+
+
+def test_account_prefers_a_usable_plan_pool_account_over_an_antigravity_first_account():
+    _accounts(agy="antigravity", acme="claude")
+    C.STAGES = {"plan": {"accounts": ["agy", "acme"]}}
+    assert assistant.pick() == ("acme", "from stage plan")
+    assert assistant.account() == "acme"
+
+
+def test_account_falls_back_through_spec_then_design_then_accounts(monkeypatch):
+    _accounts(agy="antigravity", parked="claude", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"parked"})
+    C.STAGES = {"spec": {"accounts": ["parked"]}, "design": {"accounts": ["agy", "acme"]}}
+    assert assistant.pick() == ("acme", "from stage design")
+    C.STAGES = {}
+    assert assistant.pick() == ("acme", "first usable account")
+
+
+def test_a_named_account_is_used_whatever_its_state(monkeypatch):
+    _accounts(agy="antigravity", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"agy"})
+    C.ASSISTANT = {"account": "agy"}
+    assert assistant.pick() == ("agy", "named")
+
+
+def test_nothing_usable_picks_nothing(monkeypatch):
+    _accounts(agy="antigravity", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    assert assistant.pick() == (None, None)
+
+
+def test_a_named_antigravity_account_is_refused_with_the_message(tmux):
+    C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
+    (C.CONFIG_DIR / "config.toml").write_text(
+        '[accounts.acme]\nconfig_dir = "~/.claude-acme"\nharness = "antigravity"\n[assistant]\naccount = "acme"\n')
+    with pytest.raises(SystemExit, match=r"antigravity.*\[assistant\] account"):
+        assistant.ensure()
+    assert tmux.verb("new-window") == []
+
+
+def test_no_usable_account_says_how_to_set_assistant_account(tmux, monkeypatch):
+    _accounts(agy="antigravity", acme="claude")
+    monkeypatch.setattr(accounts, "exhausted_profiles", lambda: {"acme"})
+    with pytest.raises(SystemExit, match=r"no account can run the assistant.*\[assistant\] account"):
+        assistant.ensure()
+    assert tmux.verb("new-window") == []
+
+
+def test_a_failed_start_names_the_account_and_its_harness(tmux, monkeypatch):
+    from pl import harnesses
+    real = harnesses.get
+    monkeypatch.setattr(harnesses, "get", lambda n: __import__("dataclasses").replace(real(n), interactive=[]))
+    with pytest.raises(SystemExit, match=r"account acme, harness claude.*\[assistant\] account"):
+        assistant.ensure()
+
+
+def test_a_harness_lookup_failure_keeps_its_own_message(tmux, monkeypatch):
+    from pl import harnesses
+
+    def boom(acct):
+        raise SystemExit("pl: unknown harness 'zzz'")
+    monkeypatch.setattr(assistant, "account", lambda: "acme")
+    monkeypatch.setattr(harnesses, "account_harness", boom)
+    with pytest.raises(SystemExit, match=r"unknown harness 'zzz'.*account acme"):
+        assistant.ensure()
+
+
+def test_a_changed_assistant_account_is_used_on_the_next_start_without_reload(tmux, monkeypatch):
+    assert assistant.ensure()
+    assert json.loads((C.STATE_DIR / "assistant.json").read_text())["account"] == "acme"
+    assistant.reset()
+    monkeypatch.setattr(C, "load", lambda *a, **k: pytest.fail("C.load must not be called"))
+    (C.CONFIG_DIR / "config.toml").write_text(
+        '[accounts.acme]\nconfig_dir = "~/.claude-acme"\n[accounts.acme2]\nconfig_dir = "~/.claude-acme2"\n'
+        '[assistant]\naccount = "acme2"\n')
+    assert assistant.ensure()
+    assert json.loads((C.STATE_DIR / "assistant.json").read_text())["account"] == "acme2"
+
+
 # ---------- reset ----------
 
 def test_reset_kills_the_window_and_forgets_the_session(tmux):
@@ -259,7 +342,7 @@ def test_the_state_file_is_private_and_holds_only_its_keys(tmux):
     assistant.ensure()
     p = C.STATE_DIR / "assistant.json"
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert set(json.loads(p.read_text())) <= {"session_id", "account", "harness", "window", "pane", "started_at", "mode", "build"}
+    assert set(json.loads(p.read_text())) <= {"session_id", "account", "harness", "window", "pane", "started_at", "mode", "build", "conversation", "stored_at"}
 
 
 # ---------- CLI: assistant_action and pl assistant log ----------
@@ -417,7 +500,8 @@ def test_claude_gets_ask_rules_that_beat_the_accounts_allow_rules(tmux):
     assert set(p) == {"allow", "ask", "deny"}
     for cmd in ("pl approve x", "pl --profile other approve x", "pl move-agent c a", "pl retry all", "pl idea hi",
                 "pl assistant idea file 1", "pl manager stop", "pl manager --all stop", "pl manager restart t",
-                "pl card x --delete", "gh pr merge 1", "gh api /user", "gh issue close 1", "gh pr create",
+                "pl card x --delete", "pl agents use draft x", "pl agents add x", "pl agents edit x",
+                "pl agents remove x --yes", "gh pr merge 1", "gh api /user", "gh issue close 1", "gh pr create",
                 "git push", "git push origin main", "git -C x push", "git diff --output=x", "git log --output x"):
         assert _hits(p["ask"], cmd), cmd
     assert _exec_argv(tmux)[0] == "claude" and "--permission-mode" in _exec_argv(tmux)
@@ -429,7 +513,7 @@ def test_reads_and_read_only_commands_run_without_asking(tmux):
     p = _perms(tmux)
     assert {"Read", "Glob", "Grep", "LS", "NotebookRead"} <= set(p["allow"])
     for cmd in ("pl list --all", "pl card abc", "pl alerts --all", "pl usage --by card", "pl standup --since 24h",
-                "pl manager status", "pl accounts", "pl whatsnew", "git status", "git log -5", "git diff main",
+                "pl manager status", "pl accounts", "pl whatsnew", "pl agents list", "pl agents show sales-sdr --json", "git status", "git log -5", "git diff main",
                 "gh pr view 12", "gh pr list --state open"):
         assert _hits(p["allow"], cmd) and not _hits(p["ask"], cmd) and not _hits(p["deny"], cmd), cmd
 
@@ -457,7 +541,9 @@ def test_every_pl_command_is_read_only_or_asks(tmux):
     names = set(re.findall(r'sub\.add_parser\("([\w-]+)"', src)) | {"setup", "whatsnew", "manager", "profiles"}
     assistant.ensure()
     p = _perms(tmux)
-    free = [n for n in names if not any(_hits(p[k], c) for k in ("ask", "allow") for c in (f"pl {n}", f"pl {n} x", f"pl {n} -x"))]
+    probes = {"agents": ("list", "use x")}   # no rule covers `pl agents x`: only the subcommands are ruled
+    free = [n for n in names if not any(_hits(p[k], c) for k in ("ask", "allow")
+                                        for c in (f"pl {n}", f"pl {n} x", f"pl {n} -x", *(f"pl {n} {x}" for x in probes.get(n, ()))))]
     assert names and free == []
 
 
@@ -801,3 +887,60 @@ def test_codex_assistant_gets_the_brain_server(tmux):
 def test_assistant_guide_has_brains_answer_rules():
     text = GUIDE.read_text()
     assert "pl_memory_search" in text and "Sources:" in text and "I don't know" in text
+
+
+# ---------- the brain conversation store ----------
+
+def _conv_id():
+    return json.loads((C.STATE_DIR / "assistant.json").read_text())["conversation"]
+
+
+def test_a_first_ensure_gives_the_assistant_a_private_brain_conversation(tmux):
+    assistant.ensure()
+    f = brain._conv_dir() / f"{_conv_id()}.jsonl"
+    assert f.exists() and stat.S_IMODE(f.stat().st_mode) == 0o600
+
+
+def test_a_resumed_assistant_keeps_its_conversation_id(tmux):
+    assistant.ensure()
+    first = _conv_id()
+    st = assistant.load()
+    assistant._save({**st, "pane": "%99"})
+    assistant.ensure()
+    assert _conv_id() == first
+
+
+def test_store_turns_appends_you_and_assistant_turns_once_in_order(tmux):
+    assistant.ensure()
+    items = [("2026-01-01T10:00:00", "you", "we decided to use sqlite"),
+             ("2026-01-01T10:00:01", "tool", "↳ Bash: pl list"),
+             ("2026-01-01T10:00:02", "assistant", "noted, token ghp_" + "a" * 36)]
+    assert assistant.store_turns(items) == 2
+    assert assistant.store_turns(items) == 0
+    turns = brain.conv_show(_conv_id())
+    assert [t["role"] for t in turns] == ["user", "assistant"]
+    assert "ghp_" + "a" * 36 not in turns[1]["text"]
+
+
+def test_store_turns_with_another_console_holding_the_lock_stores_nothing(tmux, monkeypatch):
+    assistant.ensure()
+    monkeypatch.setattr(assistant, "LOCK_WAIT", 0.1)
+    held = _hold(C.STATE_DIR / "assistant.lock")
+    try:
+        assert assistant.store_turns([("2026-01-01T10:00:00", "you", "hello")]) == 0
+    finally:
+        held.close()
+    assert brain.conv_show(_conv_id()) == []
+
+
+def test_end_conversation_saves_with_a_link_back_and_starts_a_new_id(tmux, monkeypatch):
+    assistant.ensure()
+    old = _conv_id()
+    assistant.store_turns([("2026-01-01T10:00:00", "you", "we will deploy only on Tuesdays")])
+    monkeypatch.setattr(brain, "_distil_model", lambda text: [{"kind": "decision", "text": "Deploy only on Tuesdays"}])
+    added = []
+    monkeypatch.setattr(brain.recall, "add", lambda **kw: added.append(kw) or "m-1")
+    assert assistant.end_conversation() == (old, 1)
+    assert added[0]["link"] == f"pl brain show {old}"
+    new = _conv_id()
+    assert new != old and assistant.load()["stored_at"] is None

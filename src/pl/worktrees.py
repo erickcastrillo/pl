@@ -11,6 +11,7 @@ from collections import deque
 from pathlib import Path
 
 from pl import config as C
+from pl import events, ghquota
 from pl.agents import registry, worker_status
 from pl.board import cards, col_name
 from pl.util import mask, slug_of
@@ -26,15 +27,25 @@ def _card_for(name, cs):
     return next((c for c in cs if (s := slug_of(c)) and name and (s.startswith(name) or name.startswith(s))), None)
 
 
+def agent_hold(c):
+    """("held", why) while the card's agent waits at the trust prompt,
+    ("running", None) while its agent is alive, else None. Both cleanup paths keep the worktree then."""
+    w = (c.get("metadata") or {}).get("worker")
+    if w and w.get("trust_wait"):
+        return "held", "trust the folder"
+    if not w:
+        return None
+    return ("running", None) if worker_status(w, registry())[0] in ("alive", "starting") else None
+
+
 def _inspect(path, c):
     """(action, reason) for one worktree folder and the card it belongs to, if any."""
     if c:
+        if hold := agent_hold(c):
+            return "keep", f"agent {hold[0]}"
         column = col_name(c["list_id"])
         if column != "Done":
             return "keep", f"card {column}"
-        w = (c.get("metadata") or {}).get("worker")
-        if w and worker_status(w, registry())[0] in ("alive", "starting"):
-            return "keep", "agent running"
     if _git(["-C", str(path), "status", "--porcelain"])[1].strip():
         return "keep", "uncommitted changes"
     if _git(["-C", str(path), "log", "HEAD", "--not", "--remotes", "--oneline"])[1].strip():
@@ -76,6 +87,7 @@ def _remove(rows):
             failed += 1
             print(f"pl worktrees: could not remove {r['name']}: {out.strip() or 'git worktree remove failed'}")
             continue
+        events.emit("worktree_cleanup", r["card"], path=r["path"], by="gc")
         removed, freed = removed + 1, freed + size
         commons.add(common)
     for common in commons:
@@ -105,6 +117,7 @@ def cmd_worktrees(a):
 
 
 _run = subprocess.run
+GIT_TIMEOUT = 60
 
 
 def _list_worktrees(work_dir: Path) -> list[dict]:
@@ -132,15 +145,82 @@ def _list_worktrees(work_dir: Path) -> list[dict]:
     return worktrees
 
 
+def _worktree_on(work: Path, branch: str) -> Path | None:
+    return next((w["path"] for w in _list_worktrees(work) if w.get("branch") == branch), None)
+
+
+def for_run(c) -> tuple[Path | None, str | None]:
+    """(worktree, None) for card c's run agent, reusing its branch or worktree; (None, git's last line) when git fails.
+    Only fetch and worktree add touch the repository, never the main checkout's files."""
+    work, slug = Path(C.WORK_DIR), slug_of(c)
+    branch = f"pl/{slug}"
+    if found := _worktree_on(work, branch):
+        return found, None
+    rework = (c.get("metadata") or {}).get("rework") or {}
+    if rework.get("active") and rework.get("prs"):
+        head = ((_pr_info(rework["prs"][0]) or {}).get("headRefName") or "")
+        if head and not head.startswith("-"):
+            branch = head
+            if found := _worktree_on(work, branch):
+                return found, None
+    root = Path(C.WORKTREES_DIR or work.parent)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = root / f"{work.name}-pl-{slug}"
+
+    def git(*args):
+        try:
+            return _run(["git", *args], capture_output=True, text=True, cwd=str(work), timeout=GIT_TIMEOUT,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        except subprocess.TimeoutExpired:   # the dispatcher's pass must not wait on a slow remote or a prompt
+            return subprocess.CompletedProcess(args, 124, "", f"git {args[0]} timed out after {GIT_TIMEOUT}s")
+
+    steps = [git("fetch", "origin")]
+    if not steps[0].returncode:
+        if git("show-ref", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0:
+            steps.append(git("worktree", "add", str(path), branch))
+        elif git("rev-parse", "--verify", "--quiet", f"origin/{branch}").returncode == 0:
+            steps.append(git("worktree", "add", "-b", branch, str(path), f"origin/{branch}"))
+        else:
+            steps.append(git("worktree", "add", "-b", branch, str(path), "origin/HEAD"))
+    failed = next((r for r in steps if r.returncode), None)
+    if failed is None:
+        return path, None
+    lines = [l.strip() for l in (failed.stderr or "").splitlines() if l.strip()]
+    return None, lines[-1] if lines else "git worktree add failed"
+
+
+def _settled_path() -> Path:
+    return Path(C.STATE_DIR) / "pr-settled.json"
+
+
+def _settled() -> dict:
+    """Merged and closed PRs already looked up: their state never changes, so they are asked about once."""
+    try:
+        return json.loads(_settled_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def _pr_info(url: str) -> dict | None:
-    r = _run(["gh", "pr", "view", url, "--json", "state,mergedAt,headRefName"],
-             capture_output=True, text=True, env=C.gh_env())
+    known = _settled()
+    if url in known:
+        return known[url]
+    r = ghquota.gh(_run, ["pr", "view", url, "--json", "state,mergedAt,headRefName"],
+                   capture_output=True, text=True, env=C.gh_env())
     if r.returncode != 0:
         return None
     try:
-        return json.loads(r.stdout)
+        info = json.loads(r.stdout)
     except Exception:
         return None
+    if isinstance(info, dict) and (info.get("state") in ("MERGED", "CLOSED") or info.get("mergedAt")):
+        try:
+            known[url] = info
+            _settled_path().parent.mkdir(parents=True, exist_ok=True)
+            _settled_path().write_text(json.dumps(known))
+        except OSError:
+            pass
+    return info
 
 
 def _is_dirty(path: Path) -> bool:
@@ -162,45 +242,18 @@ def _has_unpushed(path: Path, branch: str | None) -> bool:
     return r_diff.returncode != 0 or int(r_diff.stdout.strip() or "0") > 0
 
 
-def _has_live_agent(c: dict) -> bool:
-    m = c.get("metadata") or {}
-    w = m.get("worker")
-    if not w:
-        return False
-    if w.get("status") in ("alive", "starting"):
-        return True
-    pane = w.get("pane")
-    if pane:
-        r = _run(["tmux", "display-message", "-p", "-t", pane, "#S"], capture_output=True, text=True)
-        if r.returncode == 0:
-            return True
-    win = w.get("window")
-    if win:
-        r = _run(["tmux", "list-panes", "-s", "-t", C.TMUX_SESSION, "-F", "#{window_id}"], capture_output=True, text=True)
-        if r.returncode == 0 and win in r.stdout.splitlines():
-            return True
-    return False
-
-
 def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
     wt_path = wt["path"].resolve()
     branch = wt.get("branch") or ""
     branch_short = branch.removeprefix("pl/")
     repo_name = Path(C.WORK_DIR).name if C.WORK_DIR else ""
 
-    for c in all_cards:
+    for c in all_cards:   # the free matches first, over every card: a PR lookup costs a GitHub call
         m = c.get("metadata") or {}
         if m.get("worktree") and Path(m["worktree"]).resolve() == wt_path:
             return c
         if m.get("branch") and m["branch"] in (branch, branch_short):
             return c
-
-        for url in m.get("pr_urls") or []:
-            if url not in pr_cache:
-                pr_cache[url] = _pr_info(url)
-            pr = pr_cache.get(url)
-            if pr and pr.get("headRefName") in (branch, branch_short):
-                return c
 
         slug = slug_of(c)
         clean_dir = wt_path.name
@@ -215,6 +268,14 @@ def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
         if cid:
             parts = {branch_short, clean_dir, *branch_short.split("-"), *clean_dir.split("-")}
             if cid in parts or f"card-{cid}" in parts or f"pl-{cid}" in parts:
+                return c
+
+    for c in all_cards:
+        for url in (c.get("metadata") or {}).get("pr_urls") or []:
+            if url not in pr_cache:
+                pr_cache[url] = _pr_info(url)
+            pr = pr_cache.get(url)
+            if pr and pr.get("headRefName") in (branch, branch_short):
                 return c
 
     return None
@@ -244,8 +305,13 @@ def sweep(all_cards: list[dict], dry: bool = False) -> None:
         if not card:
             continue
 
+        if hold := agent_hold(card):
+            why = f" ({hold[1]})" if hold[1] else ""
+            print(f"worktree {wt_path} {card['id']} skipped: agent {hold[0]}{why}")
+            continue
+
         col = card.get("column") or (col_name(card.get("list_id")) if card.get("list_id") else None)
-        if col != "Done" or _has_live_agent(card):
+        if col != "Done":
             continue
 
         meta = card.get("metadata") or {}
@@ -281,8 +347,26 @@ def sweep(all_cards: list[dict], dry: bool = False) -> None:
         try:
             _run(["git", "worktree", "remove", str(wt_path)], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
             _run(["git", "worktree", "prune"], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
+            events.emit("worktree_cleanup", card["id"], path=str(wt_path), by="sweep")
         except (subprocess.CalledProcessError, OSError) as e:
             print(f"worktree {wt_path.name}: cleanup failed: {e}", file=sys.stderr)
+
+
+def check_missing(all_cards: list[dict]) -> None:
+    """One worktree_removed event for each unfinished card whose recorded worktree folder is gone."""
+    gone = [(c, p) for c in all_cards
+            if (p := (c.get("metadata") or {}).get("worktree")) and not Path(p).exists()
+            and not (c.get("metadata") or {}).get("dropped_at")
+            and (c.get("column") or col_name(c["list_id"])) != "Done"]
+    if not gone:
+        return
+    log = events._read()
+    for c, p in gone:
+        if any(e["kind"] == "worktree_removed" and e.get("card") == c["id"] and e.get("path") == p for e in log):
+            continue
+        cleanup = next((e for e in reversed(log) if e["kind"] == "worktree_cleanup" and e.get("path") == p), None)
+        events.emit("worktree_removed", c["id"], path=p,
+                    message=f"removed by pl cleanup at {cleanup['ts'][:16]}" if cleanup else "removed outside pl")
 
 
 LISTS = ("copy", "link")
