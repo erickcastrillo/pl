@@ -179,7 +179,7 @@ def _print_show(d):
     print(f"pipeline {d['name']}" + (f" (template {d['template']})" if d["template"] else ""))
     print("columns: " + " → ".join(d["columns"]))
     for n, s in d["stages"].items():
-        fields = [f"{k} {s[k]}" for k in ("skill", "account", "section", "gate", "next") if k in s]
+        fields = [f"{k} {s[k]}" for k in ("skill", "account", "agent", "section", "gate", "next") if k in s]
         print(f"  {n}: {s.get('column')} → {s.get('done')}; " + ", ".join(fields))
     print("gates: " + (", ".join(f"{n} {g}" for n, g in d["gates"].items()) or "none"))
 

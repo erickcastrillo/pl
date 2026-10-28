@@ -403,3 +403,22 @@ def test_import_of_a_non_string_pod_exits_2(fake_home, tmp_path, capsys):
         pipeline.cmd_pipelines(_import_args(f, "x"))
     assert e.value.code == 2 and "pl: pipeline.pod:" in capsys.readouterr().err
     assert not (fake_home / ".pl-x").exists()
+
+
+def test_show_prints_stage_agent_text_and_json(fake_home, capsys):
+    _profile(fake_home, "sales", NEW_CLIENT_CONFIG + 'agent = "marketing-copywriter"\n')
+    C.load("sales")
+    pipeline.cmd_pipelines(_args())
+    assert "agent marketing-copywriter" in capsys.readouterr().out
+    pipeline.cmd_pipelines(_args(json=True))
+    assert json.loads(capsys.readouterr().out)["stages"]["qualify"]["agent"] == "marketing-copywriter"
+
+
+def test_show_stage_without_agent_is_unchanged(fake_home, capsys):
+    _profile(fake_home, "sales", NEW_CLIENT_CONFIG)
+    C.load("sales")
+    pipeline.cmd_pipelines(_args())
+    assert "  qualify: Lead → Qualify review; skill pl-stage, section PROPOSAL, gate owner\n" in capsys.readouterr().out
+    pipeline.cmd_pipelines(_args(json=True))
+    assert json.loads(capsys.readouterr().out)["stages"]["qualify"] == {
+        "column": "Lead", "done": "Qualify review", "skill": "pl-stage", "section": "PROPOSAL", "gate": "owner"}
