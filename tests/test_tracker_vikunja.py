@@ -202,6 +202,15 @@ def test_cards_read_a_flat_bucket_page_from_vikunja_2(fake):
     assert sorted(c["title"] for c in cards) == ["a0", "a1", "a2", "a3", "a4"] and {c["list_id"] for c in cards} == {"10"}
 
 
+def test_cards_read_when_vikunja_hides_the_own_email(fake):
+    # Vikunja's /user leaves out the email unless the user made it public: an assigned card still reads
+    fake.me = {"id": 1, "username": "me"}
+    fake.users[0] = fake.me
+    fake.add_task(10, title="mine", assignees=[{"id": 1, "username": "me"}])
+    card = next(c for c in fake.tracker.cards() if c["title"] == "mine")
+    assert card["assigned_to"] == "me"
+
+
 def test_create_puts_task_in_column_and_reads_back(fake):
     c = fake.tracker.create("Spec ready", title="T", description="text", metadata={"k": 1}, tags=["x"], assigned_to="me@x")
     assert c["list_id"] == "11" and c["title"] == "T"

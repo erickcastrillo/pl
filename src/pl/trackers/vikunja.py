@@ -56,7 +56,8 @@ class Vikunja:
     def _own_user(self):
         if self._me is None:
             self._me = self._http("GET", "/user")
-            self._emails[self._me["id"]] = self._me["email"]
+            if self._me.get("email"):   # Vikunja leaves it out unless the user made it visible
+                self._emails[self._me["id"]] = self._me["email"]
         return self._me
 
     def _user_id(self, email):
