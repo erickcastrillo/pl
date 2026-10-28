@@ -1,0 +1,3 @@
+title = "Check a real profile, read only"
+where = "pl e2e console --live --profile NAME"
+try = "pl e2e console --live --profile <your profile>"
