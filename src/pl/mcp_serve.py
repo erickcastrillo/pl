@@ -106,6 +106,19 @@ def build(profile: str | None = None) -> FastMCP:
     def pl_approve(id: str, profile: str | None = profile) -> Any:
         return run_pl([*_profile_args(profile), "approve", id])
 
+    @server.tool(description="Every agent: built-in and this profile's.")
+    def pl_agents_list(profile: str | None = profile) -> Any:
+        return _read(profile, "agents", "list")
+
+    @server.tool(description="One agent's full definition.")
+    def pl_agents_show(name: str, profile: str | None = profile) -> Any:
+        return _read(profile, "agents", "show", name)
+
+    @server.tool(description="Set the agent a pipeline stage runs.")
+    def pl_agents_use(stage: str, agent: str, pipeline: str | None = None, profile: str | None = profile) -> Any:
+        return run_pl([*_profile_args(profile), "agents", "use", stage, agent,
+                       *(["--pipeline", pipeline] if pipeline else []), "--json"])
+
     return server
 
 
