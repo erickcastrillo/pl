@@ -545,11 +545,16 @@ def cmd_move(a):
     try:
         move_card(a.id, a.column, pr)
     except OverBudget as e:   # pl's own budget hold: saved, and the dispatcher applies it after the reset
-        t = trackers.get("tracker")
-        cid = t.ref_id(a.id) if hasattr(t, "ref_id") else a.id
-        heldwrites.add(cid, "move", {"column": a.column, "pr": pr}, e.until, was=heldwrites.cached_list(cid))
-        print(f"queued: move {short_id(cid)} to {a.column}; GitHub budget held, resets "
-              f"{time.strftime('%H:%M', time.localtime(e.until))} (pl applies it after the reset)")
+        print(held_move(a.id, a.column, pr, e))
+
+
+def held_move(ref, column, pr, e, was=None):
+    """Queue a move that pl's budget hold refused, for the dispatcher to apply after the reset; returns the notice."""
+    t = trackers.get("tracker")
+    cid = t.ref_id(ref) if hasattr(t, "ref_id") else ref
+    heldwrites.add(cid, "move", {"column": column, "pr": pr}, e.until, was=was if was is not None else heldwrites.cached_list(cid))
+    return (f"queued: move {short_id(cid)} to {column}; GitHub budget held, resets "
+            f"{time.strftime('%H:%M', time.localtime(e.until))} (pl applies it after the reset)")
 
 
 def move_card(ref, column, pr=None):

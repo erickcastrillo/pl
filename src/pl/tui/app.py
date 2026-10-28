@@ -124,7 +124,7 @@ def default_provider():
             "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
             "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
             "machine": manager.read_status(), "now": _now(snap["rows"]), "alerts": _alerts(), "watchdog": _watchdog(),
-            "kill": outward.state(),
+            "queued_moves": _queued_moves(), "kill": outward.state(),
             "home": [summary_read(d) for d in sorted(Path.home().glob(".pl-*"))]}
 
 
@@ -135,6 +135,15 @@ def _watchdog():
         return alerts.needs_you()
     except Exception:  # noqa: BLE001
         return []
+
+
+def _queued_moves():
+    """Moves waiting for the budget reset, by card; an unreadable file never fails the refresh."""
+    from pl import heldwrites
+    try:
+        return heldwrites.queued_moves()
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _now(rows):

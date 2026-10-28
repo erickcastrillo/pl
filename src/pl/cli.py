@@ -169,6 +169,9 @@
   pl e2e [REPO] [--ref REF] [--out DIR] [--keep-vm]
                           run the repo's Playwright suite in a throwaway Multipass VM set up from its
                           .pl/e2e.yaml; report in ~/pl-e2e/<repo>/<time>/ (pl e2e --help). No profile needed
+  pl e2e console [--out DIR] [--timeout SECONDS]
+                          from a pl checkout: run the console acceptance suite on a throwaway profile; report.md
+                          lists each checklist item as pass, fail or not testable here. No profile needed
   pl tests affected [--base REF] [--json]
                           the test files a change can affect (import graph for Python) and whether it needs the
                           full suite, and the command to run them. No profile needed
@@ -312,6 +315,9 @@ def _main():
     if pre_a.rest[:1] == ["chat"]:             # machine-wide: no profile of its own
         from pl import chat
         return chat.cmd_chat(pre_a.rest[1:])
+    if pre_a.rest[:2] == ["e2e", "console"]:   # the console acceptance suite; a repo folder named console is ./console
+        from pl import e2e_console
+        return e2e_console.cmd(pre_a.rest[2:])
     if pre_a.rest[:1] == ["e2e"]:              # repo-driven: reads .pl/e2e.yaml, needs no tracker
         from pl import e2e
         return e2e.cmd_e2e(pre_a.rest[1:])

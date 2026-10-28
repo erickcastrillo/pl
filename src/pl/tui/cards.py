@@ -13,16 +13,17 @@ from textual.worker import get_current_worker
 
 from pl import agent_defs, agent_screen
 from pl import config as C
-from pl import confirm, move_agent, pipeline, trackers
+from pl import confirm, heldwrites, move_agent, pipeline, trackers
 from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
-from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
+from pl.commands import adopt, done, drop, held_move, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import close, empty_state, show_first_heading, skip_headings
 from pl.tui.live import NO_WINDOW, LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
 from pl.tui.subagents import TODO_MARK
+from pl.trackers.github import OverBudget
 from pl.util import ago, short_id
 
 
@@ -132,7 +133,7 @@ def stage_agent(c, col, known=None):
     return f"{name} (unknown)" if isinstance(known, set) and name not in known else name
 
 
-def card_head(c, col, url, approved=None):
+def card_head(c, col, url, approved=None, queued=None):
     """The plain header lines of the card screen: title, then stage/who/next, column, tags, assignee, links, updated, link, metadata."""
     m = c.get("metadata") or {}
     stage, who, next_step = header_summary(c, col)
@@ -145,6 +146,7 @@ def card_head(c, col, url, approved=None):
         t.append(f"{'agent':<9}", style="dim")
         t.append(f"{agent}\n")
     for label, value in (("column", col), *([("status", approved)] if approved else []),
+                         *([("queued", queued)] if queued else []),
                          ("tags", ", ".join(map(str, c.get("tags") or []))),
                          ("assignee", c.get("assigned_to_display") or c.get("assigned_to")),
                          ("links", links)):
@@ -208,15 +210,19 @@ class CardScreen(Screen):
             except (SystemExit, Exception) as e:
                 self.app.call_from_thread(self._failed, str(e))
                 return
-            self.app.call_from_thread(self._show, c, url)
+            try:
+                queued = heldwrites.queued_moves().get(cid)
+            except Exception:  # noqa: BLE001 - no note is not an error
+                queued = None
+            self.app.call_from_thread(self._show, c, url, queued)
         self.run_worker(run, thread=True, group="card")
 
     def _failed(self, msg):
         self.query_one("#card-head", Static).update(Text(f"could not read the {pipeline.ui()['item']}: {msg}", style="red"))
 
-    async def _show(self, c, url):
+    async def _show(self, c, url, queued=None):
         self.card = c
-        self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved))
+        self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved, queued))
         await self.query_one("#card-md", Markdown).update(todo_markdown(self.now) + card_markdown(c.get("description")))
         self.query_one("#card-doc").focus()
 
@@ -565,6 +571,8 @@ class CardsView(CardActions, Horizontal):
                 if names_agents and r.get("col") != "Done" and (agent := stage_agent(r["card"], r.get("col"), known)):
                     agent = agent if len(agent) <= AGENT_WIDTH else agent[:AGENT_WIDTH - 1] + "…"
                     line = f"agent: {agent} · {line}" if line else f"agent: {agent}"
+                if note := (data.get("queued_moves") or {}).get(cid):
+                    line = f"{note} · {line}" if line else note
                 if self.plan is not None:
                     line = f"{r.get('col')} · {line}" if line else str(r.get("col"))
                 built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"),
@@ -758,7 +766,10 @@ class CardsView(CardActions, Horizontal):
 
         def run(col):
             try:
-                msg = f"moved {head} to {col}" if move_to(c["id"], col) else f"not moved: {head}"
+                try:
+                    msg = f"moved {head} to {col}" if move_to(c["id"], col) else f"not moved: {head}"
+                except OverBudget as e:   # first: it is a SystemExit too
+                    msg = held_move(c["id"], col, None, e, was=c.get("list_id"))
             except (SystemExit, Exception) as e:  # noqa: BLE001 - a failed write must not kill the console
                 msg = f"not moved: {e}"
             self.app.call_from_thread(self.app.notify, msg, markup=False)

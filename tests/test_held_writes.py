@@ -451,3 +451,50 @@ def test_give_up_held_midway_queues_only_the_pull_requests_not_done(held, clock)
     assert entry["args"] == {"prs": [PR.format(2)], "rounds": 3}
     done = [a for a in held.gh if any(x.endswith("/comments") for x in a)]
     assert len(done) == 1 and "repos/acme/app/issues/1/comments" in done[0]
+
+
+# ---------- console v move under a held budget ----------
+
+def test_console_move_under_hold_is_queued_like_pl_move(gh):
+    reset = _ledger(10, {})
+    line = commands.held_move(CARD3, "Approved", None, github.OverBudget(reset, "low"), was="opt-Spec ready")
+    assert line.startswith("queued: move ") and "to Approved; GitHub budget held, resets" in line
+    assert "(pl applies it after the reset)" in line
+    (entry,) = heldwrites.entries()
+    assert (entry["card"], entry["op"], entry["args"]["column"], entry["was"]) == (CARD3, "move", "Approved", "opt-Spec ready")
+    assert "move" in "\n".join(heldwrites.doctor_lines())
+
+
+def test_pl_move_under_hold_output_is_unchanged(gh, capsys):
+    reset = _ledger(10, {})
+    _move("3", "Approved")
+    expected = (f"queued: move {commands.short_id(CARD3)} to Approved; GitHub budget held, resets "
+                f"{time.strftime('%H:%M', time.localtime(reset))} (pl applies it after the reset)\n")
+    assert capsys.readouterr().out == expected
+    assert [e["op"] for e in heldwrites.entries()] == ["move"]
+
+
+def test_queued_moves_names_the_newest_target_per_card(gh):
+    _queue(CARD3, "Plan", 100)
+    _queue(CARD3, "Done", 200)
+    heldwrites.add(CARD4, "update", {"column": "Approved"}, 300)
+    heldwrites.add("acme/app#5", "update", {"add_tags": ["x"]}, 300)
+    heldwrites.add("acme/app#6", "hold", {}, 300)
+    got = heldwrites.queued_moves()
+    assert got == {CARD3: f"move to Done queued, resets {heldwrites._hhmm(200)}",
+                   CARD4: f"move to Approved queued, resets {heldwrites._hhmm(300)}"}
+
+
+def test_queued_moves_empty_after_replay(gh, clock):
+    heldwrites.add(CARD3, "move", {"column": "Approved", "pr": None}, clock[0], was="opt-Spec ready")
+    gh.set(status={"3": "Spec ready"})
+    assert heldwrites.queued_moves()
+    heldwrites.replay(lambda *a: None)
+    assert heldwrites.queued_moves() == {}
+
+
+def test_queued_moves_empty_after_skipped_replay(gh, clock):
+    heldwrites.add(CARD3, "move", {"column": "Approved", "pr": None}, clock[0], was="opt-Spec ready")
+    gh.set(status={"3": "Done"})
+    heldwrites.replay(lambda *a: None)
+    assert heldwrites.queued_moves() == {}
