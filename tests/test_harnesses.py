@@ -2,6 +2,7 @@
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import types
@@ -922,6 +923,12 @@ def _machine(tests=None, max_live_agents=None):
     (manager.machine_dir() / "machine.toml").write_text("\n".join(lines) + "\n")
 
 
+def _machine_text(text):
+    from pl import manager
+    manager.machine_dir().mkdir(parents=True, exist_ok=True)
+    (manager.machine_dir() / "machine.toml").write_text(text)
+
+
 def _agent_script(stage="run", **kw):
     return harnesses.launch_script(harnesses.get("claude"), "acme", "go", SID, "lbl", plugin=False, stage=stage, **kw)
 
@@ -959,3 +966,57 @@ def test_the_review_loop_window_exports_the_xdist_share(fake_home):
     _machine(tests=6, max_live_agents=3)
     script = harnesses.launch_script(harnesses.get("claude"), "acme", "/pl-review", None, "review", plugin=False)
     assert f"export {XDIST}=2\n" in script
+
+
+# ---------- agent priority ----------
+
+def _lines(script):
+    return script.splitlines()
+
+
+@pytest.mark.parametrize("stage", ["spec", "design", "plan", "run"])
+def test_launch_script_renices_to_10_by_default_before_exec(fake_home, stage):
+    lines = _lines(_agent_script(stage))
+    i = lines.index("renice -n 10 -p $$ >/dev/null 2>&1")
+    assert i < next(k for k, ln in enumerate(lines) if ln.startswith("exec "))
+
+
+def test_launch_script_uses_agent_nice_from_machine_toml(fake_home):
+    _machine_text("[limits]\nagent_nice = 15\n")
+    assert "renice -n 15 -p $$ >/dev/null 2>&1" in _lines(_agent_script())
+
+
+def test_agent_nice_0_adds_no_priority_change(fake_home):
+    _machine_text("[limits]\nagent_nice = 0\n")
+    script = _agent_script()
+    assert not any(ln.startswith("renice") for ln in _lines(script)) and "nice" not in shlex.split(_lines(script)[-1])
+
+
+def test_a_bad_agent_nice_launches_at_10_never_negative(fake_home):
+    _machine_text("[limits]\nagent_nice = -5\n")
+    script = _agent_script()
+    assert "renice -n 10 -p $$" in script and "-n -5" not in script
+
+
+def test_the_review_loop_window_and_headless_loop_are_reniced(fake_home, tmp_path):
+    loop = harnesses.launch_script(harnesses.get("claude"), "acme", "go", SID, "lbl", plugin=False, stage=None)
+    assert "renice -n 10 -p $$ >/dev/null 2>&1" in _lines(loop)
+    headless = harnesses.headless_script(harnesses.get("claude"), "acme", "go", "lbl", tmp_path / "log", tmp_path / "rec")
+    assert "renice -n 10 -p $$ >/dev/null 2>&1" in _lines(headless)
+
+
+def test_a_sandboxed_agent_runs_nice_inside_the_vm(fake_home, monkeypatch):
+    from pl import sandbox
+    monkeypatch.setattr(sandbox, "settings", lambda: {"enabled": True})
+    monkeypatch.setattr(sandbox, "vm_name", lambda: "vm1")
+    argv = shlex.split(_lines(_agent_script())[-1])
+    i = argv.index("nice")
+    assert argv[i:i + 3] == ["nice", "-n", "10"] and argv[argv.index("--") + 1] == "env" and argv[i + 3] == "claude"
+
+
+@pytest.mark.skipif(shutil.which("renice") is None or shutil.which("ps") is None, reason="needs renice and ps")
+def test_a_reniced_script_really_lowers_the_shell_and_its_children(tmp_path):
+    path = tmp_path / "s.sh"
+    path.write_text(harnesses._nice_line(10) + "\nexec sh -c 'ps -o ni= -p $$; sh -c \"ps -o ni= -p \\$\\$\"'\n")
+    out = subprocess.run(["sh", str(path)], capture_output=True, text=True, check=True).stdout.split()
+    assert len(out) == 2 and all(int(v) >= 10 for v in out)

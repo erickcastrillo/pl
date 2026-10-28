@@ -292,7 +292,8 @@ class DashboardView(Vertical):
         if m:
             pct = m.get("agent_memory_pct")
             bar.append(f"   machine: {len(m.get('profiles') or [])} profiles, {m.get('live_agents', 0)}/"
-                       f"{m.get('max_live_agents', '?')} agents" + (f", {pct}% agent memory" if pct is not None else ""), style="dim")
+                       f"{m.get('max_live_agents', '?')} agents" + (f", nice {m['agent_nice']}" if m.get("agent_nice") is not None else "")
+                       + (f", {pct}% agent memory" if pct is not None else ""), style="dim")
             if m.get("hold"):
                 bar.append(f"  HOLD: {m['hold']}", style="bold red")
         self.query_one("#window-bar", Static).update(bar)

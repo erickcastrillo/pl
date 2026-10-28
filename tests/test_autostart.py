@@ -275,7 +275,7 @@ def machine(tmp_path, age=None, toml=False):
         import time
         (d / "status.json").write_text(json.dumps({"at": time.time() - age, "pid": 1, "hold": "10 live agents (max 8)",
                                                    "profiles": [{"name": "work"}, {"name": "home"}], "live_agents": 5,
-                                                   "max_live_agents": 8, "agent_memory_pct": 38}))
+                                                   "max_live_agents": 8, "agent_memory_pct": 38, "agent_nice": 10}))
 
 
 async def test_the_dashboard_shows_a_fresh_machine_status_and_not_a_stale_one(tmp_path, monkeypatch):
@@ -291,10 +291,11 @@ async def test_the_dashboard_shows_a_fresh_machine_status_and_not_a_stale_one(tm
         assert "machine" in data and (data["machine"] is not None) is shown
         app = PlApp(snapshot_provider=lambda: {**fake_data(), "machine": data["machine"]}, autostart=False)
         async with app.run_test(size=(176, 48)) as pilot:
-            await settle(pilot, lambda: ('machine: 2 profiles, 5/8 agents, 38% agent memory' in window_bar(app)) is shown and window_bar(app), "the machine status in the window bar")
+            await settle(pilot, lambda: ('machine: 2 profiles, 5/8 agents, nice 10, 38% agent memory' in window_bar(app)) is shown and window_bar(app), "the machine status in the window bar")
             bar = str(app.query_one("#window-bar").render())
-            assert ("machine: 2 profiles, 5/8 agents, 38% agent memory" in bar) is shown
+            assert ("machine: 2 profiles, 5/8 agents, nice 10, 38% agent memory" in bar) is shown
             assert ("10 live agents" in bar) is shown
+            assert ("nice 10" in bar) is shown
 
 
 def status(rows):
