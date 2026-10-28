@@ -2,6 +2,7 @@
 import pytest
 from textual.widgets import DataTable
 
+from pl import commands
 from pl import config as C
 from pl import pipeline
 from pl.tui import chrome, needs
@@ -199,3 +200,72 @@ async def test_review_read_error_toast_says_lead(sales, monkeypatch):
         await app.push_screen(tui_review.ReviewScreen("spec", CID))
         await settle(pilot)
         assert "could not read the lead: gone" in _notes(app)
+
+
+async def _v_move(pilot, app, cid, down=1):
+    await _open_cards(pilot, app, cid)
+    await pilot.press("v")
+    await settle(pilot)
+    await pilot.press(*["down"] * down, "enter")
+    await settle(pilot)
+    await pilot.press("y")
+    await settle(pilot)
+
+
+def _raising(exc):
+    def move(cid, col):
+        raise exc
+    return move
+
+
+async def test_v_move_under_budget_hold_says_queued(monkeypatch):
+    import time
+    from pl import heldwrites
+    from pl.trackers.github import OverBudget
+    monkeypatch.setattr(tui_cards, "move_to", _raising(OverBudget(time.time() + 600, "low")))
+    monkeypatch.setattr(commands.trackers, "get", lambda kind: object())
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _v_move(pilot, app, "c0000003aaaa")
+        (note,) = [n for n in _notes(app) if "move" in n]
+    assert note.startswith("queued: move") and "(pl applies it after the reset)" in note
+    (entry,) = heldwrites.entries()
+    assert entry["card"] == "c0000003aaaa" and entry["op"] == "move" and entry["args"]["column"] == "Spec ready"
+    assert entry["was"] == "Manual"
+
+
+async def test_v_move_rate_limited_is_not_queued(monkeypatch):
+    import time
+    from pl import heldwrites
+    from pl.trackers.github import RateLimited
+    monkeypatch.setattr(tui_cards, "move_to", _raising(RateLimited(time.time() + 600, "GitHub said slow down")))
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _v_move(pilot, app, "c0000003aaaa")
+        assert any(n.startswith("not moved: ") for n in _notes(app))
+    assert heldwrites.entries() == []
+
+
+async def test_v_move_with_budget_left_moves_at_once(monkeypatch):
+    from pl import heldwrites
+    monkeypatch.setattr(tui_cards, "move_to", lambda cid, col: cid)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _v_move(pilot, app, "c0000003aaaa")
+        assert any(n.startswith("moved ") for n in _notes(app))
+    assert heldwrites.entries() == []
+
+
+async def test_board_row_shows_queued_move_note(monkeypatch):
+    data = fake_data()
+    data["queued_moves"] = {"4a000001aaaa": "move to Plan queued, resets 15:40"}
+    provider = Provider(data)
+    app = PlApp(snapshot_provider=provider)
+    async with app.run_test(size=(220, 48)) as pilot:
+        await _open_cards(pilot, app)
+        line = next(x for x in screen_text(app).splitlines() if "4a000001" in x)
+        assert "move to Plan queued" in line   # the table cuts the rest at this width
+        provider.data = {**data, "queued_moves": {}}
+        app.query_one(tui_cards.CardsView).show(provider.data)
+        await settle(pilot)
+        assert "move to Plan queued" not in screen_text(app)

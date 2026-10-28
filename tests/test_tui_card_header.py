@@ -165,3 +165,12 @@ def test_manual_card_with_agent_still_says_you(monkeypatch):
     head = card_head({"title": "T", "metadata": {}}, "Manual", None).plain
     assert "draft · you · yours to do" in head
     assert f"agent    {STAGE_AGENT}\n" in head
+
+
+def test_card_head_shows_a_queued_move():
+    head = card_head({"title": "t", "metadata": {}}, "Plan", None, queued="move to Done queued, resets 15:40").plain
+    assert "queued   move to Done queued, resets 15:40" in head
+
+
+def test_card_head_without_queue_is_unchanged():
+    assert "queued" not in card_head({"title": "t", "metadata": {}}, "Plan", None).plain
