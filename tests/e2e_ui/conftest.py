@@ -10,7 +10,7 @@ import pytest
 from textual.widgets import Footer
 
 from pl import config as C
-from pl import harnesses, trackers
+from pl import harnesses, trackers, watch
 from pl.tui import prs as tui_prs
 from pl.tui.app import PlApp
 from test_tui_views import FakeGh, screen_text
@@ -56,7 +56,9 @@ def profile(tmp_path, monkeypatch):
     board = trackers.get("tracker")
     for column in board.columns():
         board.create(column, title=f"e2e card in {column}")
+    trackers.reset()   # the console's refresh worker opens its own connection: a SQLite one cannot cross threads
     monkeypatch.setattr(tui_prs, "_run", FakeGh(), raising=False)
+    monkeypatch.setattr(watch, "pr_activity", lambda days=14: None)   # the refresh worker would run `gh search prs`
     monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", ""))
     yield folder
     trackers.reset()
