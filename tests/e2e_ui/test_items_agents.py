@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import press
-from pl import assistant, harnesses
+from conftest import HERE, press
+from pl import assistant, dispatch, harnesses, trackers
 from pl import config as C
 from test_tui_views import screen_text
 from tui_wait import settle, wait_until
@@ -129,3 +129,63 @@ async def test_item_10_open_console_uses_a_changed_assistant_account(console, tm
         await wait_until(pilot, lambda: assistant.load().get("account") == "b", "the Assistant to start on b", timeout=20.0)
         await settle(pilot)
         assert "(b)" in pilot.app.query_one("#assistant-view").status
+
+
+PR = "https://github.com/o/r/pull/7"
+
+
+def iso(minutes_ago):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds")
+
+
+def where(request, screen, tab=None, key=None):
+    """What the report says for a check that has no console: the slice 1 recorder reads this like it reads press()."""
+    HERE.setdefault(request.node.name, {"start": False})["where"] = {"tab": tab, "screen": screen, "key": key}
+
+
+@pytest.fixture
+def dispatcher_pass(profile, tmux, monkeypatch, request):
+    """A card in rework whose run agent sits in fake pane %1; `run(busy)` is one real dispatcher pass on the throwaway board."""
+    where(request, "dispatcher pass")
+    for name in ("start_worker", "sweep_untracked", "ensure_services", "notify", "mirror_to_product"):
+        monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
+
+    def make(busy):
+        worker = {"stage": "run", "harness": "claude", "pane": "%1", "window": "@1", "session_id": "s1", "started_at": iso(10)}
+        if not busy:
+            worker["finished_turn"] = True
+        board = trackers.get("tracker")
+        card = board.create("In progress", title="rework card", description="# PIPELINE: PLAN\nWP1", metadata={
+            "pipeline_mode": "auto", "profile": "a", "worker": worker,
+            "rework": {"active": True, "round": 1, "prs": [PR], "at": iso(1)}})
+        tmux.pane("%1", window="@1", name="run", command="claude", screen="some output\n❯ ")
+        monkeypatch.setattr(dispatch, "registry", lambda: {"s1": {"status": "busy" if busy else "idle"}})
+        return card["id"]
+
+    def run(card_id):
+        dispatch.dispatch_once(1, False, pull=False)
+        return trackers.get("tracker").card(card_id)["metadata"]["rework"]
+    return make, run
+
+
+def test_item_16a_idle_run_agent_gets_the_rework_message_once(dispatcher_pass, tmux):
+    make, run = dispatcher_pass
+    rework = run(make(busy=False))
+    typed = tmux.typed("%1")
+    assert len(typed) == 1 and "round 1" in typed[0][0] and typed[0][1], typed
+    assert rework.get("sent_round") == 1
+
+
+def test_item_16m_second_pass_in_the_same_round_types_nothing(dispatcher_pass, tmux):
+    make, run = dispatcher_pass
+    card_id = make(busy=False)
+    run(card_id)
+    run(card_id)
+    assert len(tmux.typed("%1")) == 1
+
+
+def test_item_16a_busy_run_agent_gets_nothing(dispatcher_pass, tmux):
+    make, run = dispatcher_pass
+    rework = run(make(busy=True))
+    assert tmux.typed("%1") == []
+    assert "sent_round" not in rework
