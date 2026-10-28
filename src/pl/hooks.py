@@ -17,7 +17,10 @@ def settings_json(card_id, window):
     (2 for a foreign card) from ever blocking the agent, and covers pl missing from PATH."""
     def hook(event):
         cmd = f"pl hook {event} --card {shlex.quote(card_id)} --window {shlex.quote(window)} || true"
-        return [{"hooks": [{"type": "command", "command": cmd, "timeout": HOOK_TIMEOUT}]}]
+        entry = {"hooks": [{"type": "command", "command": cmd, "timeout": HOOK_TIMEOUT}]}
+        if event == "Notification":   # only a permission prompt: an idle "waiting for your input" one is not a wait for you
+            entry["matcher"] = "permission_prompt"
+        return [entry]
     return json.dumps({"hooks": {e: hook(e) for e in EVENTS}})
 
 

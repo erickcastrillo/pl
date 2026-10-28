@@ -110,6 +110,14 @@ def test_launch_script_includes_hooks_for_claude_stage():
     assert cmd["type"] == "command" and cmd["timeout"] == 2
 
 
+def test_notification_hook_only_fires_on_a_permission_prompt():
+    # Claude Code also notifies when an agent idles at its prompt ("waiting for your input"); that is not a
+    # permission wait, so the hook matches permission prompts only. Stop has no matcher.
+    s = _settings(_script(stage="run", hooks=(CARD, WINDOW)))
+    assert [e.get("matcher") for e in s["hooks"]["Notification"]] == ["permission_prompt"]
+    assert all("matcher" not in e for e in s["hooks"]["Stop"])
+
+
 def test_launch_script_omits_hooks_when_disabled_or_non_stage():
     C.DISPATCH = {**C.DISPATCH, "hooks": False}
     assert _settings(_script(stage="run", hooks=(CARD, WINDOW))) is None
