@@ -428,6 +428,15 @@ def xdist_auto_workers():
     return max(1, worker_budget.max_workers() // manager._limits(manager.managed())["max_live_agents"])
 
 
+def agent_nice():
+    from pl import manager
+    return manager._limits(manager.managed())["agent_nice"]
+
+
+def _nice_line(n):
+    return f"renice -n {int(n)} -p $$ >/dev/null 2>&1" if n > 0 else None
+
+
 def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None, pod=None, model=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
@@ -464,9 +473,12 @@ def launch_script(h, account, prompt, session_id, label, resume=False, plugin=Tr
             env_args.append(f"PL_STAGE={_typeable(str(stage))}")
         if wt:
             env_args.append(f"{WORKTREES_ENV}={_typeable(wt)}")
-        exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *argv]
+        nice = ["nice", "-n", str(agent_nice())] if agent_nice() > 0 else []
+        exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *nice, *argv]
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in exec_argv))
     else:
+        if renice := _nice_line(agent_nice()):
+            lines.append(renice)
         lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
         if card := (hooks[0] if hooks else card_id):
             lines.append(f"export PL_CARD={shlex.quote(_typeable(card))}")
@@ -597,6 +609,8 @@ def headless_script(h, account, prompt, name, log_path, record_path, writes=True
     itself first."""
     argv, env = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
     lines = ["#!/bin/sh", 'rm -f -- "$0"', "umask 077"]
+    if renice := _nice_line(agent_nice()):
+        lines.append(renice)
     lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
     if "PL_GH_LEDGER" in env:
         lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(env['PL_GH_LEDGER']))}")

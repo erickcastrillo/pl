@@ -1381,3 +1381,48 @@ def test_status_names_tests_that_is_not_a_table(machine, monkeypatch):
 def test_status_json_when_not_running_has_no_test_workers(machine, capsys):
     manager.cmd_manager(["status", "--json"])
     assert json.loads(capsys.readouterr().out) == {"running": False}
+
+
+# ---------- agent priority ----------
+
+BAD_NICE = "limits.agent_nice must be a whole number from 0 to 19"
+
+
+@pytest.mark.parametrize("bad", [-5, 25, "high", True])
+def test_validate_machine_names_a_bad_agent_nice(bad):
+    assert C.validate_machine({"limits": {"agent_nice": bad}}) == [BAD_NICE]
+
+
+@pytest.mark.parametrize("good", [0, 10, 19])
+def test_validate_machine_accepts_agent_nice_0_to_19(good):
+    assert C.validate_machine({"limits": {"agent_nice": good}}) == []
+
+
+def test_limits_default_agent_nice_is_10_and_a_bad_one_keeps_it(machine):
+    assert manager._limits()["agent_nice"] == 10
+    limits(machine, "[limits]\nagent_nice = -5\n")
+    assert manager._limits()["agent_nice"] == 10
+    limits(machine, "[limits]\nagent_nice = 15\n")
+    assert manager._limits()["agent_nice"] == 15
+
+
+def test_status_json_and_show_name_the_agent_nice(machine):
+    limits(machine, "[limits]\nagent_nice = 15\n")
+    assert manager.tick({})["agent_nice"] == 15
+    f = hold(manager.machine_dir() / "manager.lock")
+    f.write("pid 41 since now")
+    f.flush()
+    machine["alive"].add(41)
+    try:
+        agents = next(ln for ln in manager.show().splitlines() if ln.startswith("agents:"))
+    finally:
+        f.close()
+    assert agents.endswith(", nice 15") or ", nice 15;" in agents
+
+
+def test_show_without_agent_nice_in_an_old_status_omits_it(machine):
+    f = running_manager(machine)
+    try:
+        assert "nice" not in manager.show()
+    finally:
+        f.close()

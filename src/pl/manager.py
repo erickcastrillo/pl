@@ -33,6 +33,7 @@ enabled = true               # false: each console starts its own profile's disp
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
+agent_nice = 10              # CPU priority of agent and loop windows and their tests: 0 (normal) to 19 (lowest)
 
 [tests]
 # max_workers = 6            # pytest workers shared by every profile's test runs (pl tests run).
@@ -489,7 +490,7 @@ def tick(state):
         except Exception as e:  # noqa: BLE001 - prune failure never stops the tick
             print(f"brain prune failed: {type(e).__name__}: {e}", flush=True)
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
-              "room": max(0, cap - live), "exited_windows": state.get("exited", 0), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error,
+              "room": max(0, cap - live), "exited_windows": state.get("exited", 0), "agent_memory_pct": pct, "agent_nice": _limits(profs)["agent_nice"], "hold": hold, "machine_error": machine_error,
               "build": build, "pkg": str(update.PKG)}
     _write("status.json", status)
     return status
@@ -761,6 +762,7 @@ def show():
                      f"{github:<12}{'; '.join(why) or '-'}{who}")
     lines.append(f"agents: {st.get('live_agents', 0)} live of {st.get('max_live_agents', '?')} on this machine "
                  "(agents column: in use/allowed now; each profile has its own share)"
+                 + (f", nice {st['agent_nice']}" if st.get("agent_nice") is not None else "")
                  + (f"; {n} exited window{'s' * (n != 1)} not counted" if (n := st.get("exited_windows")) else ""))
     w = _test_workers()
     lines.append(f"test workers: {w['in_use']}/{w['allowed']}")

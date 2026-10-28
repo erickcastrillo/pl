@@ -823,7 +823,8 @@ def save(doc, target=None) -> list[str]:
 
 
 # pl manager's machine.toml [limits]: caps across every profile on the machine
-MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True}
+MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True,
+                    "agent_nice": 10}
 
 
 def validate_tests(t) -> list[str]:
@@ -845,6 +846,9 @@ def validate_machine(t) -> list[str]:
     v = lim.get("max_live_agents")
     if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
         errs.append("limits.max_live_agents must be a whole number of at least 1")
+    v = lim.get("agent_nice")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 19):
+        errs.append("limits.agent_nice must be a whole number from 0 to 19")
     if not isinstance(man.get("enabled", True), bool):
         errs.append("manager.enabled must be true or false")
     if not isinstance(lim.get("kill_runaway", True), bool):
