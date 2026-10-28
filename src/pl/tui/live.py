@@ -1,9 +1,9 @@
-"""A read-only, live full-screen view of one agent's tmux window. No key is sent to the pane."""
+"""A read-only, live pop-up view of one agent's tmux window. No key is sent to the pane."""
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.screen import Screen
-from textual.widgets import Footer, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Static
 from textual.worker import get_current_worker
 
 from pl import agent_screen
@@ -14,7 +14,12 @@ SCROLLBACK_LINES = 2000
 NO_WINDOW = "no agent window"
 
 
-class LiveScreen(Screen):
+class LiveScreen(ModalScreen):
+    DEFAULT_CSS = """
+    LiveScreen { align: center middle; }
+    LiveScreen > Vertical { width: 90%; height: 90%; border: round $accent; background: $surface; padding: 0 1; }
+    #live-scroll { height: 1fr; }
+    """
     BINDINGS = [Binding("escape", "close", "back"), Binding("pageup", "page_up", "page up"),
                 Binding("pagedown", "page_down", "page down")]
 
@@ -24,10 +29,10 @@ class LiveScreen(Screen):
         self._text = None
 
     def compose(self):
-        yield Static(Text(self.heading), id="live-head", markup=False)
-        with VerticalScroll(id="live-scroll"):
-            yield Static(Text(NO_WINDOW, style="dim"), id="live-body", markup=False)
-        yield Footer()
+        with Vertical():
+            yield Static(Text(self.heading), id="live-head", markup=False)
+            with VerticalScroll(id="live-scroll"):
+                yield Static(Text(NO_WINDOW, style="dim"), id="live-body", markup=False)
 
     def on_mount(self):
         self._poll()
@@ -43,7 +48,7 @@ class LiveScreen(Screen):
 
     def _show(self, text, word, why):
         status = f"{word}: {why}" if why else word
-        self.query_one("#live-head", Static).update(Text(f"{self.heading}  ·  {status}"))
+        self.query_one("#live-head", Static).update(Text(f"{self.heading}  ·  {status}  ·  esc closes"))
         if text is None or text == self._text:
             return
         scroll = self.query_one("#live-scroll", VerticalScroll)

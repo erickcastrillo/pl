@@ -1,7 +1,8 @@
 """The live view of an agent's window: `w` on a Pipeline card opens it, `W` still attaches to tmux. Fake tmux, no real HOME."""
 import subprocess
 
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import ModalScreen
 
 from pl import harnesses
 from pl.tui import cards as tui_cards
@@ -79,6 +80,8 @@ async def test_live_view_scrolls_with_pgup_pgdn_and_esc_returns(monkeypatch):
     tmux = FakeTmux(screen="\n".join(f"line {i}" for i in range(300)) + "\n")
     app = _app(monkeypatch, tmux)
     async with app.run_test(size=(120, 40)) as pilot:
+        view = await _open_cards(pilot, app, CARD)
+        before = view.query_one("#cards-body").scroll_y
         live = await _open_live(pilot, app)
         scroll = live.query_one(VerticalScroll)
         await settle(pilot)
@@ -94,6 +97,40 @@ async def test_live_view_scrolls_with_pgup_pgdn_and_esc_returns(monkeypatch):
         await pilot.press("escape")
         await settle(pilot)
         assert not isinstance(app.screen, LiveScreen)
+        assert view._current()[0] == CARD and view.query_one("#cards-body").scroll_y == before
+
+
+async def test_live_view_is_a_popup_over_the_board(monkeypatch):
+    app = _app(monkeypatch, FakeTmux(screen="x\n"))
+    async with app.run_test(size=(120, 40)) as pilot:
+        view = await _open_cards(pilot, app, CARD)
+        live = await _open_live(pilot, app)
+        assert isinstance(live, ModalScreen) and view.is_attached
+        box = live.query_one(Vertical).region
+        assert box.width < 120 and box.height < 40
+        assert box.width >= 96 and box.height >= 32
+
+
+async def test_live_view_stays_where_the_user_scrolled_and_follows_again_at_the_end(monkeypatch):
+    tmux = FakeTmux(screen="\n".join(f"line {i}" for i in range(300)) + "\n")
+    app = _app(monkeypatch, tmux)
+    async with app.run_test(size=(120, 40)) as pilot:
+        live = await _open_live(pilot, app)
+        scroll = live.query_one(VerticalScroll)
+        await settle(pilot)
+        await pilot.press("pageup")
+        await settle(pilot)
+        up = scroll.scroll_y
+        tmux.screen += "new line\n"
+        live._poll()
+        await settle(pilot)
+        assert scroll.scroll_y == up
+        scroll.scroll_end(animate=False)
+        await settle(pilot)
+        tmux.screen += "newer line\n"
+        live._poll()
+        await settle(pilot)
+        assert scroll.scroll_y == scroll.max_scroll_y > up
 
 
 async def test_live_view_keeps_the_final_screen_when_the_agent_exits(monkeypatch):
@@ -121,8 +158,9 @@ async def test_live_view_masks_secrets_and_sends_no_keys(monkeypatch):
     async with app.run_test(size=(120, 40)) as pilot:
         live = await _open_live(pilot, app)
         assert "ghp_" not in body(live)
-        for key in ("a", "enter", "y"):
+        for key in ("a", "enter", "y", "ctrl+c"):
             await pilot.press(key)
+        assert app.is_running and app.screen is live
     assert not any(a[1] == "send-keys" for a in tmux.calls)
 
 
