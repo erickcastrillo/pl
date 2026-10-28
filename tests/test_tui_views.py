@@ -4137,7 +4137,7 @@ async def test_extend_skills_footer_lists_every_skills_key(monkeypatch):
         app.action_skills()
         await settle(pilot)
         assert {"new skill", "install", "edit", "$EDITOR", "remove", "share to library", "link to account",
-                "update check"} <= _footer_keys(app)
+                "update"} <= _footer_keys(app)   # #469: u updates the selected skill (diff first), not a check
 
 
 # ---------- empty states on Loops, Activity, Background, Home and Dashboard ----------
