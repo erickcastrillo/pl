@@ -1,11 +1,13 @@
 """Items 10, 16a, 16m, 16g, 16b and 16k: the Assistant account, the rework message, the card screen's finding age, Esc from a card screen, `pl usage --github`."""
 import json
 import os
+import argparse
 import functools
 import re
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,12 +15,13 @@ from textual.widgets import Footer
 from textual.widgets._footer import FooterKey
 
 from conftest import HERE, press
-from pl import assistant, dispatch, harnesses, trackers
+from pl import assistant, cli, dispatch, ghquota, harnesses, trackers, usage
 from pl.tui import prs as tui_prs
 from pl.tui.cards import CardScreen, CardsView
 from pl.trackers import localstore
 from pl import config as C
 from test_tui_views import FakeGh, screen_text
+from test_gh_rate_limit import gh, mine, tokens  # noqa: F401  (the fake gh program and the token fixtures of the rate-limit tests)
 from tui_wait import settle, wait_until
 
 FAKE_TMUX = """#!{python}
@@ -65,9 +68,9 @@ class FakeTmux:
         program = folder / "bin" / "tmux"
         program.write_text(FAKE_TMUX.format(python=sys.executable, folder=str(folder)))
         program.chmod(0o700)
-        gh = program.parent / "gh"   # the Dashboard's `gh search prs` has no seam: a program that finds no pull requests
-        gh.write_text("#!/bin/sh\necho '[]'\n")
-        gh.chmod(0o700)
+        gh_program = program.parent / "gh"   # the Dashboard's `gh search prs` has no seam: a program that finds no pull requests
+        gh_program.write_text("#!/bin/sh\necho '[]'\n")
+        gh_program.chmod(0o700)
         self.bin = program.parent
 
     def save(self):
@@ -224,7 +227,10 @@ async def open_card_screen(pilot, card_id):
     await press(pilot, "3")
     await wait_until(pilot, lambda: app.active_group() == "work", "the Work tab", timeout=20.0)
     app.action_tab("cards")
-    board = lambda: app.query_one(CardsView)
+
+    def board():
+        return app.query_one(CardsView)
+
     await wait_until(pilot, lambda: board()._rows and card_id in {r["card"]["id"] for r in board()._rows.values() if r.get("card")},
                      "the card on the board", timeout=20.0)
     for _ in range(40):
@@ -267,3 +273,46 @@ async def test_item_16b_esc_twice_from_a_card_screen_keeps_the_console(console, 
         logs = "".join(p.read_text(errors="replace") for p in C.STATE_DIR.rglob("*.log"))
         assert app.is_running and app._exception is None
         assert "ScreenStackError" not in screen_text(app) + logs
+
+
+def spend_budget(fake_gh):
+    """GitHub's own count: each board read costs 3 points; the fake gh answers with the remaining budget after it."""
+    reset = int(time.time()) + 1800
+    state = {"spent": 0, "reset": reset}
+
+    def read(do):
+        state["spent"] += 3
+        left = 5000 - state["spent"]
+        rate = {"cost": 3, "remaining": left, "resetAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset)), "limit": 5000}
+        fake_gh.set(rate=rate, remaining=left, reset=reset)
+        (C.STATE_DIR / "board-cache.json").unlink(missing_ok=True)   # a read that GitHub answers, not one the cache did
+        trackers.reset()
+        do()
+    return read, state
+
+
+@pytest.mark.usefixtures("mine")
+def test_item_16k_usage_github_names_each_pl_list_caller(request, monkeypatch, capsys):
+    fake_gh = request.getfixturevalue("gh")
+    where(request, "pl usage --github")
+    monkeypatch.setenv("PL_CONFIG_DIR", str(C.CONFIG_DIR))
+    monkeypatch.setattr(sys, "argv", ["pl", "list"])
+    read, state = spend_budget(fake_gh)
+    read(lambda: (ghquota.set_role("dispatcher"), trackers.get("tracker").cards()))
+    read(lambda: (ghquota.set_role("console"), trackers.get("tracker").cards()))
+    monkeypatch.setenv("PL_STAGE", "plan")
+    monkeypatch.setenv("PL_CARD", "pl#1")
+    read(lambda: cli.main())
+    monkeypatch.delenv("PL_STAGE")
+    monkeypatch.delenv("PL_CARD")
+    read(lambda: cli.main())
+    capsys.readouterr()
+    assert fake_gh.set(remaining=5000 - state["spent"], reset=state["reset"]) is None
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None, json=True))
+    entry = next(e for e in json.loads(capsys.readouterr().out)["accounts"] if "acme-bot" in e["account"])
+    points = {c["caller"].split(" ", 1)[-1]: c["points"] for c in entry["callers"]}
+    assert points.get("dispatcher", 0) >= 3 and points.get("console", 0) >= 3 and points.get("pl list", 0) >= 3, points
+    assert sum(points.values()) == state["spent"], points
+    assert entry["outside_pl"] == 0
+    usage.cmd_usage(argparse.Namespace(github=True, since=None, by=None, json=False))
+    assert "outside pl 0" in capsys.readouterr().out.splitlines()[-1]
