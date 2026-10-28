@@ -400,3 +400,32 @@ def test_use_on_the_engineering_pipeline_has_no_stage_to_write(fake_home, monkey
     _profile(fake_home, "work", "")
     code, _, err = _use(monkeypatch, capsys, "run", "engineering-run")
     assert code == 1 and "pipeline engineering has no stage run" in err
+
+
+def _hold_profile(fake_home, agent):
+    return _profile(fake_home, "work", MKT_CONFIG + f'agent = "{agent}"\n')
+
+
+@pytest.mark.parametrize("var", [("PL_SOURCE", "mcp"), ("PL_ASSISTANT", "1")])
+def test_use_from_an_agent_session_cannot_drop_an_approval(fake_home, monkeypatch, capsys, var):
+    d = _hold_profile(fake_home, "sales-proposal-writer")
+    before = (d / "config.toml").read_text()
+    monkeypatch.setenv(*var)
+    code, _, err = _use(monkeypatch, capsys, "draft", "support-triage")
+    assert code == 1 and "cannot drop" in err and "pl agents use draft support-triage" in err
+    assert (d / "config.toml").read_text() == before
+
+
+def test_use_from_an_agent_session_may_keep_or_add_approval(fake_home, monkeypatch, capsys):
+    d = _hold_profile(fake_home, "support-triage")
+    monkeypatch.setenv("PL_SOURCE", "mcp")
+    code, _, _ = _use(monkeypatch, capsys, "draft", "sales-proposal-writer")
+    assert code is None and 'agent = "sales-proposal-writer"' in (d / "config.toml").read_text()
+
+
+def test_use_from_the_terminal_may_drop_an_approval(fake_home, monkeypatch, capsys):
+    d = _hold_profile(fake_home, "sales-proposal-writer")
+    monkeypatch.delenv("PL_SOURCE", raising=False)
+    monkeypatch.delenv("PL_ASSISTANT", raising=False)
+    code, _, _ = _use(monkeypatch, capsys, "draft", "support-triage")
+    assert code is None and 'agent = "support-triage"' in (d / "config.toml").read_text()

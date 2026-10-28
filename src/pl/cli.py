@@ -561,7 +561,7 @@ def build_parser():
     q = pa.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pa.add_parser("add"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pa.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
-    q = pa.add_parser("use"); q.add_argument("stage"); q.add_argument("agent"); q.add_argument("--pipeline", help="pipeline name: this profile's, or the profile ~/.pl-NAME"); q.add_argument("--json", action="store_true")
+    q = pa.add_parser("use"); q.add_argument("stage"); q.add_argument("agent"); q.add_argument("--pipeline", help="pipeline name: this profile's, or the profile ~/.pl-NAME (edits that profile's config without its lock)"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")

@@ -12,7 +12,7 @@ import tomlkit
 import yaml
 
 from pl import config as C
-from pl import connectors, harnesses, skills, util
+from pl import confirm, connectors, harnesses, skills, util
 
 FIELDS = ("skills", "connector_roles", "model", "approval", "pod")
 APPROVAL = ("send", "publish", "post", "quote-prices")
@@ -236,6 +236,12 @@ def _use(a) -> None:
     stages = doc.get("pipeline", {}).get("stages", {})
     if a.stage not in stages:
         _fail(f"pl: pipeline {name} has no stage {a.stage}")
+    current = agents.get(str(stages[a.stage].get("agent", "")), {})
+    dropped = sorted(set(current.get("approval") or []) - set(agents[a.agent]["approval"]))
+    if dropped and confirm.agent_session():
+        _fail(f"pl: an agent session cannot drop {', '.join(dropped)} approval from stage {a.stage}; "
+              f"run it from the terminal or the console: pl agents use {a.stage} {a.agent}"
+              + (f" --pipeline {a.pipeline}" if a.pipeline else ""))
     stages[a.stage]["agent"] = a.agent
     C.save(doc, target=path)
     for problem in validate(a.agent, agents[a.agent]):
