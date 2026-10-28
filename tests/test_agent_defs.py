@@ -429,3 +429,98 @@ def test_use_from_the_terminal_may_drop_an_approval(fake_home, monkeypatch, caps
     monkeypatch.delenv("PL_ASSISTANT", raising=False)
     code, _, _ = _use(monkeypatch, capsys, "draft", "support-triage")
     assert code is None and 'agent = "support-triage"' in (d / "config.toml").read_text()
+
+
+NO_SEND = "---\nskills: []\nconnector_roles: []\nmodel: null\napproval: []\npod: null\n---\nClose deals.\n"
+OUTWARD_CONFIG = MKT_CONFIG + '''
+[pipeline.stages.reply]
+column = "Draft review"
+done = "Draft review"
+skill = "pl-stage"
+outward = true
+gate = "owner"
+'''
+WARNING = ("warning: stage reply is outward but agent closer does not hold send for approval; "
+           "the stage's outward gate still applies")
+
+
+def _outward_profile(fake_home, config=OUTWARD_CONFIG):
+    d = _profile(fake_home, "work", config)
+    _agent_md(d, "closer", NO_SEND)
+    return d
+
+
+def test_outward_warnings_names_stage_and_agent(fake_home):
+    _outward_profile(fake_home)
+    stages = {"reply": {"outward": True, "agent": "closer"}}
+    assert agent_defs.outward_warnings(stages) == [WARNING]
+
+
+@pytest.mark.parametrize("stage", [
+    {"outward": True, "agent": "sales-follow-up"},
+    {"outward": False, "agent": "closer"},
+    {"agent": "closer"},
+    {"outward": True},
+    {"outward": True, "agent": "nope"},
+])
+def test_outward_warnings_skips_send_non_outward_no_agent_and_unknown(fake_home, stage):
+    _outward_profile(fake_home)
+    assert agent_defs.outward_warnings({"reply": stage}) == []
+
+
+def test_outward_warnings_two_stages_one_line_each_and_only_filters(fake_home):
+    _outward_profile(fake_home)
+    _agent_md(fake_home / ".pl-work", "closer-two", NO_SEND)
+    stages = {"a": {"outward": True, "agent": "closer"}, "b": {"outward": True, "agent": "closer-two"}}
+    assert len(agent_defs.outward_warnings(stages)) == 2
+    assert agent_defs.outward_warnings(stages, only="closer-two") == [
+        "warning: stage b is outward but agent closer-two does not hold send for approval; "
+        "the stage's outward gate still applies"]
+
+
+def test_show_prints_outward_warning_after_details_exit_0(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home, OUTWARD_CONFIG + 'agent = "closer"\n')
+    _pl(monkeypatch, "agents", "show", "closer")
+    assert capsys.readouterr().out.splitlines()[-1] == WARNING
+
+
+def test_show_json_has_warnings_and_is_valid_json(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home, OUTWARD_CONFIG + 'agent = "closer"\n')
+    _pl(monkeypatch, "agents", "show", "closer", "--json")
+    assert json.loads(capsys.readouterr().out)["warnings"] == [WARNING]
+
+
+def test_show_without_match_is_unchanged(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "work", OUTWARD_CONFIG)
+    _pl(monkeypatch, "agents", "show", "sales-follow-up")
+    plain = capsys.readouterr().out
+    (d / "config.toml").write_text(OUTWARD_CONFIG + 'agent = "sales-follow-up"\n')
+    _pl(monkeypatch, "agents", "show", "sales-follow-up")
+    assert capsys.readouterr().out == plain
+    _pl(monkeypatch, "agents", "show", "sales-follow-up", "--json")
+    assert json.loads(capsys.readouterr().out)["warnings"] == []
+
+
+def test_use_prints_outward_warning_and_writes_as_before(fake_home, monkeypatch, capsys):
+    d = _outward_profile(fake_home)
+    code, out, _ = _use(monkeypatch, capsys, "reply", "closer", "--pipeline", "marketing")
+    assert code is None
+    new = (d / "config.toml").read_text()
+    changed = [ln for ln in difflib.ndiff(OUTWARD_CONFIG.splitlines(), new.splitlines()) if ln[0] in "+-"]
+    assert changed == ['+ agent = "closer"']
+    assert out.splitlines() == ["stage reply of pipeline marketing now uses agent closer", WARNING]
+
+
+def test_use_json_has_warnings(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home)
+    _, out, _ = _use(monkeypatch, capsys, "reply", "closer", "--json")
+    assert json.loads(out)["warnings"] == [WARNING]
+
+
+def test_use_other_profile_checks_that_pipelines_stage(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home, MKT_CONFIG)
+    mkt = fake_home / ".pl-mkt"
+    mkt.mkdir()
+    (mkt / "config.toml").write_text(OUTWARD_CONFIG.replace('name = "marketing"', 'name = "mkt"'))
+    _, out, _ = _use(monkeypatch, capsys, "reply", "closer", "--pipeline", "mkt")
+    assert WARNING in out.splitlines()

@@ -344,3 +344,75 @@ def test_doctor_agents_check_names_bad_agent(monkeypatch):
     ok, lines = doctor.agents()
     assert not ok
     assert lines == ["my-closer: unknown connector role crm"]
+
+
+OUTWARD_PIPELINE = '''[pipeline]
+name = "sales"
+columns = ["Draft"]
+
+[pipeline.stages.reply]
+column = "Draft"
+done = "Draft"
+skill = "pl-stage"
+outward = true
+gate = "owner"
+'''
+FOLLOWUP_STAGE = '''
+[pipeline.stages.followup]
+column = "Draft"
+done = "Draft"
+skill = "pl-stage"
+outward = true
+gate = "owner"
+agent = "closer"
+'''
+
+
+def _outward_agents(agent_line, extra=""):
+    (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE + agent_line + extra)
+    C.load("t")
+    d = C.CONFIG_DIR / "agents" / "closer"
+    d.mkdir(parents=True)
+    (d / "agent.md").write_text("---\nskills: []\nconnector_roles: []\nmodel: null\napproval: []\npod: null\n---\nx\n")
+
+
+def _outward_warning(stage="reply", agent="closer"):
+    return (f"warning: stage {stage} is outward but agent {agent} does not hold send for approval; "
+            "the stage's outward gate still applies")
+
+
+def test_doctor_warns_outward_stage_agent_without_send_exit_unchanged(capsys):
+    _outward_agents('agent = "closer"\n')
+    code, out = run(capsys)
+    assert _outward_warning() in out.splitlines()
+    (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE)
+    C.load("t")
+    assert run(capsys)[0] == code
+
+
+def test_doctor_checks_the_loaded_agent_not_the_builtin(capsys, monkeypatch):
+    (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE + 'agent = "sales-follow-up"\n')
+    C.load("t")
+    loaded = {"sales-follow-up": {"approval": []}}
+    monkeypatch.setattr("pl.agent_defs.load", lambda: loaded)
+    _, out = run(capsys)
+    assert _outward_warning(agent="sales-follow-up") in out.splitlines()
+
+
+def test_doctor_json_warning_in_agents_lines_ok_true(capsys):
+    _outward_agents('agent = "closer"\n')
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "agents")
+    assert check["ok"] is True and check["lines"] == [_outward_warning()]
+
+
+def test_doctor_two_matching_stages_two_lines(capsys):
+    _outward_agents('agent = "closer"\n', FOLLOWUP_STAGE)
+    _, out = run(capsys)
+    assert sum("is outward but" in ln for ln in out.splitlines()) == 2
+
+
+def test_doctor_unknown_stage_agent_no_outward_warning(capsys):
+    _outward_agents('agent = "nope"\n')
+    _, out = run(capsys)
+    assert "is outward but" not in out
