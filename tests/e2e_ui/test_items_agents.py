@@ -1,17 +1,24 @@
 """Items 10, 16a, 16m, 16g, 16b and 16k: the Assistant account, the rework message, the card screen's finding age, Esc from a card screen, `pl usage --github`."""
 import json
 import os
+import functools
 import re
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from textual.widgets import Footer
+from textual.widgets._footer import FooterKey
 
 from conftest import HERE, press
 from pl import assistant, dispatch, harnesses, trackers
+from pl.tui import prs as tui_prs
+from pl.tui.cards import CardScreen, CardsView
+from pl.trackers import localstore
 from pl import config as C
-from test_tui_views import screen_text
+from test_tui_views import FakeGh, screen_text
 from tui_wait import settle, wait_until
 
 FAKE_TMUX = """#!{python}
@@ -58,6 +65,9 @@ class FakeTmux:
         program = folder / "bin" / "tmux"
         program.write_text(FAKE_TMUX.format(python=sys.executable, folder=str(folder)))
         program.chmod(0o700)
+        gh = program.parent / "gh"   # the Dashboard's `gh search prs` has no seam: a program that finds no pull requests
+        gh.write_text("#!/bin/sh\necho '[]'\n")
+        gh.chmod(0o700)
         self.bin = program.parent
 
     def save(self):
@@ -88,7 +98,9 @@ def profile(profile, tmp_path, monkeypatch):
                        for n, h in (("nocli", "codex"), ("a", "claude"), ("b", "claude")))
     (profile / "config.toml").write_text('[tracker]\ntype = "local"\n' + accounts)
     monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: subprocess.run(argv, capture_output=True, text=True, **kw))
+    monkeypatch.setattr(localstore.sqlite3, "connect", functools.partial(sqlite3.connect, check_same_thread=False))   # the console reads one board from several worker threads
     C.load()
+    trackers.reset()   # the board's SQLite connection belongs to the thread that made it: the console's workers open their own
     return profile
 
 
@@ -189,3 +201,69 @@ def test_item_16a_busy_run_agent_gets_nothing(dispatcher_pass, tmux):
     rework = run(make(busy=True))
     assert tmux.typed("%1") == []
     assert "sent_round" not in rework
+
+
+def pr_card(monkeypatch, finding_minutes_ago, push_minutes_ago):
+    """A PR open card whose review finding and last push are the given ages; `gh pr view` answers the push time."""
+    board = trackers.get("tracker")
+    card = board.create("PR open", title="card with a finding", metadata={
+        "pipeline_mode": "auto", "profile": "a", "prs": [PR], "pr_urls": [PR],
+        "rework": {"active": True, "round": 1, "at": iso(finding_minutes_ago)}})
+    pushed = iso(push_minutes_ago)
+    view = {"title": "feat: x", "author": {"login": "octo"}, "headRefName": "feat/x", "baseRefName": "main", "headRefOid": "abc123",
+            "updatedAt": pushed, "commits": [{"committedDate": pushed, "oid": "abc123"}], "labels": [], "statusCheckRollup": [],
+            "additions": 1, "deletions": 0, "changedFiles": 1, "reviewDecision": "", "mergeable": "MERGEABLE", "body": ""}
+    monkeypatch.setattr(tui_prs, "_run", FakeGh(view=view))
+    trackers.reset()
+    return card["id"]
+
+
+async def open_card_screen(pilot, card_id):
+    """3, the Board sub-tab, the card's row, Enter."""
+    app = pilot.app
+    await press(pilot, "3")
+    await wait_until(pilot, lambda: app.active_group() == "work", "the Work tab", timeout=20.0)
+    app.action_tab("cards")
+    board = lambda: app.query_one(CardsView)
+    await wait_until(pilot, lambda: board()._rows and card_id in {r["card"]["id"] for r in board()._rows.values() if r.get("card")},
+                     "the card on the board", timeout=20.0)
+    for _ in range(40):
+        if (row := board()._row()) and row["card"]["id"] == card_id:
+            break
+        await press(pilot, "down")
+    await press(pilot, "enter")
+    await wait_until(pilot, lambda: isinstance(app.screen, CardScreen) and app.screen.card is not None, "the card screen", timeout=20.0)
+
+
+@pytest.mark.parametrize("finding_after_push,said", [(True, r"(?i)(newer|after).{0,40}last push"), (False, r"(?i)(older|before).{0,40}last push")],
+                         ids=["newer", "older"])
+async def test_item_16g_card_screen_says_finding_newer_or_older_than_last_push(console, tmux, monkeypatch, finding_after_push, said):
+    card_id = pr_card(monkeypatch, *((20, 30) if finding_after_push else (30, 20)))
+    async with console() as pilot:
+        await open_card_screen(pilot, card_id)
+        await settle(pilot)
+        text = screen_text(pilot.app)
+        other = r"(?i)(older|before).{0,40}last push" if finding_after_push else r"(?i)(newer|after).{0,40}last push"
+        assert re.search(said, text), "the card screen does not say whether the finding is newer or older than the last push"
+        assert not re.search(other, text)
+
+
+async def test_item_16b_esc_twice_from_a_card_screen_keeps_the_console(console, tmux):
+    card_id = trackers.get("tracker").create("In progress", title="esc card")["id"]
+    trackers.reset()
+    async with console() as pilot:
+        app = pilot.app
+        await open_card_screen(pilot, card_id)
+        names_esc = "escape" in [k.key for k in app.query_one(Footer).query(FooterKey)]
+        await press(pilot, "escape")
+        await pilot.pause()
+        await settle(pilot)
+        assert len(app.screen_stack) == 1 and app.active_group() == "work", "the first Esc did not return to the board"
+        await press(pilot, "escape")
+        await pilot.pause()
+        await settle(pilot)
+        if not names_esc:
+            assert len(app.screen_stack) == 1 and app.active_group() == "work" and app.active_tab == "cards"
+        logs = "".join(p.read_text(errors="replace") for p in C.STATE_DIR.rglob("*.log"))
+        assert app.is_running and app._exception is None
+        assert "ScreenStackError" not in screen_text(app) + logs
