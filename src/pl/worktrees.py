@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pl import config as C
@@ -149,6 +150,28 @@ def _worktree_on(work: Path, branch: str) -> Path | None:
     return next((w["path"] for w in _list_worktrees(work) if w.get("branch") == branch), None)
 
 
+def _stamp() -> str:
+    return f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+
+
+def _set_aside(path: Path, card_id: str) -> str | None:
+    """Move a plain folder out of the way, keeping its contents; an empty one is just removed. Returns an error or None."""
+    try:
+        if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+            path.rmdir()
+            return None
+        target = path.with_name(f"{path.name}.stale-{_stamp()}")
+        n = 1
+        while target.exists() or target.is_symlink():
+            n += 1
+            target = path.with_name(f"{path.name}.stale-{_stamp()}-{n}")
+        os.rename(path, target)
+    except OSError as e:
+        return f"could not set aside {path}: {e.strerror or e}"
+    events.emit("worktree_set_aside", card_id, path=str(path), moved_to=str(target))
+    return None
+
+
 def for_run(c) -> tuple[Path | None, str | None]:
     """(worktree, None) for card c's run agent, reusing its branch or worktree; (None, git's last line) when git fails.
     Only fetch and worktree add touch the repository, never the main checkout's files."""
@@ -166,6 +189,9 @@ def for_run(c) -> tuple[Path | None, str | None]:
     root = Path(C.WORKTREES_DIR or work.parent)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = root / f"{work.name}-pl-{slug}"
+    if path.exists() or path.is_symlink():
+        if err := _set_aside(path, c["id"]):
+            return None, err
 
     def git(*args):
         try:
@@ -347,6 +373,10 @@ def sweep(all_cards: list[dict], dry: bool = False) -> None:
         try:
             _run(["git", "worktree", "remove", str(wt_path)], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
             _run(["git", "worktree", "prune"], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
+            if wt_path.exists():
+                shutil.rmtree(wt_path, ignore_errors=True)
+            if wt_path.exists():
+                print(f"worktree {wt_path}: removed from git but the folder is still there; delete it by hand")
             events.emit("worktree_cleanup", card["id"], path=str(wt_path), by="sweep")
         except (subprocess.CalledProcessError, OSError) as e:
             print(f"worktree {wt_path.name}: cleanup failed: {e}", file=sys.stderr)

@@ -223,3 +223,75 @@ def test_trust_gate_checks_the_folder_it_is_given(monkeypatch):
     assert REAL_GATE(h, "a", Path("/wts")) == Path("/wts")
     assert REAL_GATE(h, "a") == C.WORK_DIR
     assert seen == ["/wts", str(C.WORK_DIR)]
+
+
+def _stale_siblings():
+    return sorted(p for p in _dest().parent.iterdir() if ".stale-" in p.name)
+
+
+def test_plain_folder_at_worktree_path_is_set_aside(monkeypatch):
+    git = FakeGit()
+    monkeypatch.setattr(worktrees, "_run", git)
+    _dest().mkdir(parents=True)
+    (_dest() / "leftover.txt").write_text("keep")
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    [moved] = _stale_siblings()
+    assert (moved / "leftover.txt").read_text() == "keep"
+    assert len(git.adds()) == 1 and str(_dest()) in git.adds()[0]
+
+
+def test_second_set_aside_gets_a_new_name(monkeypatch):
+    monkeypatch.setattr(worktrees, "_run", FakeGit())
+    monkeypatch.setattr(worktrees, "_stamp", lambda: "20260101-000000")
+    taken = _dest().with_name(_dest().name + ".stale-20260101-000000")
+    taken.mkdir(parents=True)
+    (taken / "old.txt").write_text("old")
+    _dest().mkdir()
+    (_dest() / "new.txt").write_text("new")
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    assert (taken / "old.txt").read_text() == "old"
+    [other] = [p for p in _stale_siblings() if p != taken]
+    assert (other / "new.txt").read_text() == "new"
+
+
+def test_registered_worktree_is_reused_and_nothing_moved(monkeypatch):
+    _dest().mkdir(parents=True)
+    git = FakeGit(listing=f"worktree {_dest()}\nHEAD 1111\nbranch refs/heads/pl/{_slug()}\n\n")
+    monkeypatch.setattr(worktrees, "_run", git)
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    assert git.adds() == [] and _stale_siblings() == []
+
+
+def test_folder_that_cannot_be_moved_is_an_error(monkeypatch):
+    git = FakeGit()
+    monkeypatch.setattr(worktrees, "_run", git)
+    _dest().mkdir(parents=True)
+    (_dest() / "leftover.txt").write_text("keep")
+
+    def deny(*a):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(worktrees.os, "rename", deny)
+    path, err = REAL_FOR_RUN(CARD)
+    assert path is None and str(_dest()) in err and "could not set aside" in err
+    assert (_dest() / "leftover.txt").exists()
+    assert git.adds() == []
+
+
+def test_set_aside_records_one_event(monkeypatch, tmp_path):
+    from pl import events
+    C.STATE_DIR = tmp_path / "state"
+    monkeypatch.setattr(worktrees, "_run", FakeGit())
+    _dest().mkdir(parents=True)
+    (_dest() / "leftover.txt").write_text("keep")
+    REAL_FOR_RUN(CARD)
+    [moved] = _stale_siblings()
+    [ev] = [e for e in events._read() if e["kind"] == "worktree_set_aside"]
+    assert ev["card"] == CARD["id"] and ev["path"] == str(_dest()) and ev["moved_to"] == str(moved)
+
+
+def test_empty_folder_is_removed_not_set_aside(monkeypatch):
+    monkeypatch.setattr(worktrees, "_run", FakeGit())
+    _dest().mkdir(parents=True)
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    assert _stale_siblings() == []
