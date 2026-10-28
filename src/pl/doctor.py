@@ -99,7 +99,11 @@ def machine_toml():
 
 def agents():
     problems = agent_defs.problems_in_profile()
-    return not problems, problems
+    try:
+        warnings = agent_defs.outward_warnings(agent_defs.pipeline_stages())
+    except Exception:  # noqa: BLE001 - a warning that cannot be computed never fails doctor
+        warnings = []
+    return not problems, problems + warnings
 
 
 CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings,

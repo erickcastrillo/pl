@@ -348,7 +348,7 @@ def test_doctor_agents_check_names_bad_agent(monkeypatch):
 
 OUTWARD_PIPELINE = '''[pipeline]
 name = "sales"
-columns = ["Draft"]
+columns = ["Draft", "Followup"]
 
 [pipeline.stages.reply]
 column = "Draft"
@@ -359,8 +359,8 @@ gate = "owner"
 '''
 FOLLOWUP_STAGE = '''
 [pipeline.stages.followup]
-column = "Draft"
-done = "Draft"
+column = "Followup"
+done = "Followup"
 skill = "pl-stage"
 outward = true
 gate = "owner"
@@ -384,7 +384,7 @@ def _outward_warning(stage="reply", agent="closer"):
 def test_doctor_warns_outward_stage_agent_without_send_exit_unchanged(capsys):
     _outward_agents('agent = "closer"\n')
     code, out = run(capsys)
-    assert _outward_warning() in out.splitlines()
+    assert _outward_warning() in out
     (C.CONFIG_DIR / "config.toml").write_text(OUTWARD_PIPELINE)
     C.load("t")
     assert run(capsys)[0] == code
@@ -396,7 +396,7 @@ def test_doctor_checks_the_loaded_agent_not_the_builtin(capsys, monkeypatch):
     loaded = {"sales-follow-up": {"approval": []}}
     monkeypatch.setattr("pl.agent_defs.load", lambda: loaded)
     _, out = run(capsys)
-    assert _outward_warning(agent="sales-follow-up") in out.splitlines()
+    assert _outward_warning(agent="sales-follow-up") in out
 
 
 def test_doctor_json_warning_in_agents_lines_ok_true(capsys):

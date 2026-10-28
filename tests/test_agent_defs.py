@@ -382,7 +382,8 @@ def test_use_unknown_agent_refuses_with_show_message(fake_home, monkeypatch, cap
 def test_use_json_prints_pipeline_stage_agent(fake_home, monkeypatch, capsys):
     _profile(fake_home, "work", MKT_CONFIG)
     _, out, _ = _use(monkeypatch, capsys, "draft", "marketing-copywriter", "--json")
-    assert json.loads(out) == {"pipeline": "marketing", "stage": "draft", "agent": "marketing-copywriter"}
+    assert json.loads(out) == {"pipeline": "marketing", "stage": "draft", "agent": "marketing-copywriter",
+                               "warnings": []}
 
 
 def test_use_other_profile_by_pipeline_name(fake_home, monkeypatch, capsys):
@@ -432,10 +433,10 @@ def test_use_from_the_terminal_may_drop_an_approval(fake_home, monkeypatch, caps
 
 
 NO_SEND = "---\nskills: []\nconnector_roles: []\nmodel: null\napproval: []\npod: null\n---\nClose deals.\n"
-OUTWARD_CONFIG = MKT_CONFIG + '''
+OUTWARD_CONFIG = MKT_CONFIG.replace('"Draft review"]', '"Draft review", "Reply"]') + '''
 [pipeline.stages.reply]
-column = "Draft review"
-done = "Draft review"
+column = "Reply"
+done = "Reply"
 skill = "pl-stage"
 outward = true
 gate = "owner"
