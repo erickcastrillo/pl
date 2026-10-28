@@ -241,3 +241,12 @@ def test_agent_with_no_pipeline_pod_still_gets_a_context_file(home, monkeypatch)
     prompt = context.launch_prompt(_card(), "draft", "/pl-stage x", agent=_agent())
     assert prompt.startswith("Follow the instructions in ")
     assert "AGENT STANDING TEXT" in open(prompt.removeprefix("Follow the instructions in ").rstrip(".")).read()
+
+
+def test_ac5_agent_with_approval_gets_prepare_only_line(home, monkeypatch):
+    body = _agent_body(home, monkeypatch, _agent(approval=["send", "quote-prices"]))
+    assert "Prepare only: do not send, publish, post or quote prices yourself; a person approves send, quote-prices before anything goes out." in body
+
+
+def test_ac5_agent_with_empty_approval_gets_no_prepare_line(home, monkeypatch):
+    assert "Prepare only" not in _agent_body(home, monkeypatch, _agent(approval=[]))
