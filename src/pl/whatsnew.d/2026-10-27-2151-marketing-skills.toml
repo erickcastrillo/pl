@@ -1,0 +1,3 @@
+title = "Marketing agents get their own skills"
+where = "pl agents show marketing-copywriter"
+try = "pl agents show marketing-campaign-reporter --json"

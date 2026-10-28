@@ -90,12 +90,20 @@ def settings():
                   for (table, key), name in RETIRED.items() if key in getattr(C, name)]
 
 
+def machine_toml():
+    from pl import manager
+    t = manager._machine_toml()
+    errs = C.validate_machine(t) + C.validate_tests(t)
+    return not errs, errs or ["machine.toml: fine"]
+
+
 def agents():
     problems = agent_defs.problems_in_profile()
     return not problems, problems
 
 
-CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings, agents]
+CHECKS = [local_models, tracker, assistant_account, notify_settings, notifications, queued_writes, settings,
+          machine_toml, agents]
 
 
 def _needs_you():

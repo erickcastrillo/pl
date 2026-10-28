@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
                        run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -460,6 +460,27 @@ def _start_who(stage, c):
     return {"account": profile, "harness": h.name}
 
 
+def stage_agent(stage):
+    """(name, agent) of the agent the stage names: (None, None) when it names none, (name, None) when none by that name exists."""
+    cfg = ((C.PIPELINE["stages"] if pipeline.is_config() else C.STAGES) or {}).get(stage) or {}
+    name = cfg.get("agent")
+    return (name, agent_defs.load().get(name)) if name else (None, None)
+
+
+def _agent_launch(aname, agent, h, profile, stage_skill):
+    """(harness, account, launch_script keywords) for a stage run by agent: its account moves the harness, its
+    skills (plus the one the stage's prompt invokes) and roles go in a synthetic pod of their own."""
+    if agent["model"] in C.PROFILES:
+        profile = agent["model"]
+        h = harnesses.account_harness(profile)
+    pod = {**(pods.launch_pod() or pods.current()), "name": f"agent-{aname}", "skills": [*agent["skills"], *([stage_skill] if stage_skill not in agent["skills"] else [])],
+           "roles": agent["connector_roles"]}
+    kw = {"pod": pod}
+    if agent["model"] and agent["model"] not in C.PROFILES and h.name in harnesses.MODEL_FLAGS and harnesses.MODEL_RE.fullmatch(agent["model"]):
+        kw["model"] = agent["model"]
+    return h, profile, kw
+
+
 def start_worker(c, stage, attempts, dry):
     if C.is_local_account((C.STAGES.get(stage) or {}).get("account")):
         if why := C.local_stage_problem(stage, C.STAGES[stage]):
@@ -477,12 +498,16 @@ def start_worker(c, stage, attempts, dry):
         reader.run(c, stage=stage, attempts=attempts)
         return
     h, profile = harnesses.harness_for(stage, c)
+    aname, agent = stage_agent(stage)
     name = f"{stage}-{slug_of(c)[:28]}"      # tmux window name: no colon, so "pipeline:<name>" targets stay unambiguous
     label = f"{stage}:{slug_of(c)[:28]}"     # Claude session display name
     generic = pipeline.is_config()
     if not generic and not C.PROMPTS.get(stage):
         raise SystemExit(f"pl: set [stages.{stage}] prompt in {C.path() or 'config.toml'}")
     prompt = pipeline.prompt(stage, c["id"]) if generic else C.PROMPTS[stage].format(id=c["id"], worktrees_dir=C.WORKTREES_DIR or "")
+    agent_kw = {}
+    if agent:
+        h, profile, agent_kw = _agent_launch(aname, agent, h, profile, prompt.split()[0].lstrip("/"))
     builtin = C.PROMPTS.get(stage) == C.BUILTIN_PROMPTS.get(stage) and not generic
     review = (C.CODE_HOST.get("labels") or {}).get("review")
     if stage == "run" and builtin and review:
@@ -496,7 +521,7 @@ def start_worker(c, stage, attempts, dry):
     if stage == "run":
         prompt += bootstrap_warning(c)
     if not dry:
-        prompt = context.launch_prompt(c, stage, prompt)
+        prompt = context.launch_prompt(c, stage, prompt, **({"agent": agent} if agent else {}))
     if (C.STAGES.get(stage) or {}).get("from_fields"):
         from pl import reader
         fields_json = json.dumps((c.get("metadata") or {}).get("fields") or {})
@@ -506,8 +531,11 @@ def start_worker(c, stage, attempts, dry):
     small = _small_run(c) if stage == "run" else None
     rework_round = stage == "run" and bool(((c.get("metadata") or {}).get("rework") or {}).get("active"))
     model, why = harnesses.model_reason(h, profile, stage, small, rework_round)
+    if agent and agent["model"]:
+        model, why = agent_kw.get("model", model), f"agent {aname}"
     if dry:
-        print(f"  would start {name} under {profile} model {model} ({why}): {prompt}")
+        by = f" agent {aname}" if agent else ""
+        print(f"  would start {name} under {profile}{by} model {model} ({why}): {prompt}")
         return
     try:
         harnesses.refuse_bypass(h)
@@ -530,7 +558,8 @@ def start_worker(c, stage, attempts, dry):
         update(c["id"], metadata={"worker": {"stage": stage, "session_id": sid, "pane": pane, "window": win,
                                              "tmux_session": C.TMUX_SESSION, "profile": profile, "harness": h.name,
                                              "started_at": now_iso(), "attempts": attempts, "host": C.HOST,
-                                             "launch": str(script), "model": model, "model_reason": why},
+                                             "launch": str(script), "model": model, "model_reason": why,
+                                             **({"agent": aname} if agent else {})},
                                   "answered": None})
     except BaseException:   # a rate limit or a failed write: no record, so no window and no agent
         tmux("kill-window", "-t", win, check=False)
@@ -545,7 +574,7 @@ def start_worker(c, stage, attempts, dry):
         sandbox.transfer_in(sandbox.vm_name(), host_mcp, f"/tmp/mcp-{sid}.json")
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
                                                          stage=stage, hooks=(c["id"], win), small=small,
-                                                         servers=None if C.SANDBOX.get("enabled") else stage_servers(profile, stage)), script)
+                                                         servers=None if C.SANDBOX.get("enabled") else stage_servers(profile, stage), **agent_kw), script)
     if C.ATTENTION:
         subprocess.run([str(C.ATTENTION), "register", sid, f"{stage}: {c['title'][:50]}", c["id"], stage], capture_output=True)
     events.emit("started", c["id"], stage=stage, harness=h.name, session=sid, model=model, reason=why)
@@ -1466,6 +1495,15 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                         "cards for this account wait; pl starts no agent on it until then and never answers the prompt")
             print(f"{short_id(c['id'])}  {stage} waits: account {prof} does not trust {folder} ({fix})")
             continue
+        aname, agent = stage_agent(stage)
+        if aname and agent is None:
+            key = f"agent_unknown:{c['id']}:{stage}"
+            failed.add(key)
+            if not dry:
+                alerts.open(key, "warn", f"stage {stage} names unknown agent {aname}",
+                            f"pl agents list shows the known agents; fix [pipeline.stages.{stage}] agent", cards=[c["id"]])
+            print(f"{short_id(c['id'])}  {stage} waits: stage {stage} names unknown agent {aname}")
+            continue
         if stage == "run":
             runs_alive += 1
             runs_live += 1
@@ -1705,6 +1743,7 @@ def check_alerts(all_cards, failed, st=None):
     check_machine_alerts()
     alerts.sweep("stage_failed:", failed, notify)
     alerts.sweep("permission_wait:", failed, notify)
+    alerts.sweep("agent_unknown:", failed, notify)
     check_stalled(all_cards, st)
     held = {a["key"] for a in alerts.listing() if a["key"].startswith("trust:")
             and (p := a["key"].split(":", 2))[1] in C.PROFILES

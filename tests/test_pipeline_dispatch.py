@@ -192,3 +192,159 @@ def test_approve_off_a_gate_exits_2(store, cmd, args):
         cmd(argparse.Namespace(id="o/r#1", **args))
     assert e.value.code == 2 or isinstance(e.value, commands.BadInput)
     assert "Working" in str(e.value.code)
+
+
+# ---------- plan 61 slice 4: the dispatcher runs the agent a stage names ----------
+
+def _dry_line(capsys, stage):
+    dispatch.start_worker(_card(1, "Inbox"), stage, 1, True)
+    return capsys.readouterr().out
+
+
+def test_ac6_no_agent_dry_run_line_is_unchanged_engineering(monkeypatch, capsys):
+    C.PIPELINE = {**pipeline.engineering(), "template": "engineering"}
+    C.STAGES = {"spec": {}}
+    C.PROMPTS = {"spec": "/pl-spec {id}"}
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
+    assert _dry_line(capsys, "spec") == "  would start spec-card-1 under claude model sonnet (account claude): /pl-spec o/r#1\n"
+
+
+def test_ac6_no_agent_dry_run_line_is_unchanged_generic(monkeypatch, capsys):
+    _sales()
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("sonnet", "account claude"))
+    assert _dry_line(capsys, "prepare") == "  would start prepare-card-1 under claude model sonnet (account claude): /pl-stage o/r#1 stage=prepare\n"
+
+
+COPYWRITER = {"name": "marketing-copywriter", "source": "built-in", "instructions": "Write warm copy.",
+              "skills": ["pl-stage"], "connector_roles": ["messaging"], "model": "sonnet", "approval": [], "pod": None}
+
+
+def _agent_stage(monkeypatch, tmp_path, agent=COPYWRITER, name="marketing-copywriter"):
+    stage = {**SALES["stages"]["prepare"], "agent": name}
+    C.PIPELINE, C.COLUMNS = {**SALES, "stages": {"prepare": stage}}, SALES["columns"]
+    C.STAGES = {"prepare": {"agent": name}}
+    C.PROFILES = {"claude": tmp_path / ".claude", "codex-a": tmp_path / ".codex"}
+    C.ACCOUNTS = {"claude": {"harness": "claude"}, "codex-a": {"harness": "codex"}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: {agent["name"]: agent} if agent else {})
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda stage, c: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch.harnesses, "model_reason", lambda *a, **k: ("opus", "account claude"))
+
+
+def _real_start(monkeypatch):
+    """start_worker for real with tmux and the launch faked; (launch_script kwargs, update metadata) lists."""
+    kws, metas = [], []
+    monkeypatch.setattr(C, "TMUX_SESSION", "pl-t", raising=False)
+    monkeypatch.setattr(C, "WORK_DIR", "/w", raising=False)
+    monkeypatch.setattr(C, "ATTENTION", None, raising=False)
+    monkeypatch.setattr(dispatch.harnesses, "unattended", lambda h: h)
+    monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: kws.append(kw) or "")
+    monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, s, p, **kw: p)
+    monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: argparse.Namespace(returncode=0))
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "%1")
+    monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: metas.append(f.get("metadata")))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    return kws, metas
+
+
+def test_ac2_launch_offers_exactly_the_agent_skills(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    kws, _ = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert kws[0]["pod"]["skills"] == ["pl-stage"] and kws[0]["pod"]["name"] == "agent-marketing-copywriter"
+    assert kws[0]["pod"]["roles"] == ["messaging"]
+
+
+def test_agent_without_the_stage_skill_still_offers_it(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "skills": ["pl-sales-proposal"]})
+    kws, _ = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert kws[0]["pod"]["skills"] == ["pl-sales-proposal", "pl-stage"]
+
+
+def test_ac3_agent_model_is_used_and_reason_names_agent(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["model"], w["model_reason"], w["agent"]) == ("sonnet", "agent marketing-copywriter", "marketing-copywriter")
+    assert kws[0]["model"] == "sonnet"
+
+
+def test_ac3_agent_account_moves_the_harness(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "model": "codex-a"})
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["harness"], w["profile"], w["model_reason"]) == ("codex", "codex-a", "agent marketing-copywriter")
+    assert "model" not in kws[0]
+
+
+def test_ac4_agent_without_model_keeps_stage_model_and_reason(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path, {**COPYWRITER, "model": None})
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    w = metas[0]["worker"]
+    assert (w["model"], w["model_reason"], w["profile"]) == ("opus", "account claude", "claude")
+    assert "model" not in kws[0]
+
+
+def test_a_stage_without_an_agent_passes_no_agent_keywords(monkeypatch, tmp_path):
+    _agent_stage(monkeypatch, tmp_path)
+    C.PIPELINE["stages"]["prepare"].pop("agent")
+    C.STAGES = {"prepare": {}}
+    kws, metas = _real_start(monkeypatch)
+    dispatch.start_worker(_card(1, "Inbox"), "prepare", 1, False)
+    assert not {"pod", "model"} & kws[0].keys() and "agent" not in metas[0]["worker"]
+
+
+def test_with_model_override_wins_only_for_a_valid_model_name(monkeypatch):
+    h = dispatch.harnesses.get("claude")
+
+    def picked(model):
+        return dispatch.harnesses._with_model(h.interactive, h, "claude", None, model=model)[1]["model"]
+
+    assert picked("haiku") == "haiku"
+    assert picked("bad name;") != "bad name;"
+
+
+def _two_stage_sales(monkeypatch, tmp_path, agents):
+    _agent_stage(monkeypatch, tmp_path, None, name="ghost")
+    other = {"column": "Working", "done": "Review", "skill": "pl-stage", "section": "PROPOSAL", "gate": "owner", "next": "Done"}
+    C.PIPELINE = {**C.PIPELINE, "stages": {**C.PIPELINE["stages"], "review": other}}
+    C.STAGES = {**C.STAGES, "review": {}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: agents)
+    monkeypatch.setattr(dispatch.harnesses, "harness_for", lambda *a, **k: (dispatch.harnesses.get("claude"), "claude"))
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda *a: None)
+
+
+def _alert_log(monkeypatch):
+    log = {"open": [], "sweep": []}
+    monkeypatch.setattr(dispatch.alerts, "open", lambda key, sev, title, fix, **kw: log["open"].append((key, title, kw)))
+    monkeypatch.setattr(dispatch.alerts, "sweep", lambda prefix, keys, notify: log["sweep"].append((prefix, set(keys))))
+    return log
+
+
+def test_ac7_unknown_agent_starts_nothing_and_opens_alert(monkeypatch, tmp_path):
+    _two_stage_sales(monkeypatch, tmp_path, {})
+    log = _alert_log(monkeypatch)
+    started = _pass(monkeypatch, [_card(1, "Inbox"), _card(2, "Working")])
+    assert started == [("o/r#2", "review")]
+    assert [(t, kw["cards"]) for _, t, kw in log["open"] if t.startswith("stage prepare")] == [
+        ("stage prepare names unknown agent ghost", ["o/r#1"])]
+    assert ("agent_unknown:", {"agent_unknown:o/r#1:prepare"}) in log["sweep"]
+
+
+def test_ac7_restored_agent_starts_and_clears_the_alert(monkeypatch, tmp_path):
+    _two_stage_sales(monkeypatch, tmp_path, {"ghost": {**COPYWRITER, "name": "ghost"}})
+    log = _alert_log(monkeypatch)
+    assert _pass(monkeypatch, [_card(1, "Inbox")]) == [("o/r#1", "prepare")]
+    assert ("agent_unknown:", set()) in log["sweep"] and not log["open"]
+
+
+def test_ac8_dry_run_line_names_agent_and_model(monkeypatch, tmp_path, capsys):
+    _agent_stage(monkeypatch, tmp_path)
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: pytest.fail("tmux called"))
+    assert "agent marketing-copywriter model sonnet (agent marketing-copywriter)" in _dry_line(capsys, "prepare")

@@ -826,6 +826,16 @@ def save(doc, target=None) -> list[str]:
 MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True}
 
 
+def validate_tests(t) -> list[str]:
+    """Problems in machine.toml's [tests] (empty = fine)."""
+    if "tests" in t and not isinstance(t["tests"], dict):
+        return ["tests must be a table ([tests])"]
+    v = t.get("tests", {}).get("max_workers")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
+        return ["tests.max_workers must be a whole number of at least 1"]
+    return []
+
+
 def validate_machine(t) -> list[str]:
     """Problems in machine.toml's [manager] and [limits] (empty = fine), checked with the [dispatch] size rules."""
     from pl.memory import parse_size

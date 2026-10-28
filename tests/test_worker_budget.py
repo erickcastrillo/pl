@@ -92,3 +92,9 @@ def test_hold_waits_without_running_while_the_budget_is_full(machine, monkeypatc
         ran.append(True)
     err = capsys.readouterr().err
     assert err.count("pl tests: waiting for test workers (6/6 in use)") == 1
+
+
+def test_tests_that_is_not_a_table_uses_the_default(machine, monkeypatch):
+    monkeypatch.setattr(worker_budget, "_cpus", lambda: 12)
+    (machine / "machine.toml").write_text("tests = 3\n")
+    assert worker_budget.max_workers() == 6

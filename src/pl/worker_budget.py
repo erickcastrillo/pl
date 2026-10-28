@@ -9,6 +9,7 @@ import os
 import sys
 import time
 
+from pl import config as C
 from pl import manager
 from pl.util import now_iso
 
@@ -19,8 +20,8 @@ WAIT_REPEAT = 60
 
 
 def max_workers() -> int:
-    value = (manager._machine_toml().get("tests") or {}).get("max_workers")
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+    t = manager._machine_toml()
+    if not C.validate_tests(t) and (value := t.get("tests", {}).get("max_workers")) is not None:
         return value
     return max(1, (_cpus() or 2) // 2)
 

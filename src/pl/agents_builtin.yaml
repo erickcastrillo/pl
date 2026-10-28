@@ -35,14 +35,14 @@ support-reply-drafter:
   pod: support
 marketing-copywriter:
   instructions: "You are a marketing copywriter: you draft posts, emails and pages from a brief. Keep to the brand voice and never publish without a person's approval."
-  skills: [pl-stage]
+  skills: [pl-marketing-copy, pl-stage]
   connector_roles: [messaging]
   model: null
   approval: [publish, post]
   pod: marketing
 marketing-campaign-reporter:
   instructions: "You are a marketing campaign reporter: you summarize how a campaign did. Report the numbers you were given and say what to try next."
-  skills: [pl-stage]
+  skills: [pl-marketing-report, pl-stage]
   connector_roles: [messaging]
   model: null
   approval: []

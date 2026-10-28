@@ -59,19 +59,33 @@ def _card_layer(card):
             f"{fence}\n{body}\n{fence}\n")
 
 
-def _pod_layer(pod):
+def _pod_layer(pod, agent=None):
     rules = _file(pod["file"]) if pod["file"] else ""
+    if agent:
+        extra = pods.find(agent["pod"]) if agent.get("pod") else None
+        if extra and extra["name"] != pod["name"] and extra["file"]:
+            rules = f"{rules.rstrip()}\n\n### {extra['name']} rules\n\n{_file(extra['file']).rstrip()}"
+        roles = ", ".join(agent["connector_roles"]) or "(none)"
+        return f"{rules.rstrip()}\n\nConnector roles: {roles}"
     return f"{rules.rstrip()}\n\nConnector roles: {', '.join(pod['roles'])}" if pod.get("roles") else rules
 
 
-def build(card, stage, pod, prompt=""):
+def _stage_instructions(stage):
+    return (((C.PIPELINE or {}).get("stages") or {}).get(stage) or {}).get("instructions")
+
+
+def build(card, stage, pod, prompt="", agent=None):
     """(path, report) of the context file for one stage: the layers in order, each cut to the pod's budget. report
     lists (layer, tokens before, tokens after) for each cut. Only pod's own files are read."""
     budgets = pod["budgets"]
+    role = _role(prompt)
+    if agent and (instructions := _stage_instructions(stage)):
+        role = f"{role.rstrip()}\n\n### Stage instructions\n\n{instructions}\n"
     docs = "\n\n".join(f"### {k.name}\n\n{_file(k).rstrip()}" for k in pod["knowledge"])
     layers = [("knowledge", docs, budgets.get("knowledge")),
-              ("pod", _pod_layer(pod), budgets.get("pod")),
-              ("role", _role(prompt), None),
+              ("pod", _pod_layer(pod, agent), budgets.get("pod")),
+              *([("agent", agent["instructions"], None)] if agent else []),
+              ("role", role, None),
               ("client", _client(card, pod), budgets.get("client")),
               ("card", _card_layer(card), None)]
     report, parts = [], []
@@ -91,10 +105,12 @@ def build(card, stage, pod, prompt=""):
     return out, report
 
 
-def launch_prompt(card, stage, prompt):
-    """The prompt that points at the context file when the pipeline's pod has a [pods.<name>] table, else prompt."""
+def launch_prompt(card, stage, prompt, agent=None):
+    """The prompt that points at the context file when the pipeline's pod has a [pods.<name>] table, else prompt.
+    A stage that names an agent always gets the file."""
     name = C.POD or C.PROFILE_NAME
-    if name not in C.PODS and name not in pods.OWN_SKILLS_ONLY and not pods.launch_pod():
+    configured = name in C.PODS or name in pods.OWN_SKILLS_ONLY or pods.launch_pod()
+    if not configured and not agent:
         return prompt
-    path, _ = build(card, stage, pods.find(name), prompt)
+    path, _ = build(card, stage, pods.find(name) if configured else pods.current(), prompt, agent)
     return f"Follow the instructions in {path}."

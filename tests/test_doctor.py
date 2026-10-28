@@ -84,7 +84,8 @@ def test_doctor_json_lists_each_check(capsys, monkeypatch, tmp_path):
         {"name": "notifications", "ok": True, "lines": [f"attention_cmd: {tmp_path / 'attn.sh'}", "chat alerts: none"]},
         {"name": "queued_writes", "ok": True, "lines": ["Queued writes: none"]},
         {"name": "settings", "ok": True, "lines": []},
-            {"name": "agents", "ok": True, "lines": []}]
+        {"name": "machine_toml", "ok": True, "lines": ["machine.toml: fine"]},
+        {"name": "agents", "ok": True, "lines": []}]
 
 
 def test_doctor_warns_when_the_host_is_on_the_lan(capsys, monkeypatch):
@@ -259,6 +260,42 @@ def test_doctor_json_has_needs_you_and_unchanged_checks(capsys, tmp_path, monkey
     assert len(got["needs_you"]) == 5
     assert set(got["needs_you"][0]) == {"card", "kind", "opened_at", "age_seconds", "tried", "acked"}
 
+
+BAD_WORKERS = "tests.max_workers must be a whole number of at least 1"
+
+
+def machine_toml(monkeypatch, tmp_path, text):
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
+    if text is not None:
+        (tmp_path / "machine").mkdir()
+        (tmp_path / "machine" / "machine.toml").write_text(text)
+
+
+def test_doctor_fails_machine_toml_with_a_bad_max_workers(capsys, monkeypatch, tmp_path):
+    machine_toml(monkeypatch, tmp_path, "[tests]\nmax_workers = 0\n")
+    code, out = run(capsys)
+    assert code == 1
+    assert "FAIL machine_toml" in out and f"\n  {BAD_WORKERS}\n" in out
+
+
+def test_doctor_json_lists_the_machine_toml_check(capsys, monkeypatch, tmp_path):
+    machine_toml(monkeypatch, tmp_path, "[tests]\nmax_workers = 0\n")
+    _, out = run(capsys, json=True)
+    check = next(c for c in json.loads(out)["checks"] if c["name"] == "machine_toml")
+    assert check["ok"] is False and check["lines"] == [BAD_WORKERS]
+
+
+@pytest.mark.parametrize("text", [None, "[tests]\nmax_workers = 4\n"])
+def test_doctor_machine_toml_ok_when_missing_or_valid(capsys, monkeypatch, tmp_path, text):
+    machine_toml(monkeypatch, tmp_path, text)
+    _, out = run(capsys)
+    assert "ok machine_toml" in out
+
+
+def test_doctor_machine_toml_names_tests_that_is_not_a_table(capsys, monkeypatch, tmp_path):
+    machine_toml(monkeypatch, tmp_path, "tests = 3\n")
+    _, out = run(capsys)
+    assert "FAIL machine_toml" in out and "\n  tests must be a table ([tests])\n" in out
 
 def _with_old_key(tmp_path):
     with (tmp_path / ".pl-t" / "config.toml").open("a") as f:
