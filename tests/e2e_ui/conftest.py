@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,9 @@ def pytest_collection_modifyitems(config, items):
 @pytest.fixture
 def profile(tmp_path, monkeypatch):
     """A throwaway profile: a local board with a card per main column, one fake claude account, nothing real reachable."""
+    # the console's refresh worker and the test both touch the local board: let its SQLite connection cross threads
+    _connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: _connect(*a, **{**kw, "check_same_thread": False}))
     folder = tmp_path / ".pl-e2e"
     folder.mkdir()
     account = tmp_path / ".claude-e2e"
