@@ -271,7 +271,7 @@ def test_trust_alert_sends_one_alert_opened(desktop, monkeypatch):
     from pl import accounts, harnesses
     card = {"id": CARD, "title": "Card 1", "list_id": "Approved", "tags": [], "updated_at": "2026-09-30",
             "metadata": {"pipeline_mode": "auto", "profile": "claude"}}
-    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, prof: Path("/some/folder"))
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, prof, folder=None: Path("/some/folder"))
     monkeypatch.setattr(harnesses, "trust_command", lambda *a: "claude")
     monkeypatch.setattr(dispatch, "healthy_profile", lambda *a, **k: "claude")
     monkeypatch.setattr(accounts, "exhausted_profiles", lambda: set())
