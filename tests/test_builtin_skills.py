@@ -825,8 +825,8 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v11_is_updated_to_v12(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 11, 12)
+def test_an_unedited_pl_run_v12_is_updated_to_v13(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 12, 13)
 
 
 def test_an_unedited_pl_review_v7_is_updated_to_v8(lib, shipped):
@@ -947,3 +947,53 @@ def test_pl_run_does_not_add_worktrees():
     assert "git worktree add" not in text
     assert "started you in" in text
     assert "main checkout" in text and "stop" in text
+
+
+def _stacked():
+    return " ".join((skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Stacked plans")[1].split("\n## ")[0].split())
+
+
+def test_pl_run_stacks_a_sliced_plan_only_when_it_has_slices():
+    run = _flat("pl-run")
+    for words in ("## Stacked plans", "## Slices", "### Slice k:", "otherwise follow the steps as they are"):
+        assert words in run, words
+
+
+def test_pl_run_builds_each_slice_on_its_own_branch_in_one_worktree():
+    stacked = _stacked()
+    for words in ("-s<k>", "git switch -c", "never a new worktree"):
+        assert words in stacked, words
+
+
+def test_pl_run_counts_each_slice_against_the_branch_below():
+    stacked = _stacked()
+    for words in ("git diff --numstat <previous branch>...HEAD", "origin/<default branch>", "tests/", "max_lines"):
+        assert words in stacked, words
+
+
+def test_pl_run_stops_a_stack_on_an_oversized_slice():
+    stacked = _stacked()
+    for words in ("Run notes", "pl section <id> INPUT", "Open no pull request", "do not move the card"):
+        assert words in stacked, words
+
+
+def test_pl_run_opens_each_slice_on_the_branch_below():
+    stacked = _stacked()
+    for words in ("--base <previous branch>", "--base <default branch>", 'pl move <id> "In progress" --pr', "slice k of n"):
+        assert words in stacked, words
+
+
+def test_pl_run_moves_a_stack_to_pr_open_once_after_the_last_slice():
+    stacked = _stacked()
+    assert 'pl move <id> "PR open" --pr' in stacked
+    assert stacked.index('"In progress" --pr') < stacked.index('pl move <id> "PR open" --pr')
+
+
+def test_pl_run_rework_relabels_only_changed_stack_prs():
+    rework = _rework()
+    for words in ("bottom-up", "whose diff against their base changed", "no force-push"):
+        assert words in rework, words
+
+
+def test_pl_run_v13_ships_stacked_plans():
+    assert skills._builtin("pl-run")[1] >= 13
