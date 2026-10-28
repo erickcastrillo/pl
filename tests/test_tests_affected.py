@@ -63,12 +63,47 @@ def result(monkeypatch, repo, changed, **kw):
     return T.affected(repo, "abc")
 
 
-def test_a_changed_module_lists_direct_and_indirect_importers(repo, monkeypatch):
+def test_a_changed_module_lists_only_direct_importers(repo, monkeypatch):
     r = result(monkeypatch, repo, ["src/app/core.py"])
     assert r["reasons"]["tests/test_direct.py"] == "imports app.core"
-    assert r["reasons"]["tests/test_mid.py"] == "imports app.core (via app.mid)"
+    assert "tests/test_mid.py" not in r["tests"]
     assert "tests/test_other.py" not in r["tests"]
     assert r["full"] is False
+
+
+def test_reasons_never_name_a_via_chain(repo, monkeypatch):
+    r = result(monkeypatch, repo, ["src/app/core.py"])
+    assert not any("(via" in reason for reason in r["reasons"].values())
+
+
+def test_each_direct_import_form_is_matched(repo, monkeypatch):
+    for rel, text in {
+        "tests/test_f1.py": "import app.other\n",
+        "tests/test_f3.py": "from app.other import Y\n",
+        "tests/test_f4.py": "from app.mid import x\n",
+    }.items():
+        (repo / rel).write_text(text)
+    r = result(monkeypatch, repo, ["src/app/other.py"])
+    for t in ("tests/test_f1.py", "tests/test_f3.py", "tests/test_other.py"):
+        assert r["reasons"][t] == "imports app.other"
+    assert "tests/test_f4.py" not in r["tests"]
+    assert r["full"] is False
+
+
+def test_a_changed_test_keeps_its_reason_when_it_also_imports_the_changed_module(repo, monkeypatch):
+    r = result(monkeypatch, repo, ["src/app/core.py", "tests/test_direct.py"])
+    assert r["reasons"]["tests/test_direct.py"] == "changed test"
+
+
+def test_review_and_merge_check_still_run_the_full_suite(repo):
+    import inspect
+
+    from pl import merge_check, skills
+
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    assert "Run the full test suite once with the command `pl tests full` prints" in text
+    assert "tests_affected.full_command" in inspect.getsource(merge_check._tests_rule)
+    assert "tests" not in T.test_command(repo)[T.test_command(repo).index("-q") + 1:]
 
 
 def test_a_name_match_is_listed_even_without_an_import(repo, monkeypatch):
@@ -82,9 +117,11 @@ def test_a_changed_test_is_listed(repo, monkeypatch):
     assert r["reasons"]["tests/test_other.py"] == "changed test"
 
 
-def test_relative_imports_are_followed(repo, monkeypatch):
+def test_an_importer_through_a_relative_import_is_not_listed(repo, monkeypatch):
     r = result(monkeypatch, repo, ["src/app/core.py"])
-    assert "tests/test_rel.py" in r["tests"]
+    assert "tests/test_rel.py" not in r["tests"]
+    r = result(monkeypatch, repo, ["src/app/rel.py"])
+    assert r["reasons"]["tests/test_rel.py"] == "imports app.rel"
 
 
 def test_imports_are_parsed_not_executed(repo, monkeypatch):

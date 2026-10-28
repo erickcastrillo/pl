@@ -1,4 +1,4 @@
-"""pl tests affected: the test files a change can affect in a Python repository, from the import graph.
+"""pl tests affected: the test files a change can affect in a Python repository, from the files' direct imports.
 
 Files are parsed with ast, never imported. git runs through _run (tests fake it). A repository's own
 .pl/tests.toml ([tests]: affected_cmd, always, full_on) adjusts or replaces the finder. Anything the finder cannot
@@ -10,7 +10,6 @@ import shlex
 import subprocess
 import sys
 import tomllib
-from collections import deque
 from pathlib import Path
 
 from pl import jsonout, worker_budget
@@ -136,32 +135,19 @@ def _importers(root, files):
     return graph
 
 
-def _reached(graph, changed_modules):
-    """Breadth-first from the changed modules: module -> (changed module it came from, first importer or None)."""
-    seen = {m: (m, None) for m in changed_modules}
-    queue = deque(changed_modules)
-    while queue:
-        mod = queue.popleft()
-        origin, first = seen[mod]
-        for imp in sorted(graph.get(mod, ())):
-            if imp not in seen:
-                seen[imp] = (origin, first or (mod if mod != origin else None))
-                queue.append(imp)
-    return seen
-
-
 def python_affected(root, changed, files):
     tests = {}
     by_module = {_module_name(f): f for f in files}
     changed_py = [p for p in changed if p.endswith(".py")]
-    reached = _reached(_importers(root, files), {_module_name(p) for p in changed_py})
+    graph = _importers(root, files)
     for p in changed_py:
         if _is_test(p) and p in files:
             tests[p] = "changed test"
-    for mod, (origin, first) in sorted(reached.items()):
-        path = by_module.get(mod)
-        if path and _is_test(path) and path not in tests and mod != origin:
-            tests[path] = f"imports {origin}" + (f" (via {first})" if first else "")
+    for mod in sorted({_module_name(p) for p in changed_py}):
+        for imp in sorted(graph.get(mod, ())):
+            path = by_module.get(imp)
+            if path and _is_test(path) and path not in tests and imp != mod:
+                tests[path] = f"imports {mod}"
     for p in changed_py:
         stem = Path(p).name
         for f in files:

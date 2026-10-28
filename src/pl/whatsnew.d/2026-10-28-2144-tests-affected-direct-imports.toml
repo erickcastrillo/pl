@@ -1,0 +1,3 @@
+title = "Builds run only the tests that import a changed module"
+where = "`pl tests affected` (used by the run stage)"
+try = "Change one module and run `pl tests affected`: it lists only tests that import that module; review and merge check still run the full suite"
