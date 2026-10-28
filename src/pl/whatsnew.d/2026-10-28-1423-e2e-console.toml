@@ -1,0 +1,3 @@
+title = "pl e2e console"
+where = "from a pl checkout"
+try = "pl e2e console"
