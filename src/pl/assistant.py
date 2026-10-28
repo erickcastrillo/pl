@@ -40,7 +40,7 @@ READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl al
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry", "caps", "loops",
              "restart", "hold", "unhold", "rework", "merges", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
-             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "agents", "triggers", "audit", "models", "memory", "pipelines", "activity", "notify")   # move also covers move-agent
+             "profiles", "watch", "pause", "resume", "intent", "assistant", "setup", "skills", "section", "connectors", "pods", "triggers", "audit", "models", "memory", "pipelines", "activity", "notify")   # move also covers move-agent
 GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion",
           "config", "copilot", "discussion", "extension", "gist", "gpg-key", "issue", "label", "org", "preview",
           "project", "release", "repo", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable",
@@ -48,7 +48,8 @@ GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache"
 GH_PR_WRITES = ("checkout", "close", "comment", "create", "edit", "lock", "merge", "ready", "reopen", "revert",
                 "review", "unlock", "update-branch")
 # --ac, --r, --d: argparse also takes a unique prefix of a long flag (--ack, --reset, --delete)
-ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), "Bash(pl alerts *--ac*)",
+ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), *(f"Bash(pl agents {c}*)" for c in ("use", "add", "edit", "remove")),
+             "Bash(pl agents -*)", "Bash(pl agents)", "Bash(pl alerts *--ac*)",
              "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl titles set*)", "Bash(pl titles *--fix*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
              "Bash(pl manager *run*)", "Bash(pl manager -*)", "Bash(gh -*)", *(f"Bash(gh {c}*)" for c in GH_TOP), "Bash(gh pr -*)",
              *(f"Bash(gh pr {c}*)" for c in GH_PR_WRITES), "Bash(git push*)", "Bash(git push:*)", "Bash(git -*)",

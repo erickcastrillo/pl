@@ -1,0 +1,3 @@
+title = "Give a pipeline stage its agent"
+where = "pl agents use"
+try = "pl agents use draft marketing-copywriter --pipeline marketing, then pl pipelines show"

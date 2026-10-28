@@ -500,7 +500,8 @@ def test_claude_gets_ask_rules_that_beat_the_accounts_allow_rules(tmux):
     assert set(p) == {"allow", "ask", "deny"}
     for cmd in ("pl approve x", "pl --profile other approve x", "pl move-agent c a", "pl retry all", "pl idea hi",
                 "pl assistant idea file 1", "pl manager stop", "pl manager --all stop", "pl manager restart t",
-                "pl card x --delete", "gh pr merge 1", "gh api /user", "gh issue close 1", "gh pr create",
+                "pl card x --delete", "pl agents use draft x", "pl agents add x", "pl agents edit x",
+                "pl agents remove x --yes", "gh pr merge 1", "gh api /user", "gh issue close 1", "gh pr create",
                 "git push", "git push origin main", "git -C x push", "git diff --output=x", "git log --output x"):
         assert _hits(p["ask"], cmd), cmd
     assert _exec_argv(tmux)[0] == "claude" and "--permission-mode" in _exec_argv(tmux)
@@ -512,7 +513,7 @@ def test_reads_and_read_only_commands_run_without_asking(tmux):
     p = _perms(tmux)
     assert {"Read", "Glob", "Grep", "LS", "NotebookRead"} <= set(p["allow"])
     for cmd in ("pl list --all", "pl card abc", "pl alerts --all", "pl usage --by card", "pl standup --since 24h",
-                "pl manager status", "pl accounts", "pl whatsnew", "git status", "git log -5", "git diff main",
+                "pl manager status", "pl accounts", "pl whatsnew", "pl agents list", "pl agents show sales-sdr --json", "git status", "git log -5", "git diff main",
                 "gh pr view 12", "gh pr list --state open"):
         assert _hits(p["allow"], cmd) and not _hits(p["ask"], cmd) and not _hits(p["deny"], cmd), cmd
 
@@ -540,7 +541,9 @@ def test_every_pl_command_is_read_only_or_asks(tmux):
     names = set(re.findall(r'sub\.add_parser\("([\w-]+)"', src)) | {"setup", "whatsnew", "manager", "profiles"}
     assistant.ensure()
     p = _perms(tmux)
-    free = [n for n in names if not any(_hits(p[k], c) for k in ("ask", "allow") for c in (f"pl {n}", f"pl {n} x", f"pl {n} -x"))]
+    probes = {"agents": ("list", "use x")}   # no rule covers `pl agents x`: only the subcommands are ruled
+    free = [n for n in names if not any(_hits(p[k], c) for k in ("ask", "allow")
+                                        for c in (f"pl {n}", f"pl {n} x", f"pl {n} -x", *(f"pl {n} {x}" for x in probes.get(n, ()))))]
     assert names and free == []
 
 
