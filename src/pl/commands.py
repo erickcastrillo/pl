@@ -563,7 +563,7 @@ def move_card(ref, column, pr=None):
     if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
         fresh_next()     # it writes what it read: never from a copy that may be minutes old
         t = trackers.get("tracker")
-        cid = t.ref_id(ref) if hasattr(t, "move") else find_card(ref)["id"]
+        cid = t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"]   # only the GitHub tracker resolves ids from text
         urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})

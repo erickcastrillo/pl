@@ -442,3 +442,12 @@ def test_unknown_email_fails_plainly_task_kept(fake):
 def test_unmapped_assignee_reads_username(fake):
     t = fake.add_task(10, assignees=[{"id": 2, "username": "ann"}])
     assert fake.tracker.card(f"vikunja#{t['id']}")["assigned_to"] == "ann"
+
+
+def test_pl_move_with_a_pr_records_it_and_moves_the_card(fake):
+    # pl move --pr on a Vikunja board: the tracker has move() but no ref_id(), which only the GitHub tracker has
+    from pl import commands
+    t = fake.add_task(10, title="built")
+    commands.move_card(f"vikunja#{t['id']}", "Spec ready", pr="https://github.com/o/r/pull/7")
+    got = fake.tracker.card(f"vikunja#{t['id']}")
+    assert got["list_id"] == "11" and got["metadata"]["pr_urls"] == ["https://github.com/o/r/pull/7"]
