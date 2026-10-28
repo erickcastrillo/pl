@@ -90,7 +90,7 @@ def test_an_idle_live_agent_gets_the_rework_message_once(fake):
     text = fake.typed()[0][-1]
     assert "round 1" in text and "gh api repos/o/r/issues/7/comments --jq '.[-1].body'" in text
     assert _rework_writes(fake)[0]["sent_round"] == 1
-    assert [d for k, _, d in fake.events if k == "rework_sent"] == [{"round": 1, "cleared": False}]
+    assert [d for k, _, d in fake.events if k == "rework_sent"] == [{"round": 1, "cleared": False, "carried": False}]
 
 
 def test_a_new_round_gets_its_own_message(fake):
@@ -171,3 +171,45 @@ def test_a_messaged_agent_is_not_released_with_a_backoff(fake):
     save_state({"notified": {}, "run_waits": {"aaaa0001": {"since": time.time() - 31 * 60, "session": "s1"}}})
     fake.run([_card(dict(RUN_W))])
     assert len(fake.typed()) == 1 and "run_released" not in fake.kinds()
+
+
+def test_unsent_prompt_text_is_sent_after_the_rework_message(fake):
+    fake.screen = "│ ❯ half-typed note │"
+    fake.run([_card(dict(RUN_W))])
+    assert len(fake.typed()) == 1
+    text = fake.typed()[0][-1]
+    assert text.index("round 1") < text.index("The owner had also typed (not yet sent): half-typed note")
+    sends = [a for a in fake.tmux if a[0] == "send-keys"]
+    assert sends[-1][-1] == "Enter" and [a[-1] for a in sends].count("Enter") == 1
+
+
+def test_carried_text_is_flagged_in_the_event_and_the_printed_line(fake, capsys):
+    fake.screen = "│ ❯ half-typed note │"
+    fake.run([_card(dict(RUN_W))])
+    assert [d for k, _, d in fake.events if k == "rework_sent"] == [{"round": 1, "cleared": True, "carried": True}]
+    assert "half-typed" not in str([e for e in fake.events if e[0] == "rework_sent"])
+    assert "unsent prompt text sent along" in capsys.readouterr().out
+
+
+def test_an_empty_prompt_types_only_the_rework_message(fake):
+    fake.screen = "│ > │"
+    c = _card(dict(RUN_W))
+    fake.run([c])
+    assert fake.typed()[0][-1] == dispatch.harnesses._typeable(dispatch.rework.live_message(c))
+    assert [d["carried"] for k, _, d in fake.events if k == "rework_sent"] == [False]
+
+
+def test_an_unreadable_prompt_types_only_the_rework_message(fake, monkeypatch):
+    c = _card(dict(RUN_W))
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: fake.tmux.append(a))
+    fake.run([c])
+    assert fake.typed()[0][-1] == dispatch.harnesses._typeable(dispatch.rework.live_message(c))
+    assert [d["carried"] for k, _, d in fake.events if k == "rework_sent"] == [False]
+
+
+def test_carried_text_with_shell_characters_is_typed_literally(fake):
+    fake.screen = "❯ $(rm -rf ~); echo hi"
+    fake.run([_card(dict(RUN_W))])
+    assert len(fake.typed()) == 1
+    assert fake.typed()[0][-1].endswith("$(rm -rf ~); echo hi")
+    assert fake.typed()[0][-3:-1] == ("-l", "--")
