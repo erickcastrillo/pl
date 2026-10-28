@@ -6,7 +6,9 @@ import shutil
 import sys
 import tempfile
 from importlib import resources
+from pathlib import Path
 
+import tomlkit
 import yaml
 
 from pl import config as C
@@ -211,9 +213,44 @@ def _remove(a) -> None:
         print(f"{name} is the built-in again")
 
 
+def _config_of(pipeline: str | None) -> Path:
+    from pl import cli
+    here = (C.PIPELINE or {}).get("name", "engineering")
+    if pipeline is None or pipeline == here:
+        if C.path() is None:
+            raise SystemExit(cli.NO_PROFILE)
+        return C.path()
+    other = Path.home() / f".pl-{pipeline}" / "config.toml"
+    if not C.NAME_RE.match(pipeline) or not other.is_file():
+        _fail(f"pl: no pipeline named {pipeline}")
+    return other
+
+
+def _use(a) -> None:
+    path = _config_of(a.pipeline)
+    agents = load()
+    if a.agent not in agents:
+        _fail(f"no agent named {a.agent}", 2)
+    doc = tomlkit.parse(path.read_text())
+    name = doc.get("pipeline", {}).get("name", "engineering")
+    stages = doc.get("pipeline", {}).get("stages", {})
+    if a.stage not in stages:
+        _fail(f"pl: pipeline {name} has no stage {a.stage}")
+    stages[a.stage]["agent"] = a.agent
+    C.save(doc, target=path)
+    for problem in validate(a.agent, agents[a.agent]):
+        print(f"warning: {problem}", file=sys.stderr)
+    if a.json:
+        print(json.dumps({"pipeline": name, "stage": a.stage, "agent": a.agent}))
+    else:
+        print(f"stage {a.stage} of pipeline {name} now uses agent {a.agent}")
+
+
 def cmd_agents(a) -> None:
     if a.agents_cmd == "add":
         return _add(a)
+    if a.agents_cmd == "use":
+        return _use(a)
     if a.agents_cmd == "remove":
         return _remove(a)
 

@@ -1,4 +1,5 @@
 """Named agents: built-in definitions, profile agents, pl agents list|show."""
+import difflib
 import json
 
 import pytest
@@ -302,3 +303,100 @@ def test_remove_override_restores_builtin(fake_home, known, monkeypatch):
     _agent_md(p, "sales-sdr", _md(approval="[send]"))
     _pl(monkeypatch, "agents", "remove", "sales-sdr", "--yes")
     assert agent_defs.load()["sales-sdr"]["source"] == "built-in"
+
+
+MKT_CONFIG = '''# marketing profile
+[pipeline]
+name = "marketing"
+columns = ["Brief", "Draft review"]
+
+[pipeline.stages.brief]
+column = "Brief"
+done = "Draft review"
+skill = "pl-stage"
+
+# the writing stage
+[pipeline.stages.draft]
+column = "Draft review"
+done = "Draft review"
+skill = "pl-stage"
+'''
+
+
+def _use(monkeypatch, capsys, *argv):
+    code = None
+    try:
+        _pl(monkeypatch, "agents", "use", *argv)
+    except SystemExit as e:
+        code = e.code
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_use_sets_agent_and_changes_nothing_else(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "work", MKT_CONFIG)
+    code, out, _ = _use(monkeypatch, capsys, "draft", "marketing-copywriter", "--pipeline", "marketing")
+    assert code is None
+    new = (d / "config.toml").read_text()
+    changed = [ln for ln in difflib.ndiff(MKT_CONFIG.splitlines(), new.splitlines()) if ln[0] in "+-"]
+    assert changed == ['+ agent = "marketing-copywriter"']
+    assert new.index("[pipeline.stages.draft]") < new.index("agent =")
+    assert out.strip() == "stage draft of pipeline marketing now uses agent marketing-copywriter"
+
+
+def test_use_replaces_existing_agent_once(fake_home, monkeypatch, capsys):
+    before = MKT_CONFIG + 'agent = "sales-sdr"\n'
+    d = _profile(fake_home, "work", before)
+    _use(monkeypatch, capsys, "draft", "marketing-copywriter")
+    new = (d / "config.toml").read_text()
+    assert new.count("agent =") == 1
+    assert new == before.replace("sales-sdr", "marketing-copywriter")
+
+
+def test_use_unknown_pipeline_refuses_and_keeps_file(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "work", MKT_CONFIG)
+    code, _, err = _use(monkeypatch, capsys, "draft", "marketing-copywriter", "--pipeline", "nope")
+    assert code == 1 and "no pipeline named nope" in err
+    assert (d / "config.toml").read_text() == MKT_CONFIG
+
+
+def test_use_unknown_stage_refuses_and_keeps_file(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "work", MKT_CONFIG)
+    code, _, err = _use(monkeypatch, capsys, "ship", "marketing-copywriter", "--pipeline", "marketing")
+    assert code == 1 and "pipeline marketing has no stage ship" in err
+    assert (d / "config.toml").read_text() == MKT_CONFIG
+
+
+def test_use_unknown_agent_refuses_with_show_message(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "work", MKT_CONFIG)
+    try:
+        _pl(monkeypatch, "agents", "show", "nope")
+    except SystemExit as e:
+        show_code = e.code
+    show_err = capsys.readouterr().err
+    code, _, err = _use(monkeypatch, capsys, "draft", "nope")
+    assert (code, err) == (show_code, show_err) and "no agent named nope" in err
+    assert (d / "config.toml").read_text() == MKT_CONFIG
+
+
+def test_use_json_prints_pipeline_stage_agent(fake_home, monkeypatch, capsys):
+    _profile(fake_home, "work", MKT_CONFIG)
+    _, out, _ = _use(monkeypatch, capsys, "draft", "marketing-copywriter", "--json")
+    assert json.loads(out) == {"pipeline": "marketing", "stage": "draft", "agent": "marketing-copywriter"}
+
+
+def test_use_other_profile_by_pipeline_name(fake_home, monkeypatch, capsys):
+    work = _profile(fake_home, "work", MKT_CONFIG)
+    mkt = fake_home / ".pl-mkt"
+    mkt.mkdir()
+    (mkt / "config.toml").write_text(MKT_CONFIG.replace('name = "marketing"', 'name = "mkt"'))
+    code, _, _ = _use(monkeypatch, capsys, "draft", "marketing-copywriter", "--pipeline", "mkt")
+    assert code is None
+    assert 'agent = "marketing-copywriter"' in (mkt / "config.toml").read_text()
+    assert (work / "config.toml").read_text() == MKT_CONFIG
+
+
+def test_use_on_the_engineering_pipeline_has_no_stage_to_write(fake_home, monkeypatch, capsys):
+    _profile(fake_home, "work", "")
+    code, _, err = _use(monkeypatch, capsys, "run", "engineering-run")
+    assert code == 1 and "pipeline engineering has no stage run" in err

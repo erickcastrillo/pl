@@ -214,8 +214,10 @@
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
   pl agents list [--json] | show NAME [--json] | add NAME [--json] | remove NAME [--yes]
+          | use STAGE AGENT [--pipeline NAME] [--json]
                           the named agents: built-in and the profile's own (agents/NAME/agent.md), with role, skills, connector roles, model, approval and pod;
-                          show lists problems in the definition; add starts from the built-in of that name or a placeholder; remove deletes the profile's folder
+                          show lists problems in the definition; add starts from the built-in of that name or a placeholder; remove deletes the profile's folder;
+                          use sets the agent a pipeline stage runs, changing nothing else in config.toml
   pl loops list [--json] | add NAME (--skill S | --prompt P | --template T) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
           | edit NAME [--every E] [--prompt P] [--skill S] [--hours H] [--account A] [--writes|--no-writes] [--convert]
           | pause NAME | resume NAME | rm NAME [--yes]
@@ -559,6 +561,7 @@ def build_parser():
     q = pa.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pa.add_parser("add"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pa.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pa.add_parser("use"); q.add_argument("stage"); q.add_argument("agent"); q.add_argument("--pipeline", help="pipeline name: this profile's, or the profile ~/.pl-NAME"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")
     q = pp.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
