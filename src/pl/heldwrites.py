@@ -102,6 +102,16 @@ def add_update(card, fields, until) -> dict:
     return add(card, "update", args, until, was=cached_list(card) if "column" in args else None)
 
 
+def queued_moves() -> dict[str, str]:
+    """A note per card that has a column move waiting for the reset; the newest queued target wins."""
+    notes = {}
+    for e in entries():
+        column = (e.get("args") or {}).get("column")
+        if e["op"] == "move" or (e["op"] == "update" and column):
+            notes[e["card"]] = f"move to {column} queued, resets {_hhmm(e['until'])}"
+    return notes
+
+
 def _drop(seq):
     with _lock():   # re-read under the lock: a command may have queued another write since the replay began
         _write([e for e in entries() if e["seq"] != seq])
