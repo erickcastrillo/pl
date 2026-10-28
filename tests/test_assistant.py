@@ -278,6 +278,37 @@ def test_nothing_usable_picks_nothing(monkeypatch):
     assert assistant.pick() == (None, None)
 
 
+def _only_installed(monkeypatch, *accts):
+    monkeypatch.setattr(assistant, "installed", lambda a: a in accts)
+
+
+def test_pick_skips_a_pool_account_whose_cli_is_missing(monkeypatch):
+    _accounts(nocli="codex", acme="claude")
+    C.STAGES = {"plan": {"accounts": ["nocli", "acme"]}}
+    _only_installed(monkeypatch, "acme")
+    assert assistant.pick() == ("acme", "from stage plan")
+
+
+def test_pick_skips_a_first_account_whose_cli_is_missing(monkeypatch):
+    _accounts(nocli="codex", acme="claude")
+    _only_installed(monkeypatch, "acme")
+    assert assistant.pick() == ("acme", "first usable account")
+
+
+def test_a_named_account_whose_cli_is_missing_falls_back_and_says_so(monkeypatch):
+    _accounts(nocli="codex", acme="claude")
+    C.ASSISTANT = {"account": "nocli"}
+    _only_installed(monkeypatch, "acme")
+    assert assistant.pick() == ("acme", "named account nocli skipped: codex not installed; first usable account")
+
+
+def test_no_installed_cli_starts_nothing_and_says_cli_not_installed(tmux, monkeypatch):
+    _only_installed(monkeypatch)
+    with pytest.raises(SystemExit, match=r"no account can run the assistant.*CLI not installed.*\[assistant\] account"):
+        assistant.ensure()
+    assert tmux.verb("new-window") == []
+
+
 def test_a_named_antigravity_account_is_refused_with_the_message(tmux):
     C.ACCOUNTS["acme"] = {**C.ACCOUNTS["acme"], "harness": "antigravity"}
     (C.CONFIG_DIR / "config.toml").write_text(

@@ -192,22 +192,31 @@ def usable(acct):
     return harnesses.account_harness(acct).name in ASK_FIRST
 
 
+def installed(acct):
+    """True when the account's harness CLI is on PATH."""
+    return harnesses.available(harnesses.account_harness(acct))
+
+
 def pick():
-    """(account, reason): [assistant] account when it names one, else the first account not parked whose harness can
-    ask first, from the plan, spec and design pools, then [accounts]; (None, None) when none qualifies."""
+    """(account, reason): [assistant] account when it names one whose CLI is installed, else the first account not
+    parked whose harness can ask first and whose CLI is installed, from the plan, spec and design pools, then
+    [accounts]; (None, None) when none qualifies."""
     want = C.ASSISTANT.get("account")
+    skipped = ""
     if want in C.PROFILES:
-        return want, "named"
+        if installed(want):
+            return want, "named"
+        skipped = f"named account {want} skipped: {harnesses.account_harness(want).bin} not installed; "
     parked = accounts.exhausted_profiles()
 
     def ok(a):
-        return a in C.PROFILES and a not in parked and usable(a)
+        return a in C.PROFILES and a not in parked and usable(a) and installed(a)
 
     for stage in ("plan", "spec", "design"):
         if a := next((a for a in harnesses.stage_pool(stage) or [] if ok(a)), None):
-            return a, f"from stage {stage}"
+            return a, f"{skipped}from stage {stage}"
     if a := next((a for a in C.PROFILES if ok(a)), None):
-        return a, "first usable account"
+        return a, f"{skipped}first usable account"
     return None, None
 
 
@@ -294,8 +303,8 @@ def _ensure(tried=None):
     _read_assistant_config()
     acct = account()
     if acct is None:
-        raise SystemExit("pl: no account can run the assistant: each one is parked or on a harness that cannot ask before "
-                         "each action; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
+        raise SystemExit("pl: no account can run the assistant: each one is parked, on a harness that cannot ask before "
+                         "each action, or CLI not installed; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
     tried["account"] = acct
     h = None
     try:
