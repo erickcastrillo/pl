@@ -78,6 +78,14 @@ def test_profile_agent_overrides_builtin_of_same_name(fake_home):
     assert len(rows) == 1 and rows[0]["source"] == "profile" and rows[0]["instructions"] == "Mine."
 
 
+def test_profile_override_of_a_builtin_keeps_the_builtin_approval(fake_home):
+    d = _profile(fake_home)
+    _agent_md(d, "sales-sdr", "---\napproval: []\n---\nMine.\n")
+    builtin = agent_defs._builtin()["sales-sdr"]["approval"]
+    assert "send" in builtin
+    assert agent_defs.load()["sales-sdr"]["approval"] == sorted(builtin)
+
+
 def test_bad_front_matter_agent_is_skipped_not_fatal(fake_home):
     d = _profile(fake_home)
     _agent_md(d, "broken", "---\nskills: [unclosed\n---\nx\n")

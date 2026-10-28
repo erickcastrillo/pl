@@ -83,7 +83,11 @@ def _agent(name: str, source: str, raw: dict) -> dict:
 
 def load() -> dict:
     agents = {n: _agent(n, "built-in", raw) for n, raw in _builtin().items()}
-    agents.update({n: _agent(n, "profile", raw) for n, raw in _profile().items()})
+    for n, raw in _profile().items():
+        agent = _agent(n, "profile", raw)
+        if n in agents:
+            agent["approval"] = sorted({*agents[n]["approval"], *agent["approval"]})
+        agents[n] = agent
     return agents
 
 
