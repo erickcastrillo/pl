@@ -5,7 +5,7 @@ import urllib.parse
 import urllib.request
 
 from pl import util
-from pl.trackers import mcp, metablock
+from pl.trackers import mcp, vikunjahtml
 
 PAGE = 200      # tasks per bucket per request
 TIMEOUT = 15
@@ -95,7 +95,7 @@ class Vikunja:
                    {"labels": [{"id": self._label_id(t)} for t in dict.fromkeys(tags)]})
 
     def _card(self, task, bucket_id):
-        text, meta, _ = metablock.split(task.get("description"))
+        text, meta = vikunjahtml.decode(task.get("description"))
         assignees = task.get("assignees") or []
         return {"id": f"vikunja#{task['id']}", "title": task["title"], "description": text, "metadata": meta,
                 "tags": [x["title"] for x in task.get("labels") or []], "list_id": str(bucket_id),
@@ -146,7 +146,7 @@ class Vikunja:
     def create(self, column, *, title, description="", tags=(), metadata=None, assigned_to=None):
         bucket = self._col(column)
         task = self._http("PUT", f"/projects/{self.project}/tasks",
-                          {"title": title, "description": metablock.join(description, metadata)})
+                          {"title": title, "description": vikunjahtml.encode(description, metadata)})
         self._move(task["id"], bucket)
         if tags:
             self._set_labels(task["id"], tags)
@@ -166,11 +166,11 @@ class Vikunja:
         bucket = self._col(fields["column"]) if "column" in fields else fields.get("list_id")
         if {"title", "description", "metadata"} & fields.keys():
             task = self._http("GET", f"/tasks/{tid}")
-            text, meta, _ = metablock.split(task.get("description"))
+            text, meta = vikunjahtml.decode(task.get("description"))
             if "metadata" in fields:
                 meta = {**meta, **fields["metadata"]} if verify else dict(fields["metadata"])
             task["title"] = fields.get("title", task["title"])
-            task["description"] = metablock.join(fields.get("description", text), meta)
+            task["description"] = vikunjahtml.encode(fields.get("description", text), meta)
             self._http("POST", f"/tasks/{tid}", task)
         if "tags" in fields:
             self._set_labels(tid, fields["tags"])

@@ -11,7 +11,7 @@ import pytest
 
 from pl import board, trackers
 from pl import config as C
-from pl.trackers import metablock, vikunja
+from pl.trackers import metablock, vikunja, vikunjahtml
 
 TOKEN = "tk_secret_value_123"
 P, V = 7, 3
@@ -243,7 +243,7 @@ def test_update_title_keeps_assignee_description_labels_priority(fake):
     assert got["title"] == "new" and got["priority"] == 4
     assert got["assignees"] == t["assignees"] and got["labels"] == t["labels"]
     assert not [w for w in fake.writes if w[1].endswith("/bulk")]
-    assert metablock.split(got["description"])[:2] == ("body", {"a": 1})
+    assert got["description"].startswith("<p>") and vikunjahtml.decode(got["description"]) == ("body", {"a": 1})
 
 
 def test_update_metadata_only_keeps_fields(fake):
@@ -251,15 +251,56 @@ def test_update_metadata_only_keeps_fields(fake):
     fake.tracker.update(f"vikunja#{t['id']}", metadata={"b": 2})
     got = fake.tasks[t["id"]]
     assert got["title"] == "old" and got["priority"] == 4 and got["assignees"] == t["assignees"]
-    assert metablock.split(got["description"])[:2] == ("body", {"a": 1, "b": 2})
+    assert vikunjahtml.decode(got["description"]) == ("body", {"a": 1, "b": 2})
 
 
 def test_description_keeps_metablock_and_text_readable(fake):
     c = fake.tracker.create("Inbox", title="T", description="hello", metadata={"k": "v"})
     raw = fake.tasks[int(c["id"].split("#")[1])]["description"]
-    assert raw.startswith("hello\n\n") and metablock.MARK in raw
+    assert raw.startswith("<p>hello</p>") and metablock.MARK not in raw
     c = fake.tracker.update(c["id"], description="changed")
     assert c["description"] == "changed" and c["metadata"] == {"k": "v"}
+
+
+SAMPLE = "# PIPELINE: INPUT\n\n## Sub\n\n- a\n- `b`\n\n```\ncode\n```\n\n# PIPELINE: SPEC\n\ntext\n"
+
+
+def test_create_stores_html_and_reads_back_exact_markdown(fake):
+    c = fake.tracker.create("Inbox", title="T", description=SAMPLE, metadata={"k": "v"})
+    raw = fake.tasks[int(c["id"].split("#")[1])]["description"]
+    assert "<h1>" in raw and "<pre>" in raw and "# PIPELINE" not in raw
+    for got in (fake.tracker.card(c["id"]), next(x for x in fake.tracker.cards() if x["id"] == c["id"])):
+        assert got["description"] == SAMPLE and got["metadata"] == {"k": "v"}
+
+
+def test_update_with_verify_passes_for_html(fake, capsys):
+    c = fake.tracker.create("Inbox", title="T", description=SAMPLE, metadata={})
+    fake.tracker.update(c["id"], description=SAMPLE + "more\n", verify=True)
+    assert "did not persist" not in capsys.readouterr().err + capsys.readouterr().out
+
+
+def test_legacy_markdown_task_reads_unchanged_then_writes_html(fake):
+    t = _rich(fake)
+    got = fake.tracker.card(f"vikunja#{t['id']}")
+    assert got["description"] == "body" and got["metadata"] == {"a": 1}
+    fake.tracker.update(got["id"], title="x")
+    raw = fake.tasks[t["id"]]["description"]
+    assert raw.startswith("<p>") and fake.tracker.card(got["id"])["description"] == "body"
+
+
+def test_editor_written_task_has_input_section(fake):
+    t = fake.add_task(11, title="e", description="<h1>PIPELINE: INPUT</h1><p>one</p><p>two</p><ul><li><p>a</p></li></ul>")
+    desc = fake.tracker.card(f"vikunja#{t['id']}")["description"]
+    assert board.sections(desc)["INPUT"] == "one\n\ntwo\n\n- a"
+
+
+def test_write_section_stores_html(fake):
+    from pl import commands
+    c = fake.tracker.create("Inbox", title="T", description="# PIPELINE: INPUT\n\nidea\n", metadata={})
+    md = "## Problem\n\n- x\n- y\n"
+    commands.write_section(c["id"], "SPEC", md)
+    assert "<h2>" in fake.tasks[int(c["id"].split("#")[1])]["description"]
+    assert board.sections(fake.tracker.card(c["id"])["description"])["SPEC"] == md.strip("\n")
 
 
 def test_updated_at_follows_task_updated(fake):
