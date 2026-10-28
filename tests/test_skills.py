@@ -1318,6 +1318,6 @@ async def test_skills_title_and_palette_say_subagents():
     assert "skills, subagents and commands" in chrome.HELP["skills"]
     app = PlApp(snapshot_provider=lambda: {})
     async with app.run_test() as pilot:
-        await pilot.pause()
+        await pilot.pause()  # one tick: the palette's commands are read from the mounted screen, nothing to wait for
         helps = [c.help for c in app.get_system_commands(app.screen) if c.title.startswith("Skills")]
     assert any("skills, subagents and commands" in h for h in helps)

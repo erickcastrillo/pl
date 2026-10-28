@@ -130,6 +130,6 @@ async def test_write_keys_run_nothing_and_write_nothing(monkeypatch, tmp_path):
         await wait_until(pilot, lambda: t.row_count == 3, "rows")
         t.focus()
         await pilot.press("n", "e", "d", "u", "enter", "escape")
-        await pilot.pause()
+        await pilot.pause()  # one tick so the keys are handled: the test checks nothing ran, so there is no state to wait on
     assert all(c[:3] in (["pl", "agents", "list"], ["pl", "agents", "show"]) for c in runner.calls)
     assert list(tmp_path.iterdir()) == []
