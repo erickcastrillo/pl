@@ -1,6 +1,8 @@
 """Named agents: built-in definitions, profile agents, pl agents list|show."""
 import difflib
+import io
 import json
+import subprocess
 
 import pytest
 
@@ -429,3 +431,188 @@ def test_use_from_the_terminal_may_drop_an_approval(fake_home, monkeypatch, caps
     monkeypatch.delenv("PL_ASSISTANT", raising=False)
     code, _, _ = _use(monkeypatch, capsys, "draft", "support-triage")
     assert code is None and 'agent = "support-triage"' in (d / "config.toml").read_text()
+
+
+def _no_editor(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("an editor was started")
+    monkeypatch.setattr(agent_defs, "_run", boom)
+
+
+def _fake_editor(monkeypatch, text=None, code=0):
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if text is not None:
+            open(argv[-1], "w").write(text)
+        return subprocess.CompletedProcess(argv, code)
+    monkeypatch.setattr(agent_defs, "_run", run)
+    return calls
+
+
+def _edit(monkeypatch, capsys, *argv):
+    try:
+        _pl(monkeypatch, "agents", "edit", *argv)
+        code = 0
+    except SystemExit as e:
+        code = e.code
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+ACCOUNT = '[accounts.a]\nharness = "codex"\n'
+
+
+def _closer(fake_home, **kw):
+    p = _profile(fake_home, text=ACCOUNT)
+    _agent_md(p, "my-closer", _md(skills="[pl-stage, mine]", model="opus", **kw))
+    return p, p / "agents/my-closer/agent.md"
+
+
+def test_edit_json_flags_set_fields_and_print_show_json(fake_home, known, monkeypatch, capsys):
+    _closer(fake_home)
+    _no_editor(monkeypatch)
+    code, out, _ = _edit(monkeypatch, capsys, "my-closer", "--json", "--skills", "pl-stage,mine", "--connector-roles", "email,contacts",
+                         "--model", "opus", "--approval", "send,publish", "--pod", "sales", "--instructions", "Close the deal.")
+    assert code == 0
+    _pl(monkeypatch, "agents", "show", "my-closer", "--json")
+    shown = capsys.readouterr().out
+    assert out == shown
+    got = json.loads(shown)
+    assert (got["skills"], got["connector_roles"], got["model"], got["approval"], got["pod"], got["instructions"]) == \
+        (["pl-stage", "mine"], ["email", "contacts"], "opus", ["send", "publish"], "sales", "Close the deal.")
+
+
+def test_edit_one_flag_keeps_other_fields_and_body(fake_home, known, monkeypatch, capsys):
+    _closer(fake_home)
+    _no_editor(monkeypatch)
+    monkeypatch.setattr("pl.harnesses.models", lambda name: ["opus", "sonnet"])
+    _edit(monkeypatch, capsys, "my-closer", "--json", "--model", "sonnet")
+    got = agent_defs.load()["my-closer"]
+    assert got["model"] == "sonnet" and got["skills"] == ["pl-stage", "mine"]
+    assert got["instructions"] == "Do it." and got["approval"] == ["send"]
+
+
+def test_edit_list_flag_replaces_and_empty_clears(fake_home, known, monkeypatch, capsys):
+    _closer(fake_home)
+    _no_editor(monkeypatch)
+    _edit(monkeypatch, capsys, "my-closer", "--json", "--skills", "mine")
+    assert agent_defs.load()["my-closer"]["skills"] == ["mine"]
+    _edit(monkeypatch, capsys, "my-closer", "--json", "--skills", "")
+    assert agent_defs.load()["my-closer"]["skills"] == []
+
+
+@pytest.mark.parametrize("agent,flags,problem", [
+    ("my-closer", ["--skills", "nope"], "my-closer: unknown skill nope"),
+    ("my-closer", ["--connector-roles", "crm"], "my-closer: unknown connector role crm"),
+    ("my-closer", ["--model", "gpt-x"], "my-closer: unknown model or account gpt-x"),
+    ("my-closer", ["--approval", "wire"], "my-closer: unknown approval action wire"),
+    ("sales-sdr", ["--approval", "publish"], "sales-sdr: approval cannot drop send from built-in sales-sdr"),
+])
+def test_edit_invalid_flags_write_nothing(fake_home, known, monkeypatch, capsys, agent, flags, problem):
+    p, path = _closer(fake_home)
+    _agent_md(p, "sales-sdr", "---\nskills: [pl-stage]\napproval: [send]\n---\nMine.\n")
+    target = p / "agents" / agent / "agent.md"
+    before = target.read_bytes()
+    _no_editor(monkeypatch)
+    code, out, err = _edit(monkeypatch, capsys, agent, "--json", *flags)
+    assert code == 1 and out == "" and problem in err
+    assert target.read_bytes() == before
+
+
+def test_edit_flags_without_json_print_human_show(fake_home, known, monkeypatch, capsys):
+    _closer(fake_home)
+    _no_editor(monkeypatch)
+    code, out, _ = _edit(monkeypatch, capsys, "my-closer", "--pod", "sales")
+    assert code == 0
+    _pl(monkeypatch, "agents", "show", "my-closer")
+    assert out == capsys.readouterr().out and "pod: sales" in out
+
+
+def test_edit_builtin_creates_override_with_edit(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home, text=ACCOUNT)
+    _no_editor(monkeypatch)
+    code, _, _ = _edit(monkeypatch, capsys, "sales-sdr", "--json", "--pod", "sales")
+    assert code == 0 and (p / "agents/sales-sdr/agent.md").is_file()
+    _pl(monkeypatch, "agents", "list", "--json")
+    rows = [r for r in json.loads(capsys.readouterr().out) if r["name"] == "sales-sdr"]
+    assert len(rows) == 1 and rows[0]["source"] == "profile" and rows[0]["pod"] == "sales"
+    assert agent_defs.load()["sales-sdr"]["connector_roles"] == ["contacts", "email"]
+
+
+def test_edit_builtin_invalid_leaves_no_override(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home)
+    _no_editor(monkeypatch)
+    code, _, _ = _edit(monkeypatch, capsys, "sales-sdr", "--json", "--skills", "nope")
+    assert code == 1 and not (p / "agents/sales-sdr").exists()
+    assert agent_defs.load()["sales-sdr"]["source"] == "built-in"
+
+
+@pytest.mark.parametrize("flags", [[], ["--json", "--model", "opus"]])
+def test_edit_unknown_agent_creates_nothing_and_opens_no_editor(fake_home, known, monkeypatch, capsys, flags):
+    p = _profile(fake_home)
+    monkeypatch.setenv("EDITOR", "vi")
+    _no_editor(monkeypatch)
+    code, _, err = _edit(monkeypatch, capsys, "no-such-agent", *flags)
+    assert code == 2 and "no agent named no-such-agent" in err
+    assert not (p / "agents").exists()
+
+
+def test_edit_instructions_dash_reads_stdin(fake_home, known, monkeypatch, capsys):
+    _closer(fake_home)
+    _no_editor(monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO("From stdin.\n"))
+    _edit(monkeypatch, capsys, "my-closer", "--json", "--instructions", "-")
+    assert agent_defs.load()["my-closer"]["instructions"] == "From stdin."
+
+
+def test_edit_in_editor_saves_valid_text(fake_home, known, monkeypatch, capsys):
+    _, path = _closer(fake_home)
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "myed --wait")
+    new = _md(skills="[mine]", model="opus")
+    calls = _fake_editor(monkeypatch, new)
+    code, _, _ = _edit(monkeypatch, capsys, "my-closer")
+    assert code == 0 and path.read_text() == new
+    assert calls[0][:2] == ["myed", "--wait"] and len(calls) == 1
+
+
+def test_edit_in_editor_invalid_keeps_file_byte_for_byte(fake_home, known, monkeypatch, capsys):
+    _, path = _closer(fake_home)
+    before = path.read_bytes()
+    monkeypatch.setenv("VISUAL", "myed")
+    _fake_editor(monkeypatch, _md(roles="[crm]"))
+    code, _, err = _edit(monkeypatch, capsys, "my-closer")
+    assert code == 1 and "my-closer: unknown connector role crm" in err
+    assert path.read_bytes() == before
+
+
+def test_edit_no_editor_tells_to_use_json(fake_home, known, monkeypatch, capsys):
+    _, path = _closer(fake_home)
+    before = path.read_bytes()
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    _no_editor(monkeypatch)
+    code, _, err = _edit(monkeypatch, capsys, "my-closer")
+    assert code == 2 and "no editor set" in err and "--json" in err
+    assert path.read_bytes() == before
+
+
+def test_edit_editor_nonzero_exit_cancels(fake_home, known, monkeypatch, capsys):
+    _, path = _closer(fake_home)
+    before = path.read_bytes()
+    monkeypatch.setenv("EDITOR", "myed")
+    _fake_editor(monkeypatch, "garbage", code=1)
+    code, _, err = _edit(monkeypatch, capsys, "my-closer")
+    assert code == 1 and "edit cancelled" in err and path.read_bytes() == before
+
+
+def test_edit_builtin_in_editor_invalid_leaves_no_override(fake_home, known, monkeypatch, capsys):
+    p = _profile(fake_home)
+    monkeypatch.setenv("EDITOR", "myed")
+    _fake_editor(monkeypatch, _md(skills="[nope]"))
+    code, _, _ = _edit(monkeypatch, capsys, "sales-sdr")
+    assert code == 1 and not (p / "agents/sales-sdr").exists()
+    assert agent_defs.load()["sales-sdr"]["source"] == "built-in"
+

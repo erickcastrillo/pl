@@ -214,9 +214,11 @@
   pl pods list [--json] | show NAME [--json]
                           the pipeline's pods: rules (pod.md), knowledge, skills, plugins, layer budgets and, with --json, 30-day quality numbers
   pl agents list [--json] | show NAME [--json] | add NAME [--json] | remove NAME [--yes]
+          | edit NAME [--json] [--skills L] [--connector-roles L] [--model M] [--approval L] [--pod P] [--instructions TEXT]
           | use STAGE AGENT [--pipeline NAME] [--json]
                           the named agents: built-in and the profile's own (agents/NAME/agent.md), with role, skills, connector roles, model, approval and pod;
                           show lists problems in the definition; add starts from the built-in of that name or a placeholder; remove deletes the profile's folder;
+                          edit opens agent.md in $VISUAL/$EDITOR, or sets the given fields with no editor; an invalid result is never saved;
                           use sets the agent a pipeline stage runs, changing nothing else in config.toml
   pl loops list [--json] | add NAME (--skill S | --prompt P | --template T) [--every E] [--hours H] [--account A] [--team T] [--writes] [--yes] [--dry-run]
           | edit NAME [--every E] [--prompt P] [--skill S] [--hours H] [--account A] [--writes|--no-writes] [--convert]
@@ -561,6 +563,11 @@ def build_parser():
     q = pa.add_parser("show"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pa.add_parser("add"); q.add_argument("name"); q.add_argument("--json", action="store_true")
     q = pa.add_parser("remove"); q.add_argument("name"); q.add_argument("--yes", action="store_true", help="do not ask first")
+    q = pa.add_parser("edit"); q.add_argument("name"); q.add_argument("--json", action="store_true")
+    for flag, what in (("skills", "comma list"), ("connector-roles", "comma list"), ("model", "model or account; empty = stage default"),
+                       ("approval", "comma list of send, publish, post, quote-prices"), ("pod", "pod name; empty = none"),
+                       ("instructions", "the whole body; - reads stdin")):
+        q.add_argument(f"--{flag}", default=None, help=what)
     q = pa.add_parser("use"); q.add_argument("stage"); q.add_argument("agent"); q.add_argument("--pipeline", help="pipeline name: this profile's, or the profile ~/.pl-NAME (edits that profile's config without its lock)"); q.add_argument("--json", action="store_true")
     p = sub.add_parser("pods"); pp = p.add_subparsers(dest="pods_cmd", required=True)
     q = pp.add_parser("list"); q.add_argument("--json", action="store_true")

@@ -2,7 +2,9 @@
 import json
 import os
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from importlib import resources
@@ -163,6 +165,14 @@ def _problems_of(name: str, text: str) -> list[str]:
     return validate(name, {**front, "instructions": body})
 
 
+def _write(target: Path, text: str) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=target, prefix=".agent-")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, target / "agent.md")
+
+
 def _add(a) -> None:
     name = a.name
     if not C.NAME_RE.match(name):
@@ -175,11 +185,7 @@ def _add(a) -> None:
     problems = _problems_of(name, text)
     if problems:
         _fail("\n".join(problems))
-    target.mkdir(parents=True)
-    fd, tmp = tempfile.mkstemp(dir=target, prefix=".agent-")
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-    os.replace(tmp, target / "agent.md")
+    _write(target, text)
     if a.json:
         print(json.dumps(_show(load()[name], [])))
     else:
@@ -189,6 +195,50 @@ def _add(a) -> None:
 def _builtin_text(raw: dict) -> str:
     front = yaml.safe_dump({f: raw.get(f) for f in FIELDS}, sort_keys=False)
     return f"---\n{front}---\n{raw.get('instructions') or ''}\n"
+
+
+_run = subprocess.run
+_LIST_FLAGS = ("skills", "connector_roles", "approval")
+_FLAGS = (*FIELDS, "instructions")
+
+
+def _flag_edit(text: str, flags: dict) -> str:
+    front, body = _parse(text)
+    for field, value in flags.items():
+        if field == "instructions":
+            body = sys.stdin.read().strip() if value == "-" else value
+        elif field in _LIST_FLAGS:
+            front[field] = [s.strip() for s in value.split(",") if s.strip()]
+        else:
+            front[field] = value or None
+    return f"---\n{yaml.safe_dump(front, sort_keys=False)}---\n{body}\n"
+
+
+def _editor_edit(text: str, editor: str) -> str:
+    with tempfile.TemporaryDirectory() as folder:
+        draft = Path(folder) / "agent.md"
+        draft.write_text(text)
+        if _run([*shlex.split(editor), str(draft)]).returncode != 0:
+            _fail("edit cancelled")
+        return draft.read_text()
+
+
+def _edit(a) -> None:
+    name = a.name
+    if name not in load():
+        _fail(f"no agent named {name}", 2)
+    flags = {f: getattr(a, f) for f in _FLAGS if getattr(a, f) is not None}
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not flags and not editor:
+        _fail("pl: no editor set (VISUAL or EDITOR); use --json with field flags, for example pl agents edit NAME --json --model opus", 2)
+    target = C.CONFIG_DIR / "agents" / name
+    text = (target / "agent.md").read_text() if (target / "agent.md").is_file() else _builtin_text(_builtin()[name])
+    text = _flag_edit(text, flags) if flags else _editor_edit(text, editor)
+    problems = _problems_of(name, text)
+    if problems:
+        _fail("\n".join(problems))
+    _write(target, text)
+    _print_show(name, a.json)
 
 
 def _remove(a) -> None:
@@ -259,6 +309,8 @@ def cmd_agents(a) -> None:
         return _use(a)
     if a.agents_cmd == "remove":
         return _remove(a)
+    if a.agents_cmd == "edit":
+        return _edit(a)
 
     agents = load()
     if a.agents_cmd == "list":
@@ -269,13 +321,16 @@ def cmd_agents(a) -> None:
             for r in rows:
                 print(f"{r['name']}  {r['source']}  {r['role']}")
         return
-    agent = agents.get(a.name)
-    if agent is None:
-        print(f"no agent named {a.name}", file=sys.stderr)
-        raise SystemExit(2)
-    problems = _problems_of(a.name, _builtin_text(agent) if agent["source"] == "built-in" else
-                            (C.CONFIG_DIR / "agents" / a.name / "agent.md").read_text())
-    if a.json:
+    if a.name not in agents:
+        _fail(f"no agent named {a.name}", 2)
+    _print_show(a.name, a.json)
+
+
+def _print_show(name: str, as_json: bool) -> None:
+    agent = load()[name]
+    problems = _problems_of(name, _builtin_text(agent) if agent["source"] == "built-in" else
+                            (C.CONFIG_DIR / "agents" / name / "agent.md").read_text())
+    if as_json:
         print(json.dumps(_show(agent, problems)))
         return
     print(agent["instructions"])
