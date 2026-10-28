@@ -5,7 +5,7 @@ import re
 
 from pl import board
 from pl import config as C
-from pl import pods, skills
+from pl import agent_defs, pods, skills
 
 
 def tokens(text):
@@ -74,6 +74,13 @@ def _stage_instructions(stage):
     return (((C.PIPELINE or {}).get("stages") or {}).get(stage) or {}).get("instructions")
 
 
+def _agent_layer(agent):
+    acts = [x for x in agent.get("approval") or [] if x in agent_defs.APPROVAL]
+    if not acts:
+        return agent["instructions"]
+    return f"{agent['instructions']}\n\nPrepare only: do not send, publish, post or quote prices yourself; a person approves {', '.join(acts)} before anything goes out."
+
+
 def build(card, stage, pod, prompt="", agent=None):
     """(path, report) of the context file for one stage: the layers in order, each cut to the pod's budget. report
     lists (layer, tokens before, tokens after) for each cut. Only pod's own files are read."""
@@ -84,7 +91,7 @@ def build(card, stage, pod, prompt="", agent=None):
     docs = "\n\n".join(f"### {k.name}\n\n{_file(k).rstrip()}" for k in pod["knowledge"])
     layers = [("knowledge", docs, budgets.get("knowledge")),
               ("pod", _pod_layer(pod, agent), budgets.get("pod")),
-              *([("agent", agent["instructions"], None)] if agent else []),
+              *([("agent", _agent_layer(agent), None)] if agent else []),
               ("role", role, None),
               ("client", _client(card, pod), budgets.get("client")),
               ("card", _card_layer(card), None)]

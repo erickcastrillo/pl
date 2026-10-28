@@ -98,6 +98,36 @@ def stage_complete(c, col, stage):
     return C.COLUMNS.index(col) >= C.COLUMNS.index(C.STAGE_DONE_AT[stage])
 
 
+def held_gate(c, col):
+    """(name, stage) when `col` is the done column of an ungated stage whose agent holds send, publish, post or quote-prices
+    for a person, read as an owner gate (outward for send) for this card only; None once approved in this review round."""
+    if not pipeline.is_config():
+        return None
+    m = c.get("metadata") or {}
+    for name, s in C.PIPELINE["stages"].items():
+        if s.get("done") != col or s.get("gate", "none") != "none" or s.get("outward") is True:
+            continue
+        acts = [x for x in ((stage_agent(name)[1] or {}).get("approval") or []) if x in agent_defs.APPROVAL]
+        approved = (m.get("gates") or {}).get(name)
+        if acts and not (approved and approved.get("review_round", 0) == int(m.get("review_round") or 0)):
+            return name, {**s, "gate": "owner", "outward": "send" in acts, "next": s.get("next") or col, "approval": acts}
+    return None
+
+
+def hold_agent_draft(c, col, dry):
+    """True when the card waits for a person's approval of its agent's draft; the owner is told once."""
+    if not (held := held_gate(c, col)):
+        return False
+    name, stage = held
+    if not dry and not (c.get("metadata") or {}).get("approval_pending"):
+        acts = stage["approval"]
+        update(c["id"], metadata={"approval_pending": {"by": "agent", "stage": name, "actions": acts, "at": now_iso()}})
+        events.emit("approval_pending", c["id"])
+        notifications.send("plan_ready", f"Approve: {short_id(c['id'])} {c['title'][:40]}", f"{name} holds {', '.join(acts)}; pl approve {cmd_id(c['id'])}")
+        print(f"{short_id(c['id'])}  held for approval: {', '.join(acts)}")
+    return True
+
+
 
 def finished_stage(c, col):
     """The (stage, worker) whose done column the card just reached: the live worker, else the newest finished one."""
@@ -1334,7 +1364,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"{short_id(c['id'])}  cleared the leftover run release hold")
             update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
             m = c["metadata"] = {**m, **dict.fromkeys(RELEASE_KEYS)}
-        if stage is None or hold_reason(c) or m.get("question"):   # a split or parked card gets no agent and holds no slot
+        if hold_agent_draft(c, col, dry) or stage is None or hold_reason(c) or m.get("question"):   # a split or parked card gets no agent and holds no slot
             mirror_to_product(c, col, dry)
             continue
         mirror_to_product(c, col, dry)
