@@ -384,7 +384,8 @@ def test_use_unknown_agent_refuses_with_show_message(fake_home, monkeypatch, cap
 def test_use_json_prints_pipeline_stage_agent(fake_home, monkeypatch, capsys):
     _profile(fake_home, "work", MKT_CONFIG)
     _, out, _ = _use(monkeypatch, capsys, "draft", "marketing-copywriter", "--json")
-    assert json.loads(out) == {"pipeline": "marketing", "stage": "draft", "agent": "marketing-copywriter"}
+    assert json.loads(out) == {"pipeline": "marketing", "stage": "draft", "agent": "marketing-copywriter",
+                               "warnings": []}
 
 
 def test_use_other_profile_by_pipeline_name(fake_home, monkeypatch, capsys):
@@ -616,3 +617,123 @@ def test_edit_builtin_in_editor_invalid_leaves_no_override(fake_home, known, mon
     assert code == 1 and not (p / "agents/sales-sdr").exists()
     assert agent_defs.load()["sales-sdr"]["source"] == "built-in"
 
+
+
+NO_SEND = "---\nskills: []\nconnector_roles: []\nmodel: null\napproval: []\npod: null\n---\nClose deals.\n"
+OUTWARD_CONFIG = MKT_CONFIG.replace('"Draft review"]', '"Draft review", "Reply"]') + '''
+[pipeline.stages.reply]
+column = "Reply"
+done = "Reply"
+skill = "pl-stage"
+outward = true
+gate = "owner"
+'''
+WARNING = ("warning: stage reply is outward but agent closer does not hold send for approval; "
+           "the stage's outward gate still applies")
+
+
+def _outward_profile(fake_home, config=OUTWARD_CONFIG):
+    d = _profile(fake_home, "work", config)
+    _agent_md(d, "closer", NO_SEND)
+    return d
+
+
+def test_outward_warnings_names_stage_and_agent(fake_home):
+    _outward_profile(fake_home)
+    stages = {"reply": {"outward": True, "agent": "closer"}}
+    assert agent_defs.outward_warnings(stages) == [WARNING]
+
+
+@pytest.mark.parametrize("stage", [
+    {"outward": True, "agent": "sales-follow-up"},
+    {"outward": False, "agent": "closer"},
+    {"agent": "closer"},
+    {"outward": True},
+    {"outward": True, "agent": "nope"},
+])
+def test_outward_warnings_skips_send_non_outward_no_agent_and_unknown(fake_home, stage):
+    _outward_profile(fake_home)
+    assert agent_defs.outward_warnings({"reply": stage}) == []
+
+
+def test_outward_warnings_two_stages_one_line_each_and_only_filters(fake_home):
+    _outward_profile(fake_home)
+    _agent_md(fake_home / ".pl-work", "closer-two", NO_SEND)
+    stages = {"a": {"outward": True, "agent": "closer"}, "b": {"outward": True, "agent": "closer-two"}}
+    assert len(agent_defs.outward_warnings(stages)) == 2
+    assert agent_defs.outward_warnings(stages, only="closer-two") == [
+        "warning: stage b is outward but agent closer-two does not hold send for approval; "
+        "the stage's outward gate still applies"]
+
+
+def test_show_prints_outward_warning_after_details_exit_0(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home, OUTWARD_CONFIG + 'agent = "closer"\n')
+    _pl(monkeypatch, "agents", "show", "closer")
+    assert capsys.readouterr().out.splitlines()[-1] == WARNING
+
+
+def test_show_json_has_warnings_and_is_valid_json(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home, OUTWARD_CONFIG + 'agent = "closer"\n')
+    _pl(monkeypatch, "agents", "show", "closer", "--json")
+    assert json.loads(capsys.readouterr().out)["warnings"] == [WARNING]
+
+
+def test_show_without_match_is_unchanged(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "work", OUTWARD_CONFIG)
+    _pl(monkeypatch, "agents", "show", "sales-follow-up")
+    plain = capsys.readouterr().out
+    (d / "config.toml").write_text(OUTWARD_CONFIG + 'agent = "sales-follow-up"\n')
+    _pl(monkeypatch, "agents", "show", "sales-follow-up")
+    assert capsys.readouterr().out == plain
+    _pl(monkeypatch, "agents", "show", "sales-follow-up", "--json")
+    assert json.loads(capsys.readouterr().out)["warnings"] == []
+
+
+def test_use_prints_outward_warning_and_writes_as_before(fake_home, monkeypatch, capsys):
+    d = _outward_profile(fake_home)
+    code, out, _ = _use(monkeypatch, capsys, "reply", "closer", "--pipeline", "marketing")
+    assert code is None
+    new = (d / "config.toml").read_text()
+    changed = [ln for ln in difflib.ndiff(OUTWARD_CONFIG.splitlines(), new.splitlines()) if ln[0] in "+-"]
+    assert changed == ['+ agent = "closer"']
+    assert out.splitlines() == ["stage reply of pipeline marketing now uses agent closer", WARNING]
+
+
+def test_use_json_has_warnings(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home)
+    _, out, _ = _use(monkeypatch, capsys, "reply", "closer", "--json")
+    assert json.loads(out)["warnings"] == [WARNING]
+
+
+def test_use_other_profile_checks_that_pipelines_stage(fake_home, monkeypatch, capsys):
+    _outward_profile(fake_home, MKT_CONFIG)
+    mkt = fake_home / ".pl-mkt"
+    mkt.mkdir()
+    (mkt / "config.toml").write_text(OUTWARD_CONFIG.replace('name = "marketing"', 'name = "mkt"'))
+    _, out, _ = _use(monkeypatch, capsys, "reply", "closer", "--pipeline", "mkt")
+    assert WARNING in out.splitlines()
+
+
+@pytest.mark.parametrize("var", [("PL_SOURCE", "mcp"), ("PL_ASSISTANT", "1")])
+def test_edit_from_an_agent_session_cannot_drop_an_approval(fake_home, known, monkeypatch, capsys, var):
+    _, md = _closer(fake_home)
+    before = md.read_text()
+    monkeypatch.setenv(*var)
+    code, _, err = _edit(monkeypatch, capsys, "my-closer", "--approval", "", "--json")
+    assert code == 1 and "cannot drop send" in err and "pl agents edit my-closer" in err
+    assert md.read_text() == before
+
+
+def test_edit_from_an_agent_session_may_keep_or_add_approval(fake_home, known, monkeypatch, capsys):
+    _, md = _closer(fake_home)
+    monkeypatch.setenv("PL_SOURCE", "mcp")
+    code, _, _ = _edit(monkeypatch, capsys, "my-closer", "--approval", "send,publish", "--json")
+    assert code == 0 and "publish" in md.read_text()
+
+
+def test_edit_from_the_terminal_may_drop_an_approval(fake_home, known, monkeypatch, capsys):
+    _, md = _closer(fake_home)
+    monkeypatch.delenv("PL_SOURCE", raising=False)
+    monkeypatch.delenv("PL_ASSISTANT", raising=False)
+    code, _, _ = _edit(monkeypatch, capsys, "my-closer", "--approval", "", "--json")
+    assert code == 0 and "send" not in md.read_text()

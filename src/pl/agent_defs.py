@@ -14,7 +14,7 @@ import tomlkit
 import yaml
 
 from pl import config as C
-from pl import confirm, connectors, harnesses, skills, util
+from pl import confirm, connectors, harnesses, pipeline, skills, util
 
 FIELDS = ("skills", "connector_roles", "model", "approval", "pod")
 APPROVAL = ("send", "publish", "post", "quote-prices")
@@ -98,6 +98,24 @@ def load() -> dict:
 def describe(agent: dict) -> dict:
     role = next((ln.strip() for ln in agent["instructions"].splitlines() if ln.strip()), "")
     return {"name": agent["name"], "source": agent["source"], "role": role, **{f: agent[f] for f in FIELDS}}
+
+
+def outward_warnings(stages, only=None, agents=None) -> list[str]:
+    """A line for each outward stage whose agent leaves send out of approval; the outward gate still applies."""
+    agents = load() if agents is None else agents
+    out = []
+    for name, s in stages.items():
+        agent = s.get("agent")
+        if s.get("outward") is not True or not agent or (only and agent != only) or str(agent) not in agents:
+            continue
+        if "send" not in agents[str(agent)]["approval"]:
+            out.append(f"warning: stage {name} is outward but agent {agent} does not hold send for approval; "
+                       "the stage's outward gate still applies")
+    return out
+
+
+def pipeline_stages() -> dict:
+    return C.PIPELINE["stages"] if pipeline.is_config() else {}
 
 
 def _literal_secrets(name: str, node: dict, path: str = "") -> list[str]:
@@ -237,6 +255,10 @@ def _edit(a) -> None:
     problems = _problems_of(name, text)
     if problems:
         _fail("\n".join(problems))
+    dropped = sorted(set(load()[name]["approval"]) - set(_parse(text)[0].get("approval") or []))
+    if dropped and confirm.agent_session():
+        _fail(f"pl: an agent session cannot drop {', '.join(dropped)} approval from agent {name}; "
+              f"run it from the terminal or the console: pl agents edit {name}")
     _write(target, text)
     _print_show(name, a.json)
 
@@ -296,10 +318,13 @@ def _use(a) -> None:
     C.save(doc, target=path)
     for problem in validate(a.agent, agents[a.agent]):
         print(f"warning: {problem}", file=sys.stderr)
+    warns = outward_warnings({a.stage: doc["pipeline"]["stages"][a.stage]}, agents=agents)
     if a.json:
-        print(json.dumps({"pipeline": name, "stage": a.stage, "agent": a.agent}))
+        print(json.dumps({"pipeline": name, "stage": a.stage, "agent": a.agent, "warnings": warns}))
     else:
         print(f"stage {a.stage} of pipeline {name} now uses agent {a.agent}")
+        for w in warns:
+            print(w)
 
 
 def cmd_agents(a) -> None:
@@ -327,11 +352,13 @@ def cmd_agents(a) -> None:
 
 
 def _print_show(name: str, as_json: bool) -> None:
-    agent = load()[name]
+    agents = load()
+    agent = agents[name]
     problems = _problems_of(name, _builtin_text(agent) if agent["source"] == "built-in" else
                             (C.CONFIG_DIR / "agents" / name / "agent.md").read_text())
+    warns = outward_warnings(pipeline_stages(), only=name, agents=agents)
     if as_json:
-        print(json.dumps(_show(agent, problems)))
+        print(json.dumps({**_show(agent, problems), "warnings": warns}))
         return
     print(agent["instructions"])
     print(f"skills: {', '.join(agent['skills'])}")
@@ -343,3 +370,5 @@ def _print_show(name: str, as_json: bool) -> None:
         print("problems:")
         for p in problems:
             print(f"  {p}")
+    for w in warns:
+        print(w)
