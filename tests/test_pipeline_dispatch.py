@@ -366,8 +366,13 @@ def _hold(monkeypatch, approval=("send",), agent=True, gate="none", outward=None
         stage.pop("agent")
     C.PIPELINE, C.COLUMNS = {**HOLD, "stages": {**HOLD["stages"], "draft": stage}}, HOLD_COLUMNS
     C.STAGES = {"draft": {}, "deliver": {}}
+    _agents_are(monkeypatch, approval)
+
+
+def _agents_are(monkeypatch, approval):
     defs = {"sales-follow-up": {**DRAFTER, "approval": list(approval)}}
     monkeypatch.setattr(dispatch.agent_defs, "load", lambda: defs)
+    dispatch.forget_agents()
 
 
 def _writes(monkeypatch, cs):
@@ -395,7 +400,7 @@ def test_ac4_each_approval_action_holds(monkeypatch, action):
 def test_ac1_held_card_after_approval_starts_the_next_stage(monkeypatch):
     _hold(monkeypatch)
     c = _card(1, "Ready")
-    c["metadata"]["gates"] = {"draft": {"review_round": 0}}
+    c["metadata"]["gates"] = {"draft": {"review_round": 0, "actions": ["send"]}}
     started, metas = _writes(monkeypatch, [c])
     assert started == [("o/r#1", "deliver")] and not any("approval_pending" in (m or {}) for m in metas)
 
@@ -414,6 +419,69 @@ def test_ac6_outward_stage_with_agent_without_send_still_stops_at_its_gate(monke
     assert pipeline.gate_for("Review")[0] == "draft"
     started, _ = _writes(monkeypatch, [_card(1, "Review")])
     assert started == []
+
+
+def test_held_gate_reads_agent_definitions_once_per_pass(monkeypatch):
+    _hold(monkeypatch)
+    loads = []
+    real = dispatch.agent_defs.load
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: loads.append(1) or real())
+    dispatch.held_gate(_card(1, "Ready"), "Ready")
+    dispatch.held_gate(_card(1, "Ready"), "Ready")
+    assert len(loads) == 1
+
+
+def test_next_pass_reads_an_edited_agent_definition(monkeypatch):
+    _hold(monkeypatch, approval=[])
+    assert _pass(monkeypatch, [_card(1, "Ready")]) == [("o/r#1", "deliver")]
+    _agents_are(monkeypatch, ["send"])
+    started, metas = _writes(monkeypatch, [_card(2, "Ready")])
+    assert started == [] and metas[0]["approval_pending"]["stage"] == "draft"
+
+
+def test_approve_reads_agent_definitions_fresh(monkeypatch):
+    _hold(monkeypatch, approval=[])
+    assert dispatch.held_gate(_card(1, "Ready"), "Ready") is None
+    defs = {"sales-follow-up": {**DRAFTER, "approval": ["send"]}}
+    monkeypatch.setattr(dispatch.agent_defs, "load", lambda: defs)
+    monkeypatch.setattr(commands, "col_name", lambda lid: lid)
+    assert commands._at_gate(_card(1, "Ready"), "approve")[0] == "draft"
+
+
+def test_round_zero_approval_without_actions_does_not_release_a_hold(monkeypatch):
+    _hold(monkeypatch)
+    c = _card(1, "Ready")
+    c["metadata"]["gates"] = {"draft": {"review_round": 0}}
+    assert dispatch.held_gate(c, "Ready")[0] == "draft"
+
+
+def test_approval_still_counts_when_the_agent_holds_fewer_actions(monkeypatch):
+    _hold(monkeypatch)
+    c = _card(1, "Ready")
+    c["metadata"]["gates"] = {"draft": {"review_round": 0, "actions": ["send", "publish"]}}
+    assert dispatch.held_gate(c, "Ready") is None
+
+
+def test_a_new_held_action_brings_the_hold_back_and_notifies_once(monkeypatch):
+    _hold(monkeypatch, approval=["send", "publish"])
+    c = _card(1, "Ready")
+    c["metadata"]["gates"] = {"draft": {"review_round": 0, "actions": ["send"]}}
+    writes, sent = [], []
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: writes.append(f["metadata"]))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.notifications, "send", lambda *a, **k: sent.append(a))
+    assert dispatch.hold_agent_draft(c, "Ready", False)
+    c["metadata"].update(writes[0])
+    assert dispatch.hold_agent_draft(c, "Ready", False)
+    assert len(writes) == 1 and sorted(writes[0]["approval_pending"]["actions"]) == ["publish", "send"]
+    assert len(sent) == 1
+
+
+def test_an_approval_from_an_earlier_round_never_releases(monkeypatch):
+    _hold(monkeypatch)
+    c = _card(1, "Ready", )
+    c["metadata"].update(gates={"draft": {"review_round": 0, "actions": ["send"]}}, review_round=1)
+    assert dispatch.held_gate(c, "Ready")[0] == "draft"
 
 
 @pytest.fixture
@@ -440,6 +508,7 @@ def test_ac2_owner_approve_at_a_send_hold_queues_and_records_the_gate(held, monk
     assert "approved_by" in held["metadata"]["gates"]["draft"]
     assert held["metadata"]["approval_pending"] is None
     assert held["queued"] == ["PROPOSAL"] and held["list_id"] == "Ready"
+    assert held["metadata"]["gates"]["draft"]["actions"] == ["send"]
 
 
 def test_ac2_send_hold_without_to_line_is_refused(held, monkeypatch):

@@ -18,7 +18,7 @@ from pl.jsonout import emit
 from pl.trackers.github import OverBudget
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
                       render, sections, share, update)
-from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, held_gate, paused, stop_worker
+from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, forget_agents, held_gate, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
 from pl.util import BadInput, age, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
@@ -280,6 +280,7 @@ def spec_gated(col):
 
 
 def _at_gate(c, verb):
+    forget_agents()
     col = col_name(c["list_id"])
     if not (gate := pipeline.gate_for(col) or held_gate(c, col)):
         raise BadInput(f"pl {verb}: card is in '{col}', which is not an owner gate")
@@ -287,6 +288,7 @@ def _at_gate(c, verb):
 
 
 def _at_outward_gate(c):
+    forget_agents()
     col = col_name(c["list_id"])
     gate = pipeline.is_config() and pipeline.gate_for(col)
     return (bool(gate) and gate[1].get("outward") is True) or bool(held_gate(c, col))
@@ -301,7 +303,8 @@ def _approve_gate(c, a):
         if (outside := outbound.flagged_recipients(c, send)) and not getattr(a, "confirm", False):
             raise BadInput(f"pl approve: outside recipient {', '.join(outside)}; pass --confirm to approve")
     m = c.get("metadata") or {}
-    approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0)}
+    approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0),
+                **({"actions": sorted(stage["approval"])} if stage.get("approval") else {})}
     gates = {**(m.get("gates") or {}), name: approval}
     target = pipeline.approved_column(stage)
     update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None, "approval_pending": None})
