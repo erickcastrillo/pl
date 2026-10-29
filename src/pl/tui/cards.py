@@ -18,7 +18,7 @@ from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, held_move, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import close, empty_state, show_first_heading, skip_headings
-from pl.tui.live import NO_WINDOW, LiveScreen
+from pl.tui.live import LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
@@ -327,7 +327,7 @@ class CardScreen(Screen):
 
 class CardActions:
     """The card keys of the Pipeline list. The view gives _row(): the selected row, or None."""
-    CARD_BINDINGS = [Binding("w", "live_view", "agent screen"), Binding("W", "jump", "agent window (tmux)"),
+    CARD_BINDINGS = [Binding("w", "live_view", "agent output"), Binding("W", "jump", "agent window (tmux)"),
                      Binding("c", "open_card", "card in browser"),
                      Binding("t", "retry", "try again"), Binding("m", "move_agent", "move to account")]
 
@@ -484,7 +484,7 @@ class CardsView(CardActions, Horizontal):
     #cards-table { height: 1fr; border: round $primary; }
     #cards-side { width: 1fr; height: 1fr; }
     #cards-detail { height: auto; }
-    #cards-agent { height: auto; max-height: 23; border-top: solid $primary; }
+    #cards-agent { height: 1; border-top: solid $primary; }
     #cards-body { height: 1fr; }
     """
     BINDINGS = [Binding("tab", "app.focus_next", "list / text"), *CardActions.CARD_BINDINGS,
@@ -505,7 +505,7 @@ class CardsView(CardActions, Horizontal):
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
         self._last = None   # the cursor row before the last move: which way it travels
-        self._agent = None   # (key, pane, text, word, why) last drawn in the Agent section
+        self._agent = None   # (key, pane, word, why) last drawn in the Agent section
 
     def compose(self):
         t = FitTable("title", TITLE_WIDTH, ("now",), id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
@@ -628,7 +628,8 @@ class CardsView(CardActions, Horizontal):
         self._paint_card(key)
         if (self._agent or (None,))[0] != key:
             self._agent = None
-            self._draw_agent(Text.assemble(("Agent", "bold"), "  ·  ", ("reading…", "dim")))
+            if (r.get("worker") or {}).get("pane"):
+                self._draw_agent(Text.assemble(("Agent", "bold"), "  ·  ", ("reading…", "dim")))
         self._agent_tick()
 
     def opened(self):
@@ -659,7 +660,8 @@ class CardsView(CardActions, Horizontal):
             return
         pane = (r.get("worker") or {}).get("pane")
         if not pane:
-            self._agent_show(key, pane, None, NO_WINDOW, "")
+            self.query_one("#cards-agent").display = False
+            self._agent = None
             return
         self.run_worker(lambda: self._agent_read(key, pane), thread=True, group="cards-agent", exclusive=True)
 
@@ -669,15 +671,17 @@ class CardsView(CardActions, Horizontal):
             self.app.call_from_thread(self._agent_show, key, pane, *result)
 
     def _agent_show(self, key, pane, text, word, why):
-        if self._current()[0] != key or (shown := (key, pane, text, word, why)) == self._agent:
+        if self._current()[0] != key or (shown := (key, pane, word, why)) == self._agent:
             return
         self._agent = shown
         status = f"{word}: {why}" if why else word
-        out = Text.assemble(("Agent", "bold"), "  ·  ", (status, AGENT_COLOURS.get(word, "dim")))
-        if text is not None:
-            out.append("\n")
-            out.append_text(Text.from_ansi(text, no_wrap=True, overflow="ellipsis"))
-        self._draw_agent(out)
+        stage = ((self._rows.get(key) or {}).get("worker") or {}).get("stage")
+        self._draw_agent(Text.assemble(("Agent", "bold"), "  ·  ", f"{stage} agent  ·  " if stage else "",
+                                       (status, AGENT_COLOURS.get(word, "dim")), ("  ·  w: agent output", "dim")))
+
+    def on_click(self, event):
+        if getattr(event.widget, "id", None) == "cards-agent":
+            self.action_live_view()
 
     def _loaded(self, stamp, key, hit):
         if self._pending.get(key) == stamp:
