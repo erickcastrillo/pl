@@ -132,22 +132,46 @@ def _plan_skill_text():
     return (skills.BUILTIN_DIR / PLAN_SKILL / "SKILL.md").read_text()
 
 
-def test_pl_plan_files_later_slices_with_plan_and_slice():
-    text = _plan_skill_text()
-    for needed in ("--plan", "--slice", "--title", "pl titles next", "pl titles set"):
-        assert needed in text
-    assert int(skills.VERSION_RE.search(text).group(1)) >= 6
-    assert 'pl idea "Slice <k> of <card title>' not in text
-    ideas = [line for block in re.findall(r"```.*?```", text, re.S) for line in block.splitlines() if line.strip().startswith("pl idea")]
-    assert ideas and all("--plan" in line for line in ideas)
-    assert "(after <id>)" in text and not re.search(r'--title "[^"]*\(after', text)
+def _plan_format_block(text):
+    return re.search(r"## Plan format\s+```(.*?)```", text, re.S).group(1)
 
 
-def test_pl_plan_records_a_refused_number_and_names_slices_by_card():
+def test_pl_plan_writes_slices_on_one_card():
+    text = _shipped("pl-plan")
+    for phrase in ("## Slices", "### Slice 1:", "2 to 5 slices", "build order", "File no slice cards"):
+        assert phrase in text, phrase
+    assert "## Slices" in _plan_format_block(_plan_skill_text())
+
+
+def test_pl_plan_keeps_each_slice_within_max_lines():
+    text = _shipped("pl-plan")
+    step = text.split("3. Size the change")[1].split("4. Write the plan")[0]
+    for phrase in ("max_lines", "outside `tests/`", "on top of"):
+        assert phrase in step, phrase
+
+
+def test_pl_plan_files_no_slice_cards():
     text = _plan_skill_text()
-    assert "Decisions" in text and "guess" in text
-    later = text.split("## Later slices")[1].split("## Decisions")[0]
-    assert "Slice <k>" in later and "Plan <N>" in later and "<card id>" in later
+    for gone in ("## Later slices", "pl titles next", "pl titles set"):
+        assert gone not in text, gone
+    ideas = [line for block in re.findall(r"```.*?```", text, re.S) for line in block.splitlines()
+             if line.strip().startswith("pl idea")]
+    assert not any("--slice" in line for line in ideas)
+
+
+def test_pl_plan_files_the_overflow_as_one_idea():
+    text = _shipped("pl-plan")
+    for phrase in ("More than 5 slices", "pl idea", "pl depends <new id> --on <id>", "Decisions", "never guess"):
+        assert phrase in text, phrase
+    assert text.index("pl idea") < text.index("pl depends <new id> --on <id>")
+
+
+def test_pl_plan_within_budget_keeps_todays_format():
+    text = _shipped("pl-plan")
+    assert "no `## Slices` section" in text
+    fmt = _plan_format_block(_plan_skill_text())
+    for heading in ("## Summary", "## Minimum change", "## Work packages", "## Decisions", "## Risks"):
+        assert heading in fmt, heading
 
 
 def test_an_unedited_pl_plan_v5_is_updated_to_v6(lib, shipped):
@@ -669,7 +693,7 @@ def test_skills_keep_pull_requests_small():
                  "Make the code explain itself with clear names and small functions. Add a comment only for a reason "
                  "the code cannot show, such as a non-obvious constraint or a workaround, in one line."):
         assert word in run, word
-    for word in ("pl idea", "Later slices", "target_lines", "max_lines"):
+    for word in ("pl idea", "## Slices", "target_lines", "max_lines"):
         assert word in plan, word
     assert "restate" in review
 
@@ -712,37 +736,32 @@ def test_pl_plan_requires_a_depends_on_line():
     assert "Every plan has" in text
 
 
-def test_pl_plan_links_each_later_slice():
+def test_pl_plan_links_the_overflow_idea():
     text = (skills.BUILTIN_DIR / "pl-plan" / "SKILL.md").read_text()
     assert "pl depends" in text and "--on" in text
     idx_depends = text.index("pl depends")
-    idx_idea = text.index('pl idea "Slice')
+    idx_idea = text.index('pl idea "Rest of')
     assert idx_depends > idx_idea
-
 
 
 def _shipped(name):
     return " ".join((skills.BUILTIN_DIR / name / "SKILL.md").read_text().split())
 
 
-def test_pl_plan_splits_into_independent_slices():
+def test_pl_plan_splits_into_vertical_slices():
     text = _shipped("pl-plan")
-    for phrase in ("vertical", "merge in any order", "60 lines", "Depends on", "independent", "after <slice>",
-                   "(after <id>)"):
+    for phrase in ("vertical", "60 lines", "Depends on"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 7" in text
+    assert "pl-builtin-version: 8" in text
 
 
-def test_pl_plan_orders_slices_that_share_a_file():
+def test_pl_plan_stacks_slices_that_share_a_file():
     text = _shipped("pl-plan")
-    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 7
-    later = text.split("## Later slices")[1].split("## Decisions")[0]
-    assert "files:" in later
-    for phrase in ("pl depends <later id> --on <earlier id>", "same file", "src/pl/whatsnew.d/", "CHANGELOG",
-                   "pl plan check <N>"):
+    for phrase in ("same file", "the stack orders them"):
         assert phrase in text
-    assert "can merge in any order." not in text
+    for gone in ("pl plan check <N>", "pl depends <later id> --on <earlier id>"):
+        assert gone not in text
 
 
 def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
