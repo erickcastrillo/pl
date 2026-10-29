@@ -744,3 +744,77 @@ def test_single_pr_card_is_checked_without_full_and_never_retargeted(host):
     _add(host, _card("c1"), _pr(1))
     assert merges.run_pass(host.cards, dry=False) == [URL.format(1)]
     assert host.check_calls == [(1, {})] and _moves(host) == [("merge", 1)]
+
+
+def _tests_failed(host, ids=("tests/test_a.py::test_x", "tests/test_b.py::test_y")):
+    host.checks = [{"rule": "conflicts", "ok": True, "why": "merges cleanly onto main"},
+                   {"rule": "tests", "ok": False, "why": f"tests failed (exit 1): {', '.join(ids)}", "failing": list(ids)}]
+
+
+def test_tests_only_failure_adds_rework_label_and_names_tests(host):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=pl:needs-rework"] in host.calls
+    assert not any("needs-person" in " ".join(c) for c in host.calls)
+    (post,) = _comment_posts(host)
+    body = post[5].removeprefix("body=")
+    assert "- tests/test_a.py::test_x\n- tests/test_b.py::test_y" in body and body.endswith("<!-- pl:merge-loop head=abc -->")
+
+
+def test_configured_rework_label_is_used(host):
+    C.CODE_HOST["labels"]["rework"] = "x:rework"
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=x:rework"] in host.calls
+
+
+def test_rework_comment_once_per_head(host):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    host.comments[1] = ["<!-- pl:merge-loop head=abc -->"]
+    _run()
+    assert _comment_posts(host) == []
+
+
+def test_tests_and_size_failures_still_need_a_person(host):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1, files=(("src/a.py", 200, 12),)))
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=needs-person"] in host.calls
+    (post,) = _comment_posts(host)
+    assert "tests/test_a.py::test_x" in post[5]
+
+
+def test_tests_failure_without_failed_lines_or_ci_needs_a_person(host):
+    host.checks[1] = {"rule": "tests", "ok": False, "why": "timed out after 15 minutes"}
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=needs-person"] in host.calls
+
+
+def test_dry_run_says_would_add_rework_and_writes_nothing(host, capsys):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    _run(dry_run=True)
+    assert "would add pl:needs-rework and comment" in capsys.readouterr().out
+    assert _writes(host) == []
+
+
+def test_pass_labels_tests_only_failure_rework_and_merges_nothing(host):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    assert merges.run_pass(host.cards, False) == []
+    assert _merges_in(host) == []
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=pl:needs-rework"] in host.calls
+
+
+def test_rework_label_from_merge_pass_is_flagged(host, monkeypatch):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    merges.run_pass(host.cards, False)
+    posted = [c for c in host.calls if c[:3] == ["api", "-X", "POST"] and c[3].endswith("/labels")]
+    item = {"number": 1, "html_url": URL.format(1), "pull_request": {"url": "x"}, "labels": [{"name": c[5].removeprefix("labels[]=")} for c in posted]}
+    monkeypatch.setattr(merges.rework.github, "_gh", lambda args: json.dumps([item]))
+    assert merges.rework.flagged({"acme/app"}, merges.rework.labels()) == {("acme/app", 1)}
