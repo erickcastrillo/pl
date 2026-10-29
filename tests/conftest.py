@@ -48,6 +48,15 @@ def no_real_idle_clock(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def harness_clis_installed(request, monkeypatch):
+    """Unit tests see every harness CLI on PATH (CI has none); the e2e_ui suite keeps the real check."""
+    if request.node.get_closest_marker("e2e_ui"):
+        return
+    from pl import assistant
+    monkeypatch.setattr(assistant, "installed", lambda acct: True)
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from pl import config as C
-from pl import accounts, doctor, local_model
+from pl import accounts, assistant, doctor, local_model
 
 
 class FakeBoard:
@@ -158,6 +158,20 @@ def test_doctor_fails_when_no_account_can_run_the_assistant(capsys):
     code, out = run(capsys)
     assert code == 1
     assert "FAIL assistant_account" in out and "[assistant] account" in out
+
+
+def test_doctor_names_the_installed_assistant_account(capsys, monkeypatch):
+    C.ACCOUNTS = {"nocli": {"harness": "codex"}, "acme": {"harness": "claude"}}
+    C.PROFILES = {a: C.CONFIG_DIR / a for a in C.ACCOUNTS}
+    monkeypatch.setattr(assistant, "installed", lambda a: a == "acme")
+    _, out = run(capsys)
+    assert "assistant: acme (claude), first usable account" in out and "nocli" not in out
+
+
+def test_doctor_fails_when_no_cli_is_installed(capsys, monkeypatch):
+    monkeypatch.setattr(assistant, "installed", lambda a: False)
+    code, out = run(capsys)
+    assert code == 1 and "FAIL assistant_account" in out
 
 
 @pytest.mark.parametrize("value", ["10pm-7am", "25:00-07:00", "22:00"])
