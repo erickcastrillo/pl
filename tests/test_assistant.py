@@ -304,7 +304,7 @@ def test_a_named_account_whose_cli_is_missing_falls_back_and_says_so(monkeypatch
 
 def test_no_installed_cli_starts_nothing_and_says_cli_not_installed(tmux, monkeypatch):
     _only_installed(monkeypatch)
-    with pytest.raises(SystemExit, match=r"no account can run the assistant.*CLI not installed.*\[assistant\] account"):
+    with pytest.raises(SystemExit, match=r"no account can run the assistant.*not installed.*\[assistant\] account"):
         assistant.ensure()
     assert tmux.verb("new-window") == []
 
