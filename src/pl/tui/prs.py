@@ -9,7 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static
 
 from pl import config as C
-from pl import ghquota
+from pl import ghquota, util
 from pl.commands import PR_URL, intent_text
 from pl.setup import LABELS
 from pl.trackers import github
@@ -107,6 +107,27 @@ def fetch(url):
     except (SystemExit, Exception) as e:  # noqa: BLE001 - a board error must not hide the overview
         intent = f"Could not read the card behind this PR: {getattr(e, 'note', None) or e}"
     return ("ok", v, intent)
+
+
+def last_push(urls):
+    """The newest commit time (epoch seconds) across the PRs, or None when none answers; one gh call per PR."""
+    pushes = []
+    for url in urls:
+        if not PR_URL.fullmatch(url or "") or github.limited() is not None:
+            continue
+        try:
+            r = ghquota.gh(_run, ["pr", "view", url, "--json", "commits"], capture_output=True, text=True, timeout=60, env=C.gh_env())
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        if r.returncode:
+            github.back_off(r.stderr)
+            continue
+        try:
+            commits = json.loads(r.stdout).get("commits") or []
+        except ValueError:
+            continue
+        pushes += [t for x in commits if (t := util.parse_iso(x.get("committedDate") or ""))]
+    return max(pushes, default=None)
 
 
 def overview_text(pr, hit, method):
