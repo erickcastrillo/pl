@@ -770,14 +770,14 @@ def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     for phrase in ("depends on unmerged PR #N", "pulls?state=open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 9" in text
+    assert int(re.search(r"^pl-builtin-version: (\d+)$", _raw("pl-review"), re.M).group(1)) >= 10
 
 
 def test_pl_run_assigns_the_pull_request_to_you():
     text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
     create = next(l for l in text.splitlines() if "gh pr create" in l)
     assert "--assignee @me" in create
-    assert int(re.search(r"^pl-builtin-version: (\d+)$", text, re.M).group(1)) >= 8
+    assert int(re.search(r"^pl-builtin-version: (\d+)$", _raw("pl-review"), re.M).group(1)) >= 8
 
 
 def _run_steps():
@@ -837,13 +837,34 @@ def test_an_unedited_pl_run_v11_is_updated_to_v12(lib, shipped):
     _older_copy_is_updated(lib, shipped, "pl-run", 11, 12)
 
 
-def test_an_unedited_pl_review_v8_is_updated_to_v9(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 8, 9)
+def test_an_unedited_pl_review_v9_is_updated_to_v10(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 9, 10)
+
+
+def test_pl_review_tests_a_stacked_pr_against_its_base():
+    text = _shipped("pl-review")
+    for phrase in ("`pl tests review --base origin/<baseRefName>`", "git diff origin/<baseRefName>...HEAD",
+                   "never run `pl tests full`"):
+        assert phrase in text
+    assert "Run the full test suite once" not in text
+
+
+def test_pl_review_does_not_flag_code_from_lower_slices():
+    text = _shipped("pl-review")
+    assert "including lower slices of the same stack, is not a finding" in text
+    assert "depends on unmerged PR #N" in text and "even when the tests pass" in text
+
+
+def test_pl_review_waits_behind_a_lower_pr_in_rework():
+    text = _shipped("pl-review")
+    for phrase in ("carries `<rework>`", "at any depth", "leave `<review>` on it", "The one exception"):
+        assert phrase in text
+    assert text.index("at any depth") < text.index("git worktree add")
 
 
 def test_pl_review_runs_the_review_test_set_and_it_decides_ready():
     text = _shipped("pl-review")
-    step = text.split("4. Run the tests the change needs")[1].split("5. Apply")[0]
+    step = text.split("5. Run the tests the change needs")[1].split("6. Apply")[0]
     assert '"ready"' in step and '"Review finds problems" row' in step
 
 
@@ -935,7 +956,7 @@ def test_pl_run_runs_tests_only_through_pl_tests():
 
 def test_pl_review_runs_the_tests_through_pl_tests_review():
     text = _builtin("pl-review")
-    step = text[text.index("4. Run"):text.index("5.", text.index("4. Run"))]
+    step = text[text.index("5. Run"):text.index("6.", text.index("5. Run"))]
     for phrase in ("pl tests review", "pl tests full", "one run at a time", "foreground", "review worktree"):
         assert phrase in step
 
