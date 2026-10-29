@@ -33,13 +33,18 @@ def host(monkeypatch):
     """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call;
     ns.comments: {number: [comment body]}; ns.repo_labels: the labels the repository already has."""
     ns = types.SimpleNamespace(prs={}, cards=[], calls=[], refuse={}, default="main", events=[], updates=[], done_fails=0, update_error=None,
-                               comments={}, repo_labels=set())
+                               comments={}, repo_labels=set(), check_calls=[], closing=False)
 
     def fake_gh(args):
         ns.calls.append(args)
         if args[:2] == ["pr", "merge"]:
             if msg := ns.refuse.get(int(args[2])):
                 raise SystemExit(msg)
+            if ns.closing and int(args[2]) in ns.prs:
+                ns.prs[int(args[2])]["state"] = "MERGED"
+            return ""
+        if args[:3] == ["api", "-X", "PATCH"]:
+            ns.prs[int(args[3].rsplit("/", 1)[1])]["baseRefName"] = args[5].removeprefix("base=")
             return ""
         if args[:2] == ["pr", "view"]:
             return json.dumps(ns.prs[int(args[2])])
@@ -73,7 +78,8 @@ def host(monkeypatch):
     monkeypatch.setattr(merges.board, "cards", lambda: ns.cards)
     ns.checks = [{"rule": "conflicts", "ok": True, "why": "merges cleanly onto main"}, {"rule": "tests", "ok": True, "why": "local tests passed; CI: none"}]
     monkeypatch.setattr(merges.merge_check, "default_branch", lambda repo: ns.default)
-    monkeypatch.setattr(merges.merge_check, "check", lambda pr, base: ns.checks)
+    monkeypatch.setattr(merges.merge_check, "check", lambda pr, base, **kw: (ns.check_calls.append((pr["number"], kw)), ns.checks)[1])
+    monkeypatch.setattr(merges, "_STACK_CHECKS", {})
     monkeypatch.setattr(merges, "col_name", lambda lid: lid)
     monkeypatch.setattr(agents, "col_name", lambda lid: lid)
     return ns
@@ -639,3 +645,102 @@ def test_loops_tab_shows_budget_and_parked_waits(monkeypatch):
     for why in ("GitHub budget low (until 14:05)", "its account alice is parked"):
         row = _row(monkeypatch, {"services": {"auto-merge": {"waits": why}}})
         assert row["state"] == "waiting" and row["output"] == f"waiting: {why}"
+
+
+# --- stacks of pull requests ---
+
+def _stack(host, cid, ns):
+    """One card whose pull requests chain main -> b<ns[0]> -> b<ns[1]> ..."""
+    card = {"id": cid, "title": f"card {cid}", "list_id": "PR open", "tags": [], "description": "",
+            "metadata": {"pr_urls": [URL.format(n) for n in ns], "submitted_at": "2026-10-01T00:00:00+00:00"}}
+    host.cards.append(card)
+    for k, n in enumerate(ns):
+        host.prs[n] = {**_pr(n), "baseRefName": "main" if k == 0 else f"b{ns[k - 1]}", "headRefName": f"b{n}"}
+    return card
+
+
+def _moves(host):
+    return [("merge", int(c[2])) if c[:2] == ["pr", "merge"] else ("retarget", int(c[3].rsplit("/", 1)[1]))
+            for c in host.calls if c[:2] == ["pr", "merge"] or c[:3] == ["api", "-X", "PATCH"]]
+
+
+def test_stack_orders_bottom_up_from_the_default_branch(host):
+    _stack(host, "c1", [1, 2, 3])
+    shuffled = [host.prs[n] for n in (3, 1, 2)]
+    assert [p["number"] for p in merges.stack(shuffled, "main")] == [1, 2, 3]
+    assert merges.stack(shuffled[:1], "main") is None
+
+
+def test_prs_that_do_not_chain_are_not_a_stack(passing):
+    card = _stack(passing, "c1", [1, 2])
+    passing.prs[2]["baseRefName"] = "elsewhere"
+    assert merges.stack(list(passing.prs.values()), "main") is None
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(1)]
+    assert [e[0] for e in passing.events if e[0] == "auto_merge_failed"] == ["auto_merge_failed"]
+    assert _moves(passing) == [("merge", 1)] and card["list_id"] == "PR open"
+
+
+def test_stack_is_no_candidate_until_every_pr_is_ready(host):
+    _stack(host, "c1", [1, 2, 3])
+    assert [pr["number"] for _, pr in merges.candidates(host.cards)] == [1, 2, 3]
+    host.prs[2]["labels"] = []
+    assert merges.candidates(host.cards) == []
+
+
+def test_stack_runs_the_merge_check_once_on_the_top_with_full(host):
+    card = _stack(host, "c1", [1, 2, 3])
+    verdicts = [merges.judge(card, pr, host.cards, "main") for _, pr in merges.candidates(host.cards)]
+    assert host.check_calls == [(3, {"full": True})]
+    assert all(v["action"] == "would merge" for v in verdicts)
+    tests = [next(r for r in v["rules"] if r["rule"] == "tests")["why"] for v in verdicts]
+    assert tests[0].startswith("stack top #3: ") and not tests[2].startswith("stack top")
+
+
+def test_stack_merges_bottom_up_retargeting_each_to_the_default_branch(passing):
+    _stack(passing, "c1", [1, 2, 3])
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(n) for n in (1, 2, 3)]
+    assert _moves(passing) == [("merge", 1), ("retarget", 2), ("merge", 2), ("retarget", 3), ("merge", 3)]
+    assert all("--match-head-commit" in c for c in _merges_in(passing))
+    assert [passing.prs[n]["baseRefName"] for n in (1, 2, 3)] == ["main"] * 3
+
+
+def test_failing_stack_check_merges_none_of_the_stack(host):
+    _stack(host, "c1", [1, 2, 3])
+    host.checks = [{"rule": "conflicts", "ok": True, "why": "clean"}, {"rule": "tests", "ok": False, "why": "tests failed (exit 1)"}]
+    assert merges.run_pass(host.cards, dry=False) == []
+    assert _moves(host) == [] and host.check_calls == [(3, {"full": True})]
+
+
+def test_stack_member_waits_when_the_one_below_was_not_merged_this_pass(passing, capsys):
+    passing.refuse = {1: "refused"}
+    _stack(passing, "c1", [1, 2])
+    assert merges.run_pass(passing.cards, dry=False) == []
+    assert _moves(passing) == [("merge", 1)] and "#2 waits for #1 in its stack" in capsys.readouterr().out
+
+
+def test_max_per_pass_stops_a_stack_part_way_and_the_next_pass_goes_on(passing):
+    C.AUTO_MERGE = {"enabled": True, "max_per_pass": 1}
+    passing.closing = True
+    _stack(passing, "c1", [1, 2])
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(1)]
+    assert _moves(passing) == [("merge", 1)]
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(2)]
+    assert _moves(passing) == [("merge", 1), ("retarget", 2), ("merge", 2)]
+
+
+def test_card_moves_to_done_only_after_the_top_of_the_stack_merges(passing):
+    C.AUTO_MERGE = {"enabled": True, "max_per_pass": 1}
+    passing.closing = True
+    card = _stack(passing, "c1", [1, 2, 3])
+    for n in (1, 2):
+        assert merges.run_pass(passing.cards, dry=False) == [URL.format(n)]
+        assert card["list_id"] == "PR open"
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(3)]
+    assert card["list_id"] == "Done"
+    assert _moves(passing) == [("merge", 1), ("retarget", 2), ("merge", 2), ("retarget", 3), ("merge", 3)]
+
+
+def test_single_pr_card_is_checked_without_full_and_never_retargeted(host):
+    _add(host, _card("c1"), _pr(1))
+    assert merges.run_pass(host.cards, dry=False) == [URL.format(1)]
+    assert host.check_calls == [(1, {})] and _moves(host) == [("merge", 1)]

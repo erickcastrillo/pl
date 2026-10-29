@@ -19,6 +19,7 @@ TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*$|_test\.[^/]+$")
 NOT_CHECKED = {"ok": None, "why": "not checked yet"}
 MARK = "<!-- pl:merge-loop head={} -->"
 _LABELS = set()
+_STACK_CHECKS = {}
 
 
 def settings():
@@ -48,7 +49,7 @@ def _match(path, globs):
 
 def _pr(repo, num):
     pr = json.loads(github._gh(["pr", "view", str(num), "--repo", repo, "--json",
-                                "number,url,state,isDraft,baseRefName,headRefOid,body,labels,files,statusCheckRollup"]))
+                                "number,url,state,isDraft,baseRefName,headRefName,headRefOid,body,labels,files,statusCheckRollup"]))
     rework.saw(pr.get("url", ""), pr.get("state"), [x["name"] for x in pr.get("labels") or []])
     return pr
 
@@ -59,19 +60,38 @@ def _eligible(pr):
         and not names & {lab["rework"], lab["failed"], settings()["hold"]}
 
 
-def candidates(all_cards):
-    """[(card, pr)] of the open, non-draft pull requests of cards in PR open that carry ready and none of rework, failed or hold."""
+def stack(prs, base):
+    """A card's open pull requests bottom-up when they form one chain: the bottom one is based on `base` or on the branch of a
+    merged pull request of the card, and each next one on the head of the one before. None for one pull request
+    on `base` or pull requests that do not chain."""
+    live = [p for p in prs if p.get("state") != "MERGED"]
+    at = [base, *(p.get("headRefName") for p in prs if p.get("state") == "MERGED")]
+    chain = []
+    while len(starts := [p for p in live if p["baseRefName"] in at and p not in chain]) == 1 and len(chain) < len(live):
+        chain.append(starts[0])
+        at = [starts[0].get("headRefName")]
+    if len(chain) != len(live) or not chain or (len(chain) == 1 and chain[0]["baseRefName"] == base):
+        return None
+    return chain
+
+
+def candidates(all_cards, base=None):
+    """[(card, pr)] of the open, non-draft pull requests of cards in PR open that carry ready and none of rework, failed or hold.
+    The pull requests of a stack are candidates only all together, bottom-up, each tagged with its `stack`."""
     repo = C.TRACKER.get("repo")
     cards = sorted((c for c in all_cards if col_name(c.get("list_id")) == "PR open"),
                    key=lambda c: (agents.slice_order(c), (c.get("metadata") or {}).get("submitted_at") or c.get("updated_at") or ""))
     out = []
     for c in cards:
-        for r, num, _ in rework._prs(c):
-            if r != repo:
-                continue
-            pr = _pr(r, num)
-            if _eligible(pr):
-                out.append((c, pr))
+        prs = [_pr(r, num) for r, num, _ in rework._prs(c) if r == repo]
+        if len(prs) > 1:
+            base = base or merge_check.default_branch(repo)
+        chain = stack(prs, base) if len(prs) > 1 else None
+        if not chain:
+            out += [(c, pr) for pr in prs if _eligible(pr)]
+        elif all(_eligible(p) for p in chain):
+            out += [(c, {**p, "stack": {"pos": k, "of": len(chain), "top": chain[-1], "below": chain[k - 2] if k > 1 else None}})
+                    for k, p in enumerate(chain, 1)]
     return out
 
 
@@ -101,9 +121,27 @@ def rule_deps(card, all_cards):
     return {"ok": not waiting, "why": f"waiting for {', '.join(map(short_id, waiting))}" if waiting else "all dependencies are merged"}
 
 
+def _stack_check(top, base):
+    """The merge check of a stack, run once per pass on its top with the full suite."""
+    key = (top["url"], top["headRefOid"])
+    if key not in _STACK_CHECKS:
+        _STACK_CHECKS[key] = merge_check.check(top, base, full=True)
+    return _STACK_CHECKS[key]
+
+
+def _checks(pr, base):
+    st = pr.get("stack")
+    if not st:
+        return merge_check.check(pr, base)
+    rules = _stack_check(st["top"], base)
+    if st["pos"] == st["of"]:
+        return rules
+    return [{**r, "why": f"stack top #{st['top']['number']}: {r['why']}"} for r in rules]
+
+
 def judge(card, pr, all_cards, base, write=False):
     rules = [{"rule": "size", **rule_size(pr)}, {"rule": "sensitive", **rule_sensitive(card, pr, settings()["sensitive"])},
-             {"rule": "dependencies", **rule_deps(card, all_cards)}, *merge_check.check(pr, base)]
+             {"rule": "dependencies", **rule_deps(card, all_cards)}, *_checks(pr, base)]
     rules += judgment.rules(card, pr, write, asked=all(r["ok"] is True for r in rules))
     failed = [r["rule"] for r in rules if r["ok"] is False]
     not_run = [r["rule"] for r in rules if r["ok"] is None]
@@ -217,19 +255,44 @@ def _retry_finished(all_cards, dry):
             _finish(c, url, all_cards, dry)
 
 
+def _retarget(card, pr, repo, base, dry):
+    """The pull request pointed at the default branch and read again, or None when GitHub refused (logged)."""
+    n = pr["number"]
+    if dry:
+        return {**pr, "baseRefName": base}
+    try:
+        github._gh(["api", "-X", "PATCH", f"repos/{repo}/pulls/{n}", "-f", f"base={base}"])
+    except (RateLimited, OverBudget):
+        raise
+    except SystemExit as e:
+        print(f"#{n} not retargeted to {base}: {e}")
+        events.emit("auto_merge_failed", card["id"], pr=n, repo=repo, message=str(e))
+        return None
+    return {**_pr(repo, n), "stack": pr["stack"]}
+
+
 def run_pass(all_cards, dry):
     """Merge, in candidate order, up to max_per_pass pull requests that pass every rule; each is judged right before it
     is merged, so it is checked against the default branch as the earlier merges left it, and its labels and state are
     read again after the judging, which can take minutes. Returns the merged URLs."""
     _retry_finished(all_cards, dry)
-    merged, defaults = [], {}
-    for card, pr in candidates(all_cards):
+    _STACK_CHECKS.clear()
+    merged, repo = [], C.TRACKER["repo"]
+    base = merge_check.default_branch(repo)
+    for card, pr in candidates(all_cards, base):
         if len(merged) >= per_pass():
             break
-        repo, n = C.TRACKER["repo"], pr["number"]
-        base = defaults.setdefault(repo, merge_check.default_branch(repo))
+        n = pr["number"]
         if not passes(judge(card, pr, all_cards, base, write=not dry)):
             continue
+        if pr.get("stack") and pr["baseRefName"] != base:
+            below = pr["stack"]["below"]
+            if below and below["url"] not in merged:
+                print(f"#{n} waits for #{below['number']} in its stack")
+                continue
+            pr = _retarget(card, pr, repo, base, dry)
+            if pr is None:
+                continue
         if pr["baseRefName"] != base:
             msg = f"#{n} targets {pr['baseRefName']}, not the default branch {base}: not merged"
             print(msg)
@@ -259,8 +322,9 @@ def cmd_merges(a):
     if C.TRACKER.get("type") != "github-project" or not C.TRACKER.get("repo"):
         raise SystemExit("pl merges: needs a github-project tracker with a repo")
     all_cards = board.cards()
-    found = candidates(all_cards)
-    base = merge_check.default_branch(C.TRACKER["repo"]) if found else None
+    _STACK_CHECKS.clear()
+    base = merge_check.default_branch(C.TRACKER["repo"])
+    found = candidates(all_cards, base)
     judged = []
     for c, pr in found:
         v = judge(c, pr, all_cards, base, write=not a.dry_run)

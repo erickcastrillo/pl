@@ -300,3 +300,22 @@ def test_select_config_error_fails_and_runs_nothing(env):
     env.select_error = mc.tests_affected.TestsConfigError(".pl/tests.toml: [tests] full_over must be a whole number")
     r = env.rules()["tests"]
     assert r["ok"] is False and "tests.toml" in r["why"] and env.popen == []
+
+
+def test_full_check_runs_the_full_command_and_says_stack_top(env):
+    env.sel = AFFECTED
+    r = {x["rule"]: x for x in mc.check(CI_OK, "main", full=True)}["tests"]
+    assert env.select == [] and env.popen[0][0] == ["uv", "run", "pytest", "-q"]
+    assert r["ok"] is True and r["why"] == "full suite passed (stack top); CI: 1 passed"
+
+
+def test_full_check_failure_still_names_the_failing_run(env):
+    env.rc, env.out = 1, "1 failed\n"
+    r = {x["rule"]: x for x in mc.check(PR, "main", full=True)}["tests"]
+    assert r["ok"] is False and r["why"].startswith("tests failed (exit 1)")
+
+
+def test_default_check_keeps_the_single_pr_test_command(env):
+    env.sel = AFFECTED
+    env.rules(CI_OK)
+    assert env.popen[0][0] == ["uv", "run", "pytest", "-q", "tests/test_a.py", "tests/test_b.py"]
