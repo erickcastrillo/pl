@@ -687,6 +687,10 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         if len(parts) == 4:
             live[parts[3]] = {"window": parts[0], "pane": parts[1], "cmd": parts[2]}
     svc_state, ust = st.setdefault("services", {}), None
+    try:
+        _review_on_arrival(st, all_cards, dry)
+    except Exception as e:  # noqa: BLE001  (a pass step never stops the pass)
+        print(f"review-on-arrival skipped this pass: {e}", file=sys.stderr)
     for name, svc in C.SERVICES.items():
         if svc.get("every"):
             _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=not (pause or hold))
@@ -710,6 +714,13 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
             if not w:
                 _loop_waits(svc_state, name, hold)
             continue
+        if svc_state.get(name, {}).get("run_now") and w and w["cmd"] not in harnesses.SHELLS:
+            if rec and rec.get("status") == "idle":
+                print(f"starting {name} loop run in its idle session")
+                if not dry:
+                    _type_into(w["pane"], re.sub(r"^/loop\s+\S+\s+", "", loop_prompt(svc)))
+                    svc_state[name].pop("run_now", None)
+            continue   # busy: the flag waits for the session to go idle
         pin = svc["profile"]   # a loop's own account; while it is parked the loop runs on another (unless fallback = false)
         prof = svc_state.get(name, {}).get("profile") or pin   # the account its window runs under now
         if w:
@@ -755,6 +766,7 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
         print(f"starting {name} loop under {use}: {prompt}")
         if dry:
             continue
+        svc_state.get(name, {}).pop("run_now", None)   # the fresh session reviews at once
         h = harnesses.account_harness(use)
         harnesses.refuse_bypass(h)
         pane = _loop_pane(name)
@@ -762,6 +774,7 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                                                     None, name))
         old = svc_state.get(name, {})
         svc_state[name] = {"profile": use, "started_at": now_iso(), "ran_at": now_iso(), "sessions": old.get("sessions", []),
+                           **({"arrivals": old["arrivals"]} if old.get("arrivals") is not None else {}),
                            **({"context_restarts": old["context_restarts"]} if old.get("context_restarts") else {}),
                            **({"fallback_from": moved} if moved else {})}
         _check_auto_merge(name, svc)
@@ -781,6 +794,35 @@ def _loop_pane(name):
 
 def _local_now():
     return datetime.now().replace(microsecond=0)
+
+
+def _review_on_arrival(st, all_cards, dry):
+    """A new pull request URL or rework round on a card in PR open asks the auto-review loop to run on this pass."""
+    if "auto-review" not in C.SERVICES:
+        return
+    keys = []
+    for c in all_cards:
+        if col_name(c["list_id"]) != "PR open":
+            continue
+        meta = c.get("metadata") or {}
+        keys += list(meta.get("pr_urls") or [])
+        if (meta.get("rework") or {}).get("round"):
+            keys.append(f"{c['id']} rework {meta['rework']['round']}")
+    seen = st.get("services", {}).get("auto-review", {}).get("arrivals")
+    new = [k for k in dict.fromkeys(keys) if k not in (seen or [])]
+    if seen is None:
+        if not dry:
+            st.setdefault("services", {}).setdefault("auto-review", {})["arrivals"] = list(dict.fromkeys(keys))[-200:]
+        return
+    if not new:
+        return
+    if dry:
+        print(f"dry run: would start auto-review loop run for {len(new)} new pull request(s) or rework round(s)")
+        return
+    print(f"auto-review: {len(new)} new pull request(s) or rework round(s); review runs this pass")
+    s = st["services"]["auto-review"]
+    s["run_now"] = True
+    s["arrivals"] = (seen + new)[-200:]
 
 
 def _ensure_scheduled_loop(st, name, svc, live, all_cards, dry, start=True):

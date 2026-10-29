@@ -5,7 +5,7 @@ import shlex
 import stat
 import subprocess
 import types
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -291,3 +291,132 @@ def test_a_scheduled_loop_script_exports_the_xdist_share(profile):
     manager.machine_dir().mkdir(parents=True, exist_ok=True)
     (manager.machine_dir() / "machine.toml").write_text("[tests]\nmax_workers = 6\n[limits]\nmax_live_agents = 3\n")
     assert "export PYTEST_XDIST_AUTO_NUM_WORKERS=2\n" in _headless_script("codex")
+
+
+def _review_loop(**kw):
+    C.SERVICES = {"auto-review": {"prompt": "/pl-review repo=x", "profile": "cx", "every": "30m", **kw}}
+
+
+def _pr_card(cid, *urls, round=None):
+    meta = {"pr_urls": list(urls)}
+    if round is not None:
+        meta["rework"] = {"round": round}
+    return {"id": cid, "list_id": "pro", "metadata": meta}
+
+
+def _starts(calls):
+    return len([c for c in calls if c[0] == "new-window"])
+
+
+@pytest.fixture
+def arrivals(monkeypatch):
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: "PR open" if lid == "pro" else "Other")
+
+
+def _state(seen, **kw):
+    return {"services": {"auto-review": {"arrivals": list(seen), "next_at": (datetime.now() + timedelta(hours=1)).isoformat(), **kw}}}
+
+
+def test_a_new_pull_request_starts_auto_review_before_next_at(profile, tmux_calls, arrivals, capsys):
+    calls, _ = tmux_calls
+    _review_loop()
+    st = _state([])
+    dispatch.ensure_services(st, [_pr_card("c1", "https://github.com/o/r/pull/1")], {}, False, None)
+    assert _starts(calls) == 1
+    assert "starting auto-review loop run" in capsys.readouterr().out
+
+
+def test_a_rework_round_back_in_review_starts_one_run(profile, tmux_calls, arrivals):
+    calls, panes = tmux_calls
+    _review_loop()
+    url = "https://github.com/o/r/pull/1"
+    st = _state([url])
+    cards = [_pr_card("c1", url, round=2)]
+    dispatch.ensure_services(st, cards, {}, False, None)
+    assert _starts(calls) == 1
+    record = C.STATE_DIR / "loops" / "auto-review.run.json"
+    record.write_text(json.dumps({"started_at": "a", "ended_at": "b", "result": "ok", "tokens": "n/a", "exit": 0}))
+    panes["text"] = "@7 %9 sh auto-review\n"
+    dispatch.ensure_services(st, cards, {}, False, None)
+    panes["text"] = ""
+    calls.clear()
+    dispatch.ensure_services(st, cards, {}, False, None)
+    assert _starts(calls) == 0
+    assert "run_now" not in st["services"]["auto-review"]
+
+
+def test_nothing_new_waits_for_next_at(profile, tmux_calls, arrivals):
+    calls, _ = tmux_calls
+    _review_loop()
+    url = "https://github.com/o/r/pull/1"
+    dispatch.ensure_services(_state([url]), [_pr_card("c1", url)], {}, False, None)
+    assert _starts(calls) == 0
+
+
+def test_three_new_pull_requests_start_one_run(profile, tmux_calls, arrivals):
+    calls, _ = tmux_calls
+    _review_loop()
+    cards = [_pr_card(f"c{i}", f"https://github.com/o/r/pull/{i}") for i in range(3)]
+    dispatch.ensure_services(_state([]), cards, {}, False, None)
+    assert _starts(calls) == 1
+
+
+def test_a_new_pull_request_during_a_run_waits_for_it_to_end(profile, tmux_calls, arrivals):
+    calls, panes = tmux_calls
+    _review_loop()
+    panes["text"] = "@7 %9 sh auto-review\n"
+    st = _state([])
+    cards = [_pr_card("c1", "https://github.com/o/r/pull/1")]
+    dispatch.ensure_services(st, cards, {}, False, None)
+    assert _starts(calls) == 0 and st["services"]["auto-review"]["run_now"]
+    (C.STATE_DIR / "loops").mkdir()
+    record = C.STATE_DIR / "loops" / "auto-review.run.json"
+    record.write_text(json.dumps({"started_at": "a", "ended_at": "b", "result": "ok", "tokens": "n/a", "exit": 0}))
+    dispatch.ensure_services(st, cards, {}, False, None)
+    panes["text"] = ""
+    dispatch.ensure_services(st, cards, {}, False, None)
+    assert _starts(calls) == 1
+
+
+def test_review_on_arrival_does_nothing_when_the_loop_is_off(profile, tmux_calls, arrivals, capsys):
+    calls, _ = tmux_calls
+    C.SERVICES = {}
+    st = {"services": {}}
+    dispatch.ensure_services(st, [_pr_card("c1", "https://github.com/o/r/pull/1")], {}, False, None)
+    assert _starts(calls) == 0 and st == {"services": {}}
+    assert capsys.readouterr().err == ""
+
+
+def test_dry_run_prints_the_review_it_would_start(profile, tmux_calls, arrivals, capsys):
+    _review_loop()
+    st = _state([])
+    before = json.loads(json.dumps(st))
+    dispatch.ensure_services(st, [_pr_card("c1", "https://github.com/o/r/pull/1")], {}, True, None)
+    assert "would start auto-review loop run" in capsys.readouterr().out
+    assert st == before
+
+
+def test_first_pass_after_upgrade_records_without_running(profile, tmux_calls, arrivals):
+    calls, _ = tmux_calls
+    _review_loop()
+    st = {"services": {"auto-review": {"next_at": (datetime.now() + timedelta(hours=1)).isoformat()}}}
+    url = "https://github.com/o/r/pull/1"
+    dispatch.ensure_services(st, [_pr_card("c1", url)], {}, False, None)
+    assert _starts(calls) == 0 and st["services"]["auto-review"]["arrivals"] == [url]
+
+
+def test_an_idle_long_lived_review_session_gets_one_turn_typed(profile, tmux_calls, arrivals, monkeypatch):
+    calls, panes = tmux_calls
+    C.SERVICES = {"auto-review": {"prompt": "/loop 30m /pl-review repo=x", "profile": "cx", "every": None}}
+    panes["text"] = "@7 %9 claude auto-review\n"
+    typed = []
+    monkeypatch.setattr(dispatch, "_type_into", lambda pane, text: typed.append((pane, text)))
+    st = _state([])
+    cards = [_pr_card("c1", "https://github.com/o/r/pull/1")]
+    busy = {"s": {"tmux": "x:%9", "sessionId": "s", "status": "busy"}}
+    dispatch.ensure_services(st, cards, busy, False, None)
+    assert typed == [] and st["services"]["auto-review"]["run_now"]
+    idle = {"s": {"tmux": "x:%9", "sessionId": "s", "status": "idle"}}
+    dispatch.ensure_services(st, cards, idle, False, None)
+    assert typed == [("%9", "/pl-review repo=x")]
+    assert "run_now" not in st["services"]["auto-review"]

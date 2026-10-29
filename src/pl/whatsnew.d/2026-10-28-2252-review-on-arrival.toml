@@ -1,0 +1,3 @@
+title = "Review starts when a pull request arrives"
+where = "Loops view / pl loops"
+try = "Let a card reach PR open: the next dispatcher pass starts the auto-review run (\"auto-review: 1 new pull request …\") instead of waiting up to 30 minutes."
