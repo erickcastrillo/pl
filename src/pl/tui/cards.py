@@ -24,7 +24,7 @@ from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
 from pl.tui.subagents import TODO_MARK
 from pl.trackers.github import OverBudget
-from pl.util import ago, short_id
+from pl.util import age, ago, parse_iso, short_id
 
 
 def _rename_key(screen, key, description):
@@ -133,7 +133,26 @@ def stage_agent(c, col, known=None):
     return f"{name} (unknown)" if isinstance(known, set) and name not in known else name
 
 
-def card_head(c, col, url, approved=None, queued=None):
+def rework_prs(m):
+    rw = m.get("rework") or {}
+    return (m.get("pr_urls") or rw.get("prs") or []) if rw.get("active") else []
+
+
+def finding_line(m, pushed):
+    """The review row saying whether the latest finding is newer or older than the last push; None without an active rework and a PR."""
+    rw = m.get("rework") or {}
+    if not rework_prs(m) or not (at := parse_iso(rw.get("at") or "")):
+        return None
+    t = Text(f"{'review':<9}", style="dim")
+    if pushed is None:
+        t.append(f"finding {rw['at']}; last push time unknown\n")
+    else:
+        word = "newer" if at >= pushed else "older"
+        t.append(f"{word} than the last push (finding {age(at)} ago, push {age(pushed)} ago)\n")
+    return t
+
+
+def card_head(c, col, url, approved=None, queued=None, pushed=None):
     """The plain header lines of the card screen: title, then stage/who/next, column, tags, assignee, links, updated, link, metadata."""
     m = c.get("metadata") or {}
     stage, who, next_step = header_summary(c, col)
@@ -152,6 +171,8 @@ def card_head(c, col, url, approved=None, queued=None):
                          ("links", links)):
         t.append(f"{label:<9}", style="dim")
         t.append(f"{value or '-'}\n")
+    if (line := finding_line(m, pushed)) is not None:
+        t.append_text(line)
     t.append(f"{'updated':<9}", style="dim")
     up = c.get("updated_at")
     t.append(f"{ago(up)}  " if up else "-\n")
@@ -214,15 +235,22 @@ class CardScreen(Screen):
                 queued = heldwrites.queued_moves().get(cid)
             except Exception:  # noqa: BLE001 - no note is not an error
                 queued = None
-            self.app.call_from_thread(self._show, c, url, queued)
+            pushed = None
+            if urls := rework_prs(c.get("metadata") or {}):
+                from pl.tui import prs as tui_prs   # prs imports FitTable from this module
+                try:
+                    pushed = tui_prs.last_push(urls)
+                except Exception:  # noqa: BLE001 - an unknown push time must not hide the card
+                    pushed = None
+            self.app.call_from_thread(self._show, c, url, queued, pushed)
         self.run_worker(run, thread=True, group="card")
 
     def _failed(self, msg):
         self.query_one("#card-head", Static).update(Text(f"could not read the {pipeline.ui()['item']}: {msg}", style="red"))
 
-    async def _show(self, c, url, queued=None):
+    async def _show(self, c, url, queued=None, pushed=None):
         self.card = c
-        self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved, queued))
+        self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved, queued, pushed))
         await self.query_one("#card-md", Markdown).update(todo_markdown(self.now) + card_markdown(c.get("description")))
         self.query_one("#card-doc").focus()
 

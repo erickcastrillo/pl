@@ -4682,3 +4682,33 @@ def test_waiting_tile_counts_watchdog_alerts():
     from pl.tui.dashboard import tile_values
     data = fake_data()
     assert tile_values({**data, "watchdog": [_watchdog_row()]}, 0)["waiting"] == tile_values(data, 0)["waiting"] + 1
+
+
+def _commits(*hours_ago):
+    return {"commits": [{"committedDate": _iso(h)} for h in hours_ago]}
+
+
+def test_last_push_is_the_newest_commit_across_prs(monkeypatch):
+    first, second = "https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"
+    views = {first: _commits(5, 3), second: _commits(4)}
+
+    def fake(argv, **kw):
+        return subprocess.CompletedProcess(argv, 0, json.dumps(views[argv[3]]), "")
+
+    monkeypatch.setattr(tui_prs, "_run", fake)
+    assert tui_prs.last_push([first, second]) == pytest.approx((NOW - timedelta(hours=3)).timestamp(), abs=1)
+
+
+def test_last_push_is_none_when_gh_fails(monkeypatch):
+    url = "https://github.com/o/r/pull/1"
+    monkeypatch.setattr(tui_prs, "_run", FakeGh(view=None))
+    assert tui_prs.last_push([url]) is None
+    monkeypatch.setattr(tui_prs, "_run", FakeGh(view={"commits": []}))
+    assert tui_prs.last_push([url]) is None
+
+
+def test_last_push_skips_a_link_that_is_not_a_pr(monkeypatch):
+    fake = FakeGh(view=_commits(1))
+    monkeypatch.setattr(tui_prs, "_run", fake)
+    assert tui_prs.last_push(["not a url"]) is None
+    assert fake.calls == []
