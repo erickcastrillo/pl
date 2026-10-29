@@ -2,9 +2,7 @@
 import json
 import os
 import argparse
-import functools
 import re
-import sqlite3
 import subprocess
 import sys
 import time
@@ -18,7 +16,6 @@ from conftest import HERE, press
 from pl import assistant, cli, dispatch, ghquota, harnesses, trackers, usage
 from pl.tui import prs as tui_prs
 from pl.tui.cards import CardScreen, CardsView
-from pl.trackers import localstore
 from pl import config as C
 from test_tui_views import FakeGh, screen_text
 from test_gh_rate_limit import gh, mine, tokens  # noqa: F401  (the fake gh program and the token fixtures of the rate-limit tests)
@@ -101,7 +98,6 @@ def profile(profile, tmp_path, monkeypatch):
                        for n, h in (("nocli", "codex"), ("a", "claude"), ("b", "claude")))
     (profile / "config.toml").write_text('[tracker]\ntype = "local"\n' + accounts)
     monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: subprocess.run(argv, capture_output=True, text=True, **kw))
-    monkeypatch.setattr(localstore.sqlite3, "connect", functools.partial(sqlite3.connect, check_same_thread=False))   # the console reads one board from several worker threads
     C.load()
     trackers.reset()   # the board's SQLite connection belongs to the thread that made it: the console's workers open their own
     return profile
