@@ -267,3 +267,10 @@ def no_real_busy_agents(monkeypatch):
     """A dispatcher pass writes its summary, which counts busy agents with tmux: no test lets it reach the real one."""
     from pl import dispatch
     monkeypatch.setattr(dispatch, "busy_agents", lambda reg: 0)
+
+
+@pytest.fixture(autouse=True)
+def fresh_agent_defs():
+    """The dispatcher reads agent definitions once per pass: no test sees the previous test's."""
+    from pl import dispatch
+    dispatch.forget_agents()

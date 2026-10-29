@@ -98,9 +98,24 @@ def stage_complete(c, col, stage):
     return C.COLUMNS.index(col) >= C.COLUMNS.index(C.STAGE_DONE_AT[stage])
 
 
+_AGENTS = {"defs": None}
+
+
+def agent_defs_now():
+    """The agent definitions, read once per dispatcher pass (forget_agents starts the next read)."""
+    if _AGENTS["defs"] is None:
+        _AGENTS["defs"] = agent_defs.load()
+    return _AGENTS["defs"]
+
+
+def forget_agents():
+    _AGENTS["defs"] = None
+
+
 def held_gate(c, col):
     """(name, stage) when `col` is the done column of an ungated stage whose agent holds send, publish, post or quote-prices
-    for a person, read as an owner gate (outward for send) for this card only; None once approved in this review round."""
+    for a person, read as an owner gate (outward for send) for this card only; None once approved in this review round
+    for every action it holds now."""
     if not pipeline.is_config():
         return None
     m = c.get("metadata") or {}
@@ -109,7 +124,9 @@ def held_gate(c, col):
             continue
         acts = [x for x in ((stage_agent(name)[1] or {}).get("approval") or []) if x in agent_defs.APPROVAL]
         approved = (m.get("gates") or {}).get(name)
-        if acts and not (approved and approved.get("review_round", 0) == int(m.get("review_round") or 0)):
+        released = approved and approved.get("review_round", 0) == int(m.get("review_round") or 0) \
+            and set(acts) <= set(approved.get("actions") or [])
+        if acts and not released:
             return name, {**s, "gate": "owner", "outward": "send" in acts, "next": s.get("next") or col, "approval": acts}
     return None
 
@@ -497,7 +514,7 @@ def stage_agent(stage):
     """(name, agent) of the agent the stage names: (None, None) when it names none, (name, None) when none by that name exists."""
     cfg = ((C.PIPELINE["stages"] if pipeline.is_config() else C.STAGES) or {}).get(stage) or {}
     name = cfg.get("agent")
-    return (name, agent_defs.load().get(name)) if name else (None, None)
+    return (name, agent_defs_now().get(name)) if name else (None, None)
 
 
 def _agent_launch(aname, agent, h, profile, stage_skill):
@@ -1082,6 +1099,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         raise hit
     if github_board() and (wait := ghquota.check("read")):   # the shared budget is low: this pass waits
         raise OverBudget(*wait)
+    forget_agents()  # agent files edited between passes are read again
     trackers.reset("tracker")  # a fresh tracker each pass; the stage field stays remembered across passes
     if not dry:
         heldwrites.replay(notify)   # writes the budget hold refused earlier, once the reset has passed
