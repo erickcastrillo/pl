@@ -89,13 +89,13 @@ def _selection(pr, path, cmd):
     return tests_affected.select(path, f"refs/pl-merge/{pr['number']}/base", labels)
 
 
-def _tests_rule(pr, path):
+def _tests_rule(pr, path, stack_top=False):
     settings = C.AUTO_MERGE
     cmd = settings.get("test_command")
     if not cmd:
         return {"ok": False, "why": "no test_command configured"}
     try:
-        sel = _selection(pr, path, cmd)
+        sel = {"full": True, "tests": [], "reason": "stack top"} if stack_top else _selection(pr, path, cmd)
         full = tests_affected.full_command(path, cmd)
     except tests_affected.TestsConfigError as e:
         return {"ok": False, "why": str(e)}
@@ -108,6 +108,8 @@ def _tests_rule(pr, path):
     if not ok:
         return {"ok": False, "why": f"{why} ({label})"}
     ci_ok, ci_why = ci(pr, settings)
+    if stack_top:
+        return {"ok": ci_ok, "why": f"full suite passed (stack top); {ci_why}"}
     return {"ok": ci_ok, "why": f"local tests passed ({label}); {ci_why}"}
 
 
@@ -125,8 +127,9 @@ def _cleanup(path, refs):
             pass
 
 
-def check(pr, base):
-    """[conflicts rule, tests rule] for one pull request; `ok` is None when a rule could not run."""
+def check(pr, base, full=False):
+    """[conflicts rule, tests rule] for one pull request; `ok` is None when a rule could not run. `full` runs the whole
+    suite whatever the affected-test selection would pick: the top of a stack."""
     n = pr["number"]
     refs = [f"refs/pl-merge/{n}/base", f"refs/pl-merge/{n}/head"]
     path = Path(C.STATE_DIR) / "merge-check" / f"pr-{n}"
@@ -146,6 +149,6 @@ def check(pr, base):
             return [{"rule": "conflicts", "ok": False, "why": f"conflicts with {base}: {_conflict_paths(path)}"},
                     {"rule": "tests", "ok": None, "why": "not run: conflicts"}]
         return [{"rule": "conflicts", "ok": True, "why": f"merges cleanly onto {base}"},
-                {"rule": "tests", **_tests_rule(pr, path)}]
+                {"rule": "tests", **_tests_rule(pr, path, full)}]
     finally:
         _cleanup(path, refs)
