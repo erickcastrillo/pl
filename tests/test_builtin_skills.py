@@ -273,6 +273,14 @@ def test_pl_review_runs_pl_tests_full():
     assert "`pl tests full`" in text and "not available" in text
 
 
+def test_pl_review_runs_the_review_test_set():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    for phrase in ("`pl tests review`", "pl:full-tests", "e2e_ui", "affected: N files", "full suite:", "names the failing tests"):
+        assert phrase in text
+    version = int(re.search(r"pl-builtin-version: (\d+)", text).group(1))
+    assert version >= 9
+
+
 # ---------- pl section: read and write one card section ----------
 
 @pytest.fixture
@@ -762,7 +770,7 @@ def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     for phrase in ("depends on unmerged PR #N", "pulls?state=open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 8" in text
+    assert "pl-builtin-version: 9" in text
 
 
 def test_pl_run_assigns_the_pull_request_to_you():
@@ -829,13 +837,13 @@ def test_an_unedited_pl_run_v11_is_updated_to_v12(lib, shipped):
     _older_copy_is_updated(lib, shipped, "pl-run", 11, 12)
 
 
-def test_an_unedited_pl_review_v7_is_updated_to_v8(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 7, 8)
+def test_an_unedited_pl_review_v8_is_updated_to_v9(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 8, 9)
 
 
-def test_pl_review_runs_the_full_suite_once_and_it_decides_ready():
+def test_pl_review_runs_the_review_test_set_and_it_decides_ready():
     text = _shipped("pl-review")
-    step = text.split("4. Run the full test suite once with the command `pl tests full` prints")[1].split("5. Apply")[0]
+    step = text.split("4. Run the tests the change needs")[1].split("5. Apply")[0]
     assert '"ready"' in step and '"Review finds problems" row' in step
 
 
@@ -925,10 +933,10 @@ def test_pl_run_runs_tests_only_through_pl_tests():
         assert phrase in text
 
 
-def test_pl_review_runs_the_full_suite_through_pl_tests_full():
+def test_pl_review_runs_the_tests_through_pl_tests_review():
     text = _builtin("pl-review")
     step = text[text.index("4. Run"):text.index("5.", text.index("4. Run"))]
-    for phrase in ("pl tests full", "one run at a time", "foreground", "review worktree"):
+    for phrase in ("pl tests review", "pl tests full", "one run at a time", "foreground", "review worktree"):
         assert phrase in step
 
 
