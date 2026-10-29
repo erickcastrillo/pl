@@ -78,20 +78,37 @@ def run_tests(path, cmd, timeout, env):
     return True, "local tests passed"
 
 
+def _is_pytest(cmd):
+    return any(Path(t).name in ("pytest", "py.test") for t in shlex.split(cmd))
+
+
+def _selection(pr, path, cmd):
+    if not _is_pytest(cmd):
+        return {"full": True, "tests": [], "reason": "full suite: test_command is not pytest"}
+    labels = [x["name"] for x in pr.get("labels") or []]
+    return tests_affected.select(path, f"refs/pl-merge/{pr['number']}/base", labels)
+
+
 def _tests_rule(pr, path):
     settings = C.AUTO_MERGE
     cmd = settings.get("test_command")
     if not cmd:
         return {"ok": False, "why": "no test_command configured"}
     try:
-        cmd = tests_affected.full_command(path, cmd)
+        sel = _selection(pr, path, cmd)
+        full = tests_affected.full_command(path, cmd)
     except tests_affected.TestsConfigError as e:
         return {"ok": False, "why": str(e)}
-    ok, why = run_tests(path, cmd, settings.get("test_timeout", 15), _test_env(settings))
+    label = sel["reason"]
+    if not sel["full"] and not sel["tests"]:
+        ci_ok, ci_why = ci(pr, settings)
+        return {"ok": ci_ok, "why": f"{label}; {ci_why}"}
+    run = full if sel["full"] else f"{full} {shlex.join(sel['tests'])}"
+    ok, why = run_tests(path, run, settings.get("test_timeout", 15), _test_env(settings))
     if not ok:
-        return {"ok": False, "why": why}
+        return {"ok": False, "why": f"{why} ({label})"}
     ci_ok, ci_why = ci(pr, settings)
-    return {"ok": ci_ok, "why": f"local tests passed; {ci_why}"}
+    return {"ok": ci_ok, "why": f"local tests passed ({label}); {ci_why}"}
 
 
 def _conflict_paths(path):

@@ -1,0 +1,3 @@
+title = "The merge check runs only the tests a change needs"
+where = "Auto-merge loop: the tests rule's reason"
+try = "Open a small pull request and read its tests rule: it says 'affected: N files' or 'full suite: <reason>'"
