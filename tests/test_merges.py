@@ -818,3 +818,97 @@ def test_rework_label_from_merge_pass_is_flagged(host, monkeypatch):
     item = {"number": 1, "html_url": URL.format(1), "pull_request": {"url": "x"}, "labels": [{"name": c[5].removeprefix("labels[]=")} for c in posted]}
     monkeypatch.setattr(merges.rework.github, "_gh", lambda args: json.dumps([item]))
     assert merges.rework.flagged({"acme/app"}, merges.rework.labels()) == {("acme/app", 1)}
+
+
+# --- a failing stack acts through its top ---
+
+def _failing_stack(host, ids=("tests/test_a.py::test_x",)):
+    _tests_failed(host, ids)
+    return _stack(host, "c1", [1, 2, 3])
+
+
+def _touched(host, n):
+    return [c for c in host.calls if f"/issues/{n}/" in " ".join(c)]
+
+
+def _top_only(host):
+    assert ["api", "-X", "POST", "repos/acme/app/issues/3/labels", "-f", "labels[]=pl:needs-rework"] in host.calls
+    assert not any("needs-person" in " ".join(c) for c in host.calls)
+    (post,) = _comment_posts(host)
+    assert post[3].endswith("/issues/3/comments") and "tests/test_a.py::test_x" in post[5]
+    assert _touched(host, 1) == [] and _touched(host, 2) == []
+
+
+def test_failing_stack_merges_none_of_it(host):
+    card = _failing_stack(host)
+    assert merges.run_pass(host.cards, dry=False) == []
+    assert _moves(host) == [] and len(host.check_calls) == 1
+    assert "auto_merged" not in card["metadata"]
+
+
+def test_failing_stack_sends_only_top_to_rework_with_one_comment(host):
+    _failing_stack(host)
+    _run()
+    _top_only(host)
+
+
+def test_failing_stack_pass_sends_only_top_to_rework_with_one_comment(host):
+    _failing_stack(host)
+    merges.run_pass(host.cards, dry=False)
+    _top_only(host)
+
+
+def test_failing_stack_lower_prs_get_no_label_or_comment(host):
+    _failing_stack(host)
+    _run()
+    assert _touched(host, 1) == [] and _touched(host, 2) == []
+
+
+def test_failing_stack_same_head_already_commented_posts_nothing(host):
+    _failing_stack(host)
+    host.comments[3] = ["<!-- pl:merge-loop head=abc -->"]
+    _run()
+    assert _comment_posts(host) == [] and _touched(host, 1) == [] and _touched(host, 2) == []
+
+
+def test_stack_without_failed_ids_needs_a_person_on_top_only(host):
+    host.checks[1] = {"rule": "tests", "ok": False, "why": "timed out after 15 minutes"}
+    _stack(host, "c1", [1, 2, 3])
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/3/labels", "-f", "labels[]=needs-person"] in host.calls
+    (post,) = _comment_posts(host)
+    assert "also holds #1, #2 below it" in post[5]
+    assert _touched(host, 1) == [] and _touched(host, 2) == []
+
+
+def test_stack_tests_and_lower_size_failure_needs_a_person_on_top_only(host):
+    _failing_stack(host)
+    host.prs[1] = {**host.prs[1], "files": [{"path": "src/a.py", "additions": 200, "deletions": 12}]}
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/3/labels", "-f", "labels[]=needs-person"] in host.calls
+    (post,) = _comment_posts(host)
+    assert "size (#1)" in post[5]
+    assert _touched(host, 1) == [] and _touched(host, 2) == []
+
+
+def test_pass_leaves_needs_person_stack_unlabelled(host):
+    host.checks[1] = {"rule": "tests", "ok": False, "why": "timed out after 15 minutes"}
+    _stack(host, "c1", [1, 2, 3])
+    assert merges.run_pass(host.cards, dry=False) == []
+    assert _writes(host) == [] and _comment_posts(host) == [] and _moves(host) == []
+
+
+def test_failing_stack_dry_run_says_top_rework_and_lower_held(host, capsys):
+    _failing_stack(host)
+    _run(dry_run=True)
+    out = capsys.readouterr().out
+    assert "would add pl:needs-rework and comment" in out
+    assert out.count("loop: held below stack top #3: no action") == 2
+    assert _writes(host) == []
+
+
+def test_single_pr_tests_failure_still_goes_to_rework(host):
+    _tests_failed(host)
+    _add(host, _card("c1"), _pr(1))
+    _run()
+    assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=pl:needs-rework"] in host.calls

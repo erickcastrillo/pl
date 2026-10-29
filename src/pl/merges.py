@@ -180,9 +180,9 @@ def _rework_note(failing, head):
             + lines + "\n\npl sends it back to rework; pl-run fixes it and pushes a new commit.\n\n" + MARK.format(head))
 
 
-def _to_rework(pr, failed):
-    """True for a single pull request whose only failed rule is tests with named failing tests."""
-    return not pr.get("stack") and [r["rule"] for r in failed] == ["tests"] and bool(failed[0].get("failing"))
+def _to_rework(failed):
+    """True when the only failed rule is tests with named failing tests."""
+    return [r["rule"] for r in failed] == ["tests"] and bool(failed[0].get("failing"))
 
 
 def act(pr, v, dry):
@@ -190,7 +190,7 @@ def act(pr, v, dry):
     when none fails. Sets and returns v["loop"], what was (or with dry, would be) done."""
     repo, num = rework.PR_URL.match(pr["url"]).groups()
     failed = [r for r in v["rules"] if r["ok"] is False]
-    to_rework = _to_rework(pr, failed)
+    to_rework = _to_rework(failed)
     lab = rework.labels()["rework"] if to_rework else settings()["needs_person"]
     has = lab in {x["name"] for x in pr.get("labels") or []}
     api = f"repos/{repo}/issues/{num}"
@@ -217,6 +217,31 @@ def act(pr, v, dry):
 
 def passes(verdict):
     return all(r["ok"] is True for r in verdict["rules"])
+
+
+def _failed(v):
+    return [r for r in v["rules"] if r["ok"] is False]
+
+
+def _stack_act(items, dry, rework_only=False):
+    """Act on one stack's [(pull request, verdict)], bottom-up: when a rule fails anywhere, only the top is labelled and
+    commented on (rework for a tests-only failure, needs-person otherwise) and the pull requests below it are held."""
+    if not any(_failed(v) for _, v in items):
+        for pr, v in items:
+            act(pr, v, dry)
+        return
+    (top, tv), lower = items[-1], items[:-1]
+    for _, v in lower:
+        v["loop"] = f"held below stack top #{top['number']}: no action"
+    own = _failed(tv)
+    others = [(p, r) for p, v in lower for r in _failed(v) if r["rule"] != "tests"]
+    if not others and own and _to_rework(own):
+        tv["loop"] = act(top, tv, dry)
+    elif not rework_only:
+        nums = ", ".join(f"#{p['number']}" for p, _ in lower)
+        extra = [{**r, "rule": f"{r['rule']} (#{p['number']})"} for p, r in others]
+        stack = {"rule": "stack", "ok": False, "why": f"also holds {nums} below it"}
+        tv["loop"] = act(top, {**tv, "rules": tv["rules"] + extra + [stack]}, dry)
 
 
 def _closed(url):
@@ -290,16 +315,26 @@ def run_pass(all_cards, dry):
     read again after the judging, which can take minutes. Returns the merged URLs."""
     _retry_finished(all_cards, dry)
     _STACK_CHECKS.clear()
-    merged, repo = [], C.TRACKER["repo"]
+    merged, repo, held = [], C.TRACKER["repo"], set()
     base = merge_check.default_branch(repo)
-    for card, pr in candidates(all_cards, base):
+    found = candidates(all_cards, base)
+    for card, pr in found:
         if len(merged) >= per_pass():
             break
         n = pr["number"]
+        top_url = pr.get("stack") and pr["stack"]["top"]["url"]
+        if top_url in held:
+            continue
         v = judge(card, pr, all_cards, base, write=not dry)
         if not passes(v):
-            if _to_rework(pr, [r for r in v["rules"] if r["ok"] is False]):
-                act(pr, v, dry)
+            if not top_url:
+                if _to_rework(_failed(v)):
+                    act(pr, v, dry)
+                continue
+            held.add(top_url)
+            items = [(p, v if p is pr else judge(c, p, all_cards, base, write=not dry)) for c, p in found
+                     if p.get("stack") and p["stack"]["top"]["url"] == top_url and p["url"] not in merged]
+            _stack_act(sorted(items, key=lambda i: i[0]["stack"]["pos"]), dry, rework_only=True)
             continue
         if pr.get("stack") and pr["baseRefName"] != base:
             below = pr["stack"]["below"]
@@ -340,12 +375,16 @@ def cmd_merges(a):
     all_cards = board.cards()
     _STACK_CHECKS.clear()
     base = merge_check.default_branch(C.TRACKER["repo"])
-    found = candidates(all_cards, base)
-    judged = []
-    for c, pr in found:
+    judged, stacks = [], {}
+    for c, pr in candidates(all_cards, base):
         v = judge(c, pr, all_cards, base, write=not a.dry_run)
-        act(pr, v, a.dry_run)
+        if pr.get("stack"):
+            stacks.setdefault(pr["stack"]["top"]["url"], []).append((pr, v))
+        else:
+            act(pr, v, a.dry_run)
         judged.append(v)
+    for items in stacks.values():
+        _stack_act(sorted(items, key=lambda i: i[0]["stack"]["pos"]), a.dry_run)
     rank = 0
     for j in judged:
         if passes(j):
@@ -362,5 +401,5 @@ def cmd_merges(a):
             print(f"  {mark[r['ok']]}  {r['rule']}: {r['why']}")
         print(f"  -> {j['action']}")
         if j["loop"]:
-            would = "would " if a.dry_run and not j["loop"].startswith("already") else ""
+            would = "would " if a.dry_run and not j["loop"].startswith(("already", "held")) else ""
             print(f"  -> loop: {would}{j['loop']}")
