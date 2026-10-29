@@ -1,5 +1,4 @@
 """Checklist items 5, 16j, 16l (alerts), 11 (notifications) and 4 (a console move during a GitHub budget hold)."""
-import sqlite3
 import time
 
 import pytest
@@ -131,9 +130,6 @@ async def test_item_11_pr_opened_merged_done_call_attention_cmd(console, attenti
 
 @pytest.fixture
 def budget(monkeypatch):
-    # Local keeps one sqlite connection per tracker object, so a console worker thread fails on a board opened in another thread (product bug, follow-up).
-    connect = sqlite3.connect
-    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: connect(*a, **{**kw, "check_same_thread": False}))
     state = {"spent": True}
     real = Local.update
 
