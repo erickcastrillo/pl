@@ -319,3 +319,24 @@ def test_default_check_keeps_the_single_pr_test_command(env):
     env.sel = AFFECTED
     env.rules(CI_OK)
     assert env.popen[0][0] == ["uv", "run", "pytest", "-q", "tests/test_a.py", "tests/test_b.py"]
+
+
+def test_failing_tests_name_pytest_failed_ids(env):
+    env.rc, env.out = 1, "FAILED tests/test_a.py::test_x - assert 1\nFAILED tests/test_b.py::test_y - boom\n2 failed\n"
+    r = env.rules()["tests"]
+    assert r["why"] == f"tests failed (exit 1): tests/test_a.py::test_x, tests/test_b.py::test_y {FULL_LABEL}"
+    assert r["failing"] == ["tests/test_a.py::test_x", "tests/test_b.py::test_y"]
+
+
+def test_more_than_five_failed_ids_say_plus_n_more(env):
+    ids = [f"tests/test_a.py::test_{i}" for i in range(7)]
+    env.rc, env.out = 1, "".join(f"FAILED {i} - x\n" for i in ids) + "7 failed\n"
+    r = env.rules()["tests"]
+    assert r["why"] == f"tests failed (exit 1): {', '.join(ids[:5])} +2 more {FULL_LABEL}"
+    assert r["failing"] == ids
+
+
+def test_failing_tests_without_failed_lines_read_as_today(env):
+    env.rc, env.out = 1, "collecting\n1 error\n"
+    r = env.rules()["tests"]
+    assert r["why"] == f"tests failed (exit 1): 1 error {FULL_LABEL}" and "failing" not in r

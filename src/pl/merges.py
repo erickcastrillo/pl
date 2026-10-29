@@ -19,6 +19,7 @@ TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*$|_test\.[^/]+$")
 NOT_CHECKED = {"ok": None, "why": "not checked yet"}
 MARK = "<!-- pl:merge-loop head={} -->"
 _LABELS = set()
+_WHY = {True: {"why": "pl-run fixes the failing tests"}, False: {}}
 _STACK_CHECKS = {}
 
 
@@ -155,14 +156,14 @@ def _said(repo, num, head):
     return MARK.format(head) in bodies
 
 
-def _ensure_label(repo, name):
+def _ensure_label(repo, name, why="a person decides whether to merge"):
     if (repo, name) in _LABELS:
         return
     try:
         github._gh(["api", f"repos/{repo}/labels/{urllib.parse.quote(name, safe='')}"])
     except SystemExit:
         github._gh(["label", "create", name, "--repo", repo, "--color", "D93F0B",
-                    "--description", "added by pl: a person decides whether to merge"])
+                    "--description", f"added by pl: {why}"])
     _LABELS.add((repo, name))
 
 
@@ -173,12 +174,24 @@ def _note(failed, head):
             "pl comments again only when the pull request gets a new commit.\n\n" + MARK.format(head))
 
 
+def _rework_note(failing, head):
+    lines = "\n".join(f"- {t}" for t in failing)
+    return ("pl merge loop: this pull request is not merged, because its tests fail on the merge with the default branch:\n"
+            + lines + "\n\npl sends it back to rework; pl-run fixes it and pushes a new commit.\n\n" + MARK.format(head))
+
+
+def _to_rework(pr, failed):
+    """True for a single pull request whose only failed rule is tests with named failing tests."""
+    return not pr.get("stack") and [r["rule"] for r in failed] == ["tests"] and bool(failed[0].get("failing"))
+
+
 def act(pr, v, dry):
     """Label and comment on a pull request whose judgement `v` has a failed rule, once per head commit; take the label off
     when none fails. Sets and returns v["loop"], what was (or with dry, would be) done."""
     repo, num = rework.PR_URL.match(pr["url"]).groups()
     failed = [r for r in v["rules"] if r["ok"] is False]
-    lab = settings()["needs_person"]
+    to_rework = _to_rework(pr, failed)
+    lab = rework.labels()["rework"] if to_rework else settings()["needs_person"]
     has = lab in {x["name"] for x in pr.get("labels") or []}
     api = f"repos/{repo}/issues/{num}"
     if not failed:
@@ -190,15 +203,15 @@ def act(pr, v, dry):
     if _said(repo, num, head):
         v["loop"] = "already commented on this head"
         if not has and not dry:
-            _ensure_label(repo, lab)
+            _ensure_label(repo, lab, **_WHY[to_rework])
             github._gh(["api", "-X", "POST", f"{api}/labels", "-f", f"labels[]={lab}"])
         return v["loop"]
     v["loop"] = f"add {lab} and comment"
     if not dry:
-        _ensure_label(repo, lab)
+        _ensure_label(repo, lab, **_WHY[to_rework])
         if not has:
             github._gh(["api", "-X", "POST", f"{api}/labels", "-f", f"labels[]={lab}"])
-        github._gh(["api", "-X", "POST", f"{api}/comments", "-f", f"body={_note(failed, head)}"])
+        github._gh(["api", "-X", "POST", f"{api}/comments", "-f", f"body={_rework_note(failed[0]['failing'], head) if to_rework else _note(failed, head)}"])
     return v["loop"]
 
 
@@ -283,7 +296,10 @@ def run_pass(all_cards, dry):
         if len(merged) >= per_pass():
             break
         n = pr["number"]
-        if not passes(judge(card, pr, all_cards, base, write=not dry)):
+        v = judge(card, pr, all_cards, base, write=not dry)
+        if not passes(v):
+            if _to_rework(pr, [r for r in v["rules"] if r["ok"] is False]):
+                act(pr, v, dry)
             continue
         if pr.get("stack") and pr["baseRefName"] != base:
             below = pr["stack"]["below"]

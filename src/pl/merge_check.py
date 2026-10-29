@@ -2,6 +2,7 @@
 run the configured test command there, and read the pull request's CI checks. Nothing is pushed, merged or commented.
 `[loops.auto-merge] test_command` runs the pull request's own code on this host, with only the `test_env` variables and a private HOME."""
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -66,16 +67,27 @@ def _test_env(settings):
     return {**{k: os.environ[k] for k in keep if k in os.environ}, "HOME": str(home)}
 
 
+_FAILED = re.compile(r"^FAILED (\S+)", re.M)
+
+
+def _failing(out):
+    return list(dict.fromkeys(_FAILED.findall(out or "")))
+
+
 def run_tests(path, cmd, timeout, env):
     proc = _popen(shlex.split(cmd), cwd=path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = proc.communicate(timeout=timeout * 60)
     except subprocess.TimeoutExpired:
         _stop_group(proc)
-        return False, f"timed out after {timeout} minutes"
+        return False, f"timed out after {timeout} minutes", []
     if proc.returncode:
-        return False, f"tests failed (exit {proc.returncode}): {_last_line(out)}"
-    return True, "local tests passed"
+        ids = _failing(out)
+        if not ids:
+            return False, f"tests failed (exit {proc.returncode}): {_last_line(out)}", []
+        more = f" +{len(ids) - 5} more" if len(ids) > 5 else ""
+        return False, f"tests failed (exit {proc.returncode}): {', '.join(ids[:5])}{more}", ids
+    return True, "local tests passed", []
 
 
 def _is_pytest(cmd):
@@ -104,9 +116,9 @@ def _tests_rule(pr, path, stack_top=False):
         ci_ok, ci_why = ci(pr, settings)
         return {"ok": ci_ok, "why": f"{label}; {ci_why}"}
     run = full if sel["full"] else f"{full} {shlex.join(sel['tests'])}"
-    ok, why = run_tests(path, run, settings.get("test_timeout", 15), _test_env(settings))
+    ok, why, ids = run_tests(path, run, settings.get("test_timeout", 15), _test_env(settings))
     if not ok:
-        return {"ok": False, "why": f"{why} ({label})"}
+        return {"ok": False, "why": f"{why} ({label})", **({"failing": ids} if ids else {})}
     ci_ok, ci_why = ci(pr, settings)
     if stack_top:
         return {"ok": ci_ok, "why": f"full suite passed (stack top); {ci_why}"}
