@@ -303,8 +303,8 @@ def _ensure(tried=None):
     _read_assistant_config()
     acct = account()
     if acct is None:
-        raise SystemExit("pl: no account can run the assistant: each one is parked, on a harness that cannot ask before "
-                         "each action, or CLI not installed; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
+        raise SystemExit("pl: no account can run the assistant: each one is parked, not installed, or on a harness "
+                         "that cannot ask first; set [assistant] account in config.toml to a claude or codex account (pl accounts)")
     tried["account"] = acct
     h = None
     try:
