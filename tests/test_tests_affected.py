@@ -95,13 +95,13 @@ def test_a_changed_test_keeps_its_reason_when_it_also_imports_the_changed_module
     assert r["reasons"]["tests/test_direct.py"] == "changed test"
 
 
-def test_review_and_merge_check_still_run_the_full_suite(repo):
+def test_merge_check_still_runs_the_full_suite_and_review_uses_the_test_set(repo):
     import inspect
 
     from pl import merge_check, skills
 
     text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    assert "Run the full test suite once with the command `pl tests full` prints" in text
+    assert "Run the tests the change needs" in text and "`pl tests review`" in text
     assert "tests_affected.full_command" in inspect.getsource(merge_check._tests_rule)
     assert "tests" not in T.test_command(repo)[T.test_command(repo).index("-q") + 1:]
 
@@ -484,3 +484,140 @@ def test_pl_repo_tests_toml_sets_a_capped_worker_count():
     from pathlib import Path
     data = tomllib.loads((Path(__file__).parents[1] / ".pl" / "tests.toml").read_text())
     assert isinstance(data["tests"]["workers"], int) and 1 < data["tests"]["workers"] <= 4
+
+
+# ---------- select(): which set review and the merge check run ----------
+
+def select(monkeypatch, repo, changed, labels=(), **kw):
+    fake_git(monkeypatch, repo, changed, **kw)
+    return T.select(repo, "abc", labels)
+
+
+def test_select_one_module_runs_its_affected_tests(repo, monkeypatch):
+    r = select(monkeypatch, repo, ["src/app/core.py"])
+    assert r == {"full": False, "tests": ["tests/test_core.py", "tests/test_direct.py"], "reason": "affected: 2 files", "e2e_ui": False}
+
+
+@pytest.mark.parametrize("changed,reason", [
+    (["pyproject.toml"], "pyproject.toml changed"),
+    (["uv.lock"], "uv.lock changed"),
+    (["tests/conftest.py"], "tests/conftest.py changed"),
+    (["docs/x.md"], "docs/x.md matches full_on docs/*"),
+])
+def test_select_pyproject_or_full_on_forces_full_with_its_reason(repo, monkeypatch, changed, reason):
+    settings(repo, '[tests]\nfull_on = ["docs/*"]\n')
+    r = select(monkeypatch, repo, changed)
+    assert r["full"] is True and r["reason"] == f"full suite: {reason}"
+
+
+def test_select_git_failure_or_bad_affected_cmd_is_full_with_that_reason(repo, monkeypatch):
+    r = select(monkeypatch, repo, [], fail=True)
+    assert r["full"] and r["reason"].startswith("full suite: git ") and r["e2e_ui"] is False
+    settings(repo, '[tests]\naffected_cmd = ["finder"]\n')
+    r = select(monkeypatch, repo, ["src/app/core.py"], cmd=(1, "", "boom"))
+    assert r["full"] and r["reason"] == "full suite: affected_cmd failed: boom"
+
+
+def _many_modules(repo, n):
+    names = [f"src/app/m{i}.py" for i in range(n)]
+    for p in names:
+        (repo / p).write_text("")
+    return names
+
+
+def test_select_over_full_over_modules_is_full(repo, monkeypatch):
+    settings(repo, "[tests]\nfull_over = 3\n")
+    r = select(monkeypatch, repo, _many_modules(repo, 4))
+    assert r["full"] and r["reason"] == "full suite: 4 modules changed (over 3)"
+    assert not select(monkeypatch, repo, _many_modules(repo, 3))["full"]
+
+
+def test_select_default_full_over_is_20(repo, monkeypatch):
+    assert not select(monkeypatch, repo, _many_modules(repo, 20))["full"]
+    assert select(monkeypatch, repo, _many_modules(repo, 21))["reason"] == "full suite: 21 modules changed (over 20)"
+
+
+@pytest.mark.parametrize("value", ["0", '"x"', "true", "1.5"])
+def test_select_bad_full_over_is_an_error_naming_tests_toml(repo, monkeypatch, value):
+    settings(repo, f"[tests]\nfull_over = {value}\n")
+    with pytest.raises(T.TestsConfigError, match=r"\.pl/tests\.toml.*full_over"):
+        select(monkeypatch, repo, ["src/app/core.py"])
+
+
+def test_select_label_forces_full_regardless_of_diff(repo, monkeypatch):
+    r = select(monkeypatch, repo, ["src/app/core.py"], labels=["pl:full-tests"])
+    assert r["full"] and r["reason"] == "full suite: pl:full-tests label"
+
+
+@pytest.mark.parametrize("path", ["src/pl/tui/app.py", "tests/e2e_ui/test_x.py"])
+def test_select_tui_or_e2e_ui_change_adds_e2e_ui(repo, monkeypatch, path):
+    assert select(monkeypatch, repo, [path])["e2e_ui"] is True
+    assert select(monkeypatch, repo, [path], labels=["pl:full-tests"])["e2e_ui"] is True
+
+
+def test_select_other_change_has_no_e2e_ui(repo, monkeypatch):
+    assert select(monkeypatch, repo, ["src/app/core.py"])["e2e_ui"] is False
+
+
+def test_select_docs_only_change_selects_zero_files(repo, monkeypatch):
+    r = select(monkeypatch, repo, ["README.md"])
+    assert r == {"full": False, "tests": [], "reason": "affected: 0 files", "e2e_ui": False}
+
+
+# ---------- pl tests review ----------
+
+def review(monkeypatch, repo, capsys, changed, *flags, **kw):
+    fake_git(monkeypatch, repo, changed, **kw)
+    code = T.cmd_tests(["review", "--base", "abc", *flags])
+    return code, capsys.readouterr()
+
+
+def test_review_prints_reason_then_affected_command(repo, budget, monkeypatch, capsys):
+    code, cap = review(monkeypatch, repo, capsys, ["src/app/core.py"])
+    lines = cap.out.strip().splitlines()
+    assert code == 0 and lines[0] == "affected: 2 files" and len(lines) == 2
+    assert lines[1].endswith("-q tests/test_core.py tests/test_direct.py")
+
+
+def test_review_full_prints_full_suite_reason_and_full_command(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["uv.lock"])
+    lines = cap.out.strip().splitlines()
+    assert lines[0] == "full suite: uv.lock changed" and lines[1].endswith("-q") and len(lines) == 2
+
+
+def test_review_zero_files_prints_no_command(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["README.md"])
+    assert cap.out.strip() == "affected: 0 files"
+
+
+def test_review_adds_e2e_ui_command_for_tui_changes(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["src/pl/tui/app.py"])
+    lines = cap.out.strip().splitlines()
+    assert lines[0] == "affected: 0 files; plus e2e_ui"
+    assert lines[-1].endswith("-n 6 -m e2e_ui -q tests/e2e_ui")
+
+
+def test_review_label_flag_forces_full(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["src/app/core.py"], "--label", "x", "--label", "pl:full-tests")
+    assert cap.out.splitlines()[0] == "full suite: pl:full-tests label"
+
+
+def test_review_uses_budget_workers_like_full(repo, budget, monkeypatch, capsys):
+    (budget / "machine.toml").write_text("[tests]\nmax_workers = 6\n")
+    _lease(budget, 4)
+    _, cap = review(monkeypatch, repo, capsys, ["src/app/core.py"])
+    assert "pytest -n 2 -q" in cap.out
+
+
+def test_review_bad_full_over_exits_2_naming_tests_toml(repo, budget, monkeypatch, capsys):
+    settings(repo, "[tests]\nfull_over = 0\n")
+    code, cap = review(monkeypatch, repo, capsys, ["src/app/core.py"])
+    assert code == 2 and ".pl/tests.toml" in cap.err and "full_over" in cap.err
+
+
+def test_review_json_fields(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["src/pl/tui/app.py"], "--json")
+    out = json.loads(cap.out)
+    assert set(out) == {"full", "tests", "reason", "e2e_ui", "command", "e2e_command"}
+    assert out["command"] is None
+    assert out["e2e_command"].endswith("-m e2e_ui -q tests/e2e_ui")

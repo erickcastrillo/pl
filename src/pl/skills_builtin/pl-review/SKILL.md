@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed, and turn on auto-merge only for a small, safe pull request that passes. Never merges directly. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 8
+pl-builtin-version: 9
 ---
 
 # pl-review: review labelled pull requests
@@ -49,8 +49,20 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       - tests: changed behaviour with no test that would fail without the change;
       - comments that restate what the code does. List these only when the review already finds other
         problems. A comment alone never makes a pull request need rework.
-   4. Run the full test suite once with the command `pl tests full` prints, in the foreground, one run at a time, inside the review worktree (`${PL_WORKTREES_DIR:-..}/review-<number>`), never in this checkout; if `pl tests full` is not available (an older pl), run the repository's own full test suite once instead. If it prints an error about `.pl/tests.toml`, use the "Review finds problems" row and quote the error. That result decides whether the pull request can be "ready": a
-      failing suite uses the "Review finds problems" row, naming the failing tests.
+   4. Run the tests the change needs, inside the review worktree (`${PL_WORKTREES_DIR:-..}/review-<number>`), never in this checkout:
+      `pl tests review --base origin/<baseRefName> --label <each label of the pull request>`. Run each command it prints in the
+      foreground, one run at a time. If `pl tests review` is not available (an older pl), run the command `pl tests full` prints; if
+      `pl tests full` is not available either, run the repository's own full test suite once.
+      - Its first line says which set runs and why: "affected: N files", or "full suite: <reason>", with "; plus e2e_ui" when
+        the console e2e suite also runs. When it prints only `affected: 0 files`, nothing needs a run and the tests pass.
+      - The full suite runs when the diff touches conftest.py, pyproject.toml, uv.lock or a `full_on` pattern of `.pl/tests.toml`,
+        when `pl tests affected` itself falls back to full, or when the change spans more than `full_over` modules (default 20).
+      - e2e_ui is added when the diff touches `src/pl/tui/` or `tests/e2e_ui/`.
+      - To force a full run, add the `pl:full-tests` label, or run the command `pl tests full` prints by hand.
+      - Put the first line in the review comment. When the review passes, post it as a short comment, so every outcome says which set ran.
+      - If it prints an error about `.pl/tests.toml`, use the "Review finds problems" row and quote the error. That result decides
+        whether the pull request can be "ready": a failing run of either command uses the "Review finds problems" row, and
+        the comment names the failing tests.
    5. Apply the review outcome:
 
       Check for high-impact sensitivity:

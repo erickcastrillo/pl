@@ -175,6 +175,9 @@
   pl tests affected [--base REF] [--json]
                           the test files a change can affect (import graph for Python) and whether it needs the
                           full suite, and the command to run them. No profile needed
+  pl tests review [--base REF] [--label NAME]... [--json]
+                          the test set review and the merge check run for a change: affected files, or the
+                          full suite and why
   pl tests full | run -- COMMAND
                           full prints the full-suite pytest command with the workers the machine-wide budget
                           allows now (capped by .pl/tests.toml [tests] workers); run holds the -n N workers of COMMAND from that budget while it runs
