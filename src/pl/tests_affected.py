@@ -1,4 +1,4 @@
-"""pl tests affected: the test files a change can affect in a Python repository, from the import graph.
+"""pl tests affected: the test files a change can affect in a Python repository, from the files' direct imports.
 
 Files are parsed with ast, never imported. git runs through _run (tests fake it). A repository's own
 .pl/tests.toml ([tests]: affected_cmd, always, full_on) adjusts or replaces the finder. Anything the finder cannot
@@ -10,7 +10,6 @@ import shlex
 import subprocess
 import sys
 import tomllib
-from collections import deque
 from pathlib import Path
 
 from pl import jsonout, worker_budget
@@ -20,6 +19,9 @@ FULL_FILES = {"conftest.py", "pyproject.toml", "uv.lock"}
 TEST_DIRS = {"tests", "test"}
 CMD_TIMEOUT = 120
 FULL_DEFAULT = "uv run pytest -q"
+FULL_LABEL = "pl:full-tests"
+FULL_OVER_DEFAULT = 20
+E2E_UI_PATHS = ("src/pl/tui/", "tests/e2e_ui/")
 
 
 class GitError(Exception):
@@ -136,32 +138,19 @@ def _importers(root, files):
     return graph
 
 
-def _reached(graph, changed_modules):
-    """Breadth-first from the changed modules: module -> (changed module it came from, first importer or None)."""
-    seen = {m: (m, None) for m in changed_modules}
-    queue = deque(changed_modules)
-    while queue:
-        mod = queue.popleft()
-        origin, first = seen[mod]
-        for imp in sorted(graph.get(mod, ())):
-            if imp not in seen:
-                seen[imp] = (origin, first or (mod if mod != origin else None))
-                queue.append(imp)
-    return seen
-
-
 def python_affected(root, changed, files):
     tests = {}
     by_module = {_module_name(f): f for f in files}
     changed_py = [p for p in changed if p.endswith(".py")]
-    reached = _reached(_importers(root, files), {_module_name(p) for p in changed_py})
+    graph = _importers(root, files)
     for p in changed_py:
         if _is_test(p) and p in files:
             tests[p] = "changed test"
-    for mod, (origin, first) in sorted(reached.items()):
-        path = by_module.get(mod)
-        if path and _is_test(path) and path not in tests and mod != origin:
-            tests[path] = f"imports {origin}" + (f" (via {first})" if first else "")
+    for mod in sorted({_module_name(p) for p in changed_py}):
+        for imp in sorted(graph.get(mod, ())):
+            path = by_module.get(imp)
+            if path and _is_test(path) and path not in tests and imp != mod:
+                tests[path] = f"imports {mod}"
     for p in changed_py:
         stem = Path(p).name
         for f in files:
@@ -246,7 +235,7 @@ def _full_on_reason(changed, patterns):
 
 def _fallback(reason):
     print(f"pl tests: {reason}", file=sys.stderr)
-    return {"tests": [], "reasons": {}, "full": True, "full_reason": reason}
+    return {"tests": [], "reasons": {}, "full": True, "full_reason": reason, "changed": []}
 
 
 def affected(root, ref=None):
@@ -256,7 +245,7 @@ def affected(root, ref=None):
         return _fallback(str(e))
     files = _python_files(root)
     if not cfg and not files:
-        return {"tests": [], "reasons": {}, "full": True, "full_reason": "no Python files and no .pl/tests.toml"}
+        return {"tests": [], "reasons": {}, "full": True, "full_reason": "no Python files and no .pl/tests.toml", "changed": []}
     changed = changed_paths(root, base_ref(root, ref))
     reasons, reason = {}, None
     if "affected_cmd" in cfg:
@@ -270,22 +259,62 @@ def affected(root, ref=None):
         reason = _full_reason(changed)
     reason = reason or _full_on_reason(changed, cfg.get("full_on", []))
     reasons.update({p: "always rule" for p in cfg.get("always", [])})
-    return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason}
+    return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason, "changed": changed}
 
 
-def _workers(root):
+def _tests_table(root):
     path = Path(root) / ".pl" / "tests.toml"
     try:
         data = tomllib.loads(path.read_text())
     except FileNotFoundError:
-        return None
+        return path, {}
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise UnreadableTestsConfig(f"{path}: {e}") from e
     tests = data.get("tests")
-    value = tests.get("workers") if isinstance(tests, dict) else None
+    return path, tests if isinstance(tests, dict) else {}
+
+
+def _workers(root):
+    path, tests = _tests_table(root)
+    value = tests.get("workers")
     if value is None or value == "auto" or isinstance(value, int) and not isinstance(value, bool) and value >= 1:
         return value
     raise TestsConfigError(f'{path}: [tests] workers must be "auto" or a whole number of at least 1, got {value!r}')
+
+
+def _full_over(root):
+    path, tests = _tests_table(root)
+    value = tests.get("full_over", FULL_OVER_DEFAULT)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    raise TestsConfigError(f"{path}: [tests] full_over must be a whole number of at least 1, got {value!r}")
+
+
+def _full(reason, e2e_ui):
+    return {"full": True, "tests": [], "reason": f"full suite: {reason}", "e2e_ui": e2e_ui}
+
+
+def select(root, base, labels=()):
+    """The test set review and the merge check run for a change: {"full", "tests", "reason", "e2e_ui"}."""
+    if FULL_LABEL in labels:
+        try:
+            e2e_ui = any(p.startswith(E2E_UI_PATHS) for p in changed_paths(root, base))
+        except GitError:
+            e2e_ui = False
+        return _full(f"{FULL_LABEL} label", e2e_ui)
+    try:
+        res = affected(root, base)
+    except GitError as e:
+        return _full(str(e), False)
+    changed = res["changed"]
+    e2e_ui = any(p.startswith(E2E_UI_PATHS) for p in changed)
+    if res["full"]:
+        return _full(res["full_reason"], e2e_ui)
+    limit = _full_over(root)
+    modules = [p for p in changed if p.endswith(".py") and not TEST_DIRS & set(Path(p).parts[:-1])]
+    if len(modules) > limit:
+        return _full(f"{len(modules)} modules changed (over {limit})", e2e_ui)
+    return {"full": False, "tests": res["tests"], "reason": f"affected: {len(res['tests'])} files", "e2e_ui": e2e_ui}
 
 
 def _sets_workers(token):
@@ -301,12 +330,41 @@ def full_command(root, cmd=FULL_DEFAULT):
     return cmd if workers is None else f"{cmd} -n {workers}"
 
 
+def _review(root, args):
+    try:
+        try:
+            sel = select(root, base_ref(root, args.base), args.label)
+        except GitError as e:
+            sel = _full(str(e), False)
+        command = test_command(root, strict=False) if sel["full"] else test_command(root, sel["tests"], strict=False) if sel["tests"] else None
+        e2e = test_command(root, ["tests/e2e_ui"], strict=False) if sel["e2e_ui"] else None
+    except (GitError, SettingsError, TestsConfigError) as e:
+        print(f"pl tests: {e}", file=sys.stderr)
+        return 2
+    if e2e:
+        e2e.insert(e2e.index("-q"), "-m")
+        e2e.insert(e2e.index("-q"), "e2e_ui")
+    command, e2e = (shlex.join(c) if c else None for c in (command, e2e))
+    if args.json:
+        jsonout.emit({**sel, "command": command, "e2e_command": e2e})
+        return 0
+    print(sel["reason"] + ("; plus e2e_ui" if sel["e2e_ui"] else ""))
+    for c in (command, e2e):
+        if c:
+            print(c)
+    return 0
+
+
 def cmd_tests(argv):
     ap = argparse.ArgumentParser(prog="pl tests")
     sub = ap.add_subparsers(dest="action", required=True)
     aff = sub.add_parser("affected", help="the test files a change can affect")
     aff.add_argument("--base", metavar="REF", help="compare with REF (default: merge base with the default branch)")
     aff.add_argument("--json", action="store_true")
+    rev = sub.add_parser("review", help="the test set review and the merge check run for a change")
+    rev.add_argument("--base", metavar="REF", help="compare with REF (default: merge base with the default branch)")
+    rev.add_argument("--label", action="append", default=[], metavar="NAME", help="a label of the pull request (repeatable)")
+    rev.add_argument("--json", action="store_true")
     sub.add_parser("full", help="the command that runs the full suite with the workers the budget allows")
     run = sub.add_parser("run", help="run a test command while holding its pytest workers (-n N) from the budget")
     run.add_argument("command", nargs=argparse.REMAINDER, metavar="-- COMMAND")
@@ -323,6 +381,8 @@ def cmd_tests(argv):
         if args.action == "full":
             print(shlex.join(test_command(root)))
             return 0
+        if args.action == "review":
+            return _review(root, args)
         res = affected(root, args.base)
     except GitError as e:
         print(f"pl tests: {e}", file=sys.stderr)

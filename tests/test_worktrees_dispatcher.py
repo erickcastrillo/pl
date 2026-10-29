@@ -494,3 +494,23 @@ def test_sweep_runs_only_worktree_commands_in_the_main_checkout(wt_env):
     assert any(cmd[:3] == ["git", "worktree", "remove"] for cmd in in_main)
     assert all(cmd[:3] in allowed for cmd in in_main)
     assert not [cmd for cmd, _ in wt_env.commands if {"reset", "checkout", "stash", "clean"} & set(cmd)]
+
+
+def test_sweep_deletes_leftover_folder_after_remove(wt_env):
+    from pl import worktrees
+
+    wt_path, card = _merged_done_card(wt_env)
+    (wt_path / ".venv").mkdir()
+    (wt_path / ".venv" / "x").write_text("x")
+    worktrees.sweep([card])
+    assert not wt_path.exists()
+
+
+def test_sweep_names_a_folder_it_could_not_delete(wt_env, capsys, monkeypatch):
+    from pl import worktrees
+
+    wt_path, card = _merged_done_card(wt_env)
+    monkeypatch.setattr(worktrees.shutil, "rmtree", lambda *a, **kw: None)
+    worktrees.sweep([card])
+    lines = [l for l in capsys.readouterr().out.splitlines() if str(wt_path) in l]
+    assert len(lines) == 1

@@ -310,12 +310,12 @@ def _note_wait(waits, seen, c, w):
     seen[c["id"]] = rec
 
 
-def _prompt_has_text(pane):
-    """True when the agent's prompt line (after > or ❯) holds unsent text."""
+def _prompt_text(pane):
+    """The unsent text on the agent's prompt line (after > or ❯), or '' when it is empty or unreadable."""
     screen = tmux("capture-pane", "-p", "-t", pane, "-S", "-20", check=False) or ""
     lines = [agents.BOX_RE.sub(" ", ln).strip() for ln in screen.splitlines()]
     marked = [ln for ln in lines if ln[:1] in (">", "❯")]
-    return bool(marked and marked[-1][1:].strip())
+    return marked[-1][1:].strip() if marked else ""
 
 
 def _type_into(pane, text):
@@ -345,11 +345,12 @@ def rework_live(c, w, why, reg, dry):
         if dry:
             print(f"{head}  would type the rework message into the run agent")
             return None
-        cleared = _prompt_has_text(w["pane"])
-        _type_into(w["pane"], rework.live_message(c))
+        draft = _prompt_text(w["pane"])
+        _type_into(w["pane"], rework.live_message(c) + (f" The owner had also typed (not yet sent): {draft}" if draft else ""))
         record(sent_round=n, sent_at=now_iso(), started=False)
-        events.emit("rework_sent", c["id"], round=n, cleared=cleared)
-        print(f"{head}  typed the rework message (round {n}) into the run agent")
+        events.emit("rework_sent", c["id"], round=n, cleared=bool(draft), carried=bool(draft))
+        along = ", with the owner's unsent prompt text sent along" if draft else ""
+        print(f"{head}  typed the rework message (round {n}) into the run agent{along}")
         return "sent"
     if rw.get("started"):
         return None
