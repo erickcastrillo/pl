@@ -283,6 +283,8 @@ def load(profile: str | None = None, config_dir: str | None = None) -> None:
         raise SystemExit("pl: bad profile name")
     g = globals()
     g.update(_defaults())
+    from pl import harnesses
+    harnesses._CACHE.clear()   # a [harnesses] table read for an earlier load of the same path is stale now
     d = config_dir or (str(g["HOME"] / f".pl-{profile}") if profile else None) or os.environ.get("PL_CONFIG_DIR") or None
     if d is None:
         return

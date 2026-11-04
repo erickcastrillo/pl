@@ -2,6 +2,7 @@
 import argparse
 import json
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -420,13 +421,13 @@ def test_the_session_bearer_works_only_for_its_card(fake_home):
 
 def fake_resolver(host, port):
     mapping = {
-        "api.anthropic.com": [(2, None, None, None, ("1.1.1.10", 0))],
-        "api.openai.com": [(2, None, None, None, ("2.2.2.10", 0))],
-        "generativelanguage.googleapis.com": [(2, None, None, None, ("3.3.3.10", 0))],
-        "github.com": [(2, None, None, None, ("140.82.112.4", 0))],
-        "api.github.com": [(2, None, None, None, ("140.82.112.5", 0))],
-        "allowed.host.com": [(2, None, None, None, ("4.4.4.10", 0)),
-                             (10, None, None, None, ("2001:db8::4", 0, 0, 0))],
+        "api.anthropic.com": [(socket.AF_INET, None, None, None, ("1.1.1.10", 0))],
+        "api.openai.com": [(socket.AF_INET, None, None, None, ("2.2.2.10", 0))],
+        "generativelanguage.googleapis.com": [(socket.AF_INET, None, None, None, ("3.3.3.10", 0))],
+        "github.com": [(socket.AF_INET, None, None, None, ("140.82.112.4", 0))],
+        "api.github.com": [(socket.AF_INET, None, None, None, ("140.82.112.5", 0))],
+        "allowed.host.com": [(socket.AF_INET, None, None, None, ("4.4.4.10", 0)),
+                             (socket.AF_INET6, None, None, None, ("2001:db8::4", 0, 0, 0))],
     }
     if host in mapping:
         return mapping[host]

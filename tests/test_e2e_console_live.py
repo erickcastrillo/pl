@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 
 import pytest
 
@@ -177,4 +179,4 @@ def test_ac2_live_run_makes_only_reads(live, capsys):
 
 def test_ac7_live_tests_use_a_profile_under_the_test_home(live):
     assert str(C.HOME).startswith(str(C.HOME)) and (C.HOME / ".pl-work" / "config.toml").is_file()
-    assert "tmp" in str(C.HOME)
+    assert os.path.realpath(C.HOME).startswith(os.path.realpath(tempfile.gettempdir()))   # macOS: /var/folders/..., not /tmp
