@@ -289,14 +289,13 @@ def fresh_agent_defs():
 def no_real_tui_panel_subprocesses(monkeypatch):
     """CommandPanel, ConnectorsPanel, SkillsView, and AgentsView run background workers that call their
     module-level _run: tests see empty lists, never real pl CLI subprocesses."""
-    from pl.tui import agentdefs, connectors, panels, settings, skills
+    from pl.tui import agentdefs, connectors, panels, skills
 
     fake_run = lambda argv, *a, **kw: subprocess.CompletedProcess(argv, 0, "[]", "")  # noqa: E731
     monkeypatch.setattr(panels, "_run", fake_run)
     monkeypatch.setattr(connectors, "_run", fake_run)
     monkeypatch.setattr(skills, "_run", fake_run)
     monkeypatch.setattr(agentdefs, "_run", fake_run)
-    monkeypatch.setattr(settings, "_gh_summary", lambda: "gh: test")
 
 
 @pytest.fixture(autouse=True)
@@ -375,9 +374,14 @@ def fast_textual_wait_for_idle(monkeypatch):
             await asyncio.sleep(0.01)
 
     async def _fast_press(self, *keys: str) -> None:
-        for key in keys:
+        for i, key in enumerate(keys):
+            if i > 0:
+                await self.app.workers.wait_for_complete()
+                await self._wait_for_screen()
             await self._app._press_keys((key,))
             await self._wait_for_screen()
+        await asyncio.sleep(0.01)
+        await self._wait_for_screen()
 
     orig_refresh = DOMNode.refresh_bindings
 

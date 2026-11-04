@@ -204,6 +204,7 @@ class ExtensionsView(Widget):
 
     def __init__(self, subscription_line=None):
         super().__init__()
+        self._initial_loaded = False
         self.subscription_line = subscription_line
         self.account = None
         self.data = {k: [] for k in KINDS}
@@ -228,8 +229,20 @@ class ExtensionsView(Widget):
         for k in KINDS:
             self.query_one(f"#ext-{k}", DataTable).add_columns("name", "summary")
             self.query_one(f"#ext-off-{k}").display = False
-        if C.PROFILES:
-            self.show(harnesses.default_account())
+        if type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) not in (
+            "extend", "skills", "connectors", "pods", "agents", "models", "extensions", "settings"
+        ):
+            return
+        self.ensure_loaded()
+
+    def on_show(self):
+        self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._initial_loaded:
+            self._initial_loaded = True
+            if C.PROFILES:
+                self.show(self.account or harnesses.default_account())
 
     # ---------- scanning ----------
 

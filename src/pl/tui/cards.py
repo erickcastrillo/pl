@@ -772,7 +772,7 @@ class CardsView(CardActions, Horizontal):
         shown = (key, md, text.plain)
         if shown == self._shown:
             return
-        new_md = self._shown is None or self._shown[1] != md
+        new_md = (self._shown[1] if self._shown is not None else "") != md
         self._shown = shown
         self.query_one("#cards-detail", Static).update(text)
         if new_md:

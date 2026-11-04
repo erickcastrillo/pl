@@ -137,6 +137,7 @@ class SettingsView(Widget):
 
     def __init__(self):
         super().__init__()
+        self._built = False
         self.fields = {}      # widget id -> (toml path, initial value, kind)
         self.models = {}      # model Select id -> (who it is for, harness name)
         self.picked = {}      # model Select id -> its value before custom… was chosen
@@ -155,9 +156,7 @@ class SettingsView(Widget):
         return Input(value="" if value is None else str(value), compact=True, id=wid, disabled=ro)
 
     def _field(self, label, path, value, kind="str", options=None, prompt="Select"):
-        with Horizontal(classes="field"):
-            yield Label(label)
-            yield self._cell(path, value, kind, options, prompt)
+        return Horizontal(Label(label), self._cell(path, value, kind, options, prompt), classes="field")
 
     def _stage_model_rows(self):
         used = [h for h in harnesses.MODEL_FLAGS if any((a.get("harness") or "claude") == h for a in C.ACCOUNTS.values())]
@@ -165,105 +164,125 @@ class SettingsView(Widget):
             st = C.STAGES.get(stage) or {}
             for h in used:
                 base = harnesses.models("claude") if h == "claude" else []
-                with Horizontal(classes="field"):
-                    yield Label(f"{stage} · {h}")
-                    m = (st.get("models") or {}).get(h)
-                    self.models[f"set-{len(self.fields)}"] = (f"stage {stage}", h)
-                    yield self._cell(("stages", stage, "models", h), m, options=_model_options(base, m), prompt="account's")
-                    if stage == "run":
-                        sm = ((st.get("small") or {}).get("models") or {}).get(h)
-                        self.models[f"set-{len(self.fields)}"] = (f"stage {stage} small changes", h)
-                        yield self._cell(("stages", stage, "small", "models", h), sm, options=_model_options(base, sm),
-                                         prompt="normal")
-                    else:
-                        yield Static(Text("n/a", style="dim"), classes="na")
+                m = (st.get("models") or {}).get(h)
+                self.models[f"set-{len(self.fields)}"] = (f"stage {stage}", h)
+                cell1 = self._cell(("stages", stage, "models", h), m, options=_model_options(base, m), prompt="account's")
+                if stage == "run":
+                    sm = ((st.get("small") or {}).get("models") or {}).get(h)
+                    self.models[f"set-{len(self.fields)}"] = (f"stage {stage} small changes", h)
+                    cell2 = self._cell(("stages", stage, "small", "models", h), sm, options=_model_options(base, sm),
+                                       prompt="normal")
+                else:
+                    cell2 = Static(Text("n/a", style="dim"), classes="na")
+                yield Horizontal(Label(f"{stage} · {h}"), cell1, cell2, classes="field")
                 err = Static("", id=f"stage-err-{stage}-{h}", classes="stage-warning stage-err")
                 err.display = False
                 yield err
 
-    def _panel(self, title):
-        v = Vertical(classes="panel")
+    def _panel(self, title, *children):
+        v = Vertical(*children, classes="panel")
         v.border_title = title
         return v
+
+    def _in_lazy_pl_app(self):
+        return type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) != "settings"
+
+    def _build_children(self):
+        accounts = list(C.PROFILES)
+        gen = [
+            self._field("user name", ("user", "name"), C.USER_NAME),
+            self._field("user email", ("user", "email"), C.USER_EMAIL),
+            self._field("tmux session", ("tmux_session",), C.TMUX_SESSION),
+            self._field("work dir", ("paths", "work_dir"), str(C.WORK_DIR)),
+            self._field("plans dir", ("paths", "plans_dir"), str(C.PLANS)),
+        ]
+        if pipeline.has_code():
+            gen.append(self._field("worktrees dir", ("paths", "worktrees_dir"), str(C.WORKTREES_DIR or "")))
+        yield self._panel("General", *gen)
+
+        conn = [
+            Static(Text(SUBSCRIPTION_LINE, style="bold")),
+            Static(self._accounts_text()),
+        ]
+        for kind, cfg in (("tracker", C.TRACKER), ("intake", C.INTAKE)):
+            typ = cfg.get("type") or "not set"
+            target = cfg.get("board_id") or f"{cfg.get('owner') or cfg.get('repo') or '?'} {cfg.get('number') or ''}"
+            conn.append(Static(Text(f"{kind:<8} {typ}  {target}")))
+            conn.append(Static(Text("  press T to test", style="dim"), id=f"test-{kind}"))
+            if typ == "mcp":
+                conn.append(self._field(f"{kind} board id", (kind, "board_id"), cfg.get("board_id")))
+        if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
+            conn.append(Button("Create project", id="create-project", compact=True))
+        conn.append(Static(Text("code host  gh: checking…", style="dim"), id="codehost"))
+        yield self._panel("Connections", *conn)
+
+        stage_children = []
+        names = list(harnesses.BUILTINS)
+        for stage in C.PROMPTS:
+            st = C.STAGES.get(stage) or {}
+            if st.get("accounts"):   # a pool: shown here, edited in config.toml; each account sets its harness
+                stage_children.append(Horizontal(Label(f"{stage} accounts"),
+                                                 Static(Text(", ".join(st["accounts"]) + "  (config.toml)"), id=f"pool-{stage}"),
+                                                 classes="field"))
+            else:
+                stage_children.append(self._field(f"{stage} harness", ("stages", stage, "harness"), st.get("harness"),
+                                                  options=names))
+                stage_children.append(self._field(f"{stage} account", ("stages", stage, "account"), st.get("account"),
+                                                  options=accounts))
+            levels = _stage_levels(stage)
+            if levels:
+                stage_children.append(self._field(f"{stage} effort", ("stages", stage, "effort"), st.get("effort"),
+                                                  options=levels, prompt="account's"))
+            stage_children.append(self._field(f"{stage} prompt", ("stages", stage, "prompt"), C.PROMPTS[stage]))
+            warn = Static("", classes="stage-warning", id=f"warn-{stage}")
+            warn.display = False
+            stage_children.append(warn)
+        yield self._panel("Stages and harnesses", *stage_children)
+
+        model_children = list(self._stage_model_rows())
+        for name, a in C.ACCOUNTS.items():
+            hname = a.get("harness") or "claude"
+            if hname in harnesses.MODEL_FLAGS:
+                model = a.get("model")
+                opts = _model_options(harnesses.models("claude") if hname == "claude" else [], model)
+                self.models[f"set-{len(self.fields)}"] = (f"account {name}", hname)
+                model_children.append(self._field(f"{name} model ({hname})", ("accounts", name, "model"), model,
+                                                  options=opts, prompt="default"))
+            if hname in harnesses.EFFORT_LEVELS:
+                model_children.append(self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
+                                                  options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default"))
+        yield self._panel("Models and effort (blank = the harness's default)", *model_children)
+
+        yield Button("Skills moved to Extend → Skills", id="skills-moved", compact=True)
+        yield self._panel("Chat", make_chat_panel())
+        yield self._panel("Triggers", make_triggers_panel())
+
+        loop_children = []
+        for name, svc in C.SERVICES.items():
+            loop_children.append(self._field(f"{name} prompt", ("loops", name, "prompt"), svc["prompt"]))
+            loop_children.append(self._field(f"{name} account", ("loops", name, "account"), svc.get("profile"), options=accounts))
+        yield self._panel("Loops", *loop_children)
+
+        disp_children = [
+            self._field("max runs", ("dispatch", "max_runs"), C.DISPATCH.get("max_runs"), kind="int"),
+            self._field("max prep", ("dispatch", "max_prep"), C.DISPATCH.get("max_prep"), kind="int"),
+            self._field("interval", ("dispatch", "interval"), C.DISPATCH.get("interval"), kind="int"),
+            self._field("spec approval gate", ("gates", "spec"), "on" if C.GATES.get("spec") else "off",
+                        kind="bool", options=["on", "off"]),
+        ]
+        yield self._panel("Dispatcher", *disp_children)
+        yield self._panel("Notifications",
+                          self._field("attention command", ("paths", "attention_cmd"), str(C.ATTENTION or "")))
 
     def compose(self):
         yield Static(Text(LEGACY_HINT if C.path() is None else
                           f"profile {C.PROFILE_NAME} · {C.path()} · ctrl+s save (the dispatcher uses it from its next pass) · T test connections",
                           style="bold #e0a040" if C.path() is None else "dim"), id="settings-hint")
-        accounts = list(C.PROFILES)
-        with VerticalScroll(id="settings-scroll"):
-            with self._panel("General"):
-                yield from self._field("user name", ("user", "name"), C.USER_NAME)
-                yield from self._field("user email", ("user", "email"), C.USER_EMAIL)
-                yield from self._field("tmux session", ("tmux_session",), C.TMUX_SESSION)
-                yield from self._field("work dir", ("paths", "work_dir"), str(C.WORK_DIR))
-                yield from self._field("plans dir", ("paths", "plans_dir"), str(C.PLANS))
-                if pipeline.has_code():
-                    yield from self._field("worktrees dir", ("paths", "worktrees_dir"), str(C.WORKTREES_DIR or ""))
-            with self._panel("Connections"):
-                yield Static(Text(SUBSCRIPTION_LINE, style="bold"))
-                yield Static(self._accounts_text())
-                for kind, cfg in (("tracker", C.TRACKER), ("intake", C.INTAKE)):
-                    typ = cfg.get("type") or "not set"
-                    target = cfg.get("board_id") or f"{cfg.get('owner') or cfg.get('repo') or '?'} {cfg.get('number') or ''}"
-                    yield Static(Text(f"{kind:<8} {typ}  {target}"))
-                    yield Static(Text("  press T to test", style="dim"), id=f"test-{kind}")
-                    if typ == "mcp":
-                        yield from self._field(f"{kind} board id", (kind, "board_id"), cfg.get("board_id"))
-                if (C.TRACKER.get("type") == "github-project" and not C.TRACKER.get("number")) and C.path() is not None:
-                    yield Button("Create project", id="create-project", compact=True)
-                yield Static(Text("code host  gh: checking…", style="dim"), id="codehost")
-            with self._panel("Stages and harnesses"):
-                names = list(harnesses.BUILTINS)
-                for stage in C.PROMPTS:
-                    st = C.STAGES.get(stage) or {}
-                    if st.get("accounts"):   # a pool: shown here, edited in config.toml; each account sets its harness
-                        with Horizontal(classes="field"):
-                            yield Label(f"{stage} accounts")
-                            yield Static(Text(", ".join(st["accounts"]) + "  (config.toml)"), id=f"pool-{stage}")
-                    else:
-                        yield from self._field(f"{stage} harness", ("stages", stage, "harness"), st.get("harness"),
-                                               options=names)
-                        yield from self._field(f"{stage} account", ("stages", stage, "account"), st.get("account"),
-                                               options=accounts)
-                    levels = _stage_levels(stage)
-                    if levels:
-                        yield from self._field(f"{stage} effort", ("stages", stage, "effort"), st.get("effort"),
-                                               options=levels, prompt="account's")
-                    yield from self._field(f"{stage} prompt", ("stages", stage, "prompt"), C.PROMPTS[stage])
-                    warn = Static("", classes="stage-warning", id=f"warn-{stage}")
-                    warn.display = False
-                    yield warn
-            with self._panel("Models and effort (blank = the harness's default)"):
-                yield from self._stage_model_rows()
-                for name, a in C.ACCOUNTS.items():
-                    hname = a.get("harness") or "claude"
-                    if hname in harnesses.MODEL_FLAGS:
-                        model = a.get("model")
-                        opts = _model_options(harnesses.models("claude") if hname == "claude" else [], model)
-                        self.models[f"set-{len(self.fields)}"] = (f"account {name}", hname)
-                        yield from self._field(f"{name} model ({hname})", ("accounts", name, "model"), model,
-                                               options=opts, prompt="default")
-                    if hname in harnesses.EFFORT_LEVELS:
-                        yield from self._field(f"{name} effort", ("accounts", name, "effort"), a.get("effort"),
-                                               options=list(harnesses.EFFORT_LEVELS[hname]), prompt="default")
-            # for one release (0.5.x): the Skills panel moved; remove in the next minor (see what's new)
-            yield Button("Skills moved to Extend → Skills", id="skills-moved", compact=True)
-            with self._panel("Chat"):
-                yield make_chat_panel()
-            with self._panel("Triggers"):
-                yield make_triggers_panel()
-            with self._panel("Loops"):
-                for name, svc in C.SERVICES.items():
-                    yield from self._field(f"{name} prompt", ("loops", name, "prompt"), svc["prompt"])
-                    yield from self._field(f"{name} account", ("loops", name, "account"), svc.get("profile"), options=accounts)
-            with self._panel("Dispatcher"):
-                for key in ("max_runs", "max_prep", "interval"):
-                    yield from self._field(key.replace("_", " "), ("dispatch", key), C.DISPATCH.get(key), kind="int")
-                yield from self._field("spec approval gate", ("gates", "spec"), "on" if C.GATES.get("spec") else "off",
-                                       kind="bool", options=["on", "off"])
-            with self._panel("Notifications"):
-                yield from self._field("attention command", ("paths", "attention_cmd"), str(C.ATTENTION or ""))
+        if self._in_lazy_pl_app():
+            yield VerticalScroll(id="settings-scroll")
+        else:
+            self._built = True
+            yield VerticalScroll(*self._build_children(), id="settings-scroll")
 
     def _accounts_text(self):
         t = Text()
@@ -281,6 +300,26 @@ class SettingsView(Widget):
         return t
 
     def on_mount(self):
+        if self._built:
+            self._start_workers()
+
+    def on_show(self):
+        self.ensure_built()
+
+    def ensure_built(self):
+        if self._built:
+            return
+        self._built = True
+        scroll = self.query_one("#settings-scroll", VerticalScroll)
+        children = list(self._build_children())
+
+        async def _mount():
+            await scroll.mount_all(children)
+            self._start_workers()
+
+        self.run_worker(_mount(), group="settings-mount")
+
+    def _start_workers(self):
         def run():   # gh off the UI thread
             try:
                 s = _gh_summary()

@@ -149,6 +149,7 @@ class ConnectorsPanel(Widget):
 
     def __init__(self):
         super().__init__()
+        self._initial_loaded = False
         self.items = []
         self.chat = {}
         self.chat_tests = {}
@@ -165,8 +166,20 @@ class ConnectorsPanel(Widget):
         self.query_one("#connectors-table", DataTable).add_columns(
             "name", "role", "teams", "access", "status", "expiry", "tier warning")
         self.query_one("#chat-table", DataTable).add_columns("name", "adapter", "allowed", "routes", "last test")
-        self.rescan()
-        self.rescan_chat()
+        if type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) not in (
+            "extend", "skills", "connectors", "pods", "agents", "models", "extensions", "settings"
+        ):
+            return
+        self.ensure_loaded()
+
+    def on_show(self):
+        self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._initial_loaded:
+            self._initial_loaded = True
+            self.rescan()
+            self.rescan_chat()
 
     def rescan_chat(self):
         def run():

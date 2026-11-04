@@ -295,7 +295,7 @@ class PrsView(Horizontal):
         shown = (text.plain, md)
         if shown == self._shown:
             return
-        md_changed = self._shown is None or self._shown[1] != md
+        md_changed = (self._shown[1] if self._shown is not None else "") != md
         self._shown = shown
         self.query_one("#prs-detail", Static).update(text)
         if md_changed:

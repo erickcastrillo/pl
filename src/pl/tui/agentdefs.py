@@ -54,6 +54,7 @@ class AgentsView(Widget):
 
     def __init__(self):
         super().__init__()
+        self._initial_loaded = False
         self.details = {}
 
     def compose(self):
@@ -65,7 +66,19 @@ class AgentsView(Widget):
 
     def on_mount(self):
         self.query_one("#agents-table", DataTable).add_columns(*COLUMNS)
-        self.run_worker(self._load, thread=True, exclusive=True)
+        if type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) not in (
+            "extend", "skills", "connectors", "pods", "agents", "models", "extensions", "settings"
+        ):
+            return
+        self.ensure_loaded()
+
+    def on_show(self):
+        self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._initial_loaded:
+            self._initial_loaded = True
+            self.run_worker(self._load, thread=True, exclusive=True)
 
     def _load(self):
         agents, err = _json(["pl", "agents", "list", "--json"])
