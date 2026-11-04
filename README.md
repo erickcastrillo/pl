@@ -276,7 +276,7 @@ Every Claude loop restarts fresh when it is idle above 80% of its context window
 
 ## Permissions
 
-Pipeline agents and loops run in each harness's unattended mode, so an agent nobody is watching does not sit idle at a permission prompt. pl never uses a yolo, bypass or skip-all-permissions mode.
+Pipeline agents and loops run in each harness's unattended mode, so an agent nobody is watching does not sit idle at a permission prompt. pl never uses a yolo, bypass or skip-all-permissions mode unless a profile opts in (below).
 
 | Agent | Mode |
 | --- | --- |
@@ -298,6 +298,15 @@ unattended = false     # one harness only
 ```
 
 A `[harnesses.<name>]` template that already sets its own permission or sandbox flag is left as it is.
+
+**Skip every permission check (Antigravity only, opt-in).** Antigravity's accept-edits mode still asks before each command, so its agents can stop and wait. To let them run every command without asking:
+
+```toml
+[harnesses.antigravity]
+skip_permissions = true     # pipeline agents and loops run agy --dangerously-skip-permissions
+```
+
+Nothing is blocked then: the agent can run any command your user can, and only its instructions keep it to the card's work. Use it on a machine or in a sandbox (`[sandbox]`) where that is acceptable. `[permissions] unattended = false` and `[harnesses.antigravity] unattended = false` still turn it off. The Assistant is never affected. Any other harness refuses the setting.
 
 An agent that still waits at a permission prompt, with no change on its screen for 2 minutes, opens an alert: "agent waiting for permission in <window>: <the tool line>". This includes Claude Code's "Allow this read outside the working directories?" prompt, where the tool line is the `Read(<path>)` it asked about. Its card shows "waiting for permission". pl never answers the prompt. The alert clears once the prompt is gone.
 

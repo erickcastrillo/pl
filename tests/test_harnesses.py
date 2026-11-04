@@ -671,6 +671,26 @@ def test_the_off_switch_works_per_profile_and_per_harness(fake_home, fake_tmux, 
         assert "--permission-mode" not in argv and "auto" not in argv, argv
 
 
+SKIP = '[harnesses.antigravity]\nskip_permissions = true\n'
+
+
+def test_antigravity_skip_permissions_replaces_accept_edits(fake_home, fake_tmux):
+    for argv in _launched(fake_home, fake_tmux, "antigravity", SKIP):
+        assert argv[1:2] == ["--dangerously-skip-permissions"] and "accept-edits" not in argv, argv
+    h = harnesses.unattended_headless(harnesses.get("antigravity"))
+    assert h.headless[1:2] == ["--dangerously-skip-permissions"] and harnesses.still_asks("antigravity") is None
+
+
+def test_the_off_switch_beats_skip_permissions(fake_home, fake_tmux):
+    for argv in _launched(fake_home, fake_tmux, "antigravity", SKIP + "[permissions]\nunattended = false\n"):
+        assert "--dangerously-skip-permissions" not in argv, argv
+
+
+def test_skip_permissions_on_a_harness_without_the_flag_is_refused(fake_home, fake_tmux):
+    with pytest.raises(SystemExit, match="skip_permissions"):
+        _launched(fake_home, fake_tmux, "claude", "[harnesses.claude]\nskip_permissions = true\n")
+
+
 def test_turning_one_harness_off_leaves_the_others_on(fake_home, fake_tmux):
     argv = _launched(fake_home, fake_tmux, "codex", "[harnesses.claude]\nunattended = false\n")
     assert all("never" in a for a in argv)

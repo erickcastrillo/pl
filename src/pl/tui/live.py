@@ -126,7 +126,7 @@ class LiveScreen(ModalScreen):
         close(self)
 
     def action_page_up(self):
-        self.query_one("#live-scroll", VerticalScroll).scroll_page_up()
+        self.query_one("#live-scroll", VerticalScroll).scroll_page_up(animate=False)   # mid-animation, the follow check misreads the position
 
     def action_page_down(self):
-        self.query_one("#live-scroll", VerticalScroll).scroll_page_down()
+        self.query_one("#live-scroll", VerticalScroll).scroll_page_down(animate=False)

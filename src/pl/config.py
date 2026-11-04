@@ -407,6 +407,8 @@ def validate(doc) -> list[str]:
         ev = h.get("env_var")
         if ev is not None and not (isinstance(ev, str) and harnesses.ENV_RE.fullmatch(ev)):
             errs.append(f"harnesses.{name} env_var {ev!r} is not a variable name")
+        if err := harnesses.skip_permissions_error(name, h):
+            errs.append(f"harnesses.{name} {err}")
     known = [*harnesses.BUILTINS, *(n for n, h in hs.items() if {"bin", "interactive", "headless"} <= h.keys())]
     accounts = doc.get("accounts", {})
     for name, a in accounts.items():

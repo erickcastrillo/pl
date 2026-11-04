@@ -1,0 +1,3 @@
+title = "Antigravity agents can run commands without asking (opt-in)"
+where = "config.toml [harnesses.antigravity] skip_permissions; README: Permissions"
+try = "set skip_permissions = true under [harnesses.antigravity], then let a card's agent run a test command"
