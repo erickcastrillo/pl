@@ -70,6 +70,15 @@ def test_new_card_gets_branch_from_default(monkeypatch):
     assert git.adds() == [["worktree", "add", "-b", f"pl/{_slug()}", str(_dest()), "origin/HEAD"]]
 
 
+def test_folder_of_repos_starts_in_work_dir_without_git(monkeypatch):
+    # a work dir that is not a repo but holds repos: the run skill makes its own worktrees
+    (Path(C.WORK_DIR) / "api" / ".git").mkdir(parents=True)
+    git = FakeGit()
+    monkeypatch.setattr(worktrees, "_run", git)
+    assert REAL_FOR_RUN(CARD) == (Path(C.WORK_DIR), None)
+    assert git.calls == []
+
+
 def test_existing_worktree_is_reused(monkeypatch):
     listing = f"worktree /elsewhere/old\nHEAD abc\nbranch refs/heads/pl/{_slug()}\n\n"
     git = FakeGit(listing=listing)
