@@ -25,7 +25,7 @@ from pl import config as C
 from pl.trackers.github import RateLimited
 from pl.tui import palette, parity
 from pl.tui.alerts import AlertsView
-from pl.tui.assistant import AssistantView
+from pl.tui.assistant import AssistantInput, AssistantView
 from pl.tui.cards import CardsView, card_count
 from pl.tui.connectors import ConnectorsPanel
 from pl.tui.extend import ExtendView
@@ -909,7 +909,7 @@ class PlApp(App):
             self.query_one(PrsView).selected()
         if self.active_tab == "assistant":
             self.query_one(AssistantView).opened()
-            self.call_after_refresh(self.query_one(AssistantView).focus_box)
+            self.call_after_refresh(self._focus_assistant_box, self.query_one(AssistantView))
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
         self._ensure_active_loaded()
@@ -933,7 +933,14 @@ class PlApp(App):
         instead of reaching the Assistant's box: on the Assistant tab the box takes the focus back."""
         if isinstance(event.widget, Tabs) and self.active_tab == "assistant" and len(self.screen_stack) == 1:
             view = self.query_one(AssistantView)
-            self.call_after_refresh(view.focus_box)
+            self.call_after_refresh(self._focus_assistant_box, view)
+
+    def _focus_assistant_box(self, view):
+        """Focus the box only while the Assistant tab is still active: focusing it after a switch away moves the tabs
+        back to the Assistant."""
+        box = view.query_one(AssistantInput)
+        if self.active_tab == "assistant" and len(self.screen_stack) == 1 and not box.disabled:
+            self.screen.set_focus(box)   # now: Widget.focus() runs later, possibly after a switch away
 
     def check_action(self, action, parameters):   # APP_TABS repeats the tab each gated action below needs
         if action == "tab":

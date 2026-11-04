@@ -31,6 +31,7 @@ class Harness:
     note: str = ""
     resume: list = field(default_factory=list)   # relaunch a session by id in place (pl move-agent); empty = cannot
     unattended: bool = True                      # [harnesses.<name>] unattended = false: pipeline agents ask first
+    skip_permissions: bool = False               # [harnesses.<name>] skip_permissions = true: SKIP_PERMISSIONS, opt-in
     permission_patterns: list | None = None      # its permission prompt on screen; None = PERMISSION_PATTERNS[name]
 
 
@@ -76,13 +77,16 @@ def login_argv(h):
 # The flags that let a pipeline agent or loop work without stopping for permission; never the Assistant. From each
 # CLI's --help: claude 2.1.286 (auto: a safety classifier approves routine actions and blocks risky ones), codex 0.150.1
 # (never ask, writes only inside the workspace), agy and gemini 0.32.1 (edits only: their one mode that never asks
-# skips every check, so pl keeps asking for commands, see STILL_ASKS). pl never uses a yolo, bypass or skip mode.
+# skips every check, so pl keeps asking for commands, see STILL_ASKS). pl never uses a yolo, bypass or skip mode
+# unless the profile opts in with [harnesses.<name>] skip_permissions = true (SKIP_PERMISSIONS).
 UNATTENDED = {"claude": ["--permission-mode", "auto"],
               "codex": ["--ask-for-approval", "never", "--sandbox", "workspace-write"],
               "antigravity": ["--mode", "accept-edits"],
               "gemini": ["--approval-mode", "auto_edit"]}
 # The harness's own read-only mode, for a loop with writes = false. A harness missing here cannot run one.
 READ_ONLY = {"claude": ["--permission-mode", "plan"], "codex": ["--sandbox", "read-only"]}
+# The harness's mode that approves everything, used only when [harnesses.<name>] skip_permissions = true.
+SKIP_PERMISSIONS = {"antigravity": ["--dangerously-skip-permissions"]}
 STILL_ASKS = {"antigravity": "allow the commands in agy's own settings",
               "gemini": "allow the commands with a gemini policy file (--policy)"}
 # A permission prompt on screen (strings of each CLI's binary at the versions above; claude's read-outside prompt from
@@ -242,10 +246,18 @@ def _with_model(template, h, account, stage, worktrees=None, small=False, model=
     return [*template[:1], *add, *template[1:]], {"model": model, "effort": effort, "worktrees_dir": worktrees}
 
 
+def _unattended_flags(h):
+    """The flags a pipeline agent or loop of h runs with: SKIP_PERMISSIONS when the profile opts in, else UNATTENDED.
+    None when [permissions] unattended = false or [harnesses.<name>] unattended = false."""
+    if not h.unattended or C.PERMISSIONS.get("unattended", True) is False:
+        return None
+    return SKIP_PERMISSIONS[h.name] if h.skip_permissions else UNATTENDED.get(h.name)
+
+
 def unattended(h):
     """h with its unattended flags after the program name, for a pipeline agent or loop. h itself when [permissions]
     unattended = false, [harnesses.<name>] unattended = false, it has none, or its template sets a permission flag."""
-    flags = UNATTENDED.get(h.name) if h.unattended and C.PERMISSIONS.get("unattended", True) is not False else None
+    flags = _unattended_flags(h)
     if not flags or any(PERMISSION_FLAG_RE.search(t) for t in (*h.interactive, *h.resume)):
         return h
     return dataclasses.replace(h, interactive=[*h.interactive[:1], *flags, *h.interactive[1:]],
@@ -261,7 +273,7 @@ def refuse_bypass(h):
 
 def still_asks(name):
     """A warning when this harness's agents may still wait at a permission prompt, else None."""
-    if name not in STILL_ASKS:
+    if name not in STILL_ASKS or _overrides().get(name, {}).get("skip_permissions"):
         return None
     return (f"{name} agents may wait at a permission prompt for commands: its only mode that never asks skips every "
             f"check, and pl never uses it. To let them run, {STILL_ASKS[name]}.")
@@ -277,6 +289,16 @@ def permission_patterns(h):
 
 ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CACHE = {}   # config path -> validated [harnesses] table, parsed once per process
+
+
+def skip_permissions_error(name, ov):
+    """Why [harnesses.<name>] skip_permissions is wrong, else None."""
+    v = ov.get("skip_permissions", False)
+    if not isinstance(v, bool):
+        return "skip_permissions must be true or false"
+    if v and name not in SKIP_PERMISSIONS:
+        return f"skip_permissions works only for {', '.join(SKIP_PERMISSIONS)}"
+    return None
 
 
 def _overrides():
@@ -295,6 +317,8 @@ def _overrides():
                 raise SystemExit(f"pl: [harnesses.{name}] env_var {ev!r} is not a variable name ({p})")
             if not isinstance(ov.get("unattended", True), bool):
                 raise SystemExit(f"pl: [harnesses.{name}] unattended must be true or false ({p})")
+            if err := skip_permissions_error(name, ov):
+                raise SystemExit(f"pl: [harnesses.{name}] {err} ({p})")
             for k in ("interactive", "headless", "resume", "limit_patterns", "permission_patterns"):
                 if k in ov and not (isinstance(ov[k], list) and all(isinstance(x, str) for x in ov[k])):
                     raise SystemExit(f"pl: [harnesses.{name}] {k} must be a list of strings ({p})")
@@ -631,7 +655,7 @@ def headless_script(h, account, prompt, name, log_path, record_path, writes=True
 
 def unattended_headless(h):
     """h with its unattended flags after the program name in its headless argv, unless it already sets a permission flag."""
-    flags = UNATTENDED.get(h.name) if h.unattended and C.PERMISSIONS.get("unattended", True) is not False else None
+    flags = _unattended_flags(h)
     if not flags or any(PERMISSION_FLAG_RE.search(t) for t in h.headless):
         return h
     return dataclasses.replace(h, headless=[*h.headless[:1], *flags, *h.headless[1:]])

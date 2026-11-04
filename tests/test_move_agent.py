@@ -145,6 +145,7 @@ def _events():
 def test_move_stops_copies_and_resumes_under_the_target(fake_home, pane, monkeypatch):
     _transcript(fake_home)
     c = _card()
+    started = c["metadata"]["worker"]["started_at"]
     _updates(monkeypatch, c)
     ok, msg, _ = move_agent.move(c, "acme2", "usage limit")
     assert ok, msg
@@ -158,7 +159,7 @@ def test_move_stops_copies_and_resumes_under_the_target(fake_home, pane, monkeyp
     sw = c["metadata"]["profile_switches"][-1]
     assert (sw["from"], sw["to"], sw["reason"], sw["stage"]) == ("acme", "acme2", "usage limit", "run")
     assert w["resume"]["at"] > time.time() - 5 and w["resume"].get("skip") is None
-    assert w["started_at"] == _card()["metadata"]["worker"]["started_at"] and w["moved_at"]   # the card's own start time
+    assert w["started_at"] == started and w["moved_at"]   # the card's own start time
     ev = [e for e in _events() if e["kind"] == "agent_moved"]
     assert len(ev) == 1 and ev[0]["card"] == "card0001aaaa" and ev[0]["to"] == "acme2"
 
