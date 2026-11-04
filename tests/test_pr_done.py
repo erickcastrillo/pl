@@ -89,6 +89,12 @@ def test_done_retry_with_the_same_note_adds_no_second_section():
     assert fresh(c)["description"].count("## Closed") == 1
 
 
+def test_done_note_that_appears_in_the_description_is_still_written():
+    c = make()
+    commands.done(c["id"], [c], note="body")
+    assert fresh(c)["description"].endswith("\n## Closed " + fresh(c)["metadata"]["done_at"][:10] + "\nbody\n")
+
+
 def test_done_reason_is_saved_only_when_given():
     a, b = make(), make()
     commands.done(a["id"], [a], reason="all PRs merged")
