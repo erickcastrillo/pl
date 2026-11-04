@@ -569,14 +569,20 @@ def start_worker(c, stage, attempts, dry):
     folder = C.WORK_DIR
     if stage == "run" and not generic and C.WORK_DIR and not dry:
         folder, err = worktrees.for_run(c)
+        failed = (c.get("metadata") or {}).get("worktree_failed")
         if err:
-            events.emit("error", c["id"], stage="run", message=f"worktree: {err}")
+            text = f"{worktrees.planned_path(c)}: {err}"
+            if text != failed:
+                update(c["id"], metadata={"worktree_failed": text})
+                events.emit("error", c["id"], stage="run", message=f"worktree: {text}")
             if why := alerts.open(f"worktree:{c['id']}", "high", f"Could not make the worktree for {short_id(c['id'])}",
-                                  f"{err}; fix it and the next pass retries"):
-                notify(alerts.headline(why, f"Worktree failed for {short_id(c['id'])}"), err)
+                                  f"{text}; fix it and the next pass retries"):
+                notify(alerts.headline(why, f"Worktree failed for {short_id(c['id'])}"), text)
             print(f"  {name}: no worktree ({err}); nothing started")
             return
         alerts.resolve(f"worktree:{c['id']}")
+        if failed:
+            update(c["id"], metadata={"worktree_failed": None})
         if builtin:
             prompt += f" worktree={shlex.quote(str(folder))}"
     if builtin:

@@ -178,11 +178,20 @@ def run_waiting(w, reg, st=None):
 WAIT_WIDTH = 48   # characters of a "waiting for you" reason: the state column sizes itself to its text
 
 
+WORKTREE_FAILED = "worktree failed: needs a person"
+
+
+def worktree_failed(c):
+    return bool((c.get("metadata") or {}).get("worktree_failed")) and col_name(c["list_id"]) in ("Approved", "In progress")
+
+
 def person_wait(c, status):
     """"waiting for you: <what>" when the card's agent waits on a person, else None. Read from card metadata only
     (no tmux call): an open question, then a trust prompt, a permission prompt, a run agent at a GATE."""
     m = c.get("metadata") or {}
     w = m.get("worker") or {}
+    if worktree_failed(c):
+        return WORKTREE_FAILED
     if m.get("question"):
         asked = [ln[3:] for ln in sections(c.get("description")).get("QUESTIONS", "").splitlines() if ln.startswith("Q: ")]
         reason = asked[-1] if asked else "open question"
@@ -317,6 +326,8 @@ def worker_view(c, reg):
         return "ready for your review"
     if col_name(c["list_id"]) == "Manual":
         return "manual: yours to do"
+    if worktree_failed(c):
+        return WORKTREE_FAILED
     if not w:
         rw = m.get("rework") or {}
         return "waiting: merge-only rework" if rw.get("active") and rw.get("merge_only") else "waiting"

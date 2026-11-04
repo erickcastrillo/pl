@@ -172,11 +172,25 @@ def _set_aside(path: Path, card_id: str) -> str | None:
     return None
 
 
+def planned_path(c) -> Path:
+    work = Path(C.WORK_DIR)
+    return Path(C.WORKTREES_DIR or work.parent) / f"{work.name}-pl-{slug_of(c)}"
+
+
 def for_run(c) -> tuple[Path | None, str | None]:
     """(worktree, None) for card c's run agent, reusing its branch or worktree; (None, git's last line) when git fails.
     Only fetch and worktree add touch the repository, never the main checkout's files."""
     work, slug = Path(C.WORK_DIR), slug_of(c)
     branch = f"pl/{slug}"
+
+    def git(*args):
+        try:
+            return _run(["git", *args], capture_output=True, text=True, cwd=str(work), timeout=GIT_TIMEOUT,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        except subprocess.TimeoutExpired:   # the dispatcher's pass must not wait on a slow remote or a prompt
+            return subprocess.CompletedProcess(args, 124, "", f"git {args[0]} timed out after {GIT_TIMEOUT}s")
+
+    git("worktree", "prune")   # a registration whose folder is gone would block worktree add; a real problem shows there
     if found := _worktree_on(work, branch):
         return found, None
     rework = (c.get("metadata") or {}).get("rework") or {}
@@ -186,19 +200,16 @@ def for_run(c) -> tuple[Path | None, str | None]:
             branch = head
             if found := _worktree_on(work, branch):
                 return found, None
-    root = Path(C.WORKTREES_DIR or work.parent)
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = root / f"{work.name}-pl-{slug}"
+    path = planned_path(c)
+    if not rework.get("active"):
+        own = re.compile(re.escape(branch) + r"-s\d+")
+        if any(w["path"] == path and own.fullmatch(w.get("branch") or "") for w in _list_worktrees(work)):
+            return path, None
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.exists() or path.is_symlink():
         if err := _set_aside(path, c["id"]):
             return None, err
-
-    def git(*args):
-        try:
-            return _run(["git", *args], capture_output=True, text=True, cwd=str(work), timeout=GIT_TIMEOUT,
-                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-        except subprocess.TimeoutExpired:   # the dispatcher's pass must not wait on a slow remote or a prompt
-            return subprocess.CompletedProcess(args, 124, "", f"git {args[0]} timed out after {GIT_TIMEOUT}s")
+        git("worktree", "prune")   # the renamed folder is still registered as holding its branch
 
     steps = [git("fetch", "origin")]
     if not steps[0].returncode:
