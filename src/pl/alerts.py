@@ -284,6 +284,7 @@ WATCHES = {
     "main_checkout_dirty": "stray changes in the main checkout",
     "near_cap": "cards near their token or time cap",
     "permission_wait": "waiting agents",
+    "pr_closed": "PRs closed without merging",
     "pr_person": "PRs that need a person",
     "pr_waiting": "PRs waiting over 24 h",
     "send_spike": "connector send spikes",
