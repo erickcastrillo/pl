@@ -834,6 +834,7 @@ class PlApp(App):
         self.query_one("#tabs", TabbedContent).active = f"g-{gid}"
         if view:
             self.query_one(f"#{gid}-views", TabbedContent).active = view
+        self._ensure_active_loaded()
         pane = self.query_one(f"#{self.active_tab}", TabPane)
         target = next((w for w in pane.query("*") if w.focusable), None)
         if target is not None:
@@ -848,10 +849,14 @@ class PlApp(App):
         self.action_tab(self.sub_keys[self.active_group()][letter])
 
     def active_group(self):
-        return self.query_one("#tabs", TabbedContent).active.removeprefix("g-")
+        try:
+            return self.query_one("#tabs", TabbedContent).active.removeprefix("g-")
+        except (NoMatches, ScreenStackError):
+            return None
 
     def active_group_views(self):
-        return next((views for gid, _, views in groups() if gid == self.active_group()), [])
+        grp = self.active_group()
+        return next((views for gid, _, views in groups() if gid == grp), [])
 
     def on_tabbed_content_tab_activated(self, event):
         tc = event.tabbed_content
@@ -870,6 +875,21 @@ class PlApp(App):
             self.call_after_refresh(self.query_one(AssistantView).focus_box)
         if self.active_tab == "cards":
             self.query_one(CardsView).opened()
+        self._ensure_active_loaded()
+
+    def _ensure_active_loaded(self):
+        tab = self.active_tab
+        if tab == "settings":
+            for v in self.query(SettingsView):
+                v.ensure_built()
+        elif tab in ("extend", "skills", "connectors", "pods", "agents", "models", "extensions") or self.active_group() == "extend":
+            try:
+                extend_pane = self.query_one("#g-extend")
+            except (NoMatches, ScreenStackError):
+                return
+            for w in extend_pane.walk_children():
+                if hasattr(w, "ensure_loaded"):
+                    w.ensure_loaded()
 
     def on_descendant_focus(self, event):
         """A click on a tab leaves the focus on the tab bar, where typed letters run console commands (D, s, q, r ...)

@@ -57,6 +57,7 @@ class CommandPanel(Widget):
 
     def __init__(self, list_argv, columns, actions=None, id=None, classes=None, new=None):
         super().__init__(id=id, classes=classes)
+        self._initial_loaded = False
         self.list_argv = list(list_argv)
         self.columns = tuple(columns)
         self.actions = actions or {}
@@ -76,7 +77,19 @@ class CommandPanel(Widget):
     def on_mount(self):
         table = self.query_one("#panel-table", DataTable)
         table.add_columns(*self.columns)
-        self.refresh_items()
+        if type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) not in (
+            "extend", "skills", "connectors", "pods", "agents", "models", "extensions", "settings"
+        ):
+            return
+        self.ensure_loaded()
+
+    def on_show(self):
+        self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._initial_loaded:
+            self._initial_loaded = True
+            self.refresh_items()
 
     def refresh_items(self):
         def run():
