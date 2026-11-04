@@ -1,6 +1,7 @@
 """WP22: the console and the dispatcher stay inside GitHub's rate limit.
 
-A fake `gh` (and `tmux`) come first on PATH and log every argv; HOME and the profile live under tmp_path.
+A fake `gh` (and `tmux`) come first on PATH and log every argv; they answer in-process (tests/inproc.py). HOME and the
+profile live under tmp_path.
 Nothing here calls the real gh, the network or tmux.
 """
 import argparse
@@ -15,6 +16,7 @@ from pl import board, dispatch, events, trackers, watch
 from pl.trackers import github
 from pl.tui import app as tui_app
 from pl.tui.app import PlApp
+from inproc import cached_build_ids, install, script
 from tui_wait import settle, wait_until
 
 FAKE_GH = r'''#!{python}
@@ -205,10 +207,13 @@ def gh(tmp_path, monkeypatch):
     saved = {k: v for k, v in vars(C).items() if k.isupper()}
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "gh").write_text(FAKE_GH.format(python=sys.executable, cols=json.dumps(C.COLUMNS)))
+    fake_gh = FAKE_GH.format(python=sys.executable, cols=json.dumps(C.COLUMNS))
+    (bin_dir / "gh").write_text(fake_gh)
     (bin_dir / "tmux").write_text("#!/bin/sh\nexit 1\n")
     for f in bin_dir.iterdir():
         f.chmod(0o755)
+    install(monkeypatch, {bin_dir / "gh": script(fake_gh), bin_dir / "tmux": lambda args, env: (1, "", "")})   # no process per call
+    cached_build_ids(monkeypatch)   # a dispatcher nap reads the installed build every slice; hash the package once
     home = tmp_path / "home"
     home.mkdir()
     prof = tmp_path / "prof"
