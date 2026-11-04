@@ -95,17 +95,18 @@ def test_no_setup_or_empty_string_runs_no_subprocess(repo, wt, monkeypatch):
         assert _bootstrap(repo, wt) == ([], [])
 
 
-def test_setup_timeout_terminates_process_group(repo, wt):
+def test_setup_timeout_terminates_process_group(repo, wt, monkeypatch):
+    monkeypatch.setattr(worktrees, "parse_timeout", lambda _: 0.2)
     _manifest(repo, 'setup: "sleep 60 & echo $! > child.pid; wait"\ntimeout: 1\n')
     _, failures = _bootstrap(repo, wt)
-    assert failures[0]["reason"] == "Bootstrap setup timed out after 1s"
+    assert failures[0]["reason"] == "Bootstrap setup timed out after 0.2s"
     pid = int((wt / "child.pid").read_text())
     for _ in range(50):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             break
-        time.sleep(0.1)
+        time.sleep(0.02)
     else:
         os.kill(pid, 9)
         pytest.fail("the child of the setup command survived the timeout")
@@ -167,11 +168,12 @@ def test_setup_failure_appends_note_to_card_with_exit_code_and_tail(repo, wt, tm
 
 
 def test_setup_timeout_appends_note_to_card_with_timeout_limit_and_tail(repo, wt, tmp_path, monkeypatch, board):
+    monkeypatch.setattr(worktrees, "parse_timeout", lambda _: 0.2)
     _manifest(repo, 'setup: "echo slow; sleep 30"\ntimeout: 1\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
     fields = board.updates[-1][1]
-    assert "Bootstrap setup timed out after 1s:\nslow" in fields["description"]
-    assert fields["metadata"]["bootstrap_error"]["reason"] == "Bootstrap setup timed out after 1s"
+    assert "Bootstrap setup timed out after 0.2s:\nslow" in fields["description"]
+    assert fields["metadata"]["bootstrap_error"]["reason"] == "Bootstrap setup timed out after 0.2s"
 
 
 def test_a_successful_setup_with_card_leaves_the_card_alone(repo, wt, tmp_path, monkeypatch, board):

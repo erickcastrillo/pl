@@ -391,7 +391,7 @@ class SkillsView(Widget):
                         yield Button(key, id=f"skills-btn-{key}", compact=True)
                 yield Static("", id="skills-reasons")
                 yield Static("", id="skills-meta")
-                yield Markdown("", id="skills-preview")
+                yield Markdown(id="skills-preview")
 
     def on_mount(self):
         self.query_one(DataTable).add_columns("name", "kind", "origin", "update", "used by", "linked", "description")

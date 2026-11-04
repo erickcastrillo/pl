@@ -325,7 +325,7 @@ class ReviewScreen(Screen):
         yield Static(Text(f"{self.kind.upper()} REVIEW · loading {short_id(self.card_id)}"), id="review-title")
         with Horizontal():
             with VerticalScroll(id="review-doc"):
-                yield Markdown("", open_links=False, id="review-md")
+                yield Markdown(open_links=False, id="review-md")
             ed = TextArea(id="review-editor")
             ed.border_title = "edit the spec · ctrl+s save · esc cancel"
             ed.display = False

@@ -99,7 +99,7 @@ def test_an_error_is_silent_and_still_counts_as_the_day_s_check(git):
 
 
 def test_a_timeout_is_silent_and_start_up_does_not_wait(git, monkeypatch):
-    monkeypatch.setattr(update, "TIMEOUT", 0.5)
+    monkeypatch.setattr(update, "TIMEOUT", 0.05)
     git.sleep()
     git.tags("v0.3.0")
     t0 = time.monotonic()

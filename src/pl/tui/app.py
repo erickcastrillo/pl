@@ -446,7 +446,7 @@ class PlApp(App):
             if len(views) < 2:
                 continue
             taken = set(self._bindings.key_to_bindings) | set(self.screen._bindings.key_to_bindings)
-            for w in self.query(f"#g-{gid} *"):
+            for w in self.query_one(f"#g-{gid}").walk_children():
                 taken |= set(w._bindings.key_to_bindings)
             firsts = [name[0].lower() for _, name in views]
             letters = {f: vid for f, (vid, _) in zip(firsts, views) if firsts.count(f) == 1 and f not in taken}
