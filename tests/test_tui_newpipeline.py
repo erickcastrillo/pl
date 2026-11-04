@@ -342,8 +342,24 @@ async def pick_board(pilot, index):
     def form_ready():
         if screen.query_one("#np-gh").display != (index == 1) or screen.query_one("#np-mcp").display != (index == 2):
             return False
-        return index != 1 or screen.query_one("#np-gh-note", Static).render().plain or screen.query_one("#np-projects", RadioSet).query(RadioButton)
+        if index != 1 or screen.query_one("#np-gh-note", Static).render().plain:
+            return True
+        # the projects are added with RadioSet.mount(), which finishes later: a value set on a button that is not
+        # mounted yet never reaches the RadioSet, so Next would stay disabled
+        buttons = list(screen.query_one("#np-projects", RadioSet).query(RadioButton))
+        return bool(buttons) and all(b.is_mounted for b in buttons)
     await wait_until(pilot, form_ready, "the board form")
+
+
+async def pick_project(pilot, index):
+    """Choose a GitHub project the way a person does, with a click once its button is laid out. Setting the button's
+    value from the test raced the RadioSet under a parallel run and left Next disabled (about 1 run in 10)."""
+    screen = pilot.app.screen
+    radios = screen.query_one("#np-projects", RadioSet)
+    await wait_until(pilot, lambda: len(list(radios.query(RadioButton))) > index
+                     and list(radios.query(RadioButton))[index].region.width > 0, "the project buttons laid out")
+    await pilot.click(list(radios.query(RadioButton))[index])
+    await wait_until(pilot, lambda: radios.pressed_index == index, f"project {index} to be chosen")
 
 
 async def test_step_3_offers_three_boards_local_selected():
@@ -366,7 +382,7 @@ async def test_github_project_lists_projects_from_a_fake_gh_and_prefills_repo(mo
         assert projects == ["acme #7 Sales", "me #2 Ops"]
         assert screen.query_one("#np-repo", Input).value == "acme/web"
         assert screen.query_one("#np-next", Button).disabled
-        list(screen.query_one("#np-projects", RadioSet).query(RadioButton))[0].value = True
+        await pick_project(pilot, 0)
         await wait_until(pilot, lambda: not screen.query_one("#np-next", Button).disabled, "Next to be enabled")
         screen.query_one("#np-repo", Input).value = "not a repo"
         await wait_until(pilot, lambda: screen.query_one("#np-next", Button).disabled, "Next to be disabled")
@@ -495,7 +511,7 @@ async def pick_github_7(pilot, monkeypatch):
     monkeypatch.setattr(newpipeline, "check_board", lambda tracker, columns: None)
     screen = await to_step_3(pilot)
     await pick_board(pilot, 1)
-    list(screen.query_one("#np-projects", RadioSet).query(RadioButton))[0].value = True
+    await pick_project(pilot, 0)
     await wait_until(pilot, lambda: not screen.query_one("#np-next", Button).disabled, "Next to be enabled")
     await next_step(pilot)
     await wait_until(pilot, lambda: "Step 4 of 5" in text(pilot.app), "the board check to finish")

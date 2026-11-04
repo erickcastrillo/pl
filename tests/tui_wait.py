@@ -9,8 +9,15 @@ from textual.css.query import NoMatches
 PAUSE = re.compile(r"pilot\.pause\(")
 
 
-async def wait_until(pilot, condition, what, timeout=5.0):
+async def wait_until(pilot, condition, what, timeout=15.0):
+    """Returns as soon as condition() holds, so the limit costs a passing test nothing. 15 s, not 5: under a parallel
+    run on a busy machine a console test runs about 3 times slower, and 5 s failed healthy tests.
+
+    The first re-check only drains the message queue; later ones also give the app 10 ms. Textual lays the screen out
+    when the app is idle, and a loop of zero-length pauses never lets it go idle, so a condition about layout (a
+    region, a size) could stay false until the time limit."""
     deadline = time.monotonic() + timeout
+    delay = 0
     while time.monotonic() < deadline:
         try:
             if condition():
@@ -18,7 +25,8 @@ async def wait_until(pilot, condition, what, timeout=5.0):
         except NoMatches:
             pass
         await pilot.app.workers.wait_for_complete()
-        await pilot.pause(0)   # no delay: only drains the message queue between checks
+        await pilot.pause(delay)
+        delay = 0.01
     pytest.fail(f"timed out after {timeout}s waiting for {what}")
 
 
