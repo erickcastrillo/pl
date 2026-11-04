@@ -84,8 +84,9 @@ class LiveScreen(ModalScreen):
     LiveScreen > Vertical { width: 90%; height: 90%; border: round $accent; background: $surface; padding: 0 1; }
     #live-scroll { height: 1fr; }
     """
-    BINDINGS = [Binding("escape", "close", "back"), Binding("pageup", "page_up", "page up"),
-                Binding("pagedown", "page_down", "page down")]
+    # priority: the focused VerticalScroll binds pageup/pagedown itself, with an animated scroll
+    BINDINGS = [Binding("escape", "close", "back"), Binding("pageup", "page_up", "page up", priority=True),
+                Binding("pagedown", "page_down", "page down", priority=True)]
 
     def __init__(self, pane, title):
         super().__init__()

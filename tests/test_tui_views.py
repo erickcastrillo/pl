@@ -2109,7 +2109,8 @@ async def test_a_slow_read_says_still_reading_and_lets_a_new_read_start(monkeypa
             view._read_started -= 10                         # this read has run for 10 s
             view._poll()
             await pilot.pause(0.2)   # same: the second read is held too
-            assert "still reading" in str(app.query_one("#assistant-status").render()) and len(calls) == 2
+            # >= 2: the view's own 1 s poll may start one more read once the first is past SLOW
+            assert "still reading" in str(app.query_one("#assistant-status").render()) and len(calls) >= 2
         finally:
             gate.set()
         await settle(pilot)
