@@ -1,0 +1,4 @@
+id = "2026-10-25.55"
+title = "Remove on the Skills screen says which stages, loops and pods use the skill"
+where = "Settings tab, Skills section: d on any skill, GitHub installs too"
+try = "pl skills remove NAME"

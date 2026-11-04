@@ -127,6 +127,8 @@ def listing():
 
 def cmd_inbox(a):
     """pl inbox [--json]: list waiting gates across profiles."""
+    if getattr(a, "fresh", False):
+        board.fresh_next()
     items = listing()
     if getattr(a, "json", False):
         print(mask(json.dumps({"items": items})))

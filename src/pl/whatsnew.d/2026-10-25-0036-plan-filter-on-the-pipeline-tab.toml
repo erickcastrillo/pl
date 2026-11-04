@@ -1,0 +1,4 @@
+id = "2026-10-25.36"
+title = "Plan filter on the Pipeline tab"
+where = "Pipeline tab: L, then a plan number; L clears"
+try = "pl list --plan 21"

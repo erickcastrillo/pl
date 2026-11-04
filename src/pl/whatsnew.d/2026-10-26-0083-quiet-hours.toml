@@ -1,0 +1,4 @@
+id = "2026-10-26.83"
+title = "Quiet hours hold notifications overnight and send one summary after"
+where = "[notify] quiet = \"22:00-07:00\" in the profile config; high alerts still go out"
+try = "pl doctor"

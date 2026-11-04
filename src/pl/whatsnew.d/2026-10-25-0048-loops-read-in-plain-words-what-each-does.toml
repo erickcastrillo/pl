@@ -1,0 +1,4 @@
+id = "2026-10-25.48"
+title = "Loops read in plain words: what each does, when it runs, how its last run went"
+where = "Loops tab: does, schedule, last result; Enter opens the log"
+try = "pl loops list"

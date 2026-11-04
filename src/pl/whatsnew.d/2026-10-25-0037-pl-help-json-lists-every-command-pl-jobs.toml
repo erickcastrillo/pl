@@ -1,0 +1,4 @@
+id = "2026-10-25.37"
+title = "pl help --json lists every command; pl jobs shows the long jobs running"
+where = "pl help --json; pl jobs (pl rework and pl dispatch --once report progress)"
+try = "pl help --json"

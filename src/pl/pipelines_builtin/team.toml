@@ -1,0 +1,21 @@
+[pipeline]
+name = "team"
+template = "team"
+columns = ["Hiring", "Hiring review", "Onboarding", "Onboarding review", "Done"]
+
+[pipeline.stages.hiring]
+column = "Hiring"
+done = "Hiring review"
+next = "Onboarding"
+skill = "pl-stage"
+section = "HIRING"
+gate = "owner"
+instructions = "Read the role on the card. Write the job description, the screening questions and the interview plan."
+
+[pipeline.stages.onboarding]
+column = "Onboarding"
+done = "Onboarding review"
+skill = "pl-stage"
+section = "ONBOARDING"
+gate = "owner"
+instructions = "Write the onboarding plan for the new person: accounts to create, people to meet, and the first two weeks."

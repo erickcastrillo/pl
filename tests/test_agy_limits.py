@@ -240,7 +240,6 @@ def test_a_claude_run_agent_still_reads_its_window_activity(monkeypatch):
 def test_an_idle_agy_run_agent_frees_its_run_slot_for_the_next_card(monkeypatch, capsys):
     from pl import agents
     from pl.util import load_state, save_state
-    C.DISPATCH = {**C.DISPATCH, "release_waiting_after": 0}           # waits but is never stopped
     _run_screen(monkeypatch, AGY_IDLE)
     idle, new = _card(1, worker=_run_worker()), _card(2, col="Approved")
     started = _pass(monkeypatch, [idle, new], set(), [], [], st_screen=None, waiting=agents.run_waiting)
@@ -274,7 +273,6 @@ def test_an_agy_run_window_closes_once_its_card_is_past_pr_open_and_its_screen_s
 @pytest.mark.parametrize("col", ["In progress", "Approved"])
 def test_an_agy_run_window_of_a_card_still_being_built_is_never_closed(monkeypatch, col):
     from pl.util import load_state, save_state
-    C.DISPATCH = {**C.DISPATCH, "release_waiting_after": 0}
     c = _card(13, col=col, worker=_run_worker())
     kills = []
     _run_screen(monkeypatch, AGY_IDLE)

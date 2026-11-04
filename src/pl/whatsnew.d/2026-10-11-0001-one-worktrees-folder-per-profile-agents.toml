@@ -1,0 +1,4 @@
+id = "2026-10-11.01"
+title = "One worktrees folder per profile: agents read and write their worktrees without asking"
+where = "Settings, General: worktrees dir; [paths] worktrees_dir (default <work_dir>-pl-worktrees); {worktrees_dir} in a stage prompt"
+try = "pl"

@@ -1,0 +1,4 @@
+id = "2026-09-30.13"
+title = "Pipeline agents and loops run in auto mode"
+where = "an agent stuck at a permission prompt opens an alert; README: Permissions"
+try = "pl alerts"

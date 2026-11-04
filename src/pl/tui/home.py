@@ -6,10 +6,15 @@ from pathlib import Path
 from rich.text import Text
 from textual.binding import Binding
 from textual.widget import Widget
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from pl import config as C
-from pl import util
+from pl import pipeline, util
+from pl.tui import getstarted
+from pl.tui.chrome import NEW_ROW, empty_state, new_row
+from pl.tui.dashboard import copy_text
+
+NEW_PIPELINE = "pl pipelines add NAME --template T --board local"
 
 
 def read(profile_dir: Path | str) -> dict | None:
@@ -57,6 +62,8 @@ def home_rows(summaries) -> list[dict]:
 
         oldest = s.get("oldest_wait")
         ts = oldest.get("since") or oldest.get("ts") if isinstance(oldest, dict) else (oldest if isinstance(oldest, (int, float)) else None)
+        if isinstance(ts, str):   # summary.py writes the card's updated_at, an ISO time
+            ts = util.parse_iso(ts) or None
         al = s.get("alerts", 0)
 
         out.append({
@@ -70,46 +77,120 @@ def home_rows(summaries) -> list[dict]:
 
 class HomeView(Widget):
     """The Home tab DataTable showing all configured pipelines."""
-    BINDINGS = [Binding("enter", "select", "switch pipeline", show=True), Binding("i", "details", "details")]
+    BINDINGS = [
+        Binding("enter", "select", "switch pipeline", show=True), Binding("space", "details", "details"),
+        Binding("n", "new", "new pipeline", show=True), Binding("y", "copy", "copy add command"),
+        Binding("B", "get_started('settings')", "board"),
+        Binding("C", "get_started('settings')", "accounts", show=False),
+        Binding("I", "get_started('idea')", "first idea"),
+        Binding("V", "get_started('cards')", "board view", show=False),
+        Binding("Y", "get_started('prs')", "pull requests", show=False),
+        Binding("G", "collapse_start", "collapse"),
+        Binding("Z", "dismiss_start", "dismiss"),
+    ]
+    CHECKLIST_ACTIONS = {"get_started", "collapse_start", "dismiss_start"}
 
     def __init__(self, selected_profile=None):
         super().__init__()
         self.selected_profile = selected_profile
-        self.rows = []
+        self.rows = None   # None until the first show, so that draw adds the "+ New" row even with no pipelines
+        self.started = self.collapsed = False
+        self.first = True
 
     def compose(self):
+        box = Static(id="get-started")
+        box.display = False
+        yield box
         yield DataTable(id="home-table")
+
+    def check_action(self, action, parameters):
+        return self.started if action in self.CHECKLIST_ACTIONS else True
 
     def on_mount(self):
         t = self.query_one(DataTable)
-        t.add_columns("pipeline", "status", "cards", "needs you", "live agents", "wait", "alerts")
+        t.add_columns("pipeline", "status", pipeline.ui()["items"], "needs you", "live agents", "wait", "alerts")
         t.cursor_type = "row"
 
     def selected(self):
         t = self.query_one(DataTable)
-        return self.rows[t.cursor_row] if self.rows and 0 <= t.cursor_row < len(self.rows) else None
+        i = t.cursor_row - 1
+        return self.rows[i] if self.rows and 0 <= i < len(self.rows) else None
+
+    def show_checklist(self, data):
+        box = self.query_one("#get-started", Static)
+        box.display = self.started
+        if self.started:
+            box.update(getstarted.text(getstarted.ticks(data), self.collapsed))
 
     def show(self, data):
+        try:
+            self.started = getstarted.active(data)
+        except Exception:   # a broken state file only hides the checklist
+            self.started = False
+        self.show_checklist(data)
+        self.app.refresh_bindings()
+        if self.first and self.started and not getattr(self.app, "initial_tab", None):
+            self.app.action_tab("home")
+        self.first = False
         t = self.query_one(DataTable)
         keep, rows = t.cursor_row, home_rows((data or {}).get("home", []))
-        if rows != self.rows:
+        if rows != self.rows or not t.row_count:
+            first = self.rows is None
             self.rows = rows
             t.clear()
+            t.add_row(new_row("pipeline"), Text(NEW_PIPELINE, style="dim"), *[""] * 5, key=NEW_ROW)
             for r in self.rows:
                 t.add_row(Text(r["name"]), Text(r["status"], style="green" if r["running"] else "dim"),
                           Text(r["cards"]), Text(str(r["needs_you"]), style="bold red" if r["needs_you"] > 0 else "bold"),
                           Text(str(r["live_agents"])), Text(r["oldest_wait"]), Text(str(r["alerts"])))
-            if self.rows:
-                t.move_cursor(row=min(max(keep, 0), len(self.rows) - 1))
+            if not self.rows:
+                for line in empty_state("home"):
+                    t.add_row(Text(line, style="dim"), *(Text("") for _ in range(6)))
+            t.move_cursor(row=min(1, len(rows)) if first else min(max(keep, 0), len(rows)))
 
     def action_select(self):
+        """Enter opens the pipeline: this profile's board, or another profile's console (as ctrl+k does)."""
         if r := self.selected():
-            self.app.notify(f"switch to {r['name']} (restart in slice 3)", markup=False)
+            if r["name"] == C.PROFILE_NAME:
+                self.app.action_tab("cards")
+            else:
+                self.app.switch_to(r["name"])
+        elif self.query_one(DataTable).cursor_row == 0:   # the "+ New pipeline" row
+            self.action_new()
+
+    def action_new(self):
+        from pl.tui.newpipeline import NewPipelineScreen
+        self.app.push_screen(NewPipelineScreen(), lambda name: name and self.app.switch_to(name, tab="cards"))
 
     def on_data_table_row_selected(self, _):
         self.action_select()
 
+    def action_copy(self):
+        if self.query_one(DataTable).cursor_row == 0:
+            copy_text(self.app, NEW_PIPELINE)
+            self.app.notify("copied", markup=False)
+
     def action_details(self):
         from pl.tui.details import DetailsScreen
+        if self.query_one(DataTable).cursor_row == 0:
+            return
         r = self.selected()
         self.app.push_screen(DetailsScreen((r or {}).get("name") or self.selected_profile or C.PROFILE_NAME or "default"))
+
+    def action_get_started(self, place):
+        if place == "idea":
+            self.app.action_tab("ideas")
+            if box := next(iter(self.app.query("#idea-input")), None):
+                box.focus()
+        else:
+            self.app.action_tab(place)
+
+    def action_collapse_start(self):
+        self.collapsed = not self.collapsed
+        self.show_checklist(self.app.data)
+
+    def action_dismiss_start(self):
+        getstarted.mark(dismissed=time.time())
+        self.started = False
+        self.show_checklist(self.app.data)
+        self.app.refresh_bindings()

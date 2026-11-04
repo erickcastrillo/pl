@@ -462,6 +462,16 @@ def open_issues(repo, search):
                            "number,title,labels,assignees,updatedAt", "--limit", "30", "--search", search]) or "[]")
 
 
+def auto_merge_allowed(repo):
+    """The repository's allow_auto_merge: True or False, None when gh cannot say (fails, rate limited, no
+    permission to see the field). One REST read."""
+    try:
+        out = _gh(["api", f"repos/{repo}", "--jq", ".allow_auto_merge"]).strip()
+    except (Exception, SystemExit):   # RateLimited/OverBudget are SystemExit; a failing gh never stops the loop start
+        return None
+    return {"true": True, "false": False}.get(out)
+
+
 def stage_field(owner, number, name):
     """The project's field called name, as gh's field-list gives it ({id, name, type, options}), or None."""
     j = json.loads(_gh(["project", "field-list", str(number), "--owner", owner, "--limit", "100", "--format", "json"]))

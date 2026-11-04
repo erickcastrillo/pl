@@ -3,6 +3,7 @@
 Cards live in a SQLite database in the profile folder (board.db by default).
 Implements the standard pl board protocol in-process through localstore.
 """
+import threading
 from pathlib import Path
 
 from pl import config as C
@@ -14,13 +15,14 @@ class Local:
         cfg = cfg or {}
         p = cfg.get("path") or "board.db"
         self.path = (C.CONFIG_DIR / p) if C.CONFIG_DIR else Path(p)
-        self._conn = None
+        self._local = threading.local()
         self._columns = None
 
     def _db(self):
-        if self._conn is None:
-            self._conn = localstore.open_db(self.path)
-        return self._conn
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._local.conn = localstore.open_db(self.path)
+        return conn
 
     def _call(self, fn, *args, **kwargs):
         try:

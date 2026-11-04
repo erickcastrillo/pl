@@ -1,0 +1,4 @@
+id = "2026-10-25.33"
+title = "pl usage --github shows GitHub's own budget next to pl's and marks a gap"
+where = "pl usage --github"
+try = "pl usage --github"

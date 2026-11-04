@@ -1,0 +1,3 @@
+title = "pl-run opens a sliced plan as a stack of pull requests"
+where = "Run stage (pl-run)"
+try = "Approve a plan with a ## Slices section and watch one pull request per slice appear"

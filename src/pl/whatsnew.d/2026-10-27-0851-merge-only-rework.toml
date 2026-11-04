@@ -1,0 +1,3 @@
+title = "Merge-only reworks start first"
+where = "pl list shows merge-only; Alerts tab: rework_waiting after [dispatch] rework_wait_minutes"
+try = "pl list"

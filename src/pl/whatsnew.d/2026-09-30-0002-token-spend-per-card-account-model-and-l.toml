@@ -1,0 +1,4 @@
+id = "2026-09-30.02"
+title = "Token spend per card, account, model and loop"
+where = "Dashboard Health: tokens; Loops tab: tokens 1h"
+try = "pl usage --by card"

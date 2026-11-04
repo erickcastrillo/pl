@@ -1,0 +1,4 @@
+id = "2026-10-25.16"
+title = "Pods: rules, knowledge and skills per team"
+where = "pl pods show NAME --json adds approval rate, edits per draft and escalations over 30 days; pod.md versions, rule add, rollback and rules suggested from repeated edits"
+try = "pl pods show engineering"

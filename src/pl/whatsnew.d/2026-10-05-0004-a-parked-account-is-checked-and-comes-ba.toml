@@ -1,0 +1,4 @@
+id = "2026-10-05.04"
+title = "A parked account is checked and comes back as soon as it works; its loops run elsewhere"
+where = "pl accounts: last check and next check; header: checked; alert when a loop misses 2 of its fires; [dispatch] account_checks, [loops.<name>] fallback = false"
+try = "pl accounts"

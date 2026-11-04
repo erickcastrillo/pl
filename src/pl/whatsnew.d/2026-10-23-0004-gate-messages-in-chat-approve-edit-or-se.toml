@@ -1,0 +1,4 @@
+id = "2026-10-23.04"
+title = "Gate messages in chat: approve, edit or send back directly from your phone"
+where = "manager posts waiting gates to Telegram/chat with Approve and Send back buttons"
+try = "pl manager status"

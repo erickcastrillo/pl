@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pl import accounts, alerts, commands, harnesses
+from pl import accounts, alerts, commands, harnesses, notifications
 from pl import config as C
 from pl.util import parse_iso
 
@@ -257,7 +257,7 @@ def test_the_parked_alert_says_the_last_check_result(two_profiles, probe, monkey
     _, answer = probe
     answer.update(out=CREDITS, code=1)
     notes = []
-    monkeypatch.setattr(accounts, "notify", lambda t, m: notes.append((t, m)))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: notes.append((t, m)))
     as_profile("a")
     accounts.mark_exhausted("main", CREDITS)
     _due_now("main")

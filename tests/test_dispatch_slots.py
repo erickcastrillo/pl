@@ -152,7 +152,8 @@ def test_untracked_stage_windows_holding_only_a_shell_are_closed_and_never_count
     out = (f"@1 %1 {now - 5000} - 0 run-restored zsh\n@2 %2 {now - 5000} - 0 plan-restored bash\n"
            f"@3 %3 {now} - 0 run-fresh zsh\n@5 %5 {now - 5000} pl 0 run-tracked zsh\n")
     calls = _sweep_tmux(monkeypatch, out)
-    assert dispatch.sweep_untracked([_card(1, worker=w)], {}, False, {}) == 0
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    assert dispatch.sweep_untracked([{**_card(1, worker=w), "list_id": "In progress"}], {}, False, {}) == 0
     kills = [c for c in calls if c[:2] == ["tmux", "kill-window"]]
     assert kills == [["tmux", "kill-window", "-t", "@1"], ["tmux", "kill-window", "-t", "@2"]]   # never a tracked one
 
@@ -394,7 +395,7 @@ def _trusted_agent(monkeypatch, trusts, **meta):
     monkeypatch.setattr(dispatch.move_agent, "unlock", lambda cid: None)
     monkeypatch.setattr(dispatch.move_agent, "pane_refusal", lambda c, w: None)
     monkeypatch.setattr(dispatch.move_agent, "stop", lambda pane, sid: stops.append(pane) or True)
-    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: evs.append((a, k)))
+    monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: a[0].startswith(("alert_", "pass_step_skipped")) or evs.append((a, k)))
     return _card(1, profile="claude", worker=w, **meta), keys, evs, stops
 
 

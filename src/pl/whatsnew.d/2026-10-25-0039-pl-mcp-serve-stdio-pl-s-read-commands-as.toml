@@ -1,0 +1,4 @@
+id = "2026-10-25.39"
+title = "pl mcp serve --stdio: pl's read commands as MCP tools for an agent session"
+where = "Activity tab marks what an agent session did as \"agent session (pl mcp serve)\""
+try = "pl mcp serve --stdio"

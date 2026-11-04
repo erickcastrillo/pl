@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pl import accounts, agents, alerts, dispatch, harnesses, hooks
+from pl import accounts, agents, alerts, dispatch, harnesses, hooks, notifications
 from pl import config as C
 
 REAL_ENABLED = hooks.enabled   # conftest turns hooks off for every other test
@@ -43,7 +43,7 @@ def board(monkeypatch):
     state = types.SimpleNamespace(card=_card(), writes=[], notes=[])
     monkeypatch.setattr(hooks.board, "card", lambda cid: state.card if cid == CARD else None)
     monkeypatch.setattr(hooks.board, "update", lambda cid, **f: state.writes.append((cid, f)))
-    monkeypatch.setattr(hooks, "notify", lambda t, m: state.notes.append((t, m)))
+    monkeypatch.setattr(notifications, "notify", lambda t, m: state.notes.append((t, m)))
     return state
 
 
@@ -108,6 +108,14 @@ def test_launch_script_includes_hooks_for_claude_stage():
     cmd = s["hooks"]["Stop"][0]["hooks"][0]
     assert cmd["command"] == f"pl hook Stop --card {shlex.quote(CARD)} --window {WINDOW} || true"
     assert cmd["type"] == "command" and cmd["timeout"] == 2
+
+
+def test_notification_hook_only_fires_on_a_permission_prompt():
+    # Claude Code also notifies when an agent idles at its prompt ("waiting for your input"); that is not a
+    # permission wait, so the hook matches permission prompts only. Stop has no matcher.
+    s = _settings(_script(stage="run", hooks=(CARD, WINDOW)))
+    assert [e.get("matcher") for e in s["hooks"]["Notification"]] == ["permission_prompt"]
+    assert all("matcher" not in e for e in s["hooks"]["Stop"])
 
 
 def test_launch_script_omits_hooks_when_disabled_or_non_stage():
@@ -207,7 +215,7 @@ def test_dispatch_reconciliation_prefers_limit_over_hook(monkeypatch):
 
 def _emitted(monkeypatch):
     seen = []
-    monkeypatch.setattr(hooks.events, "emit", lambda kind, card=None, **d: seen.append((kind, card, d)))
+    monkeypatch.setattr(hooks.events, "emit", lambda kind, card=None, **d: kind.startswith("alert_") or seen.append((kind, card, d)))
     return seen
 
 

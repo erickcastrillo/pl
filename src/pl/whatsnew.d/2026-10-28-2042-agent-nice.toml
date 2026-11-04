@@ -1,0 +1,3 @@
+title = "Agents run at lower CPU priority"
+where = "machine.toml [limits] agent_nice; pl manager status"
+try = "Set agent_nice = 15 in machine.toml, start an agent, and run ps -o ni -p <pid>"

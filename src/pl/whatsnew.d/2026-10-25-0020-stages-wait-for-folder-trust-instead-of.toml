@@ -1,0 +1,4 @@
+id = "2026-10-25.20"
+title = "Stages wait for folder trust instead of starting a stuck Claude agent"
+where = "Alerts tab: trust:<account>"
+try = "pl dispatch --once --dry-run"

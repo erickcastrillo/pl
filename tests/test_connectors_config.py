@@ -2,6 +2,7 @@
 import argparse
 import json
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -128,3 +129,21 @@ def test_list_json_has_no_secret_values(capsys, monkeypatch):
     assert rows["billing"]["server"] == "https://mcp.example.com"
     assert rows["billing"]["status"] == "connected"
     assert not {"token", "headers", "env"} & set(rows["billing"])
+
+
+def test_a_tickets_role_is_accepted_and_a_bogus_role_lists_tickets(capsys):
+    _connectors('[connectors.desk]\nurl = "https://desk.example.com/mcp"\nrole = ["tickets"]\n')
+    _load_profile()
+    assert connectors.get("desk")["role"] == ["tickets"]
+    _connectors('[connectors.desk]\nurl = "https://desk.example.com/mcp"\nrole = ["bogus"]\n')
+    with pytest.raises(SystemExit) as e:
+        _load_profile()
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "connectors.desk.role" in err and "tickets" in err
+
+
+def test_the_docs_role_line_lists_every_role():
+    docs = Path(__file__).parent.parent / "docs" / "connectors.md"
+    line = next(ln for ln in docs.read_text().splitlines() if ln.startswith("- `role`"))
+    assert all(f"`{r}`" in line for r in connectors.ROLES)

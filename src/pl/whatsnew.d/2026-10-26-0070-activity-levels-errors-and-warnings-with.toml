@@ -1,0 +1,4 @@
+id = "2026-10-26.70"
+title = "Activity levels: errors and warnings with counts"
+where = "Activity tab: f cycles all, errors, warnings, needs you, dispatcher, loops"
+try = "pl activity --level warning"

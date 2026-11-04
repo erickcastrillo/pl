@@ -105,12 +105,24 @@ def adapter(name: str):
         if ad_type == "telegram":
             from pl.chat.telegram import Telegram
             return Telegram(name, cfg)
+        if ad_type == "slack":
+            from pl.chat.slack import Slack
+            return Slack(name, cfg)
+        if ad_type == "discord":
+            from pl.chat.discord import Discord
+            return Discord(name, cfg)
         raise KeyError(f"pl chat: unknown adapter {ad_type!r}")
     if name in ADAPTERS:
         return ADAPTERS[name]
     if name == "telegram":
         from pl.chat.telegram import Telegram
         return Telegram
+    if name == "slack":
+        from pl.chat.slack import Slack
+        return Slack
+    if name == "discord":
+        from pl.chat.discord import Discord
+        return Discord
     raise KeyError(f"pl chat: unknown connector or adapter {name!r}")
 
 
@@ -127,7 +139,7 @@ def cmd_chat(argv: list[str]) -> int:
     p_test = sub.add_parser("test"); p_test.add_argument("name")
     p_route = sub.add_parser("route")
     p_route.add_argument("kind", choices=["gates", "alerts", "digest"])
-    p_route.add_argument("name", nargs="+")
+    p_route.add_argument("name", nargs="*")
 
     a = ap.parse_args(argv)
     if a.action == "route":

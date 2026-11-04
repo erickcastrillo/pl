@@ -1,0 +1,4 @@
+id = "2026-10-25.23"
+title = "Small jobs on local models, checked, with fallbacks"
+where = "[models.local]: a model per job (route, summarise, title, embed); setup writes it for a new profile"
+try = "pl models test summarise"

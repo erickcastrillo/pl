@@ -1,0 +1,4 @@
+id = "2026-10-25.03"
+title = "Triggers: matching mail becomes a card in its pipeline"
+where = "[triggers.<name>] in profile; runs in dispatcher pass"
+try = "pl triggers list"

@@ -1,0 +1,4 @@
+id = "2026-10-05.05"
+title = "A run agent waiting 30 min is stopped to free its place; the card shows blocked"
+where = "Pipeline: a red ! with blocked: <reason> · retry HH:MM; [dispatch] release_waiting_after (minutes, 0 = off)"
+try = "pl retry <id>"

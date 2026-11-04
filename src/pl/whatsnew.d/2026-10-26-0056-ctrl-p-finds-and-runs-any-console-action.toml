@@ -1,0 +1,4 @@
+id = "2026-10-26.56"
+title = "Ctrl+P finds and runs any console action or tab"
+where = "ctrl+p, type an action like retry"
+try = "pl --help"

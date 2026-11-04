@@ -1,0 +1,4 @@
+id = "2026-10-26.69"
+title = "Alerts tab: newest first with cards; a hides one until it changes"
+where = "Alerts tab; header: alerts N"
+try = "pl alerts"

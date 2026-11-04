@@ -1,6 +1,6 @@
 Screen { background: $background; }
 #header { height: 1; background: $panel; }
-#tabs { height: 1fr; }
+#tabs, #tabs TabbedContent { height: 1fr; }
 TabPane { padding: 0; }
 .panel { border: round $panel-lighten-2; border-title-color: $text; padding: 0 1; }
 #window-bar { height: 1; margin: 0 1; }
@@ -12,7 +12,11 @@ TabPane { padding: 0; }
 .tile-sub, .dim { color: $text-muted; }
 .tile Digits { height: 3; }
 DashboardView .row { height: 1fr; }
-#throughput, #waits, #decide, #health, #standup-panel { width: 1fr; height: 1fr; }
+#throughput, #waits, #decide, #standup-panel { width: 1fr; height: 1fr; }
 #decide { border: round $warning; }
 Sparkline { height: 1; }
 PrsView { height: 1fr; padding: 0 1; }
+#cards-table, #prs-table { width: 84; }
+.-narrow #cards-table, .-narrow #prs-table { width: 1fr; }
+.-narrow #cards-side, .-narrow #prs-side { display: none; }
+.-single > Tabs { display: none; }

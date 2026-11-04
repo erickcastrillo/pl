@@ -1,0 +1,4 @@
+id = "2026-10-25.34"
+title = "No command waits for an answer without a terminal; adding what exists is a no-op"
+where = "scripts and agent sessions: exit 2 names the flag (--yes); a repeated add says already exists, unchanged"
+try = "pl skills reset <name> < /dev/null"

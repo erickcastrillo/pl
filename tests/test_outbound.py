@@ -238,58 +238,52 @@ def test_the_sender_himself_is_not_flagged(monkeypatch, tmp_path):
     assert len(updated) > 0
 
 
-def test_sends_past_the_daily_cap_wait_and_tell_the_owner(monkeypatch, tmp_path):
-    from pl import alerts, outbound
+def _cap_setup(monkeypatch, tmp_path):
+    from pl import outbound, util
 
     monkeypatch.setattr(C, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setenv("PL_MACHINE_DIR", str(tmp_path / "machine"))
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
-
     fake_now = [1000.0]
     monkeypatch.setattr(time, "time", lambda: fake_now[0])
     monkeypatch.setattr(outbound, "_clock", lambda: fake_now[0])
-
-    # Connector with send_cap = 2
     monkeypatch.setattr(outbound, "get_send_cap", lambda conn: 2)
-
-    sent_calls = []
+    sent_calls, sent, direct = [], [], []
     monkeypatch.setattr(outbound, "call_tool", lambda c, t, a: sent_calls.append((c, t, a)))
-
-    opened_alerts = []
-    monkeypatch.setattr(alerts, "open", lambda key, sev, title, fix: opened_alerts.append((key, sev, title, fix)))
-
-    notified = []
-    from pl import util
-    monkeypatch.setattr(util, "notify", lambda title, msg: notified.append((title, msg)))
-
-    # Queue 3 items
-    c1 = {"id": "c1", "list_id": "L1", "description": "# PIPELINE: REPLY\nTo: a@ex.com\n\n1", "metadata": {"connector": "email"}}
-    c2 = {"id": "c2", "list_id": "L1", "description": "# PIPELINE: REPLY\nTo: b@ex.com\n\n2", "metadata": {"connector": "email"}}
-    c3 = {"id": "c3", "list_id": "L1", "description": "# PIPELINE: REPLY\nTo: c@ex.com\n\n3", "metadata": {"connector": "email"}}
-
-    outbound.enqueue(c1, now=1000.0)
-    outbound.enqueue(c2, now=1000.0)
-    outbound.enqueue(c3, now=1000.0)
-
-    # Undo window is 300s, move to t = 1400.0
+    monkeypatch.setattr("pl.notifications.notify", lambda t, m: sent.append((t, m)))
+    monkeypatch.setattr(util, "notify", lambda t, m: direct.append((t, m)))
+    for n, to in enumerate(("a", "b", "c"), 1):
+        card = {"id": f"c{n}", "list_id": "L1", "description": f"# PIPELINE: REPLY\nTo: {to}@ex.com\n\n{n}",
+                "metadata": {"connector": "email"}}
+        outbound.enqueue(card, now=1000.0)
     fake_now[0] = 1400.0
+    return fake_now, sent_calls, sent, direct
+
+
+def test_send_cap_with_alert_opened_off_sends_nothing(monkeypatch, tmp_path):
+    from pl import alerts, outbound
+
+    _, _, sent, direct = _cap_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(C, "NOTIFY", {"events": ["merged"]})
     outbound.send_due()
+    assert sent == [] and direct == []
+    assert not (tmp_path / "machine" / "chat-outbox.jsonl").exists()
+    assert alerts.get("send_cap:email") is not None
 
-    # Only first 2 should have been sent (cap is 2)
-    assert len(sent_calls) == 2
+
+def test_sends_past_the_daily_cap_wait_and_tell_the_owner(monkeypatch, tmp_path):
+    from pl import alerts, outbound
+
+    fake_now, sent_calls, sent, direct = _cap_setup(monkeypatch, tmp_path)
+    outbound.send_due()
     assert [c[2]["to"] for c in sent_calls] == ["a@ex.com", "b@ex.com"]
-
-    # Third item is in waiting_cap
     items = outbound._load(outbound.queue_path())
-    assert len(items) == 3
-    assert items[0]["status"] == "sent"
-    assert items[1]["status"] == "sent"
-    assert items[2]["status"] == "waiting_cap"
-
-    # Alert send_cap:email was opened
-    assert any(a[0] == "send_cap:email" for a in opened_alerts)
-
-    # Owner was notified
-    assert len(notified) > 0
-    assert any("send cap" in n[0].lower() or "send cap" in n[1].lower() for n in notified)
+    assert [i["status"] for i in items] == ["sent", "sent", "waiting_cap"]
+    assert alerts.get("send_cap:email") is not None
+    assert len(sent) == 1 and "send cap" in sent[0][0].lower()
+    assert direct == []
+    fake_now[0] += 60
+    outbound.send_due()
+    assert len(sent) == 1
 
 

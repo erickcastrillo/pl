@@ -101,8 +101,8 @@ def _extract_emails(val) -> list[str]:
     return re.findall(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", str(val))
 
 
-def flagged_recipients(c: dict) -> list[str]:
-    args = parse_reply(c)
+def flagged_recipients(c: dict, section: str = "REPLY") -> list[str]:
+    args = parse_reply(c, section)
     recipients = _extract_emails(args.get("to"))
     meta = c.get("metadata") or {}
     sender = meta.get("from") or meta.get("sender") or (meta.get("refs") or {}).get("sender") or ""
@@ -118,8 +118,8 @@ def flagged_recipients(c: dict) -> list[str]:
     return flagged
 
 
-def parse_reply(c: dict) -> dict:
-    sec = sections(c.get("description") or "").get("REPLY", "").strip()
+def parse_reply(c: dict, section: str = "REPLY") -> dict:
+    sec = sections(c.get("description") or "").get(section, "").strip()
     to, subject, thread, body = None, None, None, ""
     if sec.startswith("{"):
         with contextlib.suppress(Exception):
@@ -149,13 +149,13 @@ def parse_reply(c: dict) -> dict:
     return {"thread": thread, "to": to, "subject": subject, "body": body or sec}
 
 
-def enqueue(c: dict, now: float | None = None) -> dict:
+def enqueue(c: dict, section: str = "REPLY", now: float | None = None) -> dict:
     now = _clock() if now is None else float(now)
     conn = (c.get("metadata") or {}).get("connector") or "email"
     item = {
         "id": f"out-{short_id(c.get('id', 'card'))}-{int(now)}",
         "card": c.get("id"), "connector": conn, "tool": "send_draft",
-        "args": parse_reply(c), "not_before": now + get_undo_minutes() * 60.0,
+        "args": parse_reply(c, section), "not_before": now + get_undo_minutes() * 60.0,
         "status": "queued", "created_at": now_iso(),
     }
     with _locked_queue() as items:
@@ -186,7 +186,8 @@ def call_tool(connector: str, tool: str, args: dict) -> dict:
 def send_due(dry: bool = False, now: float | None = None) -> list[dict]:
     now = _clock() if now is None else float(now)
     sent, p = [], queue_path()
-    if not p.exists():
+    from pl import outward
+    if not p.exists() or outward.state().get("on"):
         return sent
     with _locked_queue() as items:
         for it in items:
@@ -200,13 +201,6 @@ def send_due(dry: bool = False, now: float | None = None) -> list[dict]:
                         from pl import alerts
                         alerts.open(f"send_cap:{conn}", "warning", f"Daily send cap ({cap}) reached for {conn}",
                                     fix="wait for daily reset or increase send_cap in config")
-                    with contextlib.suppress(Exception):
-                        from pl.util import notify
-                        notify(f"Send cap reached: {conn}", f"Reached daily send cap ({cap}) for {conn}.")
-                    with contextlib.suppress(Exception):
-                        from pl import chat
-                        if hasattr(chat, "route"):
-                            chat.route(f"send_cap:{conn}", f"Reached daily send cap ({cap}) for {conn}.")
                     continue
                 if dry:
                     sent.append(it)

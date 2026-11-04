@@ -1,0 +1,4 @@
+id = "2026-10-25.09"
+title = "Bootstrap fresh worktrees via .pl/worktree.yaml"
+where = "fresh worktrees bootstrapped by pl-run; README: Worktrees folder"
+try = "pl worktrees bootstrap <path> --dry-run"

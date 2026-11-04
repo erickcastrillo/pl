@@ -1,0 +1,4 @@
+id = "2026-10-26.68"
+title = "Builds can run only the tests a change can affect"
+where = "pl tests affected --json"
+try = "pl tests affected"

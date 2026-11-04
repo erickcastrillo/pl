@@ -11,6 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Static
 
 from pl.tui.review import ConfirmScreen
+from pl.tui.chrome import close
 
 
 def _run(argv, timeout=10):
@@ -154,7 +155,7 @@ class DetailsScreen(Screen):
         self.query_one("#details-text", Static).update(body)
 
     def action_close(self):
-        self.app.pop_screen()
+        close(self)
 
     def action_dispatcher(self, action="restart"):
         cmd = [sys.executable, "-m", "pl", "manager", action, self.profile]

@@ -24,10 +24,50 @@ def no_real_memory_readers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_screen_reads(monkeypatch):
+    """The dispatcher pass reads each live agent's screen once: tests see a working agent, never a real pane."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "agent_screen", types.SimpleNamespace(read=lambda pane, lines=20: ("", "working", "")))
+
+
+@pytest.fixture(autouse=True)
+def no_reconcile_in_dispatch_passes(monkeypatch):
+    """A dispatcher pass in a test does not reconcile finished agents (it would read fake panes and open alerts the
+    test does not expect); tests/test_reconcile.py calls reconcile.sweep itself."""
+    import types
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "reconcile", types.SimpleNamespace(sweep=lambda *a, **k: None))
+
+
+@pytest.fixture(autouse=True)
+def no_real_idle_clock(monkeypatch):
+    """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
+    from pl import agents
+    monkeypatch.setattr(agents, "idle_seconds", lambda w, reg, st=None: None)
+
+
+@pytest.fixture(autouse=True)
+def harness_clis_installed(request, monkeypatch):
+    """Unit tests see every harness CLI on PATH (CI has none); the e2e_ui suite keeps the real check."""
+    if request.node.get_closest_marker("e2e_ui"):
+        return
+    from pl import assistant
+    monkeypatch.setattr(assistant, "installed", lambda acct: True)
+
+
+@pytest.fixture(autouse=True)
 def temp_home(monkeypatch, tmp_path_factory):
     """HOME is a temporary folder for every test; a test that sets its own HOME afterwards still wins."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    from pl import config as C
+    vars(C).update(C._defaults())   # pl.config's globals start from the defaults under this HOME: none leak from an earlier test, none point at the real ~/.pl
+    from pl import board
+    monkeypatch.setattr(board, "_SHARE", {"mode": None})   # no shared board save unless a test turns one on: an empty one means "read", and a fresh worker would write board-cache.json
     monkeypatch.setenv("PL_NO_UPDATE_CHECK", "1")   # no test reads GitHub's tags; test_update.py turns it back on
+    # a test run inside a pl agent inherits the real profile and worktrees folder: never let a test load or touch them
+    for var in ("PL_CONFIG_DIR", "PL_WORKTREES_DIR", "PL_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
     from pl import local_model
 
     def no_model(url, payload, timeout):
@@ -41,6 +81,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     from pl import harnesses
     monkeypatch.setattr(harnesses, "MODEL_LIST_ARGV", {})    # agy models / codex's catalog: test_model_effort fakes them
     harnesses._MODELS.clear()
+    from pl import ghquota
+    monkeypatch.setattr(ghquota, "_ask_token", lambda: "")   # no test asks gh for a token; test_gh_rate_limit.py fakes gh
+    ghquota._TOKENS.clear()
 
 
 PY = re.compile(r"python[\d.]*$")
@@ -207,7 +250,14 @@ def no_stage_hooks(monkeypatch):
 def trusted_work_dir(monkeypatch):
     """The dispatcher's trust gate reads the account's .claude.json: off unless a test turns it on."""
     from pl import dispatch
-    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account: None)
+    monkeypatch.setattr(dispatch, "untrusted_folder", lambda h, account, folder=None: None)
+
+
+@pytest.fixture(autouse=True)
+def run_worktree_is_work_dir(monkeypatch):
+    """Run agents start in a worktree git makes: off unless a test turns it on (tests/test_run_worktree.py)."""
+    from pl import config, worktrees
+    monkeypatch.setattr(worktrees, "for_run", lambda c: (config.WORK_DIR, None))
 
 
 @pytest.fixture(autouse=True)
@@ -217,6 +267,8 @@ def no_live_agent_window(monkeypatch):
     monkeypatch.setattr(dispatch, "live_agent_window", lambda *a, **k: False)
     monkeypatch.setattr(dispatch, "api_error_wait", lambda *a, **k: None)   # it reads the agent's screen: tests fake it
     monkeypatch.setattr(dispatch, "death_line", lambda *a, **k: None)
+    from pl import agent_alerts
+    monkeypatch.setattr(agent_alerts, "check", lambda *a, **k: None)   # it reads each agent pane: test_agent_alerts turns it on
 
 
 @pytest.fixture(autouse=True)
@@ -224,3 +276,125 @@ def no_real_busy_agents(monkeypatch):
     """A dispatcher pass writes its summary, which counts busy agents with tmux: no test lets it reach the real one."""
     from pl import dispatch
     monkeypatch.setattr(dispatch, "busy_agents", lambda reg: 0)
+
+
+@pytest.fixture(autouse=True)
+def fresh_agent_defs():
+    """The dispatcher reads agent definitions once per pass: no test sees the previous test's."""
+    from pl import dispatch
+    dispatch.forget_agents()
+
+
+@pytest.fixture(autouse=True)
+def no_real_tui_panel_subprocesses(monkeypatch):
+    """CommandPanel, ConnectorsPanel, SkillsView, and AgentsView run background workers that call their
+    module-level _run: tests see empty lists, never real pl CLI subprocesses."""
+    from pl.tui import agentdefs, connectors, panels, skills
+
+    fake_run = lambda argv, *a, **kw: subprocess.CompletedProcess(argv, 0, "[]", "")  # noqa: E731
+    monkeypatch.setattr(panels, "_run", fake_run)
+    monkeypatch.setattr(connectors, "_run", fake_run)
+    monkeypatch.setattr(skills, "_run", fake_run)
+    monkeypatch.setattr(agentdefs, "_run", fake_run)
+
+
+@pytest.fixture(autouse=True)
+def fast_empty_markdown_mount(monkeypatch):
+    """Skipping update("") on empty Markdown mount avoids spinning a markdown-it parser in an executor."""
+    from markdown_it import MarkdownIt
+    from textual.await_complete import AwaitComplete
+    from textual.widgets import Markdown
+    from textual.widgets._markdown import MarkdownBlock
+
+    async def _on_mount(self, event):
+        initial = self._initial_markdown
+        self._initial_markdown = None
+        if initial:
+            await self.update(initial)
+        else:
+            self._markdown = ""
+            self.post_message(Markdown.TableOfContentsUpdated(self, None).set_sender(self))
+
+    def _fast_update(self, markdown: str) -> AwaitComplete:
+        self._theme = self.app.theme
+        parser = MarkdownIt("gfm-like") if self._parser_factory is None else self._parser_factory()
+        markdown_block = self.query("MarkdownBlock")
+        self._markdown = markdown
+        self._table_of_contents = None
+
+        async def await_update() -> None:
+            async with self.lock:
+                tokens = parser.parse(markdown)
+                removed = False
+
+                async def mount_batch(batch: list[MarkdownBlock]) -> None:
+                    nonlocal removed
+                    if removed:
+                        await self.mount_all(batch)
+                    else:
+                        with self.app.batch_update():
+                            await markdown_block.remove()
+                            await self.mount_all(batch)
+                        removed = True
+
+                batch: list[MarkdownBlock] = []
+                for block in self._parse_markdown(tokens):
+                    batch.append(block)
+                    if len(batch) == 200:
+                        await mount_batch(batch)
+                        batch.clear()
+                if batch:
+                    await mount_batch(batch)
+                if not removed:
+                    await markdown_block.remove()
+
+            lines = markdown.splitlines()
+            self._last_parsed_line = len(lines) - (1 if lines and lines[-1] else 0)
+            self.post_message(Markdown.TableOfContentsUpdated(self, self.table_of_contents).set_sender(self))
+
+        return AwaitComplete(await_update())
+
+    monkeypatch.setattr(Markdown, "_on_mount", _on_mount)
+    monkeypatch.setattr(Markdown, "update", _fast_update)
+
+
+@pytest.fixture(autouse=True)
+def fast_textual_wait_for_idle(monkeypatch):
+    """Eliminate wait_for_idle(0) CPU-time spin in Pilot and App, and drain screen between multi-key presses."""
+    import textual._wait
+    import textual.app
+    import textual.pilot
+    from textual.app import ScreenStackError
+    from textual.dom import DOMNode
+
+    async def _fast_wait_for_idle(min_sleep=0, max_sleep=1):
+        if min_sleep and min_sleep > 0:
+            await asyncio.sleep(min_sleep)
+        else:
+            await asyncio.sleep(0.01)
+
+    async def _fast_press(self, *keys: str) -> None:
+        for i, key in enumerate(keys):
+            if i > 0:
+                await self.app.workers.wait_for_complete()
+                await self._wait_for_screen()
+            await self._app._press_keys((key,))
+            await self._wait_for_screen()
+        await asyncio.sleep(0.01)
+        await self._wait_for_screen()
+
+    orig_refresh = DOMNode.refresh_bindings
+
+    def safe_refresh_bindings(self):
+        try:
+            orig_refresh(self)
+        except ScreenStackError:
+            pass
+
+    monkeypatch.setattr(textual._wait, "wait_for_idle", _fast_wait_for_idle)
+    monkeypatch.setattr(textual.pilot, "wait_for_idle", _fast_wait_for_idle)
+    monkeypatch.setattr(textual.app, "wait_for_idle", _fast_wait_for_idle)
+    monkeypatch.setattr(textual.pilot.Pilot, "press", _fast_press)
+    monkeypatch.setattr(DOMNode, "refresh_bindings", safe_refresh_bindings)
+
+

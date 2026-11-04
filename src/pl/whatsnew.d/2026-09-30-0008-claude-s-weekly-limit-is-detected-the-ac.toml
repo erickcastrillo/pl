@@ -1,0 +1,4 @@
+id = "2026-09-30.08"
+title = "Claude's weekly limit is detected; the account parks until its reset date"
+where = "header: PARKED until <date>"
+try = "pl accounts"

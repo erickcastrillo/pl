@@ -1,0 +1,4 @@
+id = "2026-10-25.19"
+title = "pl-plan files later slices as Plan N slice M with plan metadata"
+where = "built-in skill pl-plan v6; unedited copies update themselves"
+try = "pl skills reset pl-plan"

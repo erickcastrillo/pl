@@ -1,0 +1,4 @@
+id = "2026-10-26.80"
+title = "Customer-support pipeline template: triage and owner-approved replies"
+where = "pl pipelines list --templates"
+try = "pl pipelines add support --template customer-support --board local --yes"

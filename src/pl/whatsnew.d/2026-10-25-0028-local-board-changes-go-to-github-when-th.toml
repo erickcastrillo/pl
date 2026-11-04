@@ -1,0 +1,4 @@
+id = "2026-10-25.28"
+title = "Local board changes go to GitHub when the budget allows"
+where = "dispatcher: every pass; [sync] github and repo in config.toml"
+try = "pl sync now"

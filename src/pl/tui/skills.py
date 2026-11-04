@@ -1,24 +1,187 @@
-"""Settings section "Skills": every account's skills, agents and commands, a read-only Markdown preview, an in-app
+"""Settings section "Skills": every account's skills, subagents and commands, a read-only Markdown preview, an in-app
 editor (backup + diff confirm before saving), new from a template, delete to .pl-trash, and the shared library."""
+import io
+import json
 import os
+import re
 import shlex
 import subprocess
+from itertools import takewhile
 
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Markdown, Select, Static, TextArea
+from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
-from pl import skills
+from pl import config as C
+from pl import skill_sources, skills
+from pl.tui.chrome import NEW_ROW, new_row
 from pl.tui.extensions import TargetScreen
 from pl.tui.review import ConfirmScreen
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
-HINT = ("e edit · E $EDITOR · n new · d delete (to .pl-trash) · S share to the library · l link a library skill "
-        "to an account · I install · u update check · plugin files are read-only")
+HINT = ("e edit · E $EDITOR · n new (install or write) · d remove (a skill: its users are shown first) · S share to the library · l link a library skill "
+        "to an account · I install from GitHub · u update the selected skill (diff first) · plugin files are read-only")
+KIND_LABEL = {"agent": "subagent"}
 DIFF_LINES = 30
+PINNED_RE = re.compile(r"^Source: (github:\S+@[0-9a-f]{40})$", re.M)
+INSTALL_PROMPT = "Install from GitHub: github:owner/repo[/path][@ref] or a github.com URL"
+
+
+def pinned_source(stdout):
+    m = PINNED_RE.search(stdout)
+    return m.group(1) if m else None
+
+
+def review_title(stdout, pinned):
+    repo, sha = pinned.removeprefix("github:").rsplit("@", 1)
+    where = f"{'/'.join(repo.split('/')[:2])}@{sha[:7]}"
+    plugin = re.search(r"^Plugin (\S+)", stdout, re.M)
+    if not plugin:
+        return f"Install from {where}?"
+    listed = stdout.split("Skills (installed):", 1)[-1].split("\n")[1:]
+    count = len(list(takewhile(lambda ln: ln.startswith(" "), listed)))
+    return f"Install plugin {plugin.group(1)} ({count} skills) from {where}?"
+READ_ONLY = "plugin files are read-only"
+BUTTONS = ("edit", "update", "link", "share", "remove", "reset")
+
+
+def _origin_label(it, builtin, recs):
+    if builtin:
+        return "built in"
+    rec = recs.get(it["name"])
+    if rec and it["account"] == skills.LIBRARY:
+        return f"GitHub {rec['repo']}@{rec['sha'][:7]}"
+    if it["origin"] == "plugin":
+        return "plugin"
+    if it["origin"] == "omc":
+        return "oh-my-claude"
+    return "library link" if it["library"] else "you"
+
+
+def _users_line(name):
+    """(sentence for the confirmation, the users it found)."""
+    try:
+        used = skill_sources.users(name)
+    except Exception as e:  # noqa: BLE001 - a broken pod file must not stop the person removing a skill
+        return f"Could not check which stages, loops or pods use it: {e}.", []
+    if used:
+        return f"Used by: {', '.join(used)}.", used
+    return "Not used by any stage, loop or pod.", []
+
+
+def grouped(items):
+    """[(heading, [row, ...])]: the scan items under pl's stage skills, your library and one heading per account.
+    Each row is the item plus origin_label and used_by."""
+    builtins, recs, used = set(skills.builtin_names()), skill_sources.records(), {}
+
+    def users(it):
+        if it["kind"] != "skill":
+            return ""
+        if it["name"] not in used:
+            try:
+                used[it["name"]] = ", ".join(skill_sources.users(it["name"]))
+            except Exception:  # noqa: BLE001 - a broken pod file must not empty the list
+                used[it["name"]] = ""
+        return used[it["name"]]
+
+    def row(it):
+        is_builtin = it["account"] == skills.LIBRARY and it["name"] in builtins
+        return {**it, "origin_label": _origin_label(it, is_builtin, recs), "used_by": users(it)}
+
+    stage = [row(i) for i in items if i["account"] == skills.LIBRARY and i["name"] in builtins]
+    mine = [row(i) for i in items if i["account"] == skills.SHARED
+            or (i["account"] == skills.LIBRARY and i["name"] not in builtins)]
+    groups = [("pl's stage skills", stage), ("Your library", mine)]
+    for account, _ in skills.sources():
+        if account == skills.SHARED:
+            continue
+        harness = C.ACCOUNTS.get(account, {}).get("harness", "")
+        groups.append((f"{account} ({harness})" if harness else account, [row(i) for i in items if i["account"] == account]))
+    return [(h, rs) for h, rs in groups if rs]
+
+
+def _from_github(it):
+    return bool(it) and it["account"] == skills.LIBRARY and it["origin_label"].startswith("GitHub ")
+
+
+def update_label(it, checks):
+    """The row's "update" cell: the check's result for a GitHub-installed skill, empty for every other row."""
+    if not _from_github(it):
+        return ""
+    if checks is None:
+        return "checking…"
+    r = checks.get(it["name"])
+    if not r or r.get("error"):
+        return "check failed"
+    if r["update"]:
+        return f"update available {r['pinned'][:7]} -> {r['latest'][:7]}"
+    return "up to date"
+
+
+def update_block(it, checks):
+    """Why Update cannot run on this row; empty when it can."""
+    if not it:
+        return "nothing selected"
+    if not _from_github(it):
+        return "not installed from GitHub"
+    if checks is None:
+        return "checking for updates…"
+    r = checks.get(it["name"]) or {}
+    error = r.get("error") or checks.get("__error__") or (None if r else "no result for this skill")
+    if error:
+        return f"check failed: {error}"
+    return "" if r["update"] else "up to date"
+
+
+def _link_targets(it):
+    return [a for a, _ in skills.sources() if a not in it["linked"]]
+
+
+def _is_plugin(it):
+    try:
+        return it.get("origin") == "plugin" or skills._plugin(it["root"], it["path"])
+    except OSError:
+        return False
+
+
+def _update_label(it, checks):
+    why = update_block(it, checks)
+    if update_label(it, checks).startswith("update available"):
+        return "Update available", True, ""
+    return ("Up to date" if why == "up to date" else "Update"), False, "" if why == "up to date" else why
+
+
+def _share_refusal(it, plugin):
+    if it["kind"] != "skill":
+        return "only skills can be shared"
+    if it["account"] == skills.LIBRARY:
+        return "it is in the library already"
+    if it["library"]:
+        return "it is a link to the library"
+    return READ_ONLY if plugin else ""
+
+
+def _link_refusal(it):
+    if it["account"] != skills.LIBRARY:
+        return "only library skills can be linked"
+    return "" if _link_targets(it) else "every account links it already"
+
+
+def actions(it, checks=None):
+    """[(label, enabled, reason)] for the right pane's buttons, in order; reason is "" when enabled. checks is the
+    last `pl skills update --check --json` result keyed by skill name."""
+    plugin = _is_plugin(it)
+    ro = READ_ONLY if plugin else ""
+    update, update_ok, update_why = _update_label(it, checks)
+    share, link = _share_refusal(it, plugin), _link_refusal(it)
+    out = [("Edit", not ro, ro), (update, update_ok, update_why), ("Link to account", not link, link),
+           ("Share to library", not share, share), ("Remove", not ro, ro)]
+    if it["origin_label"] == "built in":
+        out.append(("Reset to shipped version", True, ""))
+    return out
 
 
 class PromptScreen(ModalScreen):
@@ -101,30 +264,96 @@ class EditorScreen(ModalScreen):
         self.app.push_screen(ConfirmScreen("Discard your unsaved edits?"), lambda yes: yes and self.dismiss(False))
 
 
+class NewChoiceScreen(ModalScreen):
+    """Install a skill from GitHub or write a new one."""
+    DEFAULT_CSS = """
+    NewChoiceScreen { align: center middle; }
+    NewChoiceScreen > Vertical { width: 50; height: auto; border: round $accent; padding: 1 2; background: $surface; }
+    NewChoiceScreen Button { width: 100%; margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self):
+        with Vertical():
+            yield Static("New skill")
+            yield Button("Install from GitHub", id="skills-choose-install")
+            yield Button("Write a new one", id="skills-choose-write")
+            yield Static(Text("esc cancel", style="dim"))
+
+    def on_mount(self):
+        self.query_one("#skills-choose-install").focus()
+
+    def on_button_pressed(self, event):
+        self.dismiss("install" if event.button.id == "skills-choose-install" else "write")
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class InstallReviewScreen(ModalScreen):
+    """The dry run of an install, shown in full; Install runs the pinned commit, Cancel is focused."""
+    DEFAULT_CSS = """
+    InstallReviewScreen { align: center middle; }
+    InstallReviewScreen > Vertical { width: 90; height: 80%; border: round $accent; padding: 1 2; background: $surface; }
+    InstallReviewScreen VerticalScroll { height: 1fr; }
+    InstallReviewScreen Horizontal { height: auto; margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, title, listing):
+        super().__init__()
+        self.title_text, self.listing = title, listing
+
+    def compose(self):
+        with Vertical():
+            yield Static(Text(self.title_text, style="bold"))
+            with VerticalScroll():
+                yield Static(Text(self.listing))
+            with Horizontal():
+                yield Button("Install", id="skills-review-install", variant="warning")
+                yield Button("Cancel", id="skills-review-cancel")
+
+    def on_mount(self):
+        self.query_one("#skills-review-cancel").focus()
+
+    def on_button_pressed(self, event):
+        self.dismiss(event.button.id == "skills-review-install")
+
+    def action_cancel(self):
+        self.dismiss(False)
+
+
 class NewScreen(ModalScreen):
-    """Name, account and kind of a new skill, agent or command."""
+    """Name and one-line description of a new skill in the library."""
     DEFAULT_CSS = """
     NewScreen { align: center middle; }
     NewScreen > Vertical { width: 70; height: auto; border: round $accent; padding: 1 2; background: $surface; }
     """
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, accounts, account):
-        super().__init__()
-        self.accounts, self.account = accounts, account
-
     def compose(self):
         with Vertical():
-            yield Static(Text("New skill, agent or command: name (lowercase letters, digits, dashes), account, kind"))
+            yield Static(Text("New skill in your library: name (lowercase letters, digits, dashes) and when to use it"))
             yield Input(placeholder="my-skill", id="skills-new-name")
-            yield Select([(a, a) for a in self.accounts], value=self.account, allow_blank=False, compact=True,
-                         id="skills-new-account")
-            yield Select([(k, k) for k in skills.KINDS], value="skill", allow_blank=False, compact=True, id="skills-new-kind")
+            yield Input(placeholder="Say in one sentence when to use this skill.", id="skills-new-description")
+            yield Static("", id="skills-new-error")
             yield Static(Text("enter create · esc cancel", style="dim"))
 
+    def on_mount(self):
+        self.query_one("#skills-new-name").focus()
+
     def on_input_submitted(self, m):
-        self.dismiss((m.value.strip(), self.query_one("#skills-new-account", Select).value,
-                      self.query_one("#skills-new-kind", Select).value))
+        name = self.query_one("#skills-new-name", Input).value.strip()
+        description = self.query_one("#skills-new-description", Input).value
+        if m.input.id == "skills-new-name" and not description.strip():
+            self.query_one("#skills-new-description").focus()
+            return
+        try:
+            path = skills.create(skills.LIBRARY, "skill", name, description)
+        except SystemExit as e:
+            self.query_one("#skills-new-error", Static).update(Text(str(e).removeprefix("pl: "), style="red"))
+            return
+        self.dismiss((name, path))
 
     def action_cancel(self):
         self.dismiss(None)
@@ -136,53 +365,107 @@ class SkillsView(Widget):
     #skills-hint { height: auto; color: $text-muted; }
     #skills-table { width: 3fr; height: 1fr; }
     #skills-preview-box { width: 2fr; height: 1fr; border: round $primary; }
+    #skills-buttons { height: auto; }
+    #skills-reasons { color: $text-muted; height: auto; }
+    #skills-meta { height: auto; }
     """
-    BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new"),
-                Binding("d", "delete", "delete"), Binding("S", "share", "share to library"),
+    BINDINGS = [Binding("e", "edit", "edit"), Binding("E", "external_edit", "$EDITOR"), Binding("n", "new", "new skill"),
+                Binding("d", "delete", "remove"), Binding("S", "share", "share to library"),
                 Binding("l", "link", "link to account"), Binding("I", "install", "install"),
-                Binding("u", "update", "update check")]
+                Binding("u", "update", "update")]
 
     def __init__(self):
         super().__init__()
+        self._initial_loaded = False
         self.items = []
+        self.rows = []
+        self.groups = []
+        self.checks = None
 
     def compose(self):
         yield Static(Text(HINT), id="skills-hint")
         with Horizontal():
             yield DataTable(cursor_type="row", id="skills-table", zebra_stripes=True)
             with VerticalScroll(id="skills-preview-box"):
-                yield Markdown("", id="skills-preview")
+                with Horizontal(id="skills-buttons"):
+                    for key in BUTTONS:
+                        yield Button(key, id=f"skills-btn-{key}", compact=True)
+                yield Static("", id="skills-reasons")
+                yield Static("", id="skills-meta")
+                yield Markdown(id="skills-preview")
 
     def on_mount(self):
-        self.query_one(DataTable).add_columns("name", "account", "kind", "origin", "library", "description")
-        self.rescan()
+        self.query_one(DataTable).add_columns("name", "kind", "origin", "update", "used by", "linked", "description")
+        if type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) not in (
+            "extend", "skills", "connectors", "pods", "agents", "models", "extensions", "settings"
+        ):
+            return
+        self.ensure_loaded()
+
+    def on_show(self):
+        self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._initial_loaded:
+            self._initial_loaded = True
+            self.rescan()
 
     def rescan(self):
         def run():
             try:
-                items = skills.scan()
+                groups = grouped(skills.scan())
             except (SystemExit, Exception) as e:  # noqa: BLE001 - a worker that raises kills the app
                 self.app.call_from_thread(self.app.notify, str(e), severity="error", markup=False)
                 return
-            self.app.call_from_thread(self._fill, items)
+            self.app.call_from_thread(self._scanned, groups)
         self.run_worker(run, thread=True, group="skills-scan", exclusive=True)
 
-    def _fill(self, items):
+    def _scanned(self, groups):
+        self.checks = None
+        self._fill(groups)
+        self._check()
+
+    def _check(self):
+        def run():
+            r = None
+            try:
+                r = _run(["pl", "skills", "update", "--check", "--json"], capture_output=True, text=True)
+                checks = {c["name"]: c for c in json.loads(r.stdout)}
+            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+                said = ((r and r.stderr) or str(e)).strip().splitlines()
+                checks = {"__error__": said[-1] if said else "no output"}
+            self.app.call_from_thread(self._set_checks, checks)
+        self.run_worker(run, thread=True, group="skills-check", exclusive=True)
+
+    def _set_checks(self, checks):
+        self.checks = checks
+        self._fill(self.groups)
+
+    def _fill(self, groups):
+        self.groups = groups
         t = self.query_one(DataTable)
         keep = t.cursor_row
         t.clear()
-        self.items = items
-        for i, it in enumerate(items):
-            lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
-            t.add_row(Text(it["name"]), Text(it["account"]), Text(it["kind"]), Text(it["origin"]), Text(lib),
-                      Text(it["description"][:80]), key=str(i))
-        if items:
-            t.move_cursor(row=min(keep, len(items) - 1))
+        t.add_row(new_row("skill"), *[""] * 5, key=NEW_ROW)
+        self.rows = [None]   # rows[i] is table row i; None for "+ New skill" and the headings
+        for n, (heading, rows) in enumerate(groups):
+            t.add_row(Text(heading, style="bold"), "", "", "", "", "", "", key=f"h{n}")
+            self.rows.append(None)
+            for it in rows:
+                lib = ", ".join(it["linked"]) if it["account"] == skills.LIBRARY else ("library" if it["library"] else "")
+                label = update_label(it, self.checks)
+                style = "bold" if label.startswith("update available") else "red" if label == "check failed" else ""
+                t.add_row(Text(it["name"]), Text(KIND_LABEL.get(it["kind"], it["kind"])), Text(it["origin_label"]), Text(label, style=style),
+                          Text(it["used_by"]), Text(lib), Text(it["description"][:80]), key=f"r{len(self.rows)}")
+                self.rows.append(it)
+        self.items = [r for r in self.rows if r]
+        row = min(keep, len(self.rows) - 1)
+        t.move_cursor(row=row + 1 if row and self.rows[row] is None and row + 1 < len(self.rows) else row)
         self._preview()
 
     def _item(self):
         t = self.query_one(DataTable)
-        return self.items[t.cursor_row] if t.row_count and t.cursor_row < len(self.items) else None
+        return self.rows[t.cursor_row] if t.row_count and t.cursor_row < len(self.rows) else None
 
     def _preview(self):
         it = self._item()
@@ -198,9 +481,36 @@ class SkillsView(Widget):
     def _show(self, it, text):
         if it is self._item():        # a newer row is selected: its own read follows
             self.query_one("#skills-preview", Markdown).update(text)
+            self._show_actions(it)
+
+    def _show_actions(self, it):
+        for sel in ("#skills-buttons", "#skills-reasons", "#skills-meta"):
+            self.query_one(sel).display = it is not None
+        if it is None:
+            return
+        offered = actions(it, self.checks)
+        for n, key in enumerate(BUTTONS):
+            button = self.query_one(f"#skills-btn-{key}", Button)
+            button.display = n < len(offered)
+            if n < len(offered):
+                label, enabled, reason = offered[n]
+                button.label, button.disabled, button.tooltip = label, not enabled, reason or None
+        self.query_one("#skills-reasons", Static).update(Text(" · ".join(f"{label}: {why}" for label, ok, why in offered if not ok and why)))
+        linked = ", ".join(it["linked"]) or "no account links it" if it["account"] == skills.LIBRARY else (
+            "library" if it["library"] else "not linked")
+        self.query_one("#skills-meta", Static).update(Text(f"Linked: {linked}\nUsed by: {it.get('used_by') or 'nothing'}"))
+
+    def on_button_pressed(self, e):
+        key = (e.button.id or "").removeprefix("skills-btn-")
+        getattr(self, {"edit": "action_edit", "update": "action_update", "link": "action_link", "share": "action_share",
+                       "remove": "action_delete", "reset": "action_reset"}[key])()
 
     def on_data_table_row_highlighted(self, _):
         self._preview()
+
+    def on_data_table_row_selected(self, m):
+        if m.row_key.value == NEW_ROW:
+            self.action_new()
 
     def focus_table(self):
         t = self.query_one(DataTable)
@@ -248,27 +558,41 @@ class SkillsView(Widget):
         self.rescan()
 
     def action_new(self):
-        accounts = [a for a, _ in skills.sources()] + [skills.LIBRARY]
-        cur = self._item()
-        account = cur["account"] if cur and cur["account"] in accounts else accounts[0]
+        def picked(choice):
+            if choice == "install":
+                self.action_install()
+            elif choice == "write":
+                self.app.push_screen(NewScreen(), written)
 
-        def asked(answer):
-            if not answer:
+        def written(made):
+            if not made:
                 return
-            name, acct, kind = answer
-            try:
-                path = skills.create(acct, kind, name)
-            except (SystemExit, Exception) as e:  # noqa: BLE001
-                self._say(e)
-                return
-            root = str(skills._root(acct))
+            name, path = made
             self.rescan()
-            self.open_editor({"name": name, "account": acct, "kind": kind, "path": str(path), "root": root, "origin": ""})
-        self.app.push_screen(NewScreen(accounts, account), asked)
+            self.open_editor({"name": name, "account": skills.LIBRARY, "kind": "skill", "path": str(path),
+                              "root": str(skills._root(skills.LIBRARY)), "origin": ""})
+        self.app.push_screen(NewChoiceScreen(), picked)
 
     def action_delete(self):
-        it, _ = self._editable()
-        if not it:
+        it = self._item()
+        if it is None:
+            self._say("nothing selected", "information")
+            return
+        is_library = it["account"] == skills.LIBRARY
+        if is_library and it["name"] in skills.builtin_names():
+            self._say("pl's built-in stage skills are not removed; use pl skills reset <name> to restore one", "warning")
+            return
+        try:
+            skills.check_editable(it)
+        except SystemExit as e:
+            self._say(e, "warning")
+            return
+        line, used = _users_line(it["name"]) if it["kind"] == "skill" else ("", [])
+        if is_library and it["kind"] == "skill" and it["name"] in skill_sources.records():
+            self._confirm_library_removal(it, line, used)
+            return
+        if is_library and it.get("linked"):
+            self._say(f"{it['name']} is still linked from {', '.join(it['linked'])}; unlink it there first", "warning")
             return
         what = "folder" if it["kind"] == "skill" else "file"
 
@@ -283,12 +607,30 @@ class SkillsView(Widget):
             self.rescan()
         self.app.push_screen(ConfirmScreen(f"Move the {it['kind']} {it['name']} of {it['account']} to .pl-trash? "
                                            f"The {what} goes to {it['root']}/.pl-trash; nothing is deleted. Links to it "
-                                           f"from accounts of other profiles and /pl:{it['name']} prompts will break."),
+                                           f"from accounts of other profiles will break. {line}".strip()),
                              answered)
+
+    def _confirm_library_removal(self, it, line, used):
+        name, lib = it["name"], skills.library()
+
+        def answered(yes):
+            if not yes:
+                return
+            try:
+                if skill_sources.remove(name, True, io.StringIO(), used=used) == 0:
+                    self._say(f"removed {name}", "information")
+            except (SystemExit, Exception) as e:  # noqa: BLE001
+                self._say(e)
+            self.rescan()
+        self.app.push_screen(ConfirmScreen(f"Remove {name} from {lib}? It is unlinked from every account and moved to "
+                                           f"{lib}/.pl-trash; its install record is dropped. {line}"), answered)
 
     def action_share(self):
         it = self._item()
-        if it is None or it["kind"] != "skill" or it["account"] in (skills.LIBRARY,) or it["library"]:
+        if it is None:
+            self._say("nothing selected", "information")
+            return
+        if it["kind"] != "skill" or it["account"] in (skills.LIBRARY,) or it["library"]:
             self._say("select one of an account's own skills to share it", "information")
             return
 
@@ -306,11 +648,14 @@ class SkillsView(Widget):
 
     def action_link(self):
         it = self._item()
-        if it is None or it["account"] != skills.LIBRARY:
+        if it is None:
+            self._say("nothing selected", "information")
+            return
+        if it["account"] != skills.LIBRARY:
             self._say("select a library skill (account: library) to link it; S shares a skill into the library",
                       "information")
             return
-        targets = [a for a, _ in skills.sources() if a not in it["linked"]]
+        targets = _link_targets(it)
         if not targets:
             self._say("every account links it already", "information")
             return
@@ -325,34 +670,94 @@ class SkillsView(Widget):
             self.rescan()
         self.app.push_screen(TargetScreen(it["name"], targets, verb="Link"), chosen)
 
+    def _notify_from(self, msg, severity="information"):
+        self.app.call_from_thread(self.app.notify, msg, severity=severity, markup=False)
+
     def action_install(self):
         def asked(source):
-            if not source:
-                return
+            if source:
+                self.run_worker(lambda: dry_run(source), thread=True, group="skills-install")
 
-            def run():
-                try:
-                    r = _run(["pl", "skills", "install", source], capture_output=True, text=True)
-                    msg = (r.stdout.strip() or r.stderr.strip() or "installed").splitlines()[-1]
-                except Exception as e:
-                    msg = str(e)
-                self.app.call_from_thread(self.app.notify, msg, markup=False)
-                self.app.call_from_thread(self.rescan)
-
-            self.run_worker(run, thread=True, group="skills-install")
-
-        self.app.push_screen(PromptScreen("Install skill: <github:...> or owner/repo", placeholder="github:owner/repo"), asked)
-
-    def action_update(self):
-        def run():
+        def dry_run(source):
             try:
-                r = _run(["pl", "skills", "update", "--check"], capture_output=True, text=True)
-                msg = (r.stdout.strip() or r.stderr.strip() or "updated").splitlines()[-1]
-            except Exception as e:
-                msg = str(e)
-            self.app.call_from_thread(self.app.notify, msg, markup=False)
+                r = _run(["pl", "skills", "install", source, "--dry-run"], capture_output=True, text=True)
+            except Exception as e:  # noqa: BLE001
+                return self._notify_from(str(e), "error")
+            pinned = pinned_source(r.stdout)
+            if r.returncode != 0 or not pinned:
+                msg = r.stderr.strip() if r.returncode != 0 and r.stderr.strip() else "the dry run named no commit; nothing installed"
+                return self._notify_from(msg, "error")
+            review = InstallReviewScreen(review_title(r.stdout, pinned), r.stdout)
+            self.app.call_from_thread(self.app.push_screen, review, lambda yes: reviewed(yes, pinned))
+
+        def reviewed(yes, pinned):
+            if not yes:
+                self.app.notify("nothing installed", markup=False)
+                return
+            self.run_worker(lambda: install(pinned), thread=True, group="skills-install")
+
+        def install(pinned):
+            try:
+                r = _run(["pl", "skills", "install", pinned, "--yes"], capture_output=True, text=True)
+                msg = (r.stdout.strip() or r.stderr.strip() or "installed").splitlines()[-1]
+                severity = "error" if r.returncode != 0 else "information"
+            except Exception as e:  # noqa: BLE001
+                msg, severity = str(e), "error"
+            self._notify_from(msg, severity)
             self.app.call_from_thread(self.rescan)
 
-        self.run_worker(run, thread=True, group="skills-update")
+        self.app.push_screen(PromptScreen(INSTALL_PROMPT, placeholder="github:owner/repo"), asked)
 
+    def action_update(self):
+        it = self._item()
+        why = update_block(it, self.checks)
+        if why:
+            self._say(why, "information")
+            return
+        name = it["name"]
 
+        def show_diff():
+            r = _run(["pl", "skills", "update", name, "--dry-run"], capture_output=True, text=True)
+            if r.returncode != 0:
+                self.app.call_from_thread(self._say, (r.stderr.strip() or "update failed").splitlines()[-1])
+                return
+            *diff, last = r.stdout.strip().splitlines()
+            repo, sha = last.rsplit(" ", 1)[-1].rsplit("@", 1)
+            shown = "\n".join(diff[:DIFF_LINES]) + (f"\n… {len(diff) - DIFF_LINES} more lines" if len(diff) > DIFF_LINES else "")
+            ask = ConfirmScreen(f"{shown}\n\nUpdate {name} to {repo}@{sha[:7]}?")
+            self.app.call_from_thread(self.app.push_screen, ask, lambda yes: yes and apply(sha))
+
+        def apply(sha):
+            def run():
+                r = _run(["pl", "skills", "update", name, "--yes", "--sha", sha], capture_output=True, text=True)
+                said = (r.stdout if r.returncode == 0 else r.stderr).strip().splitlines()
+                self.app.call_from_thread(self.app.notify, said[-1] if said else "update failed",
+                                          severity="information" if r.returncode == 0 else "error", markup=False)
+                self.app.call_from_thread(self.rescan)
+            self.run_worker(run, thread=True, group="skills-update")
+
+        def guarded():
+            try:
+                show_diff()
+            except Exception as e:  # noqa: BLE001 - a worker that raises kills the app
+                self.app.call_from_thread(self._say, e)
+        self.run_worker(guarded, thread=True, group="skills-update")
+
+    def action_reset(self):
+        it = self._item()
+        if it is None or it["origin_label"] != "built in":
+            self._say("select one of pl's stage skills to reset it", "information")
+            return
+        name = it["name"]
+
+        def answered(yes):
+            if not yes:
+                return
+            try:
+                backup = skills.reset_builtin(name)
+                self._say(f"restored {name}" + (f"; backup {backup}" if backup else ""), "information")
+            except (SystemExit, Exception) as e:  # noqa: BLE001
+                self._say(e)
+            self.rescan()
+        self.app.push_screen(ConfirmScreen(f"Replace {skills.library() / name / 'SKILL.md'} with the shipped version? "
+                                           f"A backup is kept."), answered)

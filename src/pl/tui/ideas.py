@@ -17,13 +17,21 @@ from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from pl import config as C
-from pl import harnesses, ideas
+from pl import harnesses, ideas, pipeline
+from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.util import short_id
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 SKIP_TEXT = "(skipped: I do not know yet; ask something else)"
-STATUS = {"interviewing": "interviewing", "approving": "creating the card…", "approved": "approved · in Inbox",
+STATUS = {"interviewing": "interviewing", "approving": "creating the {item}…", "approved": "approved · in Inbox",
           "discarded": "discarded"}
+
+
+def status_text(status, item, default=None):
+    """The status sentence with the pipeline's word; an unknown status is shown as it is, never formatted."""
+    if status in STATUS:
+        return STATUS[status].replace("{item}", item)
+    return str(status) if default is None else default
 
 
 class IdeaInput(TextArea):
@@ -110,9 +118,9 @@ class IdeasView(Widget):
     #idea-keys, #idea-status { height: 1; color: $text-muted; }
     #idea-brief { width: 54; height: 1fr; border: round $panel-lighten-2; padding: 0 1; }
     """
-    BINDINGS = [Binding("n", "new", "new idea"), Binding("d", "discard", "discard"), Binding("r", "rename", "rename"),
-                Binding("h", "harness", "harness"), Binding("e", "edit_brief", "edit brief"),
-                Binding("A", "approve", "approve brief"), Binding("ctrl+s", "skip", "skip question")]
+    BINDINGS = [Binding("n", "new", "new idea"), Binding("d", "discard", "discard"), Binding("f2", "rename", "rename"),
+                Binding("H", "harness", "harness"), Binding("e", "edit_brief", "edit brief"),
+                Binding("A", "approve", "approve brief"), Binding("ctrl+n", "skip", "skip question")]
 
     def __init__(self):
         super().__init__()
@@ -127,8 +135,8 @@ class IdeasView(Widget):
                     yield Static("", id="idea-transcript")
                 yield Static("", id="idea-status")
                 yield IdeaInput(id="idea-input", soft_wrap=True, show_line_numbers=False)
-                yield Static(Text("enter send · ctrl+j new line · ctrl+s skip question · e edit brief · "
-                                  "A approve · h harness · n new · d discard · r rename", style="dim"), id="idea-keys")
+                yield Static(Text("enter send · ctrl+j new line · ctrl+n skip question · e edit brief · "
+                                  "A approve · H harness · n new · d discard · F2 rename", style="dim"), id="idea-keys")
             yield Static("", id="idea-brief")
 
     def on_mount(self):
@@ -164,16 +172,21 @@ class IdeasView(Widget):
         self.items = items
         ol = self.query_one("#idea-list", OptionList)
         ol.clear_options()
+        ol.add_option(Option(new_row("idea"), id=NEW_ROW))
         for i in items:
             q = sum(1 for e in i.get("transcript", []) if e.get("role") == "harness")
-            line = STATUS.get(i.get("status"), str(i.get("status"))) + (f" · {q} question{'s' * (q != 1)}" if q else "")
+            line = status_text(i.get("status"), pipeline.ui()["item"]) + (f" · {q} question{'s' * (q != 1)}" if q else "")
             ol.add_option(Option(Text(f"{str(i.get('title'))[:60]}\n{line}"), id=i["id"]))
+        if not items:
+            ol.add_option(Option(Text("\n".join(empty_state("ideas")), style="dim"), disabled=True))
         ol.border_title = f"Ideas · {len(items)}"
         want = select or (self.current or {}).get("id")
         for n, i in enumerate(items):
             if i["id"] == want:
-                ol.highlighted = n
+                ol.highlighted = n + 1
                 self.current = i
+        if ol.highlighted is None:
+            ol.highlighted = 0
         self._redraw()
 
     def on_option_list_option_highlighted(self, m):
@@ -182,6 +195,10 @@ class IdeasView(Widget):
             if hit is not None and hit is not self.current:
                 self.current = hit
                 self._redraw()
+
+    def on_option_list_option_selected(self, m):
+        if m.option_list.id == "idea-list" and m.option.id == NEW_ROW:
+            self.action_new()
 
     # ---------- rendering ----------
 
@@ -214,7 +231,7 @@ class IdeasView(Widget):
         if idea is None:
             return ""
         if idea.get("status") != "interviewing":
-            return STATUS.get(idea.get("status"), "")
+            return status_text(idea.get("status"), pipeline.ui()["item"], "")
         if ideas.is_clear(idea):
             return "the brief is clear: press A to approve it and start the spec"
         return "● waiting for your answer" if idea.get("question") else ""
@@ -234,7 +251,7 @@ class IdeasView(Widget):
             t.append("\n")
         t.append(f"brief {ideas.clear_count(brief)} of {len(ideas.FIELDS)} clear\n", style="dim")
         if idea and idea.get("card_id"):
-            t.append(f"card {short_id(idea['card_id'])} in Inbox\n", style="green")
+            t.append(f"{pipeline.ui()['item']} {short_id(idea['card_id'])} in Inbox\n", style="green")
         elif idea and ideas.is_clear(idea):
             t.append("A  approve brief, start spec\n", style="bold")
         else:
@@ -302,7 +319,7 @@ class IdeasView(Widget):
 
     def action_new(self):
         self.current = None
-        self.query_one("#idea-list", OptionList).highlighted = None
+        self.query_one("#idea-list", OptionList).highlighted = 0
         self._redraw()
         self._set_input(True)
 
@@ -323,7 +340,7 @@ class IdeasView(Widget):
 
     def action_discard(self):
         if self.current and self.current.get("status") in ("approving", "approved"):
-            self.app.notify("an approved idea is not discarded; its card is on the board", markup=False)
+            self.app.notify(f"an approved idea is not discarded; its {pipeline.ui()['item']} is on the board", markup=False)
             return
         self._saved_update(status="discarded")
 
@@ -427,7 +444,7 @@ class IdeasView(Widget):
         self.approving = False
         self.current = done
         if done.get("status") != "approved" or not done.get("card_id"):
-            self.app.notify("another console is creating this card", markup=False)
+            self.app.notify(f"another console is creating this {pipeline.ui()['item']}", markup=False)
             return self.reload(select=done["id"])
-        self.app.notify(f"card {short_id(done.get('card_id'))} created in Inbox; the spec stage picks it up", markup=False)
+        self.app.notify(f"{pipeline.ui()['item']} {short_id(done.get('card_id'))} created in Inbox; the spec stage picks it up", markup=False)
         self.reload(select=done["id"])

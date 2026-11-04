@@ -1,0 +1,4 @@
+id = "2026-10-26.64"
+title = "An alert when the repository's CI is not running"
+where = "Alerts tab"
+try = "pl alerts"

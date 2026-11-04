@@ -6,8 +6,10 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 
 from pl import config as C
+from pl import harnesses
 
 DEFAULTS = {"enabled": False, "cpus": 2, "memory": "4G", "disk": "20G", "allow": []}
 SIZE_RE = re.compile(r"[1-9][0-9]*[KMG]")
@@ -148,7 +150,8 @@ def up(vm: str | None = None, **kw) -> None:
 
 def _run(argv, **kw):
     """The module's single subprocess seam: run a multipass command without a shell."""
-    return subprocess.run(argv, capture_output=True, text=True, timeout=kw.pop("timeout", 120), **kw)
+    capture = kw.pop("capture", True)
+    return subprocess.run(argv, capture_output=capture, text=True, timeout=kw.pop("timeout", 120), **kw)
 
 
 def settings() -> dict:
@@ -262,7 +265,63 @@ def _status(vm: str) -> None:
         print(f"  {source} -> {target}")
 
 
+class SandboxCopyError(RuntimeError):
+    pass
+
+
+def _last_line(r, default: str) -> str:
+    text = (r.stderr or r.stdout or "").strip()
+    return text.splitlines()[-1] if text else default
+
+
+def copy_in(src: Path | str, dest: str, vm: str | None = None) -> None:
+    """Copy one host file into the VM at mode 0600: created empty first, content streamed on stdin."""
+    vm = vm or vm_name()
+    if harnesses.SECRET_RE.fullmatch(Path(src).name):
+        raise SandboxCopyError(f"cannot copy {Path(src).name} into {vm}:{dest}: pl never copies a credential file")
+    info = _info(vm)
+    if info is None or info["state"] != "Running":
+        raise SandboxCopyError(f"cannot copy into {vm}:{dest}: the VM is not running")
+    r = _run([MULTIPASS, "exec", vm, "--", "sh", "-c",
+              'umask 077 && rm -f -- "$1" && : > "$1" && chmod 600 -- "$1"', "sh", dest])
+    if r.returncode != 0:
+        raise SandboxCopyError(f"cannot copy into {vm}:{dest}: {_last_line(r, 'create failed')}")
+    r = _run([MULTIPASS, "exec", vm, "--", "sh", "-c", 'cat > "$1"', "sh", dest], input=Path(src).read_text())
+    if r.returncode != 0:
+        _run([MULTIPASS, "exec", vm, "--", "rm", "-f", "--", dest])
+        raise SandboxCopyError(f"cannot copy into {vm}:{dest}: {_last_line(r, 'write failed')}")
+
+
+def _login(args) -> None:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise SystemExit("pl: sandbox login needs a real terminal: run it yourself in a terminal, "
+                         "not piped or from the dispatcher")
+    name = args.account
+    if not name or name not in C.ACCOUNTS:
+        raise SystemExit(f"pl: no account {name!r} in profile {C.PROFILE_NAME}; "
+                         f"its accounts are {', '.join(C.ACCOUNTS) or 'none'}")
+    h = harnesses.account_harness(name)
+    argv = harnesses.login_argv(h)
+    if not argv:
+        raise SystemExit(f"pl: harness {h.name} has no known sign-in command to run in the sandbox")
+    if not shutil.which(MULTIPASS):
+        raise SystemExit("pl: " + INSTALL)
+    vm = vm_name()
+    info = _info(vm)
+    if info is None:
+        raise SystemExit(f"pl: no sandbox VM for profile {C.PROFILE_NAME}: run pl sandbox create first")
+    if info["state"] != "Running":
+        raise SystemExit(f"pl: sandbox VM {vm} is {info['state']}: run pl sandbox start first")
+    if _run([MULTIPASS, "exec", vm, "--", "which", argv[0]]).returncode != 0:
+        raise SystemExit(f"pl: {argv[0]} is not installed in {vm}: install it inside the VM "
+                         f"(multipass shell {vm}), then run pl sandbox login {name} again")
+    r = _run([MULTIPASS, "exec", vm, "--", *argv], capture=False, timeout=None)
+    raise SystemExit(r.returncode)
+
+
 def cmd_sandbox(args) -> None:
+    if args.action == "login":
+        _login(args)
     if not shutil.which(MULTIPASS):
         raise SystemExit("pl: " + INSTALL)
     action = args.action

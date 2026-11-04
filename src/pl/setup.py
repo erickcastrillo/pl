@@ -22,8 +22,9 @@ from pathlib import Path
 import tomlkit
 
 from pl import config as C
-from pl import harnesses, profiles
+from pl import ghquota, harnesses, profiles
 from pl.trackers import github
+from pl.util import ask
 
 HARNESSES = {"claude": "claude", "codex": "codex", "agy": "antigravity"}   # choice -> built-in harness
 BINARIES = {"claude": "claude", "codex": "codex", "agy": "agy"}
@@ -92,7 +93,7 @@ _sleep = time.sleep
 
 def _input(prompt):
     try:
-        return input(prompt)
+        return ask("setup", prompt)
     except EOFError:
         raise SystemExit("pl setup: setup cancelled, nothing written") from None
 
@@ -313,7 +314,7 @@ def ask_tracker(answers, flags):
 
 def ask_gh(answers, flags):
     """[code_host] gh_config_dir: the default gh sign-in (None) or a separate folder. Checks exit codes only."""
-    r = _run(["gh", "auth", "status"])
+    r = ghquota.gh(_run, ["auth", "status"])
     logins = list(dict.fromkeys(LOGIN_RE.findall(r[1]))) if r and r[0] == 0 else []
     if r is None:
         print("gh is not installed: https://cli.github.com (pl uses it for GitHub trackers and PR checks)")
@@ -329,7 +330,7 @@ def ask_gh(answers, flags):
         return None
     path = Path(folder).expanduser()
     login = f"GH_CONFIG_DIR={shlex.quote(str(path))} gh auth login -s project"
-    while (r := _run(["gh", "auth", "status"], env={**os.environ, "GH_CONFIG_DIR": str(path)})) is not None and r[0]:
+    while (r := ghquota.gh(_run, ["auth", "status"], env={**os.environ, "GH_CONFIG_DIR": str(path)})) is not None and r[0]:
         print(f"{_tilde(path)} has no gh sign-in yet. Run this yourself (pl never signs in for you):\n  {login}")
         if not flags.interactive or _input("Press Enter when you have signed in (or type skip): ").strip() == "skip":
             break
@@ -385,21 +386,21 @@ def create_labels(answers, flags, repo):
     prefix = f"GH_CONFIG_DIR={shlex.quote(str(Path(gh_dir).expanduser()))} " if gh_dir else ""
     argv = {}
     for k, name in answers["labels"].items():   # a name used twice: the first key's color wins
-        argv.setdefault(name, ["gh", "label", "create", name, "--repo", repo, "--color", LABELS[k][1],
+        argv.setdefault(name, ["label", "create", name, "--repo", repo, "--color", LABELS[k][1],
                                "--description", LABELS[k][2]])
     if answers["tracker"].get("type") == "github-project":   # the default issue intake's label
-        argv.setdefault(C.START_LABEL, ["gh", "label", "create", C.START_LABEL, "--repo", repo, "--color", "C2E0C6",
+        argv.setdefault(C.START_LABEL, ["label", "create", C.START_LABEL, "--repo", repo, "--color", "C2E0C6",
                                         "--description", "Adopt this issue into the pl funnel"])
     have = None
     if answers.get("gh_ok"):
-        r = _run(["gh", "label", "list", "--repo", repo, "--limit", "500", "--json", "name"], env=env, stdout_only=True)
+        r = ghquota.gh(_run, ["label", "list", "--repo", repo, "--limit", "500", "--json", "name"], env=env, stdout_only=True)
         try:
             have = {x["name"] for x in json.loads(r[1])} if r and r[0] == 0 else None
         except (ValueError, TypeError, KeyError):
             have = None
     if have is None:
         answers["todo"].append(f"pl could not list the labels of {repo}; after signing in to gh, create the PR labels "
-                               "it lacks; run these yourself:\n" + "\n".join(f"  {prefix}{shlex.join(x)}" for x in argv.values()))
+                               "it lacks; run these yourself:\n" + "\n".join(f"  {prefix}gh {shlex.join(x)}" for x in argv.values()))
         return
     missing = [n for n in argv if n not in have]
     if not missing:
@@ -409,14 +410,14 @@ def create_labels(answers, flags, repo):
         yes = not flags.interactive or _input(f"Create {len(missing)} labels on {repo}? [Y/n]: ").strip().lower() not in ("n", "no")
     if not yes:
         print(f"Not creating labels. PR checks need them on {repo}:\n" +
-              "\n".join(f"  {prefix}{shlex.join(argv[n])}" for n in missing))
+              "\n".join(f"  {prefix}gh {shlex.join(argv[n])}" for n in missing))
         return
     for n in missing:
-        r = _run(argv[n], env=env)
+        r = ghquota.gh(_run, argv[n], env=env)
         if r and r[0] == 0:
             print(f"created the label {n} on {repo}")
         else:
-            answers["todo"].append(f"create the label {n} on {repo}; run this yourself:  {prefix}{shlex.join(argv[n])}")
+            answers["todo"].append(f"create the label {n} on {repo}; run this yourself:  {prefix}gh {shlex.join(argv[n])}")
 
 
 def ask_work_dir(answers, flags):
@@ -440,6 +441,7 @@ def ask_attention(answers, flags):
 
 LOCAL_MODEL_PROMPT = ("Use a local model (Gemma 4 on Ollama) for small jobs like the standup summary? "
                       "Data stays on this machine. [Y/n]: ")
+EMBED_MODEL = "nomic-embed-text"
 OLLAMA_DOWNLOAD = "https://ollama.com/download"
 
 
@@ -542,7 +544,18 @@ def build_doc(a):
         doc["code_host"].pop("labels", None)
     if a.get("local_model"):
         doc["local_model"] = dict(a["local_model"])
+        if a["local_model"].get("enabled") is True:
+            doc["models"] = {"local": models_local(a["local_model"])}
     return doc
+
+
+def models_local(lm):
+    """[models.local] for a new profile: summarise on today's model, embed once its model is pulled."""
+    from pl import local_model
+    table = {"summarise": lm.get("model") or local_model.DEFAULTS["model"]}
+    if local_model.pulled(EMBED_MODEL, local_model.models(lm) or set()):
+        table["embed"] = EMBED_MODEL
+    return table
 
 
 def merged_doc(a):
@@ -867,7 +880,7 @@ def cmd_setup(argv: list[str], profile=None):
     if flags.interactive and _input("Write this profile? [Y/n]: ").strip().lower() in ("n", "no"):
         raise SystemExit("pl setup: nothing written")
     if not a["exists"]:
-        profiles._target(a["slug"])   # appeared while we asked: never overwrite
+        profiles.refuse_existing(profiles._target(a["slug"]))   # appeared while we asked: never overwrite
     url = None
     if "_create" in t:
         a["tracker"], url = _create_project(t, t["owner"], a["gh_config_dir"])
@@ -895,6 +908,7 @@ def cmd_setup(argv: list[str], profile=None):
             profiles._write_config(d, doc)
         print(f"created {_tilde(d)}/config.toml")
         write_notify_script(a, d, flags.force)
+    ghquota.set_role("pl setup", profile=a["slug"])
     _install_builtins()
     bad, warns = C.check_models(doc)
     for w in warns:
@@ -923,7 +937,7 @@ def cmd_setup(argv: list[str], profile=None):
         print(msg)
         try:
             yes = flags.interactive and "uv tool update-shell" in msg and \
-                input("Run uv tool update-shell now? [y/N]: ").strip().lower() in ("y", "yes")
+                _input("Run uv tool update-shell now? [y/N]: ").strip().lower() in ("y", "yes")
         except EOFError:
             yes = False
         r = _run(["uv", "tool", "update-shell"]) if yes else None

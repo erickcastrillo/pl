@@ -1,17 +1,21 @@
 """Skills section: every account's skills, agents and commands, viewed, edited, created, trashed, and shared through
 pl's skills library. Temp HOME with fake accounts; nothing real is touched."""
 import io
+import json
 import os
+import subprocess
 import sys
 
 import pytest
 from rich.console import Console
 from textual.app import App
-from textual.widgets import DataTable, Input, Markdown, Select, TextArea
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Input, Markdown, Static, TextArea
 
-from pl import cli, skills
+from pl import cli, skill_sources, skills
 from pl import config as C
 from pl.tui import skills as tui
+from tui_wait import settle
 
 SKILL = "---\nname: {n}\ndescription: {d}\n---\n\n# {n}\n\nBody of {n}.\n"
 
@@ -132,6 +136,26 @@ def test_create_writes_the_template_and_never_overwrites(home):
     assert "Deploy it" in (home["a"] / "commands/deploy.md").read_text()
 
 
+def _description(path):
+    import yaml
+    return yaml.safe_load(path.read_text().split("---\n")[1])["description"]
+
+
+def test_create_writes_the_description_entered(home):
+    p = skills.create("b", "skill", "say-hi", "Use when greeting")
+    assert "\ndescription: Use when greeting\n" in p.read_text()
+
+
+def test_create_with_blank_description_keeps_the_placeholder(home):
+    p = skills.create("b", "skill", "blank-one", "  ")
+    assert _description(p) == "Say in one sentence when to use this skill."
+
+
+def test_create_quotes_a_description_yaml_would_misread(home):
+    p = skills.create("b", "skill", "colon-one", "Use when: x")
+    assert _description(p) == "Use when: x"
+
+
 # ---------- delete ----------
 
 def test_delete_moves_the_folder_to_trash(home):
@@ -235,37 +259,42 @@ def screen_text(app):
     return " ".join(console.export_text().split())
 
 
-async def settle(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-    await pilot.pause()
-
-
 class Host(App):
     def compose(self):
         yield tui.SkillsView()
 
 
 def rows(app):
-    t = app.query_one("#skills-table", DataTable)
-    return [(str(t.get_row_at(i)[0]), str(t.get_row_at(i)[1])) for i in range(t.row_count)]
+    view = app.query_one(tui.SkillsView)
+    return [None if r is None else (r["name"], r["account"]) for r in view.rows]
+
+
+def loaded(app):
+    return rows(app) and app.query_one("#skills-preview", Markdown).source
+
+
+def confirm_shown(app):
+    return isinstance(app.screen, tui.ConfirmScreen) and "y yes" in screen_text(app)
 
 
 async def select(pilot, name, account):
     app = pilot.app
+    md = app.query_one("#skills-preview", Markdown)
+    before = md.source
     t = app.query_one("#skills-table", DataTable)
     t.focus()
     t.move_cursor(row=rows(app).index((name, account)))
-    await settle(pilot)
+    await settle(pilot, lambda: md.source != before, "the preview of the selected row")
 
 
 async def test_view_lists_two_accounts_and_renders_the_preview(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         got = rows(app)
         assert ("alpha", "a") in got and ("beta", "b") in got and ("team-wide", "shared") in got
         await select(pilot, "beta", "b")
+        await settle(pilot, lambda: "Body of beta." in screen_text(app), "the preview on screen")
         md = app.query_one("#skills-preview", Markdown)
         assert "Body of beta." in md.source
         assert "Body of beta." in screen_text(app)
@@ -274,18 +303,18 @@ async def test_view_lists_two_accounts_and_renders_the_preview(home):
 async def test_e_edits_in_app_and_saves_with_a_backup_after_confirming(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         ta = app.screen.query_one(TextArea)
         ta.load_text(ta.text + "Added line.\n")
         await pilot.press("ctrl+s")
-        await settle(pilot)
+        await settle(pilot, lambda: '+Added line.' in screen_text(app), "the diff")
         assert "+Added line." in screen_text(app)                  # the diff is shown before anything is written
         assert "Added line." not in (home["a"] / "skills/alpha/SKILL.md").read_text()
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: (home['a'] / 'skills/alpha/SKILL.md').read_text().endswith('Added line.\n'), "the saved file")
         assert (home["a"] / "skills/alpha/SKILL.md").read_text().endswith("Added line.\n")
         assert len(list((home["a"] / "skills/alpha").glob("SKILL.md.bak-*"))) == 1
 
@@ -293,48 +322,232 @@ async def test_e_edits_in_app_and_saves_with_a_backup_after_confirming(home):
 async def test_e_on_a_plugin_skill_is_refused(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "plugskill", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: "plugin's file" in notes(app), "the refusal")
         assert not app.screen.query(TextArea)
         assert "plugin" in screen_text(app)
 
 
-async def test_n_creates_from_the_template_and_opens_the_editor(home):
+SHA = "a" * 40
+DRY = (f"Source: github:o/r/x@{SHA}\nRuns code:\n  script  run.sh\nFiles:\n  SKILL.md  120 B\n  run.sh  40 B\n")
+PLUGIN_DRY = (f"Source: github:o/r@{SHA}\nPlugin p\nSkills (installed):\n  a\n  b\n  c\nFiles:\n  plugin.json  9 B\n")
+
+
+class FakeRun:
+    def __init__(self, home, dry=DRY, code=0, err=""):
+        self.calls, self.dry, self.code, self.err, self.home = [], dry, code, err, home
+
+    def __call__(self, argv, **kw):
+        if "--check" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="[]", stderr="")
+        self.calls.append(list(argv))
+        if "--dry-run" in argv:
+            return subprocess.CompletedProcess(argv, self.code, stdout=self.dry, stderr=self.err)
+        lib = skills.library() / "x"
+        lib.mkdir(parents=True)
+        (lib / "SKILL.md").write_text("---\nname: x\ndescription: X\n---\nBody\n")
+        (skills.library() / ".pl-sources.json").write_text(json.dumps({"x": {
+            "source": f"github:o/r/x@{SHA}", "repo": "o/r", "path": "x", "ref": SHA, "sha": SHA, "files": []}}))
+        return subprocess.CompletedProcess(argv, 0, stdout="installed x\n", stderr="")
+
+
+def toasts(app):
+    return " ".join(n.message for n in app._notifications)
+
+
+def buttons(app):
+    return [str(b.label) for b in app.screen.query(Button)]
+
+
+async def choose(pilot, which):
+    app = pilot.app
+    app.query_one("#skills-table").focus()
+    await pilot.press("n")
+    await settle(pilot, lambda: app.screen.query(f'#skills-choose-{which}'), "the chooser")
+    await pilot.click(f"#skills-choose-{which}")
+    await settle(pilot, lambda: app.screen.query('#skills-new-name') if which == 'write' else isinstance(app.screen, tui.PromptScreen), "the chosen form")
+
+
+async def start_install(pilot, source="github:o/r/x"):
+    app = pilot.app
+    await choose(pilot, "install")
+    app.screen.query_one(Input).value = source
+    await pilot.press("enter")
+    await settle(pilot, lambda: app.screen.query('#skills-review-cancel') or toasts(app), "the review screen or an error toast")
+
+
+async def test_n_opens_a_chooser_with_exactly_two_choices_and_esc_changes_nothing(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        before = rows(app)
         app.query_one("#skills-table").focus()
         await pilot.press("n")
-        await settle(pilot)
-        app.screen.query_one("#skills-new-account", Select).value = "b"
-        app.screen.query_one("#skills-new-name", Input).value = "Bad Name"
-        app.screen.query_one("#skills-new-name", Input).focus()
-        await pilot.press("enter")
-        await settle(pilot)
-        assert not (home["b"] / "skills/Bad Name").exists() and app.is_running
-        await pilot.press("n")
-        await settle(pilot)
-        app.screen.query_one("#skills-new-account", Select).value = "b"
+        await settle(pilot, lambda: isinstance(app.screen, tui.NewChoiceScreen), "the chooser")
+        assert buttons(app) == ["Install from GitHub", "Write a new one"]
+        await pilot.press("escape")
+        await settle(pilot, lambda: not isinstance(app.screen, ModalScreen), "the chooser to close")
+        assert not isinstance(app.screen, ModalScreen)   # the chooser closed; the right pane keeps its own buttons
+        assert fake.calls == [] and rows(app) == before and not skills.library().exists()
+
+
+async def test_install_shows_the_dry_run_with_cancel_focused(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await start_install(pilot)
+        await settle(pilot, lambda: "Install from o/r@aaaaaaa?" in screen_text(app), "the review text")
+        assert fake.calls == [["pl", "skills", "install", "github:o/r/x", "--dry-run"]]
+        text = screen_text(app)
+        assert text.index("Runs code:") < text.index("Files:") and "Install from o/r@aaaaaaa?" in text
+        assert app.focused.id == "skills-review-cancel"
+
+
+async def test_install_runs_the_pinned_source_with_yes_and_refreshes(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await start_install(pilot)
+        await pilot.click("#skills-review-install")
+        await settle(pilot, lambda: ('x', 'library') in rows(app) and 'installed x' in toasts(app), "the installed skill")
+        assert fake.calls[1] == ["pl", "skills", "install", f"github:o/r/x@{SHA}", "--yes"]
+        assert ("x", "library") in rows(app)
+        assert "installed x" in toasts(app)
+
+
+@pytest.mark.parametrize("dismiss", ["cancel", "escape"])
+async def test_cancel_or_esc_installs_nothing(home, monkeypatch, dismiss):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await start_install(pilot)
+        if dismiss == "cancel":
+            await pilot.click("#skills-review-cancel")
+        else:
+            await pilot.press("escape")
+        await settle(pilot, lambda: 'nothing installed' in toasts(app), "the cancel notice")
+        assert len(fake.calls) == 1 and not skills.library().exists()
+        assert "nothing installed" in toasts(app)
+
+
+@pytest.mark.parametrize("dry,code,err,shown", [
+    ("", 2, "pl skills install: /l/x already exists; pl never overwrites", "pl never overwrites"),
+    ("Files:\n  SKILL.md  1 B\n", 0, "", "named no commit"),
+])
+async def test_a_failed_dry_run_shows_the_error_and_no_install_button(home, monkeypatch, dry, code, err, shown):
+    fake = FakeRun(home, dry=dry, code=code, err=err)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await start_install(pilot)
+        assert shown in toasts(app)
+        assert not app.screen.query("#skills-review-install") and len(fake.calls) == 1
+
+
+def test_review_title_names_the_plugin_and_skill_count():
+    assert tui.review_title(PLUGIN_DRY, f"github:o/r@{SHA}") == "Install plugin p (3 skills) from o/r@aaaaaaa?"
+    assert tui.review_title(DRY, f"github:o/r/x@{SHA}") == "Install from o/r@aaaaaaa?"
+    assert tui.pinned_source(DRY) == f"github:o/r/x@{SHA}" and tui.pinned_source("Files:\n") is None
+
+
+async def test_a_plugin_installs_with_one_pinned_yes_call(home, monkeypatch):
+    fake = FakeRun(home, dry=PLUGIN_DRY)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await start_install(pilot, "github:o/r")
+        await settle(pilot, lambda: "Install plugin p (3 skills) from o/r@aaaaaaa?" in screen_text(app), "the review text")
+        assert "Install plugin p (3 skills) from o/r@aaaaaaa?" in screen_text(app)
+        await pilot.click("#skills-review-install")
+        await settle(pilot, lambda: len(fake.calls) == 2, "the install call")
+        assert fake.calls[1] == ["pl", "skills", "install", f"github:o/r@{SHA}", "--yes"]
+
+
+async def test_write_a_new_one_creates_in_the_library_with_the_description_and_opens_the_editor(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await choose(pilot, "write")
         app.screen.query_one("#skills-new-name", Input).value = "made-here"
+        app.screen.query_one("#skills-new-description", Input).value = "Use when testing"
+        app.screen.query_one("#skills-new-description", Input).focus()
+        await pilot.press("enter")
+        await settle(pilot, lambda: app.screen.query(TextArea) and ('made-here', 'library') in rows(app), "the editor on the new skill")
+        path = skills.library() / "made-here/SKILL.md"
+        assert "\ndescription: Use when testing\n" in path.read_text()
+        assert "description: Use when testing" in app.screen.query_one(TextArea).text
+        assert ("made-here", "library") in rows(app)
+
+
+async def test_write_a_new_one_shows_name_errors_in_the_form(home):
+    (skills.library() / "taken").mkdir(parents=True)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await choose(pilot, "write")
+        for name, shown in (("Bad Name", "is not a valid name"), ("taken", "pl never overwrites")):
+            app.screen.query_one("#skills-new-name", Input).value = name
+            app.screen.query_one("#skills-new-description", Input).value = "d"
+            app.screen.query_one("#skills-new-description", Input).focus()
+            await pilot.press("enter")
+            await settle(pilot, lambda: shown in str(app.screen.query_one('#skills-new-error', Static).content), "the name error")
+            assert shown in str(app.screen.query_one("#skills-new-error", Static).content)
+            assert app.screen.query("#skills-new-name")
+        assert not (skills.library() / "Bad Name").exists()
+
+
+async def test_enter_on_the_name_moves_to_the_description(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await choose(pilot, "write")
+        app.screen.query_one("#skills-new-name", Input).value = "next-one"
         app.screen.query_one("#skills-new-name", Input).focus()
         await pilot.press("enter")
-        await settle(pilot)
-        assert (home["b"] / "skills/made-here/SKILL.md").read_text().startswith("---\nname: made-here\n")
-        assert "name: made-here" in app.screen.query_one(TextArea).text
+        await settle(pilot, lambda: app.focused.id == 'skills-new-description', "the description field to take focus")
+        assert app.focused.id == "skills-new-description" and not (skills.library() / "next-one").exists()
+
+
+async def test_I_skips_the_chooser(home, monkeypatch):
+    fake = FakeRun(home)
+    monkeypatch.setattr(tui, "_run", fake)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        app.query_one("#skills-table").focus()
+        await pilot.press("I")
+        await settle(pilot, lambda: isinstance(app.screen, tui.PromptScreen), "the source prompt")
+        assert isinstance(app.screen, tui.PromptScreen) and not app.screen.query("#skills-choose-install")
+        app.screen.query_one(Input).value = "github:o/r/x"
+        await pilot.press("enter")
+        await settle(pilot, lambda: app.screen.query('#skills-review-cancel'), "the review screen")
+        await pilot.click("#skills-review-install")
+        await settle(pilot, lambda: len(fake.calls) == 2, "the install call")
+        assert [c[-1] for c in fake.calls] == ["--dry-run", "--yes"]
 
 
 async def test_d_asks_then_moves_to_trash(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         await pilot.press("d")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the confirm")
         assert (home["b"] / "skills/beta").is_dir()                 # nothing moves before the yes
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: ('beta', 'b') not in rows(app), "the row to go")
         assert not (home["b"] / "skills/beta").exists() and (home["b"] / ".pl-trash/skills").is_dir()
         assert ("beta", "b") not in rows(app)
 
@@ -344,11 +557,11 @@ async def test_palette_entry_opens_the_skills_section(home):
     from test_tui_views import Provider
     app = PlApp(snapshot_provider=Provider())
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: app.data is not None, "the first board read")
         cmd = next(c for c in app.get_system_commands(app.screen) if c.title == "Skills: view, edit, create")
         cmd.callback()
-        await settle(pilot)
-        assert app.active_tab == "settings" and app.focused is app.query_one("#skills-table")
+        await settle(pilot, lambda: app.active_tab == 'skills' and app.focused is app.query_one('#skills-table'), "the skills tab")
+        assert app.active_tab == "skills" and app.focused is app.query_one("#skills-table")
 
 
 # ---------- launches: Claude loads the library as a plugin; other harnesses get the skill inlined ----------
@@ -442,10 +655,10 @@ async def test_e_on_a_big_file_says_why_and_opens_nothing(home):
     (home["a"] / "skills/alpha/SKILL.md").write_bytes(b"x" * ((1 << 20) + 1))
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: 'larger than 1 MiB' in notes(app), "the refusal")
         assert not app.screen.query(TextArea) and "larger than 1 MiB" in notes(app)
 
 
@@ -478,22 +691,22 @@ def test_save_never_writes_through_a_link_swapped_in_after_the_check(home, tmp_p
 async def test_esc_with_unsaved_edits_asks_before_discarding(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         ta = app.screen.query_one(TextArea)
         ta.load_text(ta.text + "Unsaved.\n")
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the discard question")
         assert "Discard" in screen_text(app)
         await pilot.press("n")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor again")
         assert app.screen.query(TextArea) and "Unsaved." in app.screen.query_one(TextArea).text
         await pilot.press("escape")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the discard question")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: not app.screen.query(TextArea), "the editor to close")
         assert not app.screen.query(TextArea)
         assert "Unsaved." not in (home["a"] / "skills/alpha/SKILL.md").read_text()
 
@@ -501,17 +714,17 @@ async def test_esc_with_unsaved_edits_asks_before_discarding(home):
 async def test_ctrl_s_after_a_change_on_disk_says_reopen(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "alpha", "a")
         await pilot.press("e")
-        await settle(pilot)
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
         (home["a"] / "skills/alpha/SKILL.md").write_text("theirs\n")
         ta = app.screen.query_one(TextArea)
         ta.load_text(ta.text + "mine\n")
         await pilot.press("ctrl+s")
-        await settle(pilot)
+        await settle(pilot, lambda: isinstance(app.screen, ModalScreen), "the diff")
         await pilot.press("y")
-        await settle(pilot)
+        await settle(pilot, lambda: 'changed on disk; reopen' in notes(app), "the reopen notice")
         assert "changed on disk; reopen" in notes(app)
         assert (home["a"] / "skills/alpha/SKILL.md").read_text() == "theirs\n"
 
@@ -537,12 +750,129 @@ def test_trash_refuses_a_library_skill_that_accounts_still_link(home):
 async def test_d_warns_that_links_and_pl_prompts_will_break(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         await pilot.press("d")
-        await settle(pilot)
+        await settle(pilot, lambda: confirm_shown(app), "the confirm")
         text = screen_text(app)
-        assert "other profiles" in text and "/pl:beta" in text
+        assert "other profiles" in text and "Not used by any stage, loop or pod" in text
+
+
+@pytest.fixture
+def gh(home, monkeypatch):
+    """Library skill foo installed from GitHub, linked into account a, run by stage plan and loop nightly."""
+    from pl import pods
+    lib = skills.library()
+    (lib / "foo").mkdir(parents=True)
+    (lib / "foo/SKILL.md").write_text(SKILL.format(n="foo", d="Does a thing"))
+    os.symlink(lib / "foo", home["a"] / "skills/foo")
+    (lib / skill_sources.SOURCES_FILE).write_text(json.dumps({"foo": {"source": "github", "repo": "o/r", "sha": SHA}}))
+    monkeypatch.setattr(C, "PROMPTS", {"plan": "/pl:foo {id}"})
+    monkeypatch.setattr(C, "SERVICES", {"nightly": {"prompt": "/loop 1h /foo"}})
+    monkeypatch.setattr(C, "LOOPS_OFF", {})
+    monkeypatch.setattr(C, "PODS", {})
+    monkeypatch.setattr(pods, "find", lambda n: {})
+    return lib
+
+
+async def press_d(pilot, name, account):
+    app = pilot.app
+    await settle(pilot, lambda: loaded(app), "the first scan and preview")
+    await select(pilot, name, account)
+    await pilot.press("d")
+    await settle(pilot, lambda: confirm_shown(app) or toasts(app), "the confirm or a refusal")
+
+
+async def test_d_on_a_github_skill_names_its_stages_and_loops_and_keeps_it(gh):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        text = screen_text(app)
+        assert "stage plan" in text and "loop nightly" in text
+        assert (gh / "foo").is_dir()
+
+
+async def test_d_yes_on_a_github_skill_removes_it_everywhere(gh, home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        await pilot.press("y")
+        await settle(pilot, lambda: 'removed foo' in toasts(app) and ('foo', 'library') not in rows(app), "the removal")
+        assert not os.path.lexists(home["a"] / "skills/foo") and not (gh / "foo").exists()
+        assert len(list((gh / ".pl-trash").glob("foo-*"))) == 1
+        assert "foo" not in skill_sources.records()
+        assert ("foo", "library") not in rows(app)
+        assert "removed foo" in toasts(app)
+
+
+@pytest.mark.parametrize("key", ["n", "escape"])
+async def test_d_no_or_escape_on_a_github_skill_changes_nothing(gh, home, key):
+    before = (gh / skill_sources.SOURCES_FILE).read_bytes()
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "foo", "library")
+        await pilot.press(key)
+        await settle(pilot, lambda: not isinstance(app.screen, ModalScreen), "the confirm to close")
+        assert (gh / "foo").is_dir() and (home["a"] / "skills/foo").is_symlink()
+        assert (gh / skill_sources.SOURCES_FILE).read_bytes() == before
+
+
+async def test_d_on_an_own_skill_names_its_pod_and_trashes_on_yes(home, monkeypatch):
+    from pl import pods
+    monkeypatch.setattr(C, "PODS", {"review": {}})
+    monkeypatch.setattr(pods, "find", lambda n: {"skills": ["beta"]})
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        text = screen_text(app)
+        assert "pod review" in text and ".pl-trash" in text
+        assert (home["b"] / "skills/beta").is_dir()
+        await pilot.press("y")
+        await settle(pilot, lambda: not (home['b'] / 'skills/beta').exists() and (home['b'] / '.pl-trash/skills').is_dir(), "the trashed skill")
+        assert not (home["b"] / "skills/beta").exists() and (home["b"] / ".pl-trash/skills").is_dir()
+
+
+async def test_d_on_an_unused_skill_says_no_stage_loop_or_pod_uses_it(home, monkeypatch):
+    monkeypatch.setattr(C, "PODS", {})
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        assert "not used by any stage, loop or pod" in screen_text(app).lower()
+
+
+@pytest.mark.parametrize("case, word", [("builtin", "reset"), ("plugin", "plugin"), ("linked", "a")])
+async def test_d_refuses_builtins_plugins_and_linked_library_skills(home, case, word):
+    if case == "builtin":
+        name, account = skills.builtin_names()[0], "library"
+        (skills.library() / name).mkdir(parents=True)
+        (skills.library() / name / "SKILL.md").write_text(SKILL.format(n=name, d="Built in"))
+    elif case == "plugin":
+        name, account = "plugskill", "a"
+    else:
+        skills.share("a", "alpha")
+        name, account = "alpha", "library"
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, name, account)
+        assert not isinstance(app.screen, tui.ConfirmScreen)
+        assert word in toasts(app)
+        assert item(name, account)["path"] and os.path.lexists(item(name, account)["path"])
+
+
+async def test_d_when_a_pod_fails_to_load_still_asks_and_says_users_could_not_be_checked(home, monkeypatch):
+    from pl import pods
+
+    def boom(n):
+        raise ValueError("bad pod file")
+    monkeypatch.setattr(C, "PODS", {"review": {}})
+    monkeypatch.setattr(pods, "find", boom)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await press_d(pilot, "beta", "b")
+        assert "could not check" in screen_text(app).lower()
+        await pilot.press("y")
+        await settle(pilot, lambda: not (home['b'] / 'skills/beta').exists(), "the trashed skill")
+        assert not (home["b"] / "skills/beta").exists()
 
 
 @pytest.mark.parametrize("bad, why", [("relative/lib", "absolute"), ("HOME", "home"), ("ACCOUNT", "account")])
@@ -635,13 +965,14 @@ def test_inlined_prompt_files_are_0600_and_old_ones_are_removed(lib):
 async def test_s_is_left_to_standup_and_S_shares(home):
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         await pilot.press("s")
+        # s is left to standup and shows nothing, so there is no state to wait for
         await settle(pilot)
         assert "skills library" not in screen_text(app)
         await pilot.press("S")
-        await settle(pilot)
+        await settle(pilot, lambda: 'skills library' in screen_text(app), "the share notice")
         assert "skills library" in screen_text(app)
 
 
@@ -656,7 +987,344 @@ async def test_the_preview_is_read_off_the_ui_thread(home, monkeypatch):
     monkeypatch.setattr(skills, "read", spy)
     app = Host()
     async with app.run_test(size=(176, 48)) as pilot:
-        await settle(pilot)
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
         await select(pilot, "beta", "b")
         assert seen and not any(seen)
         assert "Body of beta." in app.query_one("#skills-preview", Markdown).source
+
+
+# ---------- grouped list: headings, origin, used by ----------
+
+@pytest.fixture
+def grouped_home(home, monkeypatch, tmp_path):
+    library = tmp_path / "library"
+    library.mkdir()
+    for n in ("pl-plan", "mine"):
+        (library / n).mkdir()
+        (library / n / "SKILL.md").write_text(SKILL.format(n=n, d=f"{n} skill"))
+    monkeypatch.setattr(C, "SKILLS", {"library": str(library)})
+    monkeypatch.setattr(C, "PROMPTS", {}, raising=False)
+    monkeypatch.setattr(C, "SERVICES", {}, raising=False)
+    monkeypatch.setattr(C, "LOOPS_OFF", {}, raising=False)
+    monkeypatch.setattr(C, "PODS", {}, raising=False)
+    monkeypatch.setattr(skills, "builtin_names", lambda: ["pl-plan"])
+    return {**home, "library": library}
+
+
+def by_name(groups):
+    return {r["name"]: r for _, rs in groups for r in rs}
+
+
+def test_grouped_puts_builtins_library_and_accounts_under_their_headings(grouped_home):
+    groups = tui.grouped(skills.scan())
+    assert [h for h, _ in groups] == ["pl's stage skills", "Your library", "a (claude)", "b (claude)"]
+    heads = {h: {r["name"] for r in rs} for h, rs in groups}
+    assert heads["pl's stage skills"] == {"pl-plan"}
+    assert {"mine", "team-wide"} <= heads["Your library"]
+
+
+def test_grouped_origin_labels(grouped_home):
+    (grouped_home["library"] / ".pl-sources.json").write_text(
+        json.dumps({"mine": {"source": "github", "repo": "own/rep", "sha": "abcdef1234" + "0" * 30}}))
+    got = by_name(tui.grouped(skills.scan()))
+    assert got["mine"]["origin_label"] == "GitHub own/rep@abcdef1"
+    assert got["pl-plan"]["origin_label"] == "built in"
+    assert got["plugskill"]["origin_label"] == "plugin"
+    assert got["omc-helper"]["origin_label"] == "oh-my-claude"
+    assert got["alpha"]["origin_label"] == "you"
+
+
+def test_grouped_used_by_names_stages_loops_and_pods(grouped_home, monkeypatch):
+    monkeypatch.setattr(C, "PROMPTS", {"plan": "/pl-plan x"})
+    monkeypatch.setattr(C, "SERVICES", {"nightly": {"prompt": "/loop 1h /alpha"}})
+    got = by_name(tui.grouped(skills.scan()))
+    assert got["pl-plan"]["used_by"] == "stage plan"
+    assert got["alpha"]["used_by"] == "loop nightly"
+    assert got["reviewer"]["used_by"] == ""
+
+
+def test_grouped_survives_a_failing_users_lookup(grouped_home, monkeypatch):
+    def boom(_):
+        raise ValueError("bad pod file")
+    monkeypatch.setattr(skill_sources, "users", boom)
+    got = by_name(tui.grouped(skills.scan()))
+    assert {"alpha", "pl-plan", "reviewer"} <= set(got)
+    assert all(r["used_by"] == "" for r in got.values())
+
+
+async def test_view_shows_headings_and_a_heading_row_selects_nothing(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app) and 'a (claude)' in screen_text(app), "the grouped list")
+        text = screen_text(app)
+        assert "Your library" in text and "a (claude)" in text
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=1)   # row 0 is "+ New skill"
+        # moving onto a heading posts no message to wait for
+        await settle(pilot)
+        await pilot.press("e")
+        # e on a heading does nothing, so there is no state to wait for
+        await settle(pilot)
+        assert len(app.screen_stack) == 1
+
+
+# ---------- the "+ New skill" row ----------
+
+def _footer_keys(app):
+    return {b.description for _, (_, b, enabled, _) in app.screen.active_bindings.items() if enabled}
+
+
+async def test_first_row_is_new_skill_even_with_no_skills(home, monkeypatch):
+    monkeypatch.setattr(skills, "scan", lambda: [])
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        t = app.query_one("#skills-table", DataTable)
+        assert t.row_count == 1
+        assert t.get_row_at(0)[0].plain == "+ New skill" and "dim" in str(t.get_row_at(0)[0].style)
+        assert "nothing selected" in app.query_one("#skills-preview", Markdown).source
+
+
+async def test_enter_on_new_skill_and_n_open_the_same_choice_and_save_through_skills_create(home, monkeypatch):
+    made = []
+    real = skills.create
+    monkeypatch.setattr(skills, "create", lambda *a, **kw: made.append(a) or real(*a, **kw))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        # the cursor is on the new row already; no message to wait for
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot, lambda: isinstance(app.screen, tui.NewChoiceScreen), "the chooser")
+        assert isinstance(app.screen, tui.NewChoiceScreen)
+        await pilot.press("escape")
+        await settle(pilot, lambda: not isinstance(app.screen, ModalScreen), "the chooser to close")
+        await pilot.press("n")
+        await settle(pilot, lambda: isinstance(app.screen, tui.NewChoiceScreen), "the chooser")
+        assert isinstance(app.screen, tui.NewChoiceScreen)
+        await pilot.click("#skills-choose-write")
+        await settle(pilot, lambda: app.screen.query('#skills-new-name'), "the new-skill form")
+        app.screen.query_one("#skills-new-name", Input).value = "made-here"
+        app.screen.query_one("#skills-new-description", Input).value = "Use when testing"
+        app.screen.query_one("#skills-new-description", Input).focus()
+        await pilot.press("enter")
+        await settle(pilot, lambda: made and (skills.library() / 'made-here/SKILL.md').exists(), "the created skill")
+        assert made and made[0][2] == "made-here"
+        assert (skills.library() / "made-here/SKILL.md").exists()
+
+
+async def test_item_actions_on_the_new_row_say_nothing_selected(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        # the cursor is on the new row already; no message to wait for
+        await settle(pilot)
+        for key in ("e", "E", "d", "S", "l"):
+            await pilot.press(key)
+            await settle(pilot, lambda: 'nothing selected' in toasts(app), "the nothing-selected notice")
+            assert len(app.screen_stack) == 1
+            assert "nothing selected" in screen_text(app)
+            app.clear_notifications()
+
+
+async def test_footer_reads_n_new_skill(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        app.query_one("#skills-table", DataTable).focus()
+        await settle(pilot, lambda: 'new skill' in _footer_keys(app), "the footer")
+        assert "new skill" in _footer_keys(app)
+
+
+async def test_the_first_real_item_is_acted_on_not_the_one_after_it(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await select(pilot, "alpha", "a")
+        await pilot.press("e")
+        await settle(pilot, lambda: app.screen.query(TextArea), "the editor")
+        assert "alpha" in app.screen.query_one(TextArea).text
+
+
+# ---------- right pane: actions(), buttons, reasons ----------
+
+LABELS = ["Edit", "Update", "Link to account", "Share to library", "Remove"]
+
+
+def acts(name, account=None, checks=None):
+    row = next(r for _, rs in tui.grouped(skills.scan()) for r in rs
+               if r["name"] == name and account in (None, r["account"]))
+    return {label: (enabled, reason) for label, enabled, reason in tui.actions(row, checks)}
+
+
+def test_actions_for_an_accounts_own_skill(grouped_home):
+    got = acts("alpha")
+    assert list(got) == LABELS[:1] + ["Update"] + LABELS[2:]
+    assert got["Edit"] == got["Remove"] == got["Share to library"] == (True, "")
+    assert got["Link to account"] == (False, "only library skills can be linked")
+    assert got["Update"] == (False, "not installed from GitHub")
+
+
+def test_actions_for_a_plugin_file_are_read_only(grouped_home):
+    got = acts("plugskill")
+    assert got["Edit"] == got["Remove"] == got["Share to library"] == (False, "plugin files are read-only")
+
+
+def test_actions_for_a_library_skill_link_and_every_account_linked(grouped_home):
+    assert acts("mine")["Link to account"] == (True, "")
+    for account, _ in skills.sources():
+        skills.link("mine", account)
+    got = acts("mine", skills.LIBRARY)
+    assert got["Link to account"] == (False, "every account links it already")
+    assert got["Share to library"] == (False, "it is in the library already")
+
+
+def test_actions_for_an_accounts_link_to_the_library(grouped_home):
+    skills.link("mine", "a")
+    assert acts("mine", "a")["Share to library"] == (False, "it is a link to the library")
+
+
+def test_actions_for_agents_and_commands_cannot_be_shared(grouped_home):
+    for name in ("reviewer", "deploy"):
+        assert acts(name)["Share to library"] == (False, "only skills can be shared")
+
+
+def test_actions_for_a_builtin_offers_reset_last(grouped_home):
+    got = acts("pl-plan")
+    assert list(got) == [*LABELS[:1], "Update", *LABELS[2:], "Reset to shipped version"]
+    assert got["Reset to shipped version"] == (True, "")
+    assert "Reset to shipped version" not in acts("mine")
+
+
+def test_update_label_follows_the_last_check(grouped_home):
+    (grouped_home["library"] / ".pl-sources.json").write_text(
+        json.dumps({"mine": {"source": "github", "repo": "own/rep", "sha": "abcdef1234" + "0" * 30}}))
+    seen = lambda update: {"mine": {"name": "mine", "update": update, "pinned": "a" * 40, "latest": "b" * 40}}  # noqa: E731
+    assert acts("mine")["Update"] == (False, "checking for updates…")
+    assert acts("mine", checks=seen(True))["Update available"] == (True, "")
+    assert acts("mine", checks=seen(False))["Up to date"] == (False, "")
+    assert acts("mine", checks={"__error__": "boom"})["Update"] == (False, "check failed: boom")
+
+
+def pane_buttons(app):
+    return {b.id: b for b in app.query("#skills-buttons Button")}
+
+
+async def test_pane_shows_buttons_linked_and_used_by_above_the_text(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await select(pilot, "mine", skills.LIBRARY)
+        await settle(pilot, lambda: "Body of mine" in screen_text(app), "the preview on screen")
+        ids = [b.id for b in app.query("#skills-buttons Button") if b.display]
+        assert ids == [f"skills-btn-{k}" for k in ("edit", "update", "link", "share", "remove")]
+        order = [w.id for w in app.query_one("#skills-preview-box").children]
+        assert order == ["skills-buttons", "skills-reasons", "skills-meta", "skills-preview"]
+        meta = str(app.query_one("#skills-meta").render())
+        assert "Linked: no account links it" in meta and "Used by: nothing" in meta
+        assert "Body of mine" in screen_text(app)
+
+
+async def test_heading_row_shows_nothing_selected_and_no_buttons(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        t = app.query_one("#skills-table", DataTable)
+        t.focus()
+        t.move_cursor(row=0)
+        # the cursor is on row 0 already; no message to wait for
+        await settle(pilot)
+        assert not app.query_one("#skills-buttons").display and not app.query_one("#skills-meta").display
+        assert "nothing selected" in screen_text(app)
+
+
+async def test_disabled_button_shows_its_reason_without_pressing(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await select(pilot, "alpha", "a")
+        link = pane_buttons(app)["skills-btn-link"]
+        assert link.disabled and link.tooltip == "only library skills can be linked"
+        assert "Link to account: only library skills can be linked" in str(app.query_one("#skills-reasons").render())
+
+
+async def test_pressing_remove_opens_the_same_confirm_as_d(grouped_home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await select(pilot, "beta", "b")
+        pane_buttons(app)["skills-btn-remove"].press()
+        await settle(pilot, lambda: confirm_shown(app), "the confirm")
+        assert ".pl-trash" in screen_text(app)
+        assert (grouped_home["b"] / "skills/beta").is_dir()
+
+
+@pytest.mark.parametrize("answer, calls", [("n", []), ("y", ["pl-plan"])])
+async def test_reset_asks_and_only_resets_after_yes(grouped_home, monkeypatch, answer, calls):
+    called = []
+    monkeypatch.setattr(skills, "reset_builtin", lambda name: called.append(name))
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await select(pilot, "pl-plan", skills.LIBRARY)
+        pane_buttons(app)["skills-btn-reset"].press()
+        await settle(pilot, lambda: isinstance(app.screen, tui.ConfirmScreen), "the reset question")
+        shipped = grouped_home["library"] / "pl-plan" / "SKILL.md"
+        assert isinstance(app.screen, tui.ConfirmScreen)
+        assert app.screen.message == f"Replace {shipped} with the shipped version? A backup is kept."
+        assert called == []
+        await pilot.press(answer)
+        await settle(pilot, lambda: called == calls and not isinstance(app.screen, ModalScreen), "the answer to be handled")
+        assert called == calls
+
+
+async def test_update_button_shows_the_diff_once_the_background_check_finds_one(grouped_home, monkeypatch):
+    (grouped_home["library"] / ".pl-sources.json").write_text(
+        json.dumps({"mine": {"source": "github", "repo": "own/rep", "sha": "abcdef1234" + "0" * 30}}))
+    ran = []
+    latest = "b" * 40
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        out = (json.dumps([{"name": "mine", "update": True, "pinned": "abcdef1234" + "0" * 30, "latest": latest}])
+               if "--check" in cmd else f"--- a/SKILL.md\n+new\nwould update mine to own/rep@{latest}")
+        return type("R", (), {"stdout": out, "stderr": "", "returncode": 0})()
+    monkeypatch.setattr(tui, "_run", fake_run)
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        await select(pilot, "mine", skills.LIBRARY)
+        assert str(pane_buttons(app)["skills-btn-update"].label) == "Update available"
+        pane_buttons(app)["skills-btn-update"].press()
+        await settle(pilot)
+        assert ["pl", "skills", "update", "mine", "--dry-run"] in ran
+        assert f"Update mine to own/rep@{latest[:7]}?" in screen_text(app)
+
+
+async def test_harness_agent_kind_shows_as_subagent(home):
+    app = Host()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot, lambda: loaded(app), "the first scan and preview")
+        t = app.query_one("#skills-table", DataTable)
+        kind_of = {str(t.get_row_at(i)[0]): str(t.get_row_at(i)[1]) for i in range(t.row_count)}
+        assert kind_of["reviewer"] == "subagent"
+        assert kind_of["alpha"] == "skill" and kind_of["deploy"] == "command"
+
+
+async def test_skills_title_and_palette_say_subagents():
+    from pl.tui import chrome
+    from pl.tui.app import PlApp, VIEWS
+    assert VIEWS["skills"]().border_title == "Skills, subagents and commands (every account)"
+    assert "skills, subagents and commands" in chrome.HELP["skills"]
+    app = PlApp(snapshot_provider=lambda: {})
+    async with app.run_test() as pilot:
+        await pilot.pause()  # one tick: the palette's commands are read from the mounted screen, nothing to wait for
+        helps = [c.help for c in app.get_system_commands(app.screen) if c.title.startswith("Skills")]
+    assert any("skills, subagents and commands" in h for h in helps)

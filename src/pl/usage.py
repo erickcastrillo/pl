@@ -412,7 +412,16 @@ def card_report(st, since, cards):
 def cmd_usage(a):
     if getattr(a, "github", False):
         from pl import ghquota
-        print(ghquota.report())
+        from pl.trackers import github
+        rows, current = ghquota.accounts(), ghquota.account()   # pl's readings from before the fresh one
+        budget = github._graphql_budget()
+        if budget and budget[1]:
+            ghquota.refresh(*budget)
+        fresh = budget if budget and budget[1] else "GitHub refused: rate limited" if budget else "gh could not read the budget"
+        if getattr(a, "json", False):
+            print(json.dumps(ghquota.report_json(rows=rows, fresh=fresh, current=current)))
+        else:
+            print(ghquota.report(rows=rows, fresh=fresh, current=current))
         return
     from pl.standup import parse_since
     try:
@@ -432,9 +441,10 @@ def cmd_usage(a):
         print(json.dumps(card_report(scan(), since, cards or [])))
         return
     if getattr(a, "json", False):
-        from pl import jsonout
+        from pl import jsonout, local_jobs
         rows = totals(scan(), since, by, cards)
         usage = {g: dict(zip(("input", "output", "cache_read", "cache_write", "cost", "unpriced"), r)) for g, r in rows.items()}
-        jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage})
+        jsonout.emit({"since": a.since or "24h", "by": by, "state_transitions": events.state_transition_counts(since), "usage": usage,
+                     "local_jobs": local_jobs.stats(since)})
         return
     print(table(scan(), since, by, cards))

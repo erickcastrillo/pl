@@ -1,0 +1,4 @@
+id = "2026-10-25.31"
+title = "JSON for manager status, the local model, what's new, skills and the update check"
+where = "CLI: pl manager status, local-model, whatsnew, skills list and update --check take --json"
+try = "pl whatsnew --json"

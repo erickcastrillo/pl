@@ -12,12 +12,13 @@ from pathlib import Path
 
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
-from pl.agents import NEW_WINDOW_SCRIPT, RELEASE_KEYS, deps_open, registry, run_blocked, worker_status, worker_view
-from pl import audit, events, harnesses, ideas, move_agent, pipeline, pods, recall, trackers, usage, worktrees
+from pl.agents import NEW_WINDOW_SCRIPT, deps_open, registry, worker_status, worker_view
+from pl import audit, confirm, events, ghquota, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
-from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, render, sections,
-                      share, update)
-from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, paused, stop_worker
+from pl.trackers.github import OverBudget
+from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
+                      render, sections, share, update)
+from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, forget_agents, held_gate, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
 from pl.util import BadInput, age, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
@@ -35,6 +36,10 @@ def cmd_idea(a):
         if plan is None or slice_no is None or plan < 1 or slice_no < 1:
             raise SystemExit("pl idea: --plan and --slice go together, both whole numbers from 1")
         title = ideas.plan_title(plan, slice_no, a.title or line)
+    from_loop = os.environ.get("PL_LOOP_WRITES") == "0"   # a read-only loop only proposes: unstarted, tagged
+    if os.environ.get("PL_DRY_RUN") == "1":
+        print(f"would file: {title}")
+        return
     body, docs = [text, ""], []
     for d in a.doc:
         p = Path(d).expanduser().resolve()
@@ -62,8 +67,8 @@ def cmd_idea(a):
         desc, title = render({"INPUT": ideas._plain(desc)}), ideas.clean_title(title)
     check_size(desc)
     t = trackers.get("tracker" if direct else "intake")
-    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo),
-                    metadata=meta, assigned_to=trackers.me(t) if a.start else None)
+    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []),
+                    metadata=meta, assigned_to=trackers.me(t) if a.start and not from_loop else None)
     if not item.get("id"):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
     events.emit("idea_approved", item["id"])
@@ -82,13 +87,18 @@ def _list_json(a):
                 "age_seconds": int(time.time() - parse_iso(c.get("updated_at") or "")) if c.get("updated_at") else 0}
     reg = registry()
     share("read")
+    if getattr(a, "fresh", False):
+        fresh_next()
     pipeline = cards()
+    plan = getattr(a, "plan", None)
     rows = {"pipeline": [], "intake": []}
     if not a.product:
         for c in pipeline:
-            if (col := col_name(c["list_id"])) != "Done" or a.all:
+            if plan and str((c.get("metadata") or {}).get("plan")) != str(plan):
+                continue
+            if (col := col_name(c["list_id"])) != "Done" or a.all or plan:
                 rows["pipeline"].append(row(c, col, approved_label(c, col, reg) or worker_view(c, reg), deps=True))
-    if intake_configured():
+    if intake_configured() and not plan:
         linked = {(c.get("metadata") or {}).get("product_card"): c for c in pipeline if (c.get("metadata") or {}).get("product_card")}
         for c in product_cards_mine():
             if (col := product_col(c["list_id"])) != "Done" or a.all:
@@ -97,10 +107,29 @@ def _list_json(a):
     emit(rows)
 
 
+def _list_plan(pipeline, plan, reg):
+    """pl list --plan N: that plan's cards (Done too), by slice, then by card id."""
+    rows = sorted((c for c in pipeline if plan_slice(c)[0] == plan), key=plan_order)
+    if not rows:
+        print(f"no cards in plan {plan}")
+        return
+    print(f"PLAN {plan}  ({len(rows)} cards)")
+    for c in rows:
+        col = col_name(c["list_id"])
+        s = (c.get("metadata") or {}).get("slice", "?")
+        print(f"  {short_id(c['id'])}  slice {s!s:<3} {c['title'][:56]:<56}  {col:<16} "
+              f"{approved_label(c, col, reg, pipeline) or worker_view(c, reg):<28} {age(parse_iso(c.get('updated_at') or ''))}")
+
+
 def cmd_list(a):
+    plan = getattr(a, "plan", None)
+    if plan and a.product:
+        raise SystemExit("pl list: --plan and --product do not go together")
     if getattr(a, "json", False):
         return _list_json(a)
     share("read")   # the dispatcher's board read, while it is young
+    if getattr(a, "fresh", False):
+        fresh_next()
     pipeline = cards()   # before any output: a held read leaves stdout empty
     reg = registry()
     bad = exhausted_profiles()
@@ -111,6 +140,8 @@ def cmd_list(a):
         n = busy_agents(registry())
         print(f"DISPATCHER PAUSED since {paused().get('since', '?')[:16]} UTC: no new agents start   (pl resume)   "
               + (f"draining: {n} agent(s) still working" if n else "DRAINED: safe to shut down"))
+    if plan:
+        return _list_plan(pipeline, plan, reg)
     if not a.product:
         by_col = {}
         for c in pipeline:
@@ -249,27 +280,71 @@ def spec_gated(col):
 
 
 def _at_gate(c, verb):
+    forget_agents()
     col = col_name(c["list_id"])
-    if not (gate := pipeline.gate_for(col)):
+    if not (gate := pipeline.gate_for(col) or held_gate(c, col)):
         raise BadInput(f"pl {verb}: card is in '{col}', which is not an owner gate")
     return gate
 
 
-def _approve_gate(c):
+def _at_outward_gate(c):
+    forget_agents()
+    col = col_name(c["list_id"])
+    gate = pipeline.is_config() and pipeline.gate_for(col)
+    return (bool(gate) and gate[1].get("outward") is True) or bool(held_gate(c, col))
+
+
+def _approve_gate(c, a):
     name, stage = _at_gate(c, "approve")
-    gates = {**((c.get("metadata") or {}).get("gates") or {}), name: {"approved_by": C.USER_EMAIL, "approved_at": now_iso()}}
+    send = stage.get("section") if stage.get("outward") is True else None
+    if send:
+        if not outbound.parse_reply(c, send)["to"]:
+            raise BadInput(f"pl approve: no recipient in {send}: add a To: line")
+        if (outside := outbound.flagged_recipients(c, send)) and not getattr(a, "confirm", False):
+            raise BadInput(f"pl approve: outside recipient {', '.join(outside)}; pass --confirm to approve")
+    m = c.get("metadata") or {}
+    approval = {"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "review_round": int(m.get("review_round") or 0),
+                **({"actions": sorted(stage["approval"])} if stage.get("approval") else {})}
+    gates = {**(m.get("gates") or {}), name: approval}
     target = pipeline.approved_column(stage)
-    update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None})
+    update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None, "approval_pending": None})
     events.emit("gate_approved", c["id"])
     audit.append("gate_approved", card=c["id"], stage=name)
-    print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
+    if not send:
+        print(f"approved {short_id(c['id'])}  {c['title']}\n  moved to {target}")
+        return
+    outbound.enqueue(c, send)
+    waits = "approved; its outward action waits: the kill switch is on" if outward.state().get("on") \
+        else f"moved to {target}\n  queued to send after the undo window"
+    print(f"approved {short_id(c['id'])}  {c['title']}\n  {waits}")
+
+
+def _hold_for_owner(c):
+    """An agent session's outward approval: record it pending, send the owner a one-time code, move nothing."""
+    update(c["id"], metadata={"approval_pending": {"by": "agent session", "at": now_iso()}})
+    events.emit("approval_pending", c["id"])
+    audit.append("approval_pending", card=c["id"])
+    code = confirm.new_code(c)
+    title = f"An agent approved: {c['title'][:50]}"
+    notify(title, f"confirm? code {code} (10 minutes)")
+    confirm.send_to_chat(f"{title}; confirm? code {code}")
+    print("pending: the owner confirms in the console, the chat app, or with pl approve <id> --code")
 
 
 def cmd_approve(a):
     fresh_next()   # it writes what it read: never from a copy that may be minutes old
     c = find_card(a.id)
+    code = getattr(a, "code", None)
+    if code is not None:
+        if os.environ.get("PL_SOURCE") or os.environ.get("PL_ASSISTANT"):
+            raise BadInput("pl approve: --code is for the owner; an agent session cannot confirm its own approval")
+        if not confirm.check(c, code):
+            raise BadInput("pl approve: that code is wrong or expired")
+    elif confirm.agent_session():
+        if outward.is_outward(c) or _at_outward_gate(c):
+            return _hold_for_owner(c)
     if pipeline.is_config():
-        return _approve_gate(c)
+        return _approve_gate(c, a)
     col = col_name(c["list_id"])
     if spec_gated(col):
         at = (c.get("metadata") or {}).get("spec_approved_at")
@@ -280,12 +355,11 @@ def cmd_approve(a):
         draft = draft_p.read_text() if draft_p.is_file() else (sections(c.get("description")).get("SPEC") or "")
         approved = sections(c.get("description")).get("SPEC") or ""
         pods.learn(c["id"], "SPEC", draft, approved)
-        update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL})
+        update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL, "approval_pending": None})
         events.emit("spec_approved", c["id"])
         audit.append("spec_approved", card=c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
         return
-    from pl import outbound
     if outbound.has_reply(c):
         outside = getattr(outbound, "flagged_recipients", lambda _: [])(c)
         if outside and not getattr(a, "confirm", False) and not a.force:
@@ -309,19 +383,18 @@ def cmd_approve(a):
     approved = parts.get("PLAN") or ""
     pods.learn(c["id"], "PLAN", draft, approved)
     update(c["id"], list_id=col_id("Approved"),
-           metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None})
+           metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None, "approval_pending": None})
     if outbound.has_reply(c):
         outbound.enqueue(c)
     events.emit("approved", c["id"])
     audit.append("approved", card=c["id"])
     recall.note((getattr(a, "reason", None) or "approved").strip(), "approval", f"approval:{c['id']}", c["id"])
-    from pl import outward
     if outward.is_outward(c) and outward.state().get("on"):
         print(f"approved {short_id(c['id'])}  {c['title']}\n  approved; its outward action waits: the kill switch is on")
-        notify(f"Approved: {c['title'][:50]}", "its outward action waits: the kill switch is on")
+        notifications.send("approved", f"Approved: {short_id(c['id'])} {c['title'][:40]}", "its outward action waits: the kill switch is on")
     else:
         print(f"approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the run on its next pass")
-        notify(f"Approved: {c['title'][:50]}", "the run starts on the next dispatcher pass")
+        notifications.send("approved", f"Approved: {short_id(c['id'])} {c['title'][:40]}", "the run starts on the next dispatcher pass")
 
 
 def cmd_reject(a):
@@ -360,7 +433,7 @@ def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
     hits = matches(a.id, cards())
     if hits:
-        for line in done(a.id, hits):
+        for line in done(a.id, hits, note=a.note):
             print(line)
         return
     pc = product_card(a.id) if len(a.id) >= 32 else None
@@ -379,11 +452,21 @@ def cmd_done(a):
     print(f"done {short_id(pc['id'])}  {pc['title'][:70]}  (Product board, was in {product_col(pc['list_id'])})")
 
 
-def done(ref, cs=None):
+def _closed_with(description, note):
+    _, found, last = description.rstrip().rpartition("\n## Closed ")
+    return bool(found) and last.partition("\n")[2].strip() == note
+
+
+def done(ref, cs=None, note=None, reason=None):
     """A person's call: move one Feature Pipeline card (and its linked Product card) to Done. cs: the cards to pick
-    from, default every pipeline card. A live agent is not stopped. Returns lines to show."""
-    c = card(pick(ref, cards() if cs is None else cs, "pl done")["id"])   # two matches: refused, never the first
-    update(c["id"], list_id=col_id("Done"), metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None})
+    from, default every pipeline card. note: ends the description under "## Closed <date>", once. reason: kept in the
+    metadata. A live agent is not stopped. Returns lines to show."""
+    c = card(pick(ref, cs if cs is not None else cards(), "pl done")["id"])   # two matches: refused, never the first
+    meta = {"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None, **({"done_reason": reason} if reason else {})}
+    fields = {}
+    if note and note.strip() and not _closed_with(c.get("description") or "", note.strip()):   # a retried move must not add a second section
+        fields["description"] = check_size((c.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{note.strip()}\n")
+    update(c["id"], list_id=col_id("Done"), metadata=meta, **fields)
     m, out = c.get("metadata") or {}, []
     if m.get("product_card") and intake_configured() and "Done" in product_lists():
         try:
@@ -472,16 +555,35 @@ def cmd_move(a):
     pr = getattr(a, "pr", None)
     if pr is not None and not PR_URL_RE.fullmatch(pr):
         raise BadInput(f"pl move: --pr {pr!r} is not a GitHub pull request URL (https://github.com/OWNER/REPO/pull/N)")
+    try:
+        move_card(a.id, a.column, pr)
+    except OverBudget as e:   # pl's own budget hold: saved, and the dispatcher applies it after the reset
+        print(held_move(a.id, a.column, pr, e))
+
+
+def held_move(ref, column, pr, e, was=None):
+    """Queue a move that pl's budget hold refused, for the dispatcher to apply after the reset; returns the notice."""
+    t = trackers.get("tracker")
+    cid = t.ref_id(ref) if hasattr(t, "ref_id") else ref
+    heldwrites.add(cid, "move", {"column": column, "pr": pr}, e.until, was=was if was is not None else heldwrites.cached_list(cid))
+    return (f"queued: move {short_id(cid)} to {column}; GitHub budget held, resets "
+            f"{time.strftime('%H:%M', time.localtime(e.until))} (pl applies it after the reset)")
+
+
+def move_card(ref, column, pr=None):
+    """The body of pl move, also what the dispatcher replays: record the pull request, then move. Returns the card id."""
     cid = None
     if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
         fresh_next()     # it writes what it read: never from a copy that may be minutes old
         t = trackers.get("tracker")
-        cid = t.ref_id(a.id) if hasattr(t, "move") else find_card(a.id)["id"]
+        cid = t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"]   # only the GitHub tracker resolves ids from text
         urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})
         print(f"recorded {pr}")
-    print(f"moved {move_to(a.id, a.column, cid)} to {a.column}")
+    cid = move_to(ref, column, cid)
+    print(f"moved {cid} to {column}")
+    return cid
 
 
 def move_to(ref, column, cid=None):
@@ -518,6 +620,9 @@ def cmd_profiles(a):
     if getattr(a, "check_trust", False):
         return _check_trust()
     st = profile_state()
+    if a.reset and getattr(a, "dry_run", False):
+        print(f"would un-park {a.reset}")
+        return
     if a.reset:
         for p in (list(st) if a.reset == "all" else [a.reset]):
             st.pop(p, None)
@@ -526,6 +631,11 @@ def cmd_profiles(a):
         C.PROFILE_STATE.write_text(json.dumps(st, indent=1))
         print(f"un-parked {a.reset}")
     bad = exhausted_profiles()
+    if getattr(a, "json", False):
+        emit({"accounts": [{"name": p, "parked": p in bad, "until": parking(p).get("until", "") if p in bad else "",
+                            "reason": parking(p).get("reason", "") if p in bad else "", "dir": str(C.PROFILES[p])}
+                           for p in C.PROFILES]})
+        return
     for p in C.PROFILES:
         r = parking(p)   # with the machine-wide entry: parked by another profile that shares the folder, and its checks
         state = f"PARKED until {r.get('until', '')[11:16]} UTC ({r.get('reason', '')}, seen {r.get('exhausted_at', '')[:16]})" if p in bad else "ok"
@@ -555,6 +665,8 @@ def _caps_line(used):
 
 
 def cmd_card(a):
+    if getattr(a, "fresh", False):
+        fresh_next()
     c = find_card(a.id)
     if a.delete:
         trackers.get("tracker").delete(c["id"])
@@ -655,6 +767,8 @@ def cmd_section(a):
     An approved PLAN or SPEC is refused unless --force (a person's yes)."""
     name = " ".join(a.name.split()).upper()
     if a.from_ is None:
+        if getattr(a, "fresh", False):
+            fresh_next()
         c = find_card(a.id)
         text = sections(c.get("description")).get(name)
         if text is None:
@@ -701,10 +815,19 @@ def cmd_board(a):
     if a.action == "check":
         from pl import boardcheck
         return boardcheck.cmd_check(a)
+    if a.action == "migrate":
+        from pl import migrate
+        return migrate.cmd_migrate(a)
+    if a.action == "restore":
+        if not a.from_:
+            raise SystemExit("pl board restore: --from DIR is required")
+        from pl.trackers import localrestore
+        print(localrestore.restore(Path(a.from_).expanduser(), a.yes))
+        return
     if a.action != "init":
-        raise SystemExit("pl board: only 'init' is supported")
+        raise SystemExit("pl board: only 'init' and 'restore' are supported")
     if "Inbox" in lists():
-        print(f"Inbox exists: {lists()['Inbox']['id']}")
+        print(f"Inbox already exists, unchanged: {lists()['Inbox']['id']}")
         return
     try:
         lid = trackers.get("tracker").ensure_column("Inbox", description=(
@@ -946,24 +1069,18 @@ def cmd_depends(a):
 
 def retry(ref, stage=None):
     """Clear the worker (and its attempt count) of one card, or with ref "all" of every funnel card whose agent hit the
-    attempt limit, so the dispatcher starts it fresh. A card held back after its waiting run agent was released
-    (blocked) has the hold cleared too. A running agent is left alone. Returns one line per card."""
+    attempt limit, so the dispatcher starts it fresh. A running agent is left alone. Returns one line per card."""
     fresh_next()   # it resets what it read: never a worker restarted since a cached copy
     cs = cards()
     if ref == "all":
         picked = [c for c in cs if (c.get("metadata") or {}).get("pipeline_mode") == "auto"
-                  and (int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS
-                       or run_blocked(c))]
+                  and int(((c.get("metadata") or {}).get("worker") or {}).get("attempts") or 0) >= MAX_ATTEMPTS]
     else:
         picked = [pick(ref, cs, "pl retry", min_prefix=8)]   # like find_card, but a prefix needs 8+ chars
     reg, out = registry(), []
     for c in picked:
         w = (c.get("metadata") or {}).get("worker") or {}
         head = f"{short_id(c['id'])}  {c['title'][:50]}"
-        if not w and (c.get("metadata") or {}).get("run_retry_at"):
-            update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
-            out.append(f"{head}: cleared the blocked hold of its released run agent; the dispatcher starts it now")
-            continue
         meta = c.get("metadata") or {}
         if not w and meta.get("cap_stopped") and col_name(c["list_id"]) == "Manual" and not stage:
             back = meta.get("manual_from_column") or "Approved"
@@ -992,6 +1109,9 @@ def cmd_pause(a):
     if paused():
         print(f"already paused since {paused().get('since', '?')[:16]} UTC")
         return
+    if getattr(a, "dry_run", False):
+        print("would pause: no new agents would start from the next dispatcher pass")
+        return
     C.ATTN.mkdir(exist_ok=True)
     C.PAUSE_FILE.write_text(json.dumps({"since": now_iso(), "host": C.HOST}))
     print("paused: no new agents start from the next dispatcher pass; working agents finish their step (pl resume)")
@@ -1000,6 +1120,9 @@ def cmd_pause(a):
 def cmd_resume(a):
     if not paused():
         print("not paused")
+        return
+    if getattr(a, "dry_run", False):
+        print("would resume: the next dispatcher pass would start waiting cards again")
         return
     C.PAUSE_FILE.unlink()
     print("resumed: the next dispatcher pass starts waiting cards again")
@@ -1014,17 +1137,20 @@ def cmd_intent(a):
     m = PR_URL.match(a.pr)
     if not m:
         raise SystemExit("pl intent: give the full PR URL, https://github.com/<owner>/<repo>/pull/<n>")
-    r = subprocess.run(["gh", "pr", "view", m.group(3), "--repo", f"{m.group(1)}/{m.group(2)}", "--json", "body"],
-                       capture_output=True, text=True, timeout=60, env=C.gh_env())
+    r = ghquota.gh(subprocess.run, ["pr", "view", m.group(3), "--repo", f"{m.group(1)}/{m.group(2)}", "--json", "body"],
+                   capture_output=True, text=True, timeout=60, env=C.gh_env())
     body = (json.loads(r.stdout).get("body") or "") if r.returncode == 0 else ""
+    if getattr(a, "json", False):
+        emit({"pr": a.pr, "cards": [{"id": c["id"], "title": c["title"], "spec": (secs.get("SPEC") or "").strip(),
+                                     "plan_scope": "\n\n".join(picked)} for c, secs, picked in _intent_cards(a.pr, body)]})
+        return
     print(intent_text(a.pr, body))
 
 
-def intent_text(pr, body):
-    """The `pl intent` text for PR URL pr whose body is body: the spec + plan scope of the cards behind it."""
+def _intent_cards(pr, body):
+    """(card, its sections, the plan's scope sections) for the cards behind PR URL pr."""
     ids = [c["id"] for c in cards() if pr in ((c.get("metadata") or {}).get("pr_urls") or [])]
     ids = list(dict.fromkeys(ids + re.findall(r"cardId=([0-9a-f-]{36})", body)))
-    out = [f"# What {pr} was meant to do", ""]
     keep = re.compile(r"minimum change|deliberately not|acceptance|scope|non-goal", re.I)
     for cid in ids:
         try:
@@ -1032,13 +1158,20 @@ def intent_text(pr, body):
         except SystemExit:
             continue
         secs = sections(c.get("description"))
+        picked = [p.strip() for p in re.split(r"(?m)^(?=## )", secs.get("PLAN") or "") if keep.search(p.split("\n", 1)[0])]
+        yield c, secs, picked
+
+
+def intent_text(pr, body):
+    """The `pl intent` text for PR URL pr whose body is body: the spec + plan scope of the cards behind it."""
+    out = [f"# What {pr} was meant to do", ""]
+    for c, secs, picked in _intent_cards(pr, body):
+        cid = c["id"]
         out += [f"## Card {short_id(cid)}: {c['title']}", ""]
         if secs.get("SPEC"):
             out += ["### SPEC", secs["SPEC"].strip(), ""]
-        if secs.get("PLAN"):
-            picked = [p.strip() for p in re.split(r"(?m)^(?=## )", secs["PLAN"]) if keep.search(p.split("\n", 1)[0])]
-            if picked:
-                out += ["### PLAN (scope sections only)"] + picked + [""]
+        if picked:
+            out += ["### PLAN (scope sections only)"] + picked + [""]
         if not secs.get("SPEC") and not secs.get("PLAN"):
             out += [(c.get("description") or "(no description)").strip()[:6000], ""]
     if len(out) == 2:
@@ -1069,12 +1202,23 @@ def cmd_worktrees_bootstrap(a):
             print(note)
     except ValueError as e:
         raise SystemExit(f"pl worktrees bootstrap: {e}")
+    if a.card and not a.dry_run:
+        record_worktree(a.card, str(Path(a.path).expanduser().resolve()))
     for failure in failures:
         print(f"{failure['reason']}:\n{failure['output']}", file=sys.stderr)
         if a.card:
             record_bootstrap_failure(a.card, failure)
     if a.card and not failures and not a.dry_run:
         clear_bootstrap_failure(a.card)
+
+
+def record_worktree(card_ref, path):
+    try:
+        c = find_card(card_ref)
+        if (c.get("metadata") or {}).get("worktree") != path:
+            update(c["id"], metadata={"worktree": path})
+    except Exception as e:
+        print(f"pl worktrees bootstrap: could not record the worktree on the card: {e}", file=sys.stderr)
 
 
 def record_bootstrap_failure(card_ref, failure):
@@ -1091,11 +1235,45 @@ def clear_bootstrap_failure(card_ref):
         update(c["id"], metadata={"bootstrap_error": None})
 
 
+def _sync_now(p, r, as_json):
+    for got in (p, r):
+        if got["stopped_because"] == "error":
+            print(f"pl sync: {got['error']}", file=sys.stderr)
+            raise SystemExit(1)
+    if p["stopped_because"] == "reserve":
+        r = {**r, "stopped_because": "reserve"}
+    if as_json:
+        print(json.dumps({**{k: r[k] for k in ("sent", "remaining", "stopped_because", "next_window")},
+                          "pulled": p["pulled"], "conflicts": p["conflicts"]}))
+        return
+    n, c = p["pulled"], p["conflicts"]
+    print(f"{n} card{'' if n == 1 else 's'} pulled")
+    if c:
+        print(f"{len(c)} conflict(s): {', '.join(c)}: see pl alerts")
+    print(f"{r['sent']} changes sent, {r['remaining']} remain")
+    if r["stopped_because"] in ("reserve", "half-budget") and r["next_window"]:
+        print("next GitHub window: " + datetime.fromisoformat(r["next_window"]).astimezone().strftime("%H:%M"))
+
+
 def cmd_sync(a):
-    from pl import ghquota, outbox
+    from pl import ghquota, outbox, sync
     target = C.SYNC.get("github")
+    if a.action == "resolve" and not (a.id and a.keep):
+        raise SystemExit("usage: pl sync resolve <id> --keep remote|local")
     if not target:
         raise SystemExit("pl sync: set [sync] github in config.toml")
+    if a.action == "init":
+        return sync.cmd_init(a)
+    if a.action == "resolve":
+        c = find_card(a.id)
+        fields = ", ".join(sync.resolve(c["id"], a.keep))
+        print(f"{short_id(c['id'])}: kept {a.keep} for {fields}" + ("; queued, the next sync sends it" if a.keep == "local" else ""))
+        return
+    if a.action == "now":
+        p = sync.pull()
+        if p["stopped_because"] == "error":   # conflicts could not be checked: replaying could overwrite a person's edit
+            return _sync_now(p, p, False)
+        return _sync_now(p, sync.replay(), getattr(a, "json", False))
     n = outbox.count()
     led = ghquota.ledger()
     reset = led.get("reset")

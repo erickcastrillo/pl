@@ -17,6 +17,7 @@ from textual.widgets.option_list import Option
 
 from pl import config as C
 from pl import harnesses
+from pl.tui.chrome import NEW_ROW, new_row
 
 _run = subprocess.run          # the one subprocess runner here ($EDITOR); tests fake it
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -197,11 +198,13 @@ class ExtensionsView(Widget):
     ExtensionsView .kind { color: $text-muted; margin-top: 1; }
     #ext-detail { margin-top: 1; height: auto; }
     """
-    BINDINGS = [Binding("e", "edit", "open in $EDITOR"), Binding("n", "new", "new"), Binding("r", "rescan", "rescan"),
-                Binding("y", "copy", "copy to account")]
+    BINDINGS = [Binding("e", "edit", "open in $EDITOR"), Binding("n", "new('skills')", "new skill"),
+                Binding("n", "new('commands')", "new command"), Binding("n", "new('hooks')", "new hook"),
+                Binding("r", "rescan", "rescan"), Binding("y", "copy", "copy to account")]
 
     def __init__(self, subscription_line=None):
         super().__init__()
+        self._initial_loaded = False
         self.subscription_line = subscription_line
         self.account = None
         self.data = {k: [] for k in KINDS}
@@ -226,8 +229,20 @@ class ExtensionsView(Widget):
         for k in KINDS:
             self.query_one(f"#ext-{k}", DataTable).add_columns("name", "summary")
             self.query_one(f"#ext-off-{k}").display = False
-        if C.PROFILES:
-            self.show(harnesses.default_account())
+        if type(self.app).__name__ == "PlApp" and getattr(self.app, "initial_tab", None) not in (
+            "extend", "skills", "connectors", "pods", "agents", "models", "extensions", "settings"
+        ):
+            return
+        self.ensure_loaded()
+
+    def on_show(self):
+        self.ensure_loaded()
+
+    def ensure_loaded(self):
+        if not self._initial_loaded:
+            self._initial_loaded = True
+            if C.PROFILES:
+                self.show(self.account or harnesses.default_account())
 
     # ---------- scanning ----------
 
@@ -260,6 +275,8 @@ class ExtensionsView(Widget):
             ok = ext["supported"][k]
             table.display, off.display = ok, not ok
             off.update(Text(f"not supported by {name} yet", style="dim"))
+            if ok:
+                table.add_row(new_row("hook: edit settings.json" if k == "hooks" else k[:-1]), "", key=NEW_ROW)
             for i, item in enumerate(ext[k]):
                 table.add_row(Text(item["name"]), Text(item["summary"]), key=str(i))
         self._detail()
@@ -276,9 +293,17 @@ class ExtensionsView(Widget):
     def _item(self):
         kind = self._current_kind()
         table = self.query_one(f"#ext-{kind}", DataTable)
-        if not table.row_count or table.cursor_row >= len(self.data[kind]):
+        if not 0 < table.cursor_row <= len(self.data[kind]):
             return None
-        return self.data[kind][table.cursor_row]
+        return self.data[kind][table.cursor_row - 1]
+
+    def check_action(self, action, parameters):
+        if action == "new" and parameters:
+            return parameters[0] == self._current_kind()
+        return True
+
+    def on_descendant_focus(self, _):
+        self.refresh_bindings()
 
     def on_select_changed(self, m):
         if m.select.id == "ext-account" and m.value is not Select.NULL and m.value != self.account:
@@ -288,6 +313,12 @@ class ExtensionsView(Widget):
         if m.data_table.id and m.data_table.id[4:] in KINDS:
             self.kind = m.data_table.id[4:]
             self._detail()
+            self.refresh_bindings()
+
+    def on_data_table_row_selected(self, m):
+        if m.row_key.value == NEW_ROW and m.data_table.id and m.data_table.id[4:] in KINDS:
+            self.kind = m.data_table.id[4:]
+            self.action_new(self.kind)
 
     # ---------- actions ----------
 
@@ -308,8 +339,8 @@ class ExtensionsView(Widget):
             self.app.notify(str(e), severity="error", markup=False)
         self.action_rescan()
 
-    def action_new(self):
-        kind = self._current_kind()
+    def action_new(self, kind=None):
+        kind = kind or self._current_kind()
         if kind == "hooks":
             self.app.notify("hooks live in settings.json: select one and press e", markup=False)
             return

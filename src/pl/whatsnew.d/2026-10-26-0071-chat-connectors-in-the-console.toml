@@ -1,0 +1,4 @@
+id = "2026-10-26.71"
+title = "Chat connectors in the console"
+where = "Extend → Connectors: Chat connectors; t tests one"
+try = "pl chat list"

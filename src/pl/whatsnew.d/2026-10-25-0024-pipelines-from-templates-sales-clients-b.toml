@@ -1,0 +1,4 @@
+id = "2026-10-25.24"
+title = "Pipelines from templates: sales, clients, billing, team"
+where = "pl pipelines"
+try = "pl pipelines list --templates"

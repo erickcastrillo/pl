@@ -204,3 +204,55 @@ def test_local_tracker_round_trip_through_board_helpers(fake_home):
     cols = t.columns()
     assert moved["list_id"] == cols["Approved"]
 
+
+
+def _threaded_board(tmp_path):
+    from pl.trackers.local import Local
+    C.CONFIG_DIR = tmp_path
+    board = Local({"path": str(tmp_path / "board.db")})
+    card = board.create("Inbox", title="one")
+    return board, card
+
+
+def _in_thread(fn):
+    import threading
+    out = {}
+
+    def run():
+        try:
+            out["value"] = fn()
+        except Exception as e:
+            out["error"] = e
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    return out
+
+
+def test_local_board_can_be_read_from_another_thread(tmp_path):
+    board, card = _threaded_board(tmp_path)
+    board.cards()
+    out = _in_thread(lambda: (board.cards(), board.columns()))
+    assert "error" not in out
+    assert [c["id"] for c in out["value"][0]] == [card["id"]]
+
+
+def test_write_on_another_thread_is_seen_by_the_main_thread(tmp_path):
+    board, card = _threaded_board(tmp_path)
+    board.cards()
+    out = _in_thread(lambda: board.update(card["id"], title="renamed"))
+    assert "error" not in out
+    assert board.card(card["id"])["title"] == "renamed"
+
+
+def test_one_thread_reuses_its_connection(tmp_path, monkeypatch):
+    opened = []
+    real = localstore.open_db
+    monkeypatch.setattr(localstore, "open_db", lambda *a, **kw: opened.append(1) or real(*a, **kw))
+    board, card = _threaded_board(tmp_path)
+    board.cards()
+    board.card(card["id"])
+    board.update(card["id"], title="again")
+    assert len(opened) == 1
+    _in_thread(board.cards)
+    assert len(opened) == 2

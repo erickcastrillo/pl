@@ -1,0 +1,3 @@
+title = "An agent's output opens in a pop-up"
+where = "Console → Work → Board"
+try = "Select a card with a running agent and press w, or click its Agent line; Esc closes"

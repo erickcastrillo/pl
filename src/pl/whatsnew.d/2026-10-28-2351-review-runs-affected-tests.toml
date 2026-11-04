@@ -1,0 +1,3 @@
+title = "Review runs only the tests a change needs"
+where = "pl-review loop; `pl tests review`"
+try = "pl tests review --base origin/main"

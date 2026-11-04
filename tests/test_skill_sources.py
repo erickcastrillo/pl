@@ -39,7 +39,7 @@ def test_resolve_reads_the_sha_from_ls_remote(monkeypatch):
     monkeypatch.setattr(S, "_git", fake)
     src = S.parse("github:acme/kit@main")
     assert S.resolve(src) == SHA
-    assert calls == [["git", "ls-remote", "https://github.com/acme/kit", "main"]]
+    assert calls == [["git", "ls-remote", "--", "https://github.com/acme/kit", "main"]]
     calls.clear()
     assert S.resolve({**src, "ref": "b" * 40}) == "b" * 40 and calls == []
     monkeypatch.setattr(S, "_git", lambda argv, cwd=None, timeout=60: "")

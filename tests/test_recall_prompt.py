@@ -70,7 +70,7 @@ def test_a_stage_on_card_42_gets_a_memory_file_with_only_its_entries():
     recall.add("other card", "run", "run:2", card="7", pod=C.PROFILE_NAME)
     arg = dispatch.memory_arg(_card(), "plan", dry=False)
     path = arg.removeprefix(" memory=")
-    assert arg.startswith(" memory=") and path.startswith(str(C.STATE_DIR / "launch"))
+    assert arg.startswith(" memory=") and path.startswith(str(dispatch._memory_dir()))
     text = open(path).read()
     assert "card entry" in text and "other card" not in text
     assert oct(__import__("os").stat(path).st_mode & 0o777) == "0o600"
@@ -92,3 +92,17 @@ def test_dry_run_names_the_argument_without_writing(monkeypatch):
     recall.add("card entry", "run", "run:1", card="42", pod=C.PROFILE_NAME)
     assert dispatch.memory_arg(_card(), "plan", dry=True) == " memory=<file>"
     assert not (C.STATE_DIR / "launch").exists()
+
+
+def test_the_memory_file_lives_in_the_work_folder_agents_can_read(tmp_path):
+    # agents start in work_dir; a file under the profile's state folder made Claude ask for a read outside it
+    work = tmp_path / "repo"
+    (work / ".git" / "info").mkdir(parents=True)
+    (C.CONFIG_DIR / "config.toml").write_text(f'[paths]\nwork_dir = "{work}"\n')
+    C.load("t")
+    recall.add("card entry", "run", "run:1", card="42", pod=C.PROFILE_NAME)
+    path = dispatch.memory_arg(_card(), "plan", dry=False).removeprefix(" memory=")
+    assert path.startswith(str(work / ".pl" / "launch")) and "card entry" in open(path).read()
+    assert ".pl/launch/" in (work / ".git" / "info" / "exclude").read_text().splitlines()
+    dispatch.memory_arg(_card(), "plan", dry=False)
+    assert (work / ".git" / "info" / "exclude").read_text().splitlines().count(".pl/launch/") == 1

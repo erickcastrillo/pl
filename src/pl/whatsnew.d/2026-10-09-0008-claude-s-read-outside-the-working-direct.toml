@@ -1,0 +1,4 @@
+id = "2026-10-09.08"
+title = "Claude's read outside the working directories prompt opens an alert"
+where = "Alerts tab: agent waiting for permission in <window>: Read(<path>)"
+try = "pl alerts"

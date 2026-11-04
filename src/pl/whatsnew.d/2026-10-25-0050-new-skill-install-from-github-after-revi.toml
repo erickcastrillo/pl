@@ -1,0 +1,4 @@
+id = "2026-10-25.50"
+title = "+ New skill: install from GitHub after reviewing every file, or write one"
+where = "Settings tab, Skills section: n"
+try = "pl skills install SOURCE --dry-run"

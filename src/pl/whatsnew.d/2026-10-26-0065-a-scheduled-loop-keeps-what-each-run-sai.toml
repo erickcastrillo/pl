@@ -1,0 +1,4 @@
+id = "2026-10-26.65"
+title = "A scheduled loop keeps what each run said: last run, its output and earlier runs"
+where = "Loops tab: select a scheduled loop; its last 20 runs are kept under state/loops/<name>/"
+try = "pl loops run <name>"

@@ -1,0 +1,4 @@
+id = "2026-10-23.01"
+title = "A built-in local board and the pl board protocol"
+where = "pl setup: the default board for a new non-code pipeline"
+try = "pl board check local"

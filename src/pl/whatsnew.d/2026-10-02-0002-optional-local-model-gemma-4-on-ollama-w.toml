@@ -1,0 +1,4 @@
+id = "2026-10-02.02"
+title = "Optional local model (Gemma 4 on Ollama) writes a short standup summary"
+where = "pl setup offers it on a new profile; [local_model] enabled = true; loopback url only, no API key"
+try = "pl standup --summary"

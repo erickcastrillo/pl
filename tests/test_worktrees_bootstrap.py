@@ -149,3 +149,17 @@ def test_cli_bootstrap_fails_on_invalid_manifest(repo, tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         _cli(monkeypatch, repo, wt)
     assert e.value.code not in (0, None)
+
+
+def test_bootstrap_with_card_records_worktree_path(repo, tmp_path, monkeypatch):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    writes = []
+    monkeypatch.setattr(commands, "find_card", lambda ref: {"id": "o/r#1", "metadata": {}})
+    monkeypatch.setattr(commands, "update", lambda cid, **kw: writes.append((cid, kw)))
+    monkeypatch.chdir(repo)
+    commands.cmd_worktrees_bootstrap(argparse.Namespace(path=str(wt), dry_run=False, card="o/r#1"))
+    assert writes == [("o/r#1", {"metadata": {"worktree": str(wt.resolve())}})]
+    writes.clear()
+    commands.cmd_worktrees_bootstrap(argparse.Namespace(path=str(wt), dry_run=True, card="o/r#1"))
+    assert writes == []

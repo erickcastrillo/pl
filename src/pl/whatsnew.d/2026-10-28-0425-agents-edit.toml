@@ -1,0 +1,3 @@
+title = "Edit an agent safely"
+where = "pl agents edit"
+try = "pl agents edit sales-sdr --json --pod sales"

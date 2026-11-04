@@ -9,6 +9,8 @@ import tomllib
 
 from pl import schedule
 
+NOTIFY_EVENTS = ("plan_ready", "approved", "pr_opened", "review_passed", "review_rework", "merged", "done", "alert_opened",
+                 "agent_waiting")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
@@ -68,15 +70,20 @@ def _defaults():
     CODE_HOST = {"owner": None, "labels": {}}  # [code_host] owner, labels = {review, ready, merge_ready, rework, failed}
     GH_CONFIG_DIR = None                       # [code_host] gh_config_dir: this profile's own gh sign-in folder
     PR_LIMITS = {"pr_max_lines": 300, "pr_max_files": 10, "pr_auto_merge_lines": 150, "pr_auto_merge_files": 6}
+    AUTO_MERGE = {}   # [loops.auto-merge]: the built-in merge loop's rules (merges.py); off unless enabled = true
     STAGES = {}
     # memory: agents start only while min_free_memory is free; a window past max_agent_processes/_memory is stopped
     MEMORY_DEFAULTS = {"min_free_memory": "15%", "max_agent_processes": 150, "max_agent_memory": "25%", "kill_runaway": True}
     # autostart: the console starts the dispatcher. account_checks: minutes between health checks of a parked account
-    # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. release_waiting_after: minutes a run agent may wait (a GATE line or an idle
-    # screen) before pl stops it and holds its card back (0 is off)
+    # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. stall_minutes: minutes a run
+    # agent may sit idle while its card has not moved on before pl opens a "stalled" alert and notifies (0 is off)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
-                "release_waiting_after": 30, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+                "stall_minutes": 20, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+    # [watchdog] job_minutes: a background job of a stage agent running longer is "overrun" (0 is off)
+    WATCHDOG = {"job_minutes": 45}
     GATES = {"spec": False}
+    # [notify] events: the moments pl tells the owner about (desktop attention_cmd and chat connectors routed for alerts)
+    NOTIFY = {"events": list(NOTIFY_EVENTS)}
     PIPELINE = None       # [pipeline]: columns, stages and gates; the engineering pipeline when absent
     ASSISTANT = {}        # [assistant] enabled, account, proactive: the Assistant tab (on unless enabled = false)
     PERMISSIONS = {}      # [permissions] unattended = false: pipeline agents and loops ask before each action
@@ -90,6 +97,7 @@ def _defaults():
     CAPS = {}             # [caps.<stage>] minutes, tokens ("2M", "500k" or a number): a stage's agent is stopped at the cap
     SYNC = {}
     USAGE = {}            # [usage] prices = {model = dollars per million tokens}, windows = {model = context tokens}
+    ACTIVITY = {}         # [activity] prompt_minutes, slow_factor, slow_minutes, wait_minutes, finished_minutes: slow-work warnings
     TRIGGERS = {}         # [triggers.<name>]
     CONNECTORS = {}       # [connectors.<name>]
     RETENTION = {"email_days": 90}  # [retention] email_days = 90
@@ -124,12 +132,15 @@ def _review_text(repo, lab, account):
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
-def _review_prompt(repo, lab, account):
-    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo and the
-    labels. Claude repeats it with /loop."""
+def _review_prompt(repo, lab, account, limits):
+    """The built-in auto-review loop's prompt for a github-project profile: the pl-review skill with the repo, the
+    labels and the auto-merge size limits. Claude repeats it with /loop."""
     rework, failed = lab.get("rework") or "pl:needs-rework", lab.get("failed") or "pl:review-failed"
     q = shlex.quote   # a label with spaces stays one value
     text = f"/pl-review repo={q(repo)} review={q(lab['review'])} ready={q(lab['ready'])} rework={q(rework)} failed={q(failed)}"
+    if lab.get("merge_ready"):
+        text += f" merge_ready={q(lab['merge_ready'])}"
+    text += f" auto_lines={limits['pr_auto_merge_lines']} auto_files={limits['pr_auto_merge_files']}"
     return f"/loop 30m {text}" if (account.get("harness") or "claude") == "claude" else text
 
 
@@ -191,14 +202,16 @@ def _apply(g, t):
     g["PRODUCT_INTAKE_COLUMNS"], g["PRODUCT_SKIP_TAGS"] = [it["columns"]] if isinstance(it["columns"], str) else list(it["columns"]), set(it["skip_tags"])
     g["STAGES"] = dict(t.get("stages", {}))
     g["PROMPTS"] = {**g["PROMPTS"], **{s: v["prompt"] for s, v in g["STAGES"].items() if "prompt" in v}}
+    loops = {n: v for n, v in t.get("loops", {}).items() if n != "auto-merge"}
+    g["AUTO_MERGE"] = dict(t.get("loops", {}).get("auto-merge", {}))
     if "loops" in t:
         g["SERVICES"] = {n: {"prompt": v.get("prompt") or (f"/{v['skill']}" if v.get("skill") else ""), "profile": v.get("account"),
                              **({"max_context": v["max_context"]} if "max_context" in v else {}),
                              **({"pinned_only": True} if v.get("fallback") is False else {}),
                              **{k: v[k] for k in ("every", "hours", "skill", "team") if k in v},
                              **({"writes": v.get("writes", False)} if "every" in v or "writes" in v else {})}
-                         for n, v in t["loops"].items() if v.get("enabled", True) is not False}
-        g["LOOPS_OFF"] = {n: dict(v) for n, v in t["loops"].items() if v.get("enabled", True) is False}
+                         for n, v in loops.items() if v.get("enabled", True) is not False}
+        g["LOOPS_OFF"] = {n: dict(v) for n, v in loops.items() if v.get("enabled", True) is False}
     ch = t.get("code_host", {})
     repos = [r for r in (ch.get("repos") if isinstance(ch.get("repos"), list) else []) if isinstance(r, str) and r]
     g["CODE_HOST"] = {"owner": ch.get("owner") or None, "labels": dict(ch.get("labels") or {}), **({"repos": repos} if repos else {})}
@@ -209,18 +222,21 @@ def _apply(g, t):
         lab = g["CODE_HOST"]["labels"]
         if "auto-review" not in t.get("loops", {}) and g["ACCOUNTS"] and lab.get("review") and lab.get("ready"):
             first, acct = next(iter(g["ACCOUNTS"].items()))
-            g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct), "profile": first,
+            g["SERVICES"] = {**g["SERVICES"], "auto-review": {"prompt": _review_prompt(tr["repo"], lab, acct, g["PR_LIMITS"]), "profile": first,
                                                              "fallback": _review_text(tr["repo"], lab, acct),
                                                              "builtin": True}}
     if isinstance(ch.get("gh_config_dir"), str) and ch["gh_config_dir"]:
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
+    g["WATCHDOG"] = {**g["WATCHDOG"], **t.get("watchdog", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
+    g["NOTIFY"] = {**g["NOTIFY"], **t.get("notify", {})}
     from pl import pipeline
     g["PIPELINE"] = pipeline.from_toml(t.get("pipeline"))
     if t.get("pipeline"):
         g["COLUMNS"] = g["PIPELINE"]["columns"]
     g["USAGE"] = dict(t.get("usage", {}))
+    g["ACTIVITY"] = dict(t.get("activity", {}))
     g["CAPS"] = parse_caps(t.get("caps", {}))
     g["PERMISSIONS"] = dict(t.get("permissions", {}))
     g["ASSISTANT"] = dict(t.get("assistant", {}))
@@ -345,10 +361,16 @@ def validate(doc) -> list[str]:
         errs.append("code_host.gh_config_dir must be a folder path (text)")
     errs += _pr_limit_errors({**_defaults()["PR_LIMITS"], **doc.get("code_host", {})})
     for key, low in (("max_runs", 0), ("max_prep", 0), ("interval", 1), ("max_agent_processes", 1),
-                     ("release_waiting_after", 0)):
+                     ("stall_minutes", 0), ("rework_wait_minutes", 0)):
         v = doc.get("dispatch", {}).get(key)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < low):
             errs.append(f"dispatch.{key} must be a whole number of at least {low}")
+    v = doc.get("watchdog", {}).get("job_minutes")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+        errs.append("watchdog.job_minutes must be a whole number of at least 0")
+    ev = doc.get("notify", {}).get("events")
+    if ev is not None and not (isinstance(ev, list) and all(e in NOTIFY_EVENTS for e in ev)):
+        errs.append(f"notify.events must be a list of: {', '.join(NOTIFY_EVENTS)}")
     if not isinstance(doc.get("permissions", {}).get("unattended", True), bool):
         errs.append("permissions.unattended must be true or false")
     if "cleanup" in doc.get("worktrees", {}) and not isinstance(doc.get("worktrees", {}).get("cleanup"), bool):
@@ -433,6 +455,15 @@ def validate(doc) -> list[str]:
                 errs.append(f"{kind}.owner must not be empty")
             if "number" in t and not str(t["number"]).strip():
                 errs.append(f"{kind}.number must not be empty")
+        if t.get("type") == "vikunja":
+            if not str(t.get("url") or "").startswith(("http://", "https://")):
+                errs.append(f"{kind}.url must start with http:// or https://")
+            for key in ("project_id", "view_id"):
+                if isinstance(t.get(key), bool) or not isinstance(t.get(key), int):
+                    errs.append(f"{kind}.{key} must be a whole number")
+            from pl.trackers import mcp   # imported here: trackers import this module
+            if not mcp.VAR_RE.fullmatch(str(t.get("token") or "")):
+                errs.append(f"{kind}.token must be a ${{VAR}} reference to an environment variable")
     for table in ("loops", "stages"):
         for name, v in doc.get(table, {}).items():
             if table == "loops" and not NAME_RE.match(name):
@@ -444,7 +475,7 @@ def validate(doc) -> list[str]:
                 errs.append(f"loops.{name}: max_context must be a whole percent from 0 (off) to 100")
             if table == "loops" and not isinstance(v.get("fallback", True), bool):
                 errs.append(f"loops.{name}: fallback must be true or false")
-            if table == "loops" and v.get("enabled", True) is not False and not str(v.get("prompt") or v.get("skill") or "").strip():
+            if table == "loops" and name != "auto-merge" and v.get("enabled", True) is not False and not str(v.get("prompt") or v.get("skill") or "").strip():
                 errs.append(f"loops.{name}: prompt or skill is required")
             if table == "loops":
                 errs += _loop_schedule_errors(name, v)
@@ -462,6 +493,13 @@ def validate(doc) -> list[str]:
                 errs += _pool_errors(name, v, accounts)
             elif table == "stages" and accounts and v.get("harness") in known:
                 errs += _stage_harness_errors(name, v, accounts)
+    am = doc.get("loops", {}).get("auto-merge")
+    am = am if isinstance(am, dict) else {}
+    if am.get("merge_method", "squash") not in ("squash", "merge", "rebase"):
+        errs.append('loops.auto-merge.merge_method must be "squash", "merge" or "rebase"')
+    mp = am.get("max_per_pass", 5)
+    if isinstance(mp, bool) or not isinstance(mp, int) or mp < 1:
+        errs.append("loops.auto-merge.max_per_pass must be a whole number, 1 or more")
     errs += _pod_errors(doc.get("pods", {}), globals()["CONFIG_DIR"])
     from pl import triggers
     errs += triggers.validate(doc)
@@ -785,7 +823,18 @@ def save(doc, target=None) -> list[str]:
 
 
 # pl manager's machine.toml [limits]: caps across every profile on the machine
-MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True}
+MACHINE_DEFAULTS = {"max_live_agents": 8, "max_agents_memory": "60%", "min_free_memory": "15%", "kill_runaway": True,
+                    "agent_nice": 10}
+
+
+def validate_tests(t) -> list[str]:
+    """Problems in machine.toml's [tests] (empty = fine)."""
+    if "tests" in t and not isinstance(t["tests"], dict):
+        return ["tests must be a table ([tests])"]
+    v = t.get("tests", {}).get("max_workers")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
+        return ["tests.max_workers must be a whole number of at least 1"]
+    return []
 
 
 def validate_machine(t) -> list[str]:
@@ -797,6 +846,9 @@ def validate_machine(t) -> list[str]:
     v = lim.get("max_live_agents")
     if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 1):
         errs.append("limits.max_live_agents must be a whole number of at least 1")
+    v = lim.get("agent_nice")
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 19):
+        errs.append("limits.agent_nice must be a whole number from 0 to 19")
     if not isinstance(man.get("enabled", True), bool):
         errs.append("manager.enabled must be true or false")
     if not isinstance(lim.get("kill_runaway", True), bool):

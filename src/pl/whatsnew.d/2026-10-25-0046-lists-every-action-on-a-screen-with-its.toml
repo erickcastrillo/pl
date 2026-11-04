@@ -1,0 +1,4 @@
+id = "2026-10-25.46"
+title = "? lists every action on a screen with its pl command"
+where = "any screen: press ?"
+try = "pl --help"

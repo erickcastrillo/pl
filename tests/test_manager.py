@@ -9,7 +9,7 @@ import time
 import pytest
 
 from pl import config as C
-from pl import dispatch, manager
+from pl import dispatch, manager, worker_budget
 
 REAL_NOTIFY = manager._notify   # the fixture replaces it; the timeout test needs the real one
 TR = '[tracker]\ntype = "mcp"\n'   # a managed profile needs a tracker; one without it is a config error
@@ -558,6 +558,8 @@ def test_the_default_machine_toml_names_every_key_with_a_comment():
     t = tomllib.loads(manager.MACHINE_TOML)
     assert t["manager"] == {"enabled": True} and set(t["limits"]) == set(C.MACHINE_DEFAULTS) - {"max_live_agents"}
     assert "# max_live_agents =" in manager.MACHINE_TOML   # unset: computed from the profiles, shown commented out
+    assert t["tests"] == {} and "# max_workers =" in manager.MACHINE_TOML
+    assert "every profile" in manager.MACHINE_TOML and "half the cores" in manager.MACHINE_TOML
     keys = [x for x in manager.MACHINE_TOML.splitlines() if "=" in x]
     assert keys and all("#" in x for x in keys)
 
@@ -1291,5 +1293,136 @@ def test_status_says_how_many_exited_windows_were_not_counted(machine, n, text):
                                            "max_live_agents": 8, "exited_windows": count})
             assert ("exited window" in manager.show()) == bool(count)
             assert not count or text in manager.show()
+    finally:
+        f.close()
+
+
+# ---------- test workers ----------
+
+BAD_WORKERS = "tests.max_workers must be a whole number of at least 1"
+
+
+@pytest.mark.parametrize("bad", [0, -2, "four", True])
+def test_validate_tests_names_a_bad_max_workers(bad):
+    assert C.validate_tests({"tests": {"max_workers": bad}}) == [BAD_WORKERS]
+
+
+def test_validate_tests_names_a_tests_value_that_is_not_a_table():
+    assert C.validate_tests({"tests": 3}) == ["tests must be a table ([tests])"]
+
+
+@pytest.mark.parametrize("t", [{}, {"tests": {}}, {"tests": {"max_workers": 6}}])
+def test_validate_tests_is_empty_for_no_table_or_a_good_value(t):
+    assert C.validate_tests(t) == []
+
+
+def running_manager(machine, toml=""):
+    limits(machine, toml)
+    f = hold(manager.machine_dir() / "manager.lock")
+    f.write("pid 41 since now")
+    f.flush()
+    machine["alive"].add(41)
+    manager._write("status.json", {"at": manager._clock(), "pid": 41, "profiles": []})
+    return f
+
+
+def test_status_shows_test_workers_in_use_of_allowed(machine):
+    f = running_manager(machine, "[tests]\nmax_workers = 6\n")
+    try:
+        with worker_budget.hold(4):
+            out = manager.show()
+    finally:
+        f.close()
+    assert "test workers: 4/6" in out.splitlines()
+
+
+def test_status_json_has_test_workers(machine, capsys):
+    f = running_manager(machine, "[tests]\nmax_workers = 6\n")
+    try:
+        with worker_budget.hold(4):
+            manager.cmd_manager(["status", "--json"])
+    finally:
+        f.close()
+    assert json.loads(capsys.readouterr().out)["test_workers"] == {"in_use": 4, "allowed": 6}
+
+
+def test_status_test_workers_default_to_half_the_cores(machine, monkeypatch, capsys):
+    monkeypatch.setattr(worker_budget, "_cpus", lambda: 12)
+    f = running_manager(machine)
+    try:
+        assert "test workers: 0/6" in manager.show().splitlines()
+        manager.cmd_manager(["status", "--json"])
+    finally:
+        f.close()
+    assert json.loads(capsys.readouterr().out)["test_workers"] == {"in_use": 0, "allowed": 6}
+
+
+@pytest.mark.parametrize("bad", ["0", "-2", '"four"'])
+def test_status_names_a_bad_max_workers_under_the_test_workers_line(machine, monkeypatch, bad):
+    monkeypatch.setattr(worker_budget, "_cpus", lambda: 12)
+    f = running_manager(machine, f"[tests]\nmax_workers = {bad}\n")
+    try:
+        lines = manager.show().splitlines()
+    finally:
+        f.close()
+    assert lines[lines.index("test workers: 0/6") + 1] == f"machine.toml: {BAD_WORKERS}"
+
+
+def test_status_names_tests_that_is_not_a_table(machine, monkeypatch):
+    monkeypatch.setattr(worker_budget, "_cpus", lambda: 12)
+    f = running_manager(machine, "tests = 3\n")
+    try:
+        lines = manager.show().splitlines()
+    finally:
+        f.close()
+    assert lines[lines.index("test workers: 0/6") + 1] == "machine.toml: tests must be a table ([tests])"
+
+
+def test_status_json_when_not_running_has_no_test_workers(machine, capsys):
+    manager.cmd_manager(["status", "--json"])
+    assert json.loads(capsys.readouterr().out) == {"running": False}
+
+
+# ---------- agent priority ----------
+
+BAD_NICE = "limits.agent_nice must be a whole number from 0 to 19"
+
+
+@pytest.mark.parametrize("bad", [-5, 25, "high", True])
+def test_validate_machine_names_a_bad_agent_nice(bad):
+    assert C.validate_machine({"limits": {"agent_nice": bad}}) == [BAD_NICE]
+
+
+@pytest.mark.parametrize("good", [0, 10, 19])
+def test_validate_machine_accepts_agent_nice_0_to_19(good):
+    assert C.validate_machine({"limits": {"agent_nice": good}}) == []
+
+
+def test_limits_default_agent_nice_is_10_and_a_bad_one_keeps_it(machine):
+    assert manager._limits()["agent_nice"] == 10
+    limits(machine, "[limits]\nagent_nice = -5\n")
+    assert manager._limits()["agent_nice"] == 10
+    limits(machine, "[limits]\nagent_nice = 15\n")
+    assert manager._limits()["agent_nice"] == 15
+
+
+def test_status_json_and_show_name_the_agent_nice(machine):
+    limits(machine, "[limits]\nagent_nice = 15\n")
+    assert manager.tick({})["agent_nice"] == 15
+    f = hold(manager.machine_dir() / "manager.lock")
+    f.write("pid 41 since now")
+    f.flush()
+    machine["alive"].add(41)
+    try:
+        agents = next(ln for ln in manager.show().splitlines() if ln.startswith("agents:"))
+    finally:
+        f.close()
+    assert agents.endswith(", nice 15") or ", nice 15;" in agents
+
+
+def test_show_without_agent_nice_in_an_old_status_omits_it(machine):
+    f = running_manager(machine)
+    try:
+        assert "nice" not in manager.show()
     finally:
         f.close()

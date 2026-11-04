@@ -1,0 +1,3 @@
+title = "Watch a running agent live from the Running view"
+where = "Automate → Running: w (or Enter) on an agent window opens its live view; Esc goes back"
+try = "pl"

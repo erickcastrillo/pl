@@ -1,0 +1,3 @@
+title = "Agents' pytest -n auto uses a small share of the cores"
+where = "every agent window and review loop"
+try = "pl manager status, then start a run agent and check its tests"

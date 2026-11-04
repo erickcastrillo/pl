@@ -11,6 +11,8 @@ from pathlib import Path
 import tomlkit
 
 from pl import config as C
+from pl.jsonout import emit
+from pl.util import BadInput
 
 def _tilde(p):
     s = str(p)
@@ -61,6 +63,28 @@ def list_profiles(check_lock=True) -> list[dict]:
         rows.append(_row(name, d, d / "state" / "pl-dispatch.lock", session, {**base["TRACKER"], **t.get("tracker", {})},
                          t.get("accounts", base["ACCOUNTS"]), check_lock))
     return rows
+
+
+def all_accounts() -> tuple[list[dict], list[str]]:
+    """Accounts of the current profile and every ~/.pl-* profile, one row per (name, folder); plus a line per unreadable profile.
+    Reads config.toml files only, never an account folder."""
+    sources = [(C.PROFILE_NAME or "-", C.ACCOUNTS)]
+    skipped = []
+    for d in sorted(Path.home().glob(".pl-*")):
+        name = d.name.removeprefix(".pl-")
+        if not C.NAME_RE.match(name) or name == C.PROFILE_NAME or not (d / "config.toml").is_file():
+            continue
+        try:
+            sources.append((name, tomllib.loads((d / "config.toml").read_text()).get("accounts", {})))
+        except (OSError, tomllib.TOMLDecodeError):
+            skipped.append(f"skipped profile {name}: its config.toml could not be read")
+    rows = {}
+    for profile, accounts in sources:
+        for n, a in accounts.items():
+            folder = _tilde(Path(a.get("config_dir", f"~/.claude-{n}")).expanduser())
+            row = rows.setdefault((n, folder), {"name": n, "settings": dict(a), "dir": folder, "profiles": []})
+            row["profiles"].append(profile)
+    return list(rows.values()), skipped
 
 
 def current_row() -> dict:
@@ -149,41 +173,61 @@ def _doc(v, tracker, intake):
     })
 
 
+def refuse_existing(d):
+    if d.exists():
+        raise BadInput(f"pl: profile {d.name[len('.pl-'):]!r} exists ({d}); pick another name or edit its config.toml")
+
+
 def _write_config(d, doc):
+    """Create the profile folder; False when it already holds exactly this config (nothing is touched)."""
+    cfg = d / "config.toml"
+    if cfg.is_file() and cfg.read_text() == tomlkit.dumps(doc):
+        print(f"profile {d.name[len('.pl-'):]!r} already exists, unchanged ({d})")
+        return False
+    refuse_existing(d)
     d.mkdir(mode=0o700)
     fd = os.open(d / "config.toml", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(tomlkit.dumps(doc))
+    return True
+
+
+def pipeline_config(pipeline_doc, tracker, accounts) -> dict:
+    """A pipeline profile's config: its pipeline, a board and the accounts, and no code host."""
+    return _clean({"tracker": tracker, "accounts": {n: dict(a) for n, a in accounts.items()}, "pipeline": pipeline_doc})
 
 
 def _target(name):
     if not C.NAME_RE.match(name):
-        raise SystemExit(f"pl: bad profile name {name!r}")
-    d = Path.home() / f".pl-{name}"
-    if d.exists():
-        raise SystemExit(f"pl: profile {name!r} exists ({d}); pick another name or edit its config.toml")
-    return d
+        raise BadInput(f"pl: bad profile name {name!r}")
+    return Path.home() / f".pl-{name}"
 
 
 def new_profile(name: str, from_current: bool = False, github_owner: str | None = None, github_title: str | None = None,
-                github_repo: str | None = None):
+                github_repo: str | None = None, pipeline_doc: dict | None = None, tracker_doc: dict | None = None,
+                accounts: dict | None = None):
     """Write ~/.pl-<name>/config.toml with the effective (or neutral default) values and [gates] spec = true.
     With github_owner, first create a GitHub Project with a "pl stage" field and make it the tracker."""
     d = _target(name)
+    if pipeline_doc is not None:
+        if _write_config(d, pipeline_config(pipeline_doc, tracker_doc, accounts if accounts is not None else C.ACCOUNTS)):
+            print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+        return
     v = _values(from_current)
     if not from_current:
         v["PROMPTS"] = dict(C.BUILTIN_PROMPTS)   # a new profile runs pl's built-in stage skills
     tracker = dict(v["TRACKER"])
     if github_owner is not None:
         from pl.trackers.github import GitHubProject
+        refuse_existing(d)   # a re-run would make a second project that never matches the first
         made = GitHubProject.create_project(github_owner, github_title or f"pl {name}", v["COLUMNS"])
         tracker = {"type": "github-project", "owner": github_owner, "number": made["number"], "status_field": made["status_field"],
                    **({"repo": github_repo} if github_repo else {})}
     intake = {**v["INTAKE"], "columns": list(v["INTAKE"]["columns"]) if not isinstance(v["INTAKE"]["columns"], str) else v["INTAKE"]["columns"]}
-    _write_config(d, _doc(v, tracker, intake))
     if github_owner is not None:
         print(f"created GitHub Project {made['url']} (stage field \"{made['status_field']}\")")
-    print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+    if _write_config(d, _doc(v, tracker, intake)):
+        print(f"created {d}/config.toml\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
 
 
 # ---------- --from-legacy: read the one-file pl script's settings ----------
@@ -323,8 +367,8 @@ def from_legacy(name: str, script: Path, mcp_json: Path | None = None, server: s
               **({"card_url": v["_intake_url"]} if v["_intake_url"] else {})}
     if not intake["board_id"]:
         intake = {}
-    _write_config(d, _doc(base, tracker, intake))
-    print(f"created {d}/config.toml from {script}\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
+    if _write_config(d, _doc(base, tracker, intake)):
+        print(f"created {d}/config.toml from {script}\nalias pl-{name}='PL_CONFIG_DIR=~/.pl-{name} pl'")
 
 
 def cmd_new(argv: list[str], profile: str | None = None):
@@ -340,7 +384,11 @@ def cmd_new(argv: list[str], profile: str | None = None):
     ap.add_argument("--owner", help="GitHub user or organisation that owns the new project")
     ap.add_argument("--title", help="the new project's title (default: pl NAME)")
     ap.add_argument("--repo", help="owner/name: the repository the new project's cards are issues in")
+    ap.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     a = ap.parse_args(argv)
+    if a.dry_run:
+        print(f"would create {_target(a.name)}/config.toml")
+        return
     if a.github_project and a.owner is None:
         ap.error("--github-project create needs --owner")
     if a.from_legacy:
@@ -354,6 +402,9 @@ def cmd_new(argv: list[str], profile: str | None = None):
 
 def cmd_profiles(a):
     rows = list_profiles()
+    if getattr(a, "json", False):
+        emit({"profiles": rows, "warnings": shared_warnings(rows)})
+        return
     if not rows:
         print("no profiles yet: create one with pl profiles new <name>")
         return

@@ -99,7 +99,7 @@ def test_an_error_is_silent_and_still_counts_as_the_day_s_check(git):
 
 
 def test_a_timeout_is_silent_and_start_up_does_not_wait(git, monkeypatch):
-    monkeypatch.setattr(update, "TIMEOUT", 0.5)
+    monkeypatch.setattr(update, "TIMEOUT", 0.05)
     git.sleep()
     git.tags("v0.3.0")
     t0 = time.monotonic()
@@ -180,7 +180,7 @@ async def test_the_console_shows_the_notice_and_u_shows_the_commands(git, monkey
         assert isinstance(app.screen, UpdateScreen)
         text = screen_text(app)
         assert "git pull" in text and "uv tool install --force --reinstall" in text and "v0.3.0" in text
-        await pilot.press("c")
+        await pilot.press("y")   # copy is y since Plan 5 slice 2 (one key, one meaning)
         assert copied == [update.COMMANDS]
         await pilot.press("escape")
         await settle(pilot)

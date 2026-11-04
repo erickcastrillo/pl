@@ -1,0 +1,251 @@
+"""Plan 33 slice 4: sub-tab keys, the remembered sub-tab per profile, and the footer's view keys first."""
+import json
+
+import pytest
+from textual.widgets import Footer, Input
+from textual.widgets._footer import FooterKey
+
+from pl import config as C
+from pl.tui.app import PlApp, ViewFooter
+from pl.tui.chrome import MAIN_KEYS, groups
+from test_tui_views import FakeAssistant, Provider, fake_home, settle  # noqa: F401 - fake_home is an autouse fixture there
+from tui_wait import wait_until
+
+
+@pytest.fixture(autouse=True)
+def state_dir(tmp_path, monkeypatch):
+    d = tmp_path / "state"
+    d.mkdir()
+    monkeypatch.setattr(C, "STATE_DIR", d)
+    return d
+
+
+async def wait_for(pilot, condition, what):
+    await wait_until(pilot, condition, what, timeout=20.0)   # a loaded machine (load average 100) needs more than 5s
+
+
+def saved_tab(state_dir, group="work"):
+    try:
+        saved = json.loads((state_dir / "subtabs.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return saved.get(group) if isinstance(saved, dict) else None
+
+
+async def start(pilot, condition=None, what="the console to start"):
+    await wait_for(pilot, lambda: pilot.app.query(Footer), "the console to mount")
+    await settle(pilot)
+    await wait_for(pilot, condition or (lambda: pilot.app.query(Footer)), what)
+    return pilot.app
+
+
+async def on_tab(pilot, want):
+    await settle(pilot)
+    await wait_for(pilot, lambda: pilot.app.active_tab == want, f"the {want} sub-tab")
+
+
+async def test_ac1_right_and_left_switch_work_sub_tabs_from_the_list():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press("3")
+        await on_tab(pilot, "ideas")
+        assert app.active_tab == "ideas"
+        for key, want in (("right", "cards"), ("left", "ideas"), ("left", "cards"), ("right", "ideas")):
+            await pilot.press(key)
+            await on_tab(pilot, want)
+            assert app.active_tab == want
+
+
+async def test_ac2_a_free_letter_opens_its_sub_tab():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press("6", "m")   # Extend: m opens Models (Loops lost its l to the full-log key, Plan 42 slice 2)
+        await on_tab(pilot, "models")
+        assert app.active_tab == "models"
+        label = app.query_one("#extend-views").get_tab("models").label
+        assert label.plain.startswith("Models") and label.spans[0].style.underline and label.spans[0].start == 0
+
+
+async def test_ac3_sub_tab_letters_never_collide():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        assert app.sub_keys == {"review": {"p": "prs", "w": "waiting"},   # Loops' l is its full-log key now
+                                "extend": {"c": "connectors", "m": "models", "p": "pods"}}
+        for gid, letters in app.sub_keys.items():
+            own = {k for k in letters if all(b.action.startswith("sub_letter") for b in app._bindings.key_to_bindings[k])}
+            assert own == set(letters)
+            assert not any(k in w._bindings.key_to_bindings for k in letters for w in app.query(f"#g-{gid} *"))
+        await pilot.press("3", "i")
+        await on_tab(pilot, "ideas")
+        assert app.active_tab == "ideas"
+        await pilot.press("7", "a")
+        await on_tab(pilot, "activity")
+        assert app.active_tab == "activity"
+
+
+async def test_ac4_text_boxes_keep_left_right_and_letters(monkeypatch):
+    FakeAssistant(monkeypatch)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press("2")
+        await settle(pilot)
+        await wait_for(pilot, lambda: isinstance(app.focused, Input), "the assistant's text box to take focus")
+        box = app.focused
+        assert isinstance(box, Input)
+        await pilot.press("x", "b", "left")
+        await settle(pilot)
+        await wait_for(pilot, lambda: box.value == "xb" and box.cursor_position == 1, "the typed letters and the cursor move")
+        assert box.value == "xb" and box.cursor_position == 1
+        assert app.active_tab == "assistant"
+
+
+@pytest.mark.parametrize("key", ["1", "4", "7"])
+async def test_ac5_single_view_tabs_ignore_left_right(key):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press(key)
+        await on_tab(pilot, [views[0][0] for _, _, views in groups()][int(key) - 1])
+        before = app.active_tab
+        await pilot.press("left", "right")
+        await settle(pilot)
+        assert app.active_tab == before
+
+
+async def test_ac6_last_sub_tabs_come_back_after_a_restart(state_dir):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press("3", "right", "4", "right")
+        await settle(pilot)
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards" and saved_tab(state_dir, "review") == "prs",
+                         "the cards and prs tabs, saved")
+    saved = json.loads((state_dir / "subtabs.json").read_text())
+    assert saved["work"] == "cards" and saved["review"] == "prs"
+    again = PlApp(snapshot_provider=Provider())
+    async with again.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press("3")
+        await on_tab(pilot, "cards")
+        assert again.active_tab == "cards"
+        await pilot.press("4")
+        await on_tab(pilot, "prs")
+        assert again.active_tab == "prs"
+
+
+async def test_ac7_another_profile_starts_on_first_sub_tabs(tmp_path, monkeypatch):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(), b.mkdir()
+    (a / "subtabs.json").write_text('{"work": "cards"}')
+    monkeypatch.setattr(C, "STATE_DIR", b)
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        await pilot.press("3")
+        await on_tab(pilot, "ideas")
+        assert app.active_tab == "ideas"
+        await pilot.press("5")
+        await on_tab(pilot, "loops")
+        assert app.active_tab == "loops"
+    assert (a / "subtabs.json").read_text() == '{"work": "cards"}'
+
+
+@pytest.mark.parametrize("saved,assistant_off", [
+    (None, False), ("not json", False), ("[1, 2]", False), ('{"work": "gone"}', False),
+    ('{"assistant": "assistant"}', True)])
+async def test_ac8_bad_saved_file_falls_back_quietly(state_dir, saved, assistant_off):
+    if saved is not None:
+        (state_dir / "subtabs.json").write_text(saved)
+    if assistant_off:
+        C.ASSISTANT = {"enabled": False}
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot)
+        first = {gid: views[0][0] for gid, _, views in groups()}
+        for gid, vid in first.items():
+            assert app.query_one(f"#{gid}-views").active == vid
+        assert not app._notifications
+        await pilot.press("3", "right")
+        await settle(pilot)
+        await wait_for(pilot, lambda: saved_tab(state_dir) == "cards", "the cards tab, saved")
+    assert json.loads((state_dir / "subtabs.json").read_text())["work"] == "cards"
+
+
+async def test_ac9_tab_option_wins_and_is_saved(state_dir):
+    (state_dir / "subtabs.json").write_text('{"work": "ideas"}')
+    app = PlApp(snapshot_provider=Provider(), tab="cards")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await start(pilot, lambda: app.active_tab == "cards" and saved_tab(state_dir) == "cards", "the cards tab, saved")
+        assert app.active_tab == "cards"
+    assert json.loads((state_dir / "subtabs.json").read_text())["work"] == "cards"
+
+
+def footer_keys(app):
+    return [k for k in app.query_one(Footer).query(FooterKey)]
+
+
+def footer_ready(app, view):
+    keys = footer_keys(app)
+    laid_out = all(k.region.width > 0 for k in keys if k.action in MAIN_KEYS[view] or k.action == "help")
+    return laid_out and (app._typing() or any(k.action == "help" for k in keys))
+
+
+@pytest.mark.parametrize("view", sorted(MAIN_KEYS))
+async def test_ac10_footer_at_80x24_shows_each_views_main_keys(view):
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await start(pilot)
+        if view not in {v for _, _, vs in groups() for v, _ in vs}:
+            pytest.skip("view not shown")
+        app.action_tab(view)
+        await settle(pilot)
+        await wait_for(pilot, lambda: footer_ready(app, view), f"the {view} footer keys laid out")
+        keys = footer_keys(app)
+        for k in keys:
+            if k.action in MAIN_KEYS[view] or k.action == "help":
+                assert k.region.width > 0 and k.region.right <= 80, (view, k.action, k.region)
+        if not app._typing():   # a printable key in a text box is text, so the footer drops those bindings
+            assert any(k.action == "help" for k in keys), [k.action for k in keys]
+
+
+async def test_footer_recomposes_only_when_its_keys_change(monkeypatch):
+    """Textual's Footer recomposes on every bindings update (about 23 while the console starts); each one mounts and
+    styles every key again. ViewFooter keeps one recompose pending at most and skips it when nothing it shows changed."""
+    calls = []
+    real = ViewFooter.recompose
+
+    async def counting(self):
+        calls.append(self.app.active_tab)
+        return await real(self)
+    monkeypatch.setattr(ViewFooter, "recompose", counting)
+    app = PlApp(snapshot_provider=Provider(), interval=3600)
+    async with app.run_test(size=(200, 24)) as pilot:
+        await start(pilot)
+        await settle(pilot)
+        at_start = len(calls)
+        assert at_start <= 3, calls
+        footer = app.query_one(ViewFooter)
+        for _ in range(5):   # what focus moves that do not change the keys send
+            footer.bindings_changed(app.screen)
+        await settle(pilot)
+        assert len(calls) == at_start, calls
+        app.action_tab("cards")
+        await wait_for(pilot, lambda: "move_column" in {k.action for k in footer_keys(app)},
+                       "the cards view's move_column key in the footer")
+        assert len(calls) > at_start
+
+
+async def test_footer_keeps_console_keys_after_view_keys():
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(200, 24)) as pilot:
+        await start(pilot)
+        app.action_tab("cards")
+        await settle(pilot)
+        await wait_for(pilot, lambda: {"move_column", "dispatcher"} <= {k.action for k in footer_keys(app)},
+                         "the view's move_column key and the console's dispatcher key in the footer")
+        actions = [k.action for k in footer_keys(app)]
+        assert actions.index("move_column") < actions.index("dispatcher")

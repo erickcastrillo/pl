@@ -1,0 +1,3 @@
+title = "Built-in sales and support pods: rules and skills for client pipelines"
+where = "pl pods list; pl pods show sales"
+try = "pl pipelines add sales --template new-client --board local"

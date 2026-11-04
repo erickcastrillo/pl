@@ -13,6 +13,8 @@ import time
 import tomllib
 from pathlib import Path
 
+from pl import jsonout
+
 TICK = 5                      # seconds between ticks, as the dispatcher's fast guard
 STALE = 3 * TICK              # a status older than this is ignored: a dead manager never freezes the pipeline
 BACKOFF = (10, 30, 120, 300)  # seconds before restarting a dispatcher that exited: 1st, 2nd, 3rd, 4th+ time
@@ -31,6 +33,11 @@ enabled = true               # false: each console starts its own profile's disp
 max_agents_memory = "60%"    # past it the largest agent tree is stopped; over 80% of it holds new starts
 min_free_memory = "15%"      # less free memory holds new starts
 kill_runaway = true          # false: only notify
+agent_nice = 10              # CPU priority of agent and loop windows and their tests: 0 (normal) to 19 (lowest)
+
+[tests]
+# max_workers = 6            # pytest workers shared by every profile's test runs (pl tests run).
+                             # Unset: half the cores, at least 1
 """
 
 
@@ -483,7 +490,7 @@ def tick(state):
         except Exception as e:  # noqa: BLE001 - prune failure never stops the tick
             print(f"brain prune failed: {type(e).__name__}: {e}", flush=True)
     status = {"at": now, "pid": os.getpid(), "profiles": rows, "live_agents": live, "max_live_agents": cap,
-              "room": max(0, cap - live), "exited_windows": state.get("exited", 0), "agent_memory_pct": pct, "hold": hold, "machine_error": machine_error,
+              "room": max(0, cap - live), "exited_windows": state.get("exited", 0), "agent_memory_pct": pct, "agent_nice": _limits(profs)["agent_nice"], "hold": hold, "machine_error": machine_error,
               "build": build, "pkg": str(update.PKG)}
     _write("status.json", status)
     return status
@@ -720,7 +727,13 @@ def stop(all_=False):
     return note
 
 
+def _test_workers():
+    from pl import worker_budget
+    return {"in_use": worker_budget.in_use(), "allowed": worker_budget.max_workers()}
+
+
 def show():
+    from pl import config as C
     st = read_status(max_age=float("inf"))
     if not running() or not st:
         return "manager: not running" + ("" if _path("machine.toml").exists() else " (never started on this machine)")
@@ -749,7 +762,11 @@ def show():
                      f"{github:<12}{'; '.join(why) or '-'}{who}")
     lines.append(f"agents: {st.get('live_agents', 0)} live of {st.get('max_live_agents', '?')} on this machine "
                  "(agents column: in use/allowed now; each profile has its own share)"
+                 + (f", nice {st['agent_nice']}" if st.get("agent_nice") is not None else "")
                  + (f"; {n} exited window{'s' * (n != 1)} not counted" if (n := st.get("exited_windows")) else ""))
+    w = _test_workers()
+    lines.append(f"test workers: {w['in_use']}/{w['allowed']}")
+    lines.extend(f"machine.toml: {e}" for e in C.validate_tests(_machine_toml()))
     for acct, g in sorted(accounts.items()):
         lines.append(f"GitHub {acct.split('@')[0]}: {g['remaining']} of {g['limit']} GraphQL points left, resets "
                      f"{time.strftime('%H:%M', time.localtime(g['reset']))} (github column: spent/fair share; "
@@ -768,6 +785,7 @@ def cmd_manager(argv):
     ap.add_argument("profile", nargs="?", help="restart: start this profile's dispatcher again; stop: stop only "
                     "this profile's dispatcher, not restarted until restart")
     ap.add_argument("--all", action="store_true", help="stop: also stop every managed dispatcher")
+    ap.add_argument("--json", action="store_true", help="status: print one JSON document (shape in docs/cli-json.md)")
     a = ap.parse_args(argv)
     if a.action == "run":
         return _run_loop()
@@ -777,6 +795,10 @@ def cmd_manager(argv):
             print(f"pl manager {a.action}: give a profile name", file=sys.stderr)
             return 2
         print(note)
+        return 0
+    if a.json and a.action == "status":
+        st = read_status(max_age=float("inf"))
+        jsonout.emit({"running": True, **st, "test_workers": _test_workers()} if running() and st else {"running": False})
         return 0
     print({"start": start, "status": show}.get(a.action, lambda: stop(a.all))())
     return 0

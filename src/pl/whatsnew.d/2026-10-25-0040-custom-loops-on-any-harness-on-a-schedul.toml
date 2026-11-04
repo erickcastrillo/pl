@@ -1,0 +1,4 @@
+id = "2026-10-25.40"
+title = "Custom loops on any harness, on a schedule"
+where = "Loops tab: n add, e p g d w"
+try = "pl loops add --template stale-cards"

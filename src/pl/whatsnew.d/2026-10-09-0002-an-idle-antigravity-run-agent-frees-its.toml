@@ -1,0 +1,4 @@
+id = "2026-10-09.02"
+title = "An idle Antigravity run agent frees its run slot, like Claude's"
+where = "pl list: run agent waiting (idle N min); the next card starts"
+try = "pl list"

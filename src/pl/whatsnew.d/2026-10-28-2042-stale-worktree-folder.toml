@@ -1,0 +1,3 @@
+title = "A leftover folder no longer blocks a run"
+where = "run stage, pl events"
+try = "Look for a worktree_set_aside event; the old folder is kept as <name>.stale-<time> next to the worktree"

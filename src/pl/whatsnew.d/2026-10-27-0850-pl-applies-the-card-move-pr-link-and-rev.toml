@@ -1,0 +1,3 @@
+title = "pl applies the card move, PR link and review label an agent claimed but missed"
+where = "Activity tab: reconciled; Alerts tab: reconcile_failed"
+try = "pl alerts"

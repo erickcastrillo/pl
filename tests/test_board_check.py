@@ -132,3 +132,41 @@ def test_rules_structure():
         assert len(r) == 3
         assert callable(r[2])
 
+
+
+def test_check_passes_against_pl_board_serve_as_a_hub_stand_in(tmp_path, monkeypatch):
+    import socket
+    import threading
+    import time
+    import uvicorn
+    from pl import boardcheck, boardserve
+    from pl.trackers.mcp import Mcp
+
+    prof = tmp_path / ".pl-hub"
+    prof.mkdir()
+    (prof / "config.toml").write_text('[tracker]\ntype = "local"\n')
+    monkeypatch.setattr(C, "CONFIG_DIR", prof)
+    monkeypatch.setenv("HUB_TOKEN", "s3cret")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    app = boardserve._auth_app(boardserve.build(prof / "board.db").streamable_http_app(), token="s3cret")
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+    for _ in range(50):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                break
+        except OSError:
+            time.sleep(0.05)
+    try:
+        hub = Mcp({"type": "mcp", "protocol": "pl", "server": {
+            "url": f"http://127.0.0.1:{port}/mcp", "headers": {"Authorization": "Bearer ${HUB_TOKEN}"}}})
+        results = boardcheck.check(hub)
+    finally:
+        server.should_exit = True
+        t.join(timeout=2)
+    assert [r["id"] for r in results] == [f"R{i}" for i in range(1, 12)]
+    assert [r for r in results if not r["ok"]] == []

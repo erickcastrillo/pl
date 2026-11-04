@@ -1,0 +1,4 @@
+id = "2026-10-24.01"
+title = "Exit codes for scripts: 0 done, 1 failed, 2 bad input, with a one-line reason"
+where = "every pl command; an unknown card or column now exits 2 (it was 1)"
+try = "pl card nosuch; echo $?"

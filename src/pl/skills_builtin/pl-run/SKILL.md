@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 7
+pl-builtin-version: 13
 ---
 
 # pl-run: build the approved plan for one card
@@ -21,6 +21,7 @@ such choice in the pull request description.
 - A `rework=N` argument means the plan is already built and its pull request is open, but the automated review
   asked for changes: follow "Rework mode" below instead of the steps. `rework_label=<label>` and `ready=<label>`
   come with it.
+- If the PLAN has a `## Slices` section, follow "Stacked plans" below in place of steps 3 to 6; otherwise follow the steps as they are.
 
 ## Steps
 
@@ -38,35 +39,23 @@ such choice in the pull request description.
    pl move <id> "In progress"
    ```
 
-2. Make a worktree on a new branch from the up-to-date default branch. Never work in this checkout itself.
-   Put it in the profile's worktrees folder, `$PL_WORKTREES_DIR` (pl made it and gave you access to it).
-   When that variable is empty, use `..`:
-
-   ```
-   git fetch origin
-   git worktree add -b pl/<short-name> "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" origin/<default branch>
-   ```
-
-   Then bootstrap it, so the files and dependencies the repository's `.pl/worktree.yaml` asks for are in place:
-
-   ```
-   pl worktrees bootstrap "${PL_WORKTREES_DIR:-..}/<repo>-pl-<short-name>" --card <id>
-   ```
-
-   If bootstrap reports a problem, proceed with the diagnostics it printed; do not stop.
-
-   If the branch or worktree already exists from an earlier attempt, reuse it (`git worktree list` shows where; an
-   older one may be at `../<repo>-pl-<short-name>`) and continue where it stopped. Run every later command inside it.
+2. pl started you in this card's worktree; its path is the `worktree=<path>` argument. Check it with
+   `git rev-parse --show-toplevel` and `git rev-parse --git-common-dir`. If the common dir is this folder's own
+   `.git` (you were started in the owner's checkout, and you never work in the main checkout), or the top level is not the `worktree=` path, stop: write
+   the error as your last message and do nothing else. Do not make a branch or worktree of your own and do not `cd`
+   out of this folder. Run `pl worktrees bootstrap . --card <id>`; if it reports a problem, go on with its
+   diagnostics. Your branch is the one checked out here (`git branch --show-current`); use it wherever this
+   skill says `pl/<short-name>`.
 
 3. For each work package, in order (an "End-to-end tests" package comes last, as below):
-   1. Write the tests the package lists. Run them and confirm they fail for the expected reason.
-   2. Make the change the package describes, and nothing else.
-   3. Run the package's tests until they pass, then the project's usual test and lint commands.
-   4. Check `git diff --stat` against the plan's "Minimum change" budget; if over, remove code until inside it.
-   5. Commit with a message that names the work package.
+   1. Write the tests the package lists. Run them with the command `pl tests affected` prints and confirm they fail for the expected reason.
+   2. Make the change the package describes, and nothing else. In pl itself, a what's-new entry is one new file in
+      `src/pl/whatsnew.d/` named with the current UTC date and time (`YYYY-MM-DD-HHMM-<slug>.toml`); never edit another entry.
+   3. Run the package's tests until they pass. Run tests only with the command `pl tests affected --json` prints in "command" (`pl tests full`, the full suite, when the JSON has `full` true or the command fails: non-zero exit, or output that is not JSON),
+      one run at a time, in the foreground under `timeout 1200`, inside the card's own worktree, never in the main checkout; then run the project's lint command and read both results before going on.
+   4. Check `git diff --stat` against the plan's "Minimum change" budget (remove code if over), then commit with a message naming the work package.
 
-4. When every package is done, run the full test suite once more.
-5. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
+4. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
 
    ```
    git diff --numstat origin/<default branch>...HEAD
@@ -74,20 +63,20 @@ such choice in the pull request description.
    ```
 
    Note the diff metrics: within target_lines and target_files it qualifies for auto-merge; if larger, put the
-   metrics in the pull request description for standard review. Always go on to step 6 so review and CI can run.
+   metrics in the pull request description for standard review. Always go on to step 5 so review and CI can run.
 
-6. Push and open the pull request:
+5. Push and open the pull request:
 
    ```
-   git push -u origin pl/<short-name>
-   gh pr create --base <default branch> --title "<card title>" --body-file <file> --label <review label>
+   git push -u origin HEAD
+   gh pr create --base <default branch> --title "<card title>" --body-file <file> --assignee @me --label <review label>
    ```
 
    `<review label>` is the `review=<label>` argument; leave out `--label` when there is none. The body says what
-   changed, which acceptance criteria it meets, how it was tested, and every choice you made where the plan was
-   unclear, with the card id.
+   changed, which acceptance criteria it meets, how it was tested (the affected test files you ran, or that you ran the full
+   suite and why: `full` true, or `pl tests affected` failed), and every choice you made where the plan was unclear, with the card id.
 
-7. Move the card and record the pull request on it:
+6. Move the card and record the pull request on it:
 
    ```
    pl move <id> "PR open" --pr <pull request URL>
@@ -104,27 +93,37 @@ cheaply; else prove they compile and are found (`npx tsc --noEmit`, `npx playwri
 it starts a virtual machine for many minutes; a person runs it. In the pull request body add an "End-to-end" section:
 each test file and title with its criterion, and "pl e2e <repo path> --ref pl/<short-name>"; or why there are none.
 
+## Stacked plans
+
+Only when the PLAN has a `## Slices` section whose slices are headed `### Slice k: <name>`. A plan without it follows the steps above unchanged. Let n be the number of slices.
+
+- Branches: build every slice in the worktree pl started you in (steps 1 and 2 as usual), never a new worktree. Slice 1 is built on the card's branch `pl/<short-name>`. Slice k (k > 1) is built on a new branch `pl/<short-name>-s<k>`, made with `git switch -c pl/<short-name>-s<k>` from slice k-1's branch once slice k-1 is pushed.
+- Build and count: for each slice in order, build its work packages as step 3 says. Count slice k with `git diff --numstat <previous branch>...HEAD` and `git diff --name-only <previous branch>...HEAD`, where the previous branch is slice k-1's branch, and `origin/<default branch>` for slice 1. Add added plus deleted lines outside `tests/` and compare the total with `max_lines`.
+- Over `max_lines`: stop. Open no pull request for slice k or any slice above it, and do not move the card. Write "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened" as one note under a "Run notes" heading in the card's INPUT (`pl section <id> INPUT` to read it, `pl section <id> INPUT --from <file>` to write it back whole), and make the same text your last message. Pull requests already open for lower slices stay open.
+- Open: `git push -u origin HEAD`, then `gh pr create --base <previous branch> --title "<card title> (slice k of n)" --body-file <file> --assignee @me --label <review label>`, with `--base <default branch>` for slice 1 and the label as in step 5. Record it with `pl move <id> "In progress" --pr <pull request URL>`.
+- Body: as step 5, plus a first line "slice k of n" and a link to the pull request below it (none for slice 1). Once slice k+1 is open, edit slice k's body to add the link to the pull request above it (`gh pr edit <number> --body-file <file>`).
+- Finish: after the last slice's pull request is open, run `pl move <id> "PR open" --pr <last pull request URL>` once, and not before. Then stop.
+
 ## Rework mode
 
 Only with a `rework=N` argument. The work is the review's findings, not the plan.
 
 1. Read the card (`pl card <id>`). `metadata.rework.prs` lists the pull requests to fix; `metadata.pr_urls`
-   lists every pull request of the card. Read the plan and spec only as background.
-2. For each pull request to fix, read the newest review: the last comments, where the review's findings are.
+   lists every pull request of the card. Read the plan and spec only for context.
+2. For each pull request to fix, read the newest review: the last comments, where the review's findings are (`<owner>`, `<repo>` and `<number>` are in its URL, `https://github.com/<owner>/<repo>/pull/<number>`). Read pull requests, labels, checks and comments through `gh api repos/...` (REST): GraphQL points are shared with pl. Use GraphQL only where REST has no equivalent (Projects).
 
    ```
-   gh pr view <url> --json number,headRefName,baseRefName,labels
+   gh api 'repos/<owner>/<repo>/pulls/<number>' --jq '{number, headRefName: .head.ref, baseRefName: .base.ref, labels: [.labels[].name]}'
    gh api 'repos/<owner>/<repo>/issues/<number>/comments?per_page=100' --jq '.[-3:][]|"\(.created_at) \(.body)"'
    ```
 
    Every problem it lists as still open is the work. Findings it says are fixed need nothing.
-3. Do not make a new branch or a new pull request. Reuse the branch's worktree (`git worktree list`), or add one from
-   `origin/<branch>` in `$PL_WORKTREES_DIR` and run `pl worktrees bootstrap <worktree path> --card <id>`. `git fetch
+3. Work in the folder you were started in, the pull request's branch; never make a branch or worktree. `git fetch
    origin`, then merge the pull request's base branch into it (never rebase or force-push), resolving conflicts.
 4. For each open finding: write a test that fails because of it, make the smallest fix, see the test pass.
    Where a finding is marked unsure or is a product call, pick the safer behaviour and say so. When a finding
    is caused by code on the default branch that another card is fixing, leave it and name that card.
-5. Run the project's usual test and lint commands, then push to the same branch (no force-push).
+5. Run the new finding tests, then the tests as in step 3.3 (affected tests plus lint; the full suite only when `full` is true or the command fails; foreground, `timeout 1200`), then push to the same branch (no force-push).
 6. Comment on each pull request you fixed, starting "Rework round N": each finding and what you changed, or why not.
 7. Send each fixed pull request back to review: remove the `rework_label` and `ready` labels and add the `review`
    label (`gh pr edit --add-label/--remove-label`; when it fails, `gh api -X DELETE
@@ -134,6 +133,7 @@ Only with a `rework=N` argument. The work is the review's findings, not the plan
 When the card has a stack of pull requests (each one's base is the branch of the one before), work bottom-up:
 fix each finding on the lowest branch whose code it names, merge that branch into the next one up and so on
 to the top, then push every branch. Merge the default branch only into the bottom branch.
+Then, in step 7, send back to review only the pull requests whose diff against their base changed (compare `git diff <base>...<branch>` before and after); leave the others' labels as they are.
 
 ## When the plan is wrong
 

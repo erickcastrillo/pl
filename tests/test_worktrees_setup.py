@@ -95,17 +95,18 @@ def test_no_setup_or_empty_string_runs_no_subprocess(repo, wt, monkeypatch):
         assert _bootstrap(repo, wt) == ([], [])
 
 
-def test_setup_timeout_terminates_process_group(repo, wt):
+def test_setup_timeout_terminates_process_group(repo, wt, monkeypatch):
+    monkeypatch.setattr(worktrees, "parse_timeout", lambda _: 0.2)
     _manifest(repo, 'setup: "sleep 60 & echo $! > child.pid; wait"\ntimeout: 1\n')
     _, failures = _bootstrap(repo, wt)
-    assert failures[0]["reason"] == "Bootstrap setup timed out after 1s"
+    assert failures[0]["reason"] == "Bootstrap setup timed out after 0.2s"
     pid = int((wt / "child.pid").read_text())
     for _ in range(50):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             break
-        time.sleep(0.1)
+        time.sleep(0.02)
     else:
         os.kill(pid, 9)
         pytest.fail("the child of the setup command survived the timeout")
@@ -167,24 +168,26 @@ def test_setup_failure_appends_note_to_card_with_exit_code_and_tail(repo, wt, tm
 
 
 def test_setup_timeout_appends_note_to_card_with_timeout_limit_and_tail(repo, wt, tmp_path, monkeypatch, board):
+    monkeypatch.setattr(worktrees, "parse_timeout", lambda _: 0.2)
     _manifest(repo, 'setup: "echo slow; sleep 30"\ntimeout: 1\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
     fields = board.updates[-1][1]
-    assert "Bootstrap setup timed out after 1s:\nslow" in fields["description"]
-    assert fields["metadata"]["bootstrap_error"]["reason"] == "Bootstrap setup timed out after 1s"
+    assert "Bootstrap setup timed out after 0.2s:\nslow" in fields["description"]
+    assert fields["metadata"]["bootstrap_error"]["reason"] == "Bootstrap setup timed out after 0.2s"
 
 
 def test_a_successful_setup_with_card_leaves_the_card_alone(repo, wt, tmp_path, monkeypatch, board):
     _manifest(repo, 'setup: "true"\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
-    assert board.updates == []
+    assert board.updates == [(board.card["id"], {"metadata": {"worktree": str(wt.resolve())}})]
 
 
 def test_a_successful_setup_clears_an_earlier_failure(repo, wt, tmp_path, monkeypatch, board):
     board.card["metadata"] = {"bootstrap_error": {"reason": "old", "output": "old"}}
     _manifest(repo, 'setup: "true"\n')
     _cmd(repo, wt, monkeypatch, "c1", tmp_path, tmp_path / "state")
-    assert board.updates == [(board.card["id"], {"metadata": {"bootstrap_error": None}})]
+    assert board.updates == [(board.card["id"], {"metadata": {"worktree": str(wt.resolve())}}),
+                             (board.card["id"], {"metadata": {"bootstrap_error": None}})]
 
 
 def _prompt_for(monkeypatch, metadata):
@@ -199,12 +202,13 @@ def _prompt_for(monkeypatch, metadata):
     monkeypatch.setattr(dispatch.harnesses, "refuse_bypass", lambda h: None)
     monkeypatch.setattr(dispatch.harnesses, "launch_script", lambda h, prof, p, sid, label, **kw: seen.append(p) or "")
     monkeypatch.setattr(dispatch.context, "launch_prompt", lambda c, stage, p: p)
-    monkeypatch.setattr(dispatch, "memory_arg", lambda c, stage, dry: "")
+    monkeypatch.setattr(dispatch, "memory_arg", lambda c, stage, dry, base=None: "")
     monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0))
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: "%1")
     monkeypatch.setattr(dispatch, "_launch", lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: ("/w", None))
     dispatch.start_worker({"id": "c" * 36, "title": "t", "metadata": metadata}, "run", 0, False)
     return seen[0]
 

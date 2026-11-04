@@ -1,26 +1,72 @@
 """Pipeline tab: every card as a list grouped by board column (Done hidden; z shows it), its full text beside it, and
 actions. Cards that need a person carry a red ! and n shows only those."""
+import re
 import shutil
+from dataclasses import replace
 
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Markdown, OptionList, Static
+from textual.worker import get_current_worker
 
+from pl import agent_defs, agent_screen
 from pl import config as C
-from pl import move_agent, trackers
+from pl import confirm, heldwrites, move_agent, pipeline, trackers
 from pl.agents import jump_to_window
-from pl.board import card, sections
-from pl.commands import adopt, done, drop, hold, move_to, restart, retry, undrop, unhold
-from pl.tui.chrome import show_first_heading, skip_headings
+from pl.board import card, plan_order, plan_slice, sections
+from pl.commands import adopt, done, drop, held_move, hold, move_to, restart, retry, undrop, unhold
+from pl.tui.chrome import close, empty_state, show_first_heading, skip_headings
+from pl.tui.live import AGENT_COLOURS, AgentPane, LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
-from pl.tui.needs import detail, needs_groups, needs_me, review_kind, start_review
+from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
 from pl.tui.subagents import TODO_MARK
-from pl.util import ago, short_id
+from pl.trackers.github import OverBudget
+from pl.util import age, ago, parse_iso, short_id
+
+
+def _rename_key(screen, key, description):
+    """Key hints are class constants; this puts the pipeline's word in this instance's own copy."""
+    bindings = screen._bindings.key_to_bindings
+    bindings[key] = [replace(b, description=description) for b in bindings[key]]
+
 
 TITLE_WIDTH = 34   # two less than before: the state column starts with the ! marker
+NARROW_NOW = 14
+AGENT_WIDTH = 24   # a longer agent name ends in … on the board
+
+
+class FitTable(DataTable):
+    """Under the app's -narrow class the `flex` column takes the width the others leave, and the `capped` columns stop
+    growing with their text, so no column is cut at 80 columns. Wide, columns keep their own widths."""
+
+    def __init__(self, flex, wide=None, capped=(), **kw):
+        super().__init__(**kw)
+        self.flex, self.wide, self.capped = flex, wide, capped
+
+    def on_resize(self, _):
+        narrow = self.app.has_class("-narrow")
+        cols = {c.key.value: c for c in self.ordered_columns}
+        for k in self.capped:
+            cols[k].auto_width, cols[k].width = not narrow, NARROW_NOW if narrow else cols[k].width
+        flex = cols[self.flex]
+        if narrow:
+            others = sum(c.get_render_width(self) for c in cols.values() if c is not flex)
+            flex.auto_width, flex.width = False, max(10, self.content_size.width - others - 2)
+        else:
+            flex.auto_width, flex.width = self.wide is None, self.wide or flex.width
+        self._require_update_dimensions = True
+        self.refresh(layout=True)
+
+
+def field_value(meta, name) -> str:
+    """A board field's text from the card's metadata: the exact name, else with underscores for spaces."""
+    value = meta.get(name)
+    if value is None:
+        value = meta.get(name.replace(" ", "_"))
+    return "" if value is None else str(value)
 
 
 STATE = {"review": ("your review", "#e0a040"), "manual": ("yours to do", "#5f9fff"), "working": ("working", "green"),
@@ -42,7 +88,7 @@ def open_card_url(app, cid):
         if safe_link(url):   # a board-supplied file: or javascript: link is never opened
             app.call_from_thread(app.open_url, url)
         else:
-            app.call_from_thread(app.notify, "no web link for this card", markup=False)
+            app.call_from_thread(app.notify, f"no web link for this {pipeline.ui()['item']}", markup=False)
     app.run_worker(run, thread=True, group="keys")
 
 
@@ -70,7 +116,43 @@ def header_summary(c, col):
     return stage, "nobody", "waits for a slot" if queued else "-"
 
 
-def card_head(c, col, url, approved=None):
+def known_agents():
+    """The names of the agents that exist, or None when they cannot be read (nothing is then marked unknown)."""
+    try:
+        return set(agent_defs.load())
+    except Exception:
+        return None
+
+
+def stage_agent(c, col, known=None):
+    """The agent named by the card's current stage ("" for none); " (unknown)" follows a name that is not in `known`."""
+    stage, _, _ = header_summary(c, col)
+    name = (((C.PIPELINE or {}).get("stages") or {}).get(stage) or {}).get("agent")
+    if not name or not isinstance(name, str):
+        return ""
+    return f"{name} (unknown)" if isinstance(known, set) and name not in known else name
+
+
+def rework_prs(m):
+    rw = m.get("rework") or {}
+    return (m.get("pr_urls") or rw.get("prs") or []) if rw.get("active") else []
+
+
+def finding_line(m, pushed):
+    """The review row saying whether the latest finding is newer or older than the last push; None without an active rework and a PR."""
+    rw = m.get("rework") or {}
+    if not rework_prs(m) or not (at := parse_iso(rw.get("at") or "")):
+        return None
+    t = Text(f"{'review':<9}", style="dim")
+    if pushed is None:
+        t.append(f"finding {rw['at']}; last push time unknown\n")
+    else:
+        word = "newer" if at >= pushed else "older"
+        t.append(f"{word} than the last push (finding {age(at)} ago, push {age(pushed)} ago)\n")
+    return t
+
+
+def card_head(c, col, url, approved=None, queued=None, pushed=None):
     """The plain header lines of the card screen: title, then stage/who/next, column, tags, assignee, links, updated, link, metadata."""
     m = c.get("metadata") or {}
     stage, who, next_step = header_summary(c, col)
@@ -79,12 +161,18 @@ def card_head(c, col, url, approved=None):
                       for l in m.get("links") or [])
     t = Text(f"{c.get('title') or ''}\n", style="bold")
     t.append(f"{stage} · {who} · {next_step}\n")
+    if agent := stage_agent(c, col, known_agents()):
+        t.append(f"{'agent':<9}", style="dim")
+        t.append(f"{agent}\n")
     for label, value in (("column", col), *([("status", approved)] if approved else []),
+                         *([("queued", queued)] if queued else []),
                          ("tags", ", ".join(map(str, c.get("tags") or []))),
                          ("assignee", c.get("assigned_to_display") or c.get("assigned_to")),
                          ("links", links)):
         t.append(f"{label:<9}", style="dim")
         t.append(f"{value or '-'}\n")
+    if (line := finding_line(m, pushed)) is not None:
+        t.append_text(line)
     t.append(f"{'updated':<9}", style="dim")
     up = c.get("updated_at")
     t.append(f"{ago(up)}  " if up else "-\n")
@@ -107,13 +195,30 @@ def todo_markdown(now):
     return "# Agent todos\n\n" + "\n".join(f"- {TODO_MARK.get(s, '[ ]')} {t}" for s, t in todos) + "\n\n" if todos else ""
 
 
+def live_worker(c):
+    """The card's worker when its pane exists on this machine, else None. An unknown pane must not hide the card."""
+    try:
+        w = (c.get("metadata") or {}).get("worker") or {}
+        pane = w.get("pane")
+        if pane and w.get("host") in (None, C.HOST) and agent_screen.pane_alive(pane):
+            return w
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 class CardScreen(Screen):
     """The whole card, read-only. The card is read again in a worker; its text is data, never markup."""
     DEFAULT_CSS = """
     #card-head { height: auto; padding: 0 1; border: round $primary; }
     #card-doc { height: 1fr; border: round $primary; }
+    #card-body { height: 1fr; }
+    #card-left { width: 1fr; }
+    CardScreen.-split #card-head { max-height: 40%; }
     """
-    BINDINGS = [Binding("escape", "close", "close"), Binding("q", "close", "close"),
+    BINDINGS = [Binding("escape", "close", "close"),
+                Binding("G", "agent_end", "follow agent"),
+                Binding("tab,shift+tab", "switch_side", show=False),
                 Binding("y", "copy", "copy card text"), Binding("O", "open", "open in browser"),
                 Binding("a", "approve", "approve"), Binding("x", "send_back", "send back"),
                 Binding("p", "hold", "hold / release"), Binding("R", "restart", "restart agent"),
@@ -122,11 +227,15 @@ class CardScreen(Screen):
     def __init__(self, card_id, col, approved=None, now=None):
         super().__init__()
         self.card_id, self.col, self.card, self.approved, self.now = card_id, col, None, approved, now
+        _rename_key(self, "y", f"copy {pipeline.ui()['item']} text")
 
     def compose(self):
-        yield Static(Text(f"loading… {short_id(self.card_id)}", style="dim"), id="card-head", markup=False)
-        with VerticalScroll(id="card-doc"):
-            yield Markdown("", open_links=False, id="card-md")
+        with Horizontal(id="card-body"):
+            with Vertical(id="card-left"):
+                yield Static(Text(f"loading… {short_id(self.card_id)}", style="dim"), id="card-head", markup=False)
+                with VerticalScroll(id="card-doc"):
+                    yield Markdown(open_links=False, id="card-md")
+            yield AgentPane(id="card-agent")
         yield Footer()
 
     def on_mount(self):
@@ -142,20 +251,48 @@ class CardScreen(Screen):
             except (SystemExit, Exception) as e:
                 self.app.call_from_thread(self._failed, str(e))
                 return
-            self.app.call_from_thread(self._show, c, url)
+            try:
+                queued = heldwrites.queued_moves().get(cid)
+            except Exception:  # noqa: BLE001 - no note is not an error
+                queued = None
+            pushed = None
+            if urls := rework_prs(c.get("metadata") or {}):
+                from pl.tui import prs as tui_prs   # prs imports FitTable from this module
+                try:
+                    pushed = tui_prs.last_push(urls)
+                except Exception:  # noqa: BLE001 - an unknown push time must not hide the card
+                    pushed = None
+            self.app.call_from_thread(self._show, c, url, queued, pushed, live_worker(c))
         self.run_worker(run, thread=True, group="card")
 
     def _failed(self, msg):
-        self.query_one("#card-head", Static).update(Text(f"could not read the card: {msg}", style="red"))
+        self.query_one("#card-head", Static).update(Text(f"could not read the {pipeline.ui()['item']}: {msg}", style="red"))
 
-    async def _show(self, c, url):
+    async def _show(self, c, url, queued=None, pushed=None, live=None):
         self.card = c
-        self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved))
+        self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved, queued, pushed))
         await self.query_one("#card-md", Markdown).update(todo_markdown(self.now) + card_markdown(c.get("description")))
         self.query_one("#card-doc").focus()
+        if live:
+            self.query_one(AgentPane).start(live)
+            self.add_class("-split")
+            self.refresh_bindings()
+
+    def _split(self):
+        return self.has_class("-split")
+
+    def action_agent_end(self):
+        self.query_one("#agent-scroll").scroll_end(animate=False)
+
+    def action_switch_side(self):
+        if not self._split():
+            self.focus_next()
+            return
+        other = "#agent-scroll" if self.query_one("#card-doc").has_focus else "#card-doc"
+        self.query_one(other).focus()
 
     def action_close(self):
-        self.app.pop_screen()
+        close(self)
 
     def action_copy(self):
         if self.card is None:
@@ -178,6 +315,8 @@ class CardScreen(Screen):
             self.app.notify("only web links open from here", markup=False)
 
     def check_action(self, action, parameters):
+        if action == "agent_end":
+            return True if self._split() else None
         if action in ("approve", "send_back"):
             m = (self.card or {}).get("metadata") or {}
             is_gate = (self.col == "Plan for review") or (
@@ -205,7 +344,8 @@ class CardScreen(Screen):
     def action_approve(self):
         if self.card:
             kind = "spec" if self.col == "Spec ready" else "plan"
-            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close)
+            confirm_and_approve(self.app, self.card["id"], str(self.card.get("title") or ""), kind, after=self.action_close,
+                                agent_pending=bool(confirm.pending(self.card)))
 
     def action_send_back(self):
         if self.card:
@@ -244,7 +384,7 @@ class CardScreen(Screen):
             return
         stage = ((self.card.get("metadata") or {}).get("worker") or {}).get("stage")
         if not stage:
-            self.app.notify("R restarts a card's agent; this card has none", markup=False)
+            self.app.notify(f"R restarts a {pipeline.ui()['item']}'s agent; this {pipeline.ui()['item']} has none", markup=False)
             return
         head = f"{short_id(self.card['id'])}  {str(self.card.get('title') or '')[:50]}"
         self._ask_then(f"Restart the {stage} agent of {head}? pl stops it (Ctrl-C in its window) and the "
@@ -254,8 +394,20 @@ class CardScreen(Screen):
 
 class CardActions:
     """The card keys of the Pipeline list. The view gives _row(): the selected row, or None."""
-    CARD_BINDINGS = [Binding("w", "jump", "agent window"), Binding("c", "open_card", "card in browser"),
+    CARD_BINDINGS = [Binding("w", "live_view", "agent output"), Binding("W", "jump", "agent window (tmux)"),
+                     Binding("c", "open_card", "card in browser"),
                      Binding("t", "retry", "try again"), Binding("m", "move_agent", "move to account")]
+
+    def action_live_view(self):
+        r = self._row()
+        if r is None:
+            return
+        w = r.get("worker") or {}
+        if not w.get("pane"):
+            self.app.notify(f"this {pipeline.ui()['item']} has no agent window", markup=False)
+            return
+        c = r.get("card") or {}
+        self.app.push_screen(LiveScreen(w["pane"], f"{short_id(c.get('id'))}  {str(c.get('title') or '')[:50]} · {w.get('stage') or ''} agent"))
 
     def action_jump(self):
         r = self._row()
@@ -268,7 +420,7 @@ class CardActions:
         """t on a card whose agent died too often: confirm, then pl retry it off the UI thread."""
         r = self._row()
         if r is None or not r.get("failed"):
-            self.app.notify("t retries a card whose agent died too often (marked needs you)", markup=False)
+            self.app.notify(f"t retries a {pipeline.ui()['item']} whose agent died too often (marked needs you)", markup=False)
             return
         c = r["card"]
 
@@ -291,7 +443,7 @@ class CardActions:
         r = self._row()
         w = (r or {}).get("worker") or {}
         if r is None or not w.get("window"):
-            self.app.notify("m moves a card's live agent to another account", markup=False)
+            self.app.notify(f"m moves a {pipeline.ui()['item']}'s live agent to another account", markup=False)
             return
         c = r["card"]
 
@@ -332,11 +484,6 @@ def card_count(data):
     return sum(len(here) for _, here in card_rows(data))
 
 
-def attention_count(data):
-    """Cards on the Pipeline list (Done hidden) that wait on a person."""
-    return sum(needs_me(r) for _, here in card_rows(data) for r in here)
-
-
 class ColumnPicker(ModalScreen):
     """The board's columns but the card's own; enter picks one, esc cancels."""
     DEFAULT_CSS = """
@@ -371,14 +518,14 @@ class ReasonScreen(ModalScreen):
     """
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, message):
+    def __init__(self, message, placeholder="reason (optional)"):
         super().__init__()
-        self.message = message
+        self.message, self.placeholder = message, placeholder
 
     def compose(self):
         with Vertical():
             yield Static(Text(self.message))
-            yield Input(placeholder="reason (optional)")
+            yield Input(placeholder=self.placeholder)
             yield Static(Text("enter next · esc cancel", style="dim"))
 
     def on_input_submitted(self, m):
@@ -394,58 +541,87 @@ def drop_back(c):
     return back if back in C.COLUMNS and back != "Done" else "Inbox"
 
 
+AGENT_LINES, AGENT_SECONDS = 20, 2
+
+
 class CardsView(CardActions, Horizontal):
     DEFAULT_CSS = """
     CardsView { height: 1fr; }
-    #cards-table { width: 84; height: 1fr; border: round $primary; }
+    #cards-table { height: 1fr; border: round $primary; }
     #cards-side { width: 1fr; height: 1fr; }
     #cards-detail { height: auto; }
+    #cards-agent { height: 1; border-top: solid $primary; }
     #cards-body { height: 1fr; }
     """
     BINDINGS = [Binding("tab", "app.focus_next", "list / text"), *CardActions.CARD_BINDINGS,
-                Binding("v", "move_column", "move to column"), Binding("n", "only_mine", "only mine / all"),
+                Binding("v", "move_column", "move to column"), Binding("f", "only_mine", "only mine / all"),
                 Binding("o", "answer", "answer questions"), Binding("d", "drop", "drop"), Binding("h", "hand_off", "to Manual"),
-                Binding("f", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
+                Binding("F", "done", "done"), Binding("e", "edit_input", "edit idea"), Binding("z", "show_done", "show Done"),
                 Binding("u", "undrop", "undo drop"), Binding("R", "restart", "restart agent"),
-                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold")]
+                Binding("i", "adopt", "to pipeline"), Binding("p", "hold", "hold"),
+                Binding("L", "plan_filter", "plan filter")]
 
     def __init__(self):
         super().__init__()
         self._rows, self._built, self._now, self._data = {}, [], {}, None
-        self.only_mine = False   # n: list only the cards that wait on a person
+        _rename_key(self, "c", f"{pipeline.ui()['item']} in browser")
+        self.only_mine = False   # f: list only the cards that wait on a person
         self.show_done = False   # z: a Done group from the last refresh's Done cards (no extra board read)
+        self.plan = None   # L: only this plan's cards, ordered by slice
         self._bodies, self._pending = {}, {}   # card id → (updated_at, markdown or error); read again only when it changed
         self._shown = None
         self._last = None   # the cursor row before the last move: which way it travels
+        self._agent = None   # (key, pane, word, why) last drawn in the Agent section
 
     def compose(self):
-        t = DataTable(id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
-        t.add_column("id")
-        t.add_column("title", width=TITLE_WIDTH)   # a long title ends in … so state and now stay on screen
-        t.add_columns("state", "now")
+        t = FitTable("title", TITLE_WIDTH, ("now",), id="cards-table", cursor_type="row", show_header=False, zebra_stripes=False)
+        t.add_column("id", key="id")
+        t.add_column("title", width=TITLE_WIDTH, key="title")   # a long title ends in … so state and now stay on screen
+        for f in pipeline.ui()["fields"]:
+            t.add_column(f, key=f"field:{f}")
+        t.add_column("state", key="state")
+        t.add_column("now", key="now")
         yield t
         with Vertical(id="cards-side", classes="panel"):
             yield Static(Text(""), id="cards-detail")
+            yield Static(Text(""), id="cards-agent", markup=False)
             with VerticalScroll(id="cards-body"):
-                yield Markdown("", open_links=False, id="cards-md")
+                yield Markdown(open_links=False, id="cards-md")
+
+    def on_mount(self):
+        self.query_one("#cards-agent").display = False
+        self.set_interval(AGENT_SECONDS, self._agent_tick)
 
     def show(self, data):
         self._now, self._data = data.get("now") or {}, data
         groups = card_rows(data)
-        total, mine = sum(len(h) for _, h in groups), attention_count(data)
+        words = pipeline.ui()
+        fields, blank = words["fields"], [Text("")] * len(words["fields"])
+        total, mine = sum(len(h) for _, h in groups), needs_you_count(data)
         if self.show_done and (finished := [r for r in data["snapshot"].get("done") or [] if r.get("card")]):
             groups = [*groups, ("Done", finished)]
         t = self.query_one(DataTable)
-        if self.only_mine:
+        if self.plan is not None:
+            finished = data["snapshot"].get("done") or []
+            here = sorted((r for r in [*data["snapshot"]["rows"], *finished]
+                           if r.get("card") and plan_slice(r["card"])[0] == self.plan and (not self.only_mine or needs_me(r))),
+                          key=lambda r: plan_order(r["card"]))
+            groups = [(f"plan {self.plan}", here)] if here else []
+            needs = " · needs you only" if self.only_mine else ""
+            t.border_title = (f"Pipeline · plan {self.plan}{needs} · {len(here)} {words['items']} · L clears" if here
+                              else f"Pipeline · no cards in plan {self.plan} · L clears")
+        elif self.only_mine:
             groups = [(col, here) for col, h in groups if (here := [r for r in h if needs_me(r)])]
-            t.border_title = f"Pipeline · needs you only · {mine} of {total} cards · n shows all"
+            t.border_title = f"Pipeline · needs you only · {sum(len(h) for _, h in groups)} of {total} {words['items']} · f shows all"
         else:
-            t.border_title = f"Pipeline · {total} cards · {mine} need you (n only those) · " + (
+            t.border_title = f"Pipeline · {total} {words['items']} · {mine} need you (f only those) · " + (
                 "z hides Done" if self.show_done else "Done is hidden (z shows it)")
         keep, keep_key = t.cursor_row, self._current()[0]
+        names_agents = any(isinstance(s, dict) and s.get("agent") for s in ((C.PIPELINE or {}).get("stages") or {}).values())
+        known = known_agents() if names_agents else None
         self._rows, built = {}, []
         for col, here in groups:
-            built.append((f"group:{col}", (Text("■", style="dim"), Text(f"{col.upper()} {len(here)}", style="bold"), Text(""), Text(""))))
+            built.append((f"group:{col}", (Text("■", style="dim"), Text(f"{col.upper()} {len(here)}", style="bold"), *blank, Text(""), Text(""))))
             for r in here:
                 cid = r["card"]["id"]
                 if cid in self._rows:   # a duplicate row would raise DuplicateKey
@@ -455,14 +631,24 @@ class CardsView(CardActions, Horizontal):
                 if r.get("col") == "Done":   # dropped (with its reason) or done
                     label, colour = ("dropped", "yellow") if m.get("dropped_at") else ("done", "green")
                 else:
-                    label, colour = (r["approved"], "red" if r.get("blocked") or r.get("failed") else "green") if r.get("approved") else STATE[card_state(r)]
+                    label, colour = (r["approved"], "red" if r.get("blocked") or r.get("failed") or r.get("waiting") else "green") if r.get("approved") else STATE[card_state(r)]
                 state = Text.assemble(("! ", "bold red") if needs_me(r) else "  ", (label, colour))   # ! = waits on a person
                 line = str(m.get("drop_reason") or "") if r.get("col") == "Done" else (self._now.get(cid) or {}).get("line") or ""
-                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"), state,
+                if names_agents and r.get("col") != "Done" and (agent := stage_agent(r["card"], r.get("col"), known)):
+                    agent = agent if len(agent) <= AGENT_WIDTH else agent[:AGENT_WIDTH - 1] + "…"
+                    line = f"agent: {agent} · {line}" if line else f"agent: {agent}"
+                if note := (data.get("queued_moves") or {}).get(cid):
+                    line = f"{note} · {line}" if line else note
+                if self.plan is not None:
+                    line = f"{r.get('col')} · {line}" if line else str(r.get("col"))
+                built.append((cid, (Text(short_id(cid), style="dim"), Text(r["card"].get("title") or "", no_wrap=True, overflow="ellipsis"),
+                                    *(Text(field_value(m, f), style="dim", no_wrap=True, overflow="ellipsis") for f in fields), state,
                                     Text(line, style="red" if line.startswith("error: ") else "dim"))))
-        if not built:
-            empty = "Nothing needs you." if self.only_mine else "No cards on the board."
-            built.append(("group:empty", (Text("■", style="dim"), Text(empty, style="dim"), Text(""), Text(""))))
+        if not built:   # the title column is narrow, so the message takes one short line per row
+            lines = ([f"No {words['items']} in plan {self.plan}."] if self.plan is not None else ["Nothing needs you."] if self.only_mine
+                     else empty_state("cards"))
+            for i, line in enumerate(lines):
+                built.append((f"group:empty{i}", (Text("■" if i == 0 else "", style="dim"), Text(line, style="dim"), *blank, Text(""), Text(""))))
         rebuilt = [k for k, _ in built] != [k for k, _ in self._built]
         if not rebuilt:   # same rows, same order: change only the cells that differ
             for (rid, cells), (_, before) in zip(built, self._built):
@@ -506,6 +692,11 @@ class CardsView(CardActions, Horizontal):
             self._pending[key] = stamp   # the old text stays on screen until the new one arrives; read only when shown
             self._load(key, stamp)
         self._paint_card(key)
+        if (self._agent or (None,))[0] != key:
+            self._agent = None
+            if (r.get("worker") or {}).get("pane"):
+                self._draw_agent(Text.assemble(("Agent", "bold"), "  ·  ", ("reading…", "dim")))
+        self._agent_tick()
 
     def opened(self):
         """The tab was just shown: read the selected card's text now; on the first card, show its heading too."""
@@ -517,9 +708,46 @@ class CardsView(CardActions, Horizontal):
             try:
                 hit = ("ok", card_markdown(card(key).get("description")))
             except (SystemExit, Exception) as e:  # noqa: BLE001 - RateLimited carries its own note
-                hit = ("error", getattr(e, "note", None) or f"could not read the card: {e}")
+                hit = ("error", getattr(e, "note", None) or f"could not read the {pipeline.ui()['item']}: {e}")
             self.app.call_from_thread(self._loaded, stamp, key, hit)
         self.run_worker(run, thread=True, group="cards-body")
+
+    def _draw_agent(self, text):
+        agent = self.query_one("#cards-agent", Static)
+        agent.display = True
+        agent.update(text)
+
+    def _agent_tick(self):
+        if self.app.active_tab != "cards" or len(self.app.screen_stack) != 1:
+            return
+        key, r = self._current()
+        if r is None:
+            self.query_one("#cards-agent").display = False
+            return
+        pane = (r.get("worker") or {}).get("pane")
+        if not pane:
+            self.query_one("#cards-agent").display = False
+            self._agent = None
+            return
+        self.run_worker(lambda: self._agent_read(key, pane), thread=True, group="cards-agent", exclusive=True)
+
+    def _agent_read(self, key, pane):
+        result = agent_screen.read(pane, lines=AGENT_LINES)
+        if not get_current_worker().is_cancelled:
+            self.app.call_from_thread(self._agent_show, key, pane, *result)
+
+    def _agent_show(self, key, pane, text, word, why):
+        if self._current()[0] != key or (shown := (key, pane, word, why)) == self._agent:
+            return
+        self._agent = shown
+        status = f"{word}: {why}" if why else word
+        stage = ((self._rows.get(key) or {}).get("worker") or {}).get("stage")
+        self._draw_agent(Text.assemble(("Agent", "bold"), "  ·  ", f"{stage} agent  ·  " if stage else "",
+                                       (status, AGENT_COLOURS.get(word, "dim")), ("  ·  w: agent output", "dim")))
+
+    def on_click(self, event):
+        if getattr(event.widget, "id", None) == "cards-agent":
+            self.action_live_view()
 
     def _loaded(self, stamp, key, hit):
         if self._pending.get(key) == stamp:
@@ -544,14 +772,14 @@ class CardsView(CardActions, Horizontal):
         shown = (key, md, text.plain)
         if shown == self._shown:
             return
-        new_md = self._shown is None or self._shown[1] != md
+        new_md = (self._shown[1] if self._shown is not None else "") != md
         self._shown = shown
         self.query_one("#cards-detail", Static).update(text)
         if new_md:
             self.query_one("#cards-md", Markdown).update(md)
 
     def action_only_mine(self):
-        """n: only the cards that wait on a person, or all of them again."""
+        """f: only the cards that wait on a person, or all of them again."""
         self.show_attention(not self.only_mine)
 
     def show_attention(self, on=True, group=None):
@@ -566,6 +794,25 @@ class CardsView(CardActions, Horizontal):
         if cid is not None:
             t.move_cursor(row=t.get_row_index(cid))
 
+    def action_plan_filter(self):
+        """L: ask for a plan number and list only that plan's cards by slice; L again shows everything."""
+        if self.plan is not None:
+            self.plan = None
+        else:
+            def picked(v):
+                if v is None:
+                    return
+                if not re.fullmatch(r"[0-9]+", v.strip()) or int(v) == 0:
+                    self.app.notify("the plan must be a whole number from 1", markup=False)
+                    return
+                self.plan = int(v)
+                if self._data is not None:
+                    self.show(self._data)
+            self.app.push_screen(ReasonScreen("Show one plan: its number (esc cancels)", placeholder="plan number, e.g. 21"), picked)
+            return
+        if self._data is not None:
+            self.show(self._data)
+
     def action_answer(self):
         self.review("answer")
 
@@ -573,7 +820,7 @@ class CardsView(CardActions, Horizontal):
         """a / x / o on a spec or plan waiting for review; any other card only gets a notice."""
         r = self._row()
         if r and r.get("col") == "Spec ready" and (r["card"].get("metadata") or {}).get("pipeline_mode") != "auto":
-            self.app.notify("this card is manual: press i to hand it to the pipeline (pl adopt)", markup=False)
+            self.app.notify(f"this {pipeline.ui()['item']} is manual: press i to hand it to the pipeline (pl adopt)", markup=False)
             return
         kind = review_kind(r) if r else None
         start_review(self.app, what, r, kind, [k for k, x in self._rows.items() if review_kind(x) == kind])
@@ -582,14 +829,17 @@ class CardsView(CardActions, Horizontal):
         """v: pick a column, confirm, then move the card off the UI thread."""
         r = self._row()
         if r is None:
-            self.app.notify("select a card to move it to another column", markup=False)
+            self.app.notify(f"select a {pipeline.ui()['item']} to move it to another column", markup=False)
             return
         c = r["card"]
         head = f"{short_id(c['id'])}  {str(c.get('title') or '')[:50]}"
 
         def run(col):
             try:
-                msg = f"moved {head} to {col}" if move_to(c["id"], col) else f"not moved: {head}"
+                try:
+                    msg = f"moved {head} to {col}" if move_to(c["id"], col) else f"not moved: {head}"
+                except OverBudget as e:   # first: it is a SystemExit too
+                    msg = held_move(c["id"], col, None, e, was=c.get("list_id"))
             except (SystemExit, Exception) as e:  # noqa: BLE001 - a failed write must not kill the console
                 msg = f"not moved: {e}"
             self.app.call_from_thread(self.app.notify, msg, markup=False)
@@ -616,9 +866,9 @@ class CardsView(CardActions, Horizontal):
         """The selected card when it is not in Done, else None after a notice."""
         r = self._row()
         if r is None:
-            self.app.notify(f"select a card to {what} it", markup=False)
+            self.app.notify(f"select a {pipeline.ui()['item']} to {what} it", markup=False)
         elif r.get("col") == "Done":
-            self.app.notify(f"{key} works on a card that is not in Done; u puts a dropped card back, v moves any card", markup=False)
+            self.app.notify((lambda item: f"{key} works on a {item} that is not in Done; u puts a dropped {item} back, v moves any {item}")(pipeline.ui()["item"]), markup=False)
         else:
             return r
         return None
@@ -664,8 +914,8 @@ class CardsView(CardActions, Horizontal):
                        lambda: [f"moved {head} to Manual" if move_to(c["id"], "Manual") else f"not moved: {head}"], "not moved: ")
 
     def action_done(self):
-        """f: confirm, then pl done off the UI thread."""
-        r = self._open_row("f", "finish")
+        """F: confirm, then pl done off the UI thread."""
+        r = self._open_row("F", "finish")
         if r is None:
             return
         c, head = r["card"], self._head(r["card"])
@@ -676,7 +926,7 @@ class CardsView(CardActions, Horizontal):
         """u on a dropped card in the Done group: confirm, then pl undrop off the UI thread."""
         r = self._row()
         if r is None or r.get("col") != "Done" or not (r["card"].get("metadata") or {}).get("dropped_at"):
-            self.app.notify("u puts a dropped card back (z shows Done)", markup=False)
+            self.app.notify(f"u puts a dropped {pipeline.ui()['item']} back (z shows Done)", markup=False)
             return
         c = r["card"]
         self._ask_then(f"Put {self._head(c)} back to {drop_back(c)}? The drop is cleared.", lambda: undrop(c["id"]), "not put back: ")
@@ -688,7 +938,7 @@ class CardsView(CardActions, Horizontal):
             return
         c, stage = r["card"], (r.get("worker") or {}).get("stage")
         if not stage:
-            self.app.notify("R restarts a card's agent; this card has none", markup=False)
+            self.app.notify(f"R restarts a {pipeline.ui()['item']}'s agent; this {pipeline.ui()['item']} has none", markup=False)
             return
         self._ask_then(f"Restart the {stage} agent of {self._head(c)}? pl stops it (Ctrl-C in its window) and the "
                        f"dispatcher starts the {stage} stage fresh (attempt 1).", lambda: restart(c["id"]), "not restarted: ")
@@ -735,7 +985,7 @@ class CardsView(CardActions, Horizontal):
         only when it changed and the card's INPUT is still the text that was opened."""
         r = self._row()
         if r is None:
-            self.app.notify("select a card to edit its idea", markup=False)
+            self.app.notify(f"select a {pipeline.ui()['item']} to edit its idea", markup=False)
             return
         cid = r["card"]["id"]
 

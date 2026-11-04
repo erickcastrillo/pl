@@ -9,9 +9,20 @@ COMMANDS = {
     "PlApp.update": "pl update",
     "HomeView.select": "pl profiles",
     "HomeView.details": "pl profiles",
+    "AgentsView.show": "pl agents show NAME",
+    "HomeView.get_started": "pl setup",
     "PlApp.switcher": "pl list --json",
+    "PlApp.pipelines": "pl pipelines list --json",
+    "PlApp.pipeline": "pl pipelines list --json",
     "PlApp.oldest": "pl inbox --json",
+    "DashboardView.all_pipelines": "pl inbox --json",
+    "DashboardView.inbox_approve": "pl approve <id>",
+    "DashboardView.inbox_send_back": "pl reject <id> NOTES",
     "ConnectorsPanel.revoke": "pl connectors revoke NAME",
+    "ConnectorsPanel.chat_add": "pl chat add ADAPTER --token-env VAR --allow ID --name NAME --yes",
+    "ConnectorsPanel.chat_test": "pl chat test NAME",
+    "ConnectorsPanel.route": "pl chat route KIND NAME...",
+    "ConnectorsPanel.remove": "pl chat remove NAME --yes",
     "PlApp.kill_switch": "pl kill-switch on|off|status",
     "CardScreen.approve": "pl approve <id>",
     "CardScreen.send_back": "pl reject <id> NOTES",
@@ -22,19 +33,26 @@ COMMANDS = {
     "CardsView.done": "pl done <id>",
     "CardsView.move_column": "pl move <id> <col>",
     "CardsView.hand_off": "pl move <id> Manual",
+    "CardsView.plan_filter": "pl list --plan N",
     "CardsView.retry": "pl retry <id>",
     "CardsView.restart": "pl restart <id>",
+    "LoopsView.edit": "pl loops edit NAME",
+    "LoopsView.pause": "pl loops pause|resume NAME",
+    "LoopsView.run_now": "pl loops run NAME",
+    "LoopsView.delete": "pl loops rm NAME",
     "CardsView.move_agent": "pl move-agent <card> <account>",
     "CardsView.edit_input": "pl section <id> INPUT",
     "AlertsView.ack": "pl alerts --ack KEY",
     "IdeasView.new": "pl idea",
     "IdeasView.approve": "pl approve <id>",
+    "WaitingView.approve": "pl approve <id>",
+    "WaitingView.send_back": "pl reject <id> NOTES",
     "ReviewScreen.approve": "pl approve <id>",
     "ReviewScreen.send_back": "pl reject <id> <notes>",
     "SkillsView.share": "pl skills share NAME",
     "SkillsView.link": "pl skills link NAME ACCOUNT",
+    "AssistantView.undo": "pl brain undo CONV",
     "AssistantView.file_idea": "pl assistant idea file <id>",
-    "BrainView.file_idea": "pl assistant idea file <id>",
     # Direct action aliases
     "drop": "pl drop <id>",
     "undrop": "pl undrop <id>",
@@ -50,6 +68,11 @@ COMMANDS = {
 }
 
 NAV = {
+    "switch_side",
+    "agent_end",
+    "brain",
+    "collapse_start",
+    "dismiss_start",
     # Dialog and modal controls
     "close",
     "cancel",
@@ -58,15 +81,22 @@ NAV = {
     "pick",
     # Tab and focus navigation
     "tab",
+    "sub_tab",
+    "sub_letter",
     "focus_next",
     "focus_previous",
     "app.focus_next",
     "app.focus_previous",
     "leave_box",
+    # DataTable's own top and bottom keys, inherited by FitTable (the other table keys are listed below)
+    "scroll_top",
+    "scroll_bottom",
     # Window and screen navigation
     "cycle_window",
     "open_window",
     "jump",
+    "live_view",
+    "open_log",
     "open_card",
     "open",
     "view_card",
@@ -151,6 +181,8 @@ NAV = {
     "show_overlay",
 }
 
+LOOPS_KEYS = {"n": "pl loops add", "e": "pl loops edit", "p": "pl loops pause", "g": "pl loops run", "d": "pl loops rm"}   # w and R are navigation (NAV)
+
 PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
     "details": "pl pipelines show NAME --json",
     ("pipelines", "details"): "pl pipelines show NAME --json",
@@ -162,6 +194,10 @@ PARITY_MAP = {   # the pipeline details screen: what each of its actions runs
     ("pods", "r"): "pl pods rule add",
     ("pods", "show"): "pl pods show",
     ("pods", "enter"): "pl pods show",
+    ("agents", "list"): "pl agents list",
+    ("agents", "show"): "pl agents show",
+    ("agents", "enter"): "pl agents show",
+    ("triggers", "list"): "pl triggers list",
     ("models", "list"): "pl models list",
     ("models", "test"): "pl models test",
     ("models", "t"): "pl models test",
@@ -193,3 +229,34 @@ PARITY = {   # the card screen's own header actions (and the Connectors panel's)
     ("connectors", "add"): "pl connectors add", ("connectors", "test"): "pl connectors test", ("connectors", "revoke"): "pl connectors revoke",
 }
 MAP = PARITY
+
+NAVIGATE = {"tab", "step", "cycle_window", "focus_next", "focus_previous", "jump", "open_window", "switcher", "oldest",
+            "close", "cancel", "back", "leave_box", "scroll_top", "scroll_bottom", "only_mine", "plan_filter",
+            "next_filter", "show_done", "help"}
+GROUPS = ("navigate", "act on the selection", "add", "other")
+
+
+def _action_name(action):
+    return action.split("(")[0].removeprefix("app.")
+
+
+def command_for(owner, action, key=None):
+    """The pl command a bound action runs, or None for navigation and local UI actions."""
+    name = _action_name(action)
+    for found in (LOOPS_KEYS.get(key) if owner == "LoopsView" else None,   # the key names the exact command (pause or resume)
+                  COMMANDS.get(f"{owner}.{name}"), COMMANDS.get(name), PARITY.get(name)):
+        if found:
+            return found
+    return None
+
+
+def group_of(action, command):
+    """Which help group a bound action belongs to (one of GROUPS)."""
+    name = _action_name(action)
+    if name in NAVIGATE:
+        return "navigate"
+    if name == "new" or name.startswith("new_") or name == "file_idea":
+        return "add"
+    if command and any(token in command for token in ("<id>", "<card>", "NAME")):
+        return "act on the selection"
+    return "other"

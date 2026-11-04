@@ -1,0 +1,4 @@
+id = "2026-10-26.82"
+title = "Route and remove chat connectors in the console"
+where = "Extend → Connectors: on a chat row, r picks what it receives and d removes it"
+try = "pl chat route"

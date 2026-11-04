@@ -1,0 +1,3 @@
+title = "Review checks each stacked pull request against its base"
+where = "pl-review loop"
+try = "Open a pull request on top of another one; review covers only its own diff and waits while the one below is in rework"

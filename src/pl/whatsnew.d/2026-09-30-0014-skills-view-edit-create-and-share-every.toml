@@ -1,0 +1,4 @@
+id = "2026-09-30.14"
+title = "Skills: view, edit, create and share every account's skills"
+where = "Settings tab, Skills section (ctrl+p \"Skills\"): e edit, n new, d delete, S share, l link"
+try = "pl skills list"

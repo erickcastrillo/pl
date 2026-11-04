@@ -59,7 +59,7 @@ def who() -> str:
         return f"agent:{os.environ['PL_STAGE']}"
     if os.environ.get("PL_ASSISTANT"):
         return "assistant"
-    if os.environ.get("PL_MCP_SESSION") or os.environ.get("PL_MCP"):
+    if os.environ.get("PL_MCP_SESSION") or os.environ.get("PL_MCP") or os.environ.get("PL_SOURCE") == "mcp":
         return "mcp-session"
     return getattr(C, "USER_EMAIL", "") or os.environ.get("USER", "unknown")
 
@@ -80,6 +80,9 @@ def _format_what(action: str, detail=None) -> str:
 
 def append(action: str, *, card=None, target=None, detail=None, host=None, connector=None, channel=None, when=None,
            **extra) -> None:
+    from pl import trackers
+    if trackers.dry_run():
+        return
     try:
         C.STATE_DIR.mkdir(parents=True, exist_ok=True)
         try:

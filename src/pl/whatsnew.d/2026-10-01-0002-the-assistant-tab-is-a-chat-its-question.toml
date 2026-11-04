@@ -1,0 +1,4 @@
+id = "2026-10-01.02"
+title = "The Assistant tab is a chat; its questions show as a card a number key answers"
+where = "tab 0 Assistant: turns, short tool lines, the status line; it restarts on a pl update when idle and unwatched"
+try = "open it and ask \"what is stuck?\""

@@ -8,8 +8,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from pl import config as C
+from pl import ghquota
 from pl.accounts import exhausted_profiles, parking
-from pl.agents import died_label, hold_reason, pane_tail, registry, run_blocked, worker_status, worker_view
+from pl.agents import died_label, hold_reason, pane_tail, person_wait, registry, worker_status, worker_view
 from pl.board import cards, col_name, sections
 from pl.commands import plan_path
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, paused, stage_for
@@ -82,10 +83,10 @@ def watch_snapshot():
             status = worker_status(w, reg)[0] if w else "none"
             failed = bool(w) and status == "dead" and int(w.get("attempts") or 0) >= MAX_ATTEMPTS   # pl retry / t
             view = worker_view(c, reg)
-            blocked = auto and not w and bool(run_blocked(c))   # its waiting run agent was released; held back
+            wait = person_wait(c, status)
             if hold_reason(c):
                 kind = "row"   # split or parked: nothing for a person to do on this card
-            elif blocked:
+            elif wait:
                 kind = "needs"
                 needs["attention"] += 1
             elif rec and rec.get("status") == "needs-attention":
@@ -113,8 +114,8 @@ def watch_snapshot():
                     per_prof[profile]["queued"] += 1
             pc = short_id(m.get("product_card") or "")
             rows.append({"kind": kind, "card": c, "worker": w, "win": win, "col": col, "profile": profile, "failed": failed,
-                         "blocked": blocked,
-                         "approved": approved_label(c, col, reg) or (died_label(c, "t to retry") if failed else None) or (view if view.startswith(("run agent waiting", "limit hit", "blocked")) else None),
+                         "waiting": wait,
+                         "approved": wait or approved_label(c, col, reg) or (died_label(c, "t to retry") if failed else None) or (view if view.startswith(("run agent waiting", "limit hit")) else None),
                          "text": f"{short_id(c['id'])}  {c['title'][:46]:<46}  {profile:<6} {view:<26} {since:>4}  {win:<34} {('P:' + pc) if pc else ''}"})
     # Done cards came with the same board read; they stay out of rows (and every count) for the Pipeline's z only
     done = [{"kind": "row", "card": c, "worker": {}, "win": "", "col": "Done", "profile": (c.get("metadata") or {}).get("profile") or ""}
@@ -215,7 +216,7 @@ def detail_for(r, full_card, full_pr):
 
 
 _pr_cache = {"at": 0, "counts": None}
-PR_TTL = 300   # PR searches are reused this long, across the profile's processes (4 searches cost 4 of 30 a minute)
+PR_TTL = 300   # PR searches are reused this long, across the profile's processes (5 searches cost 5 of 30 a minute)
 ACTIVITY_TTL = 1800   # PR activity is 14 days of history: reused for 30 minutes
 _FORCED = {}   # PR search name -> the r press (board.fresh_next) it already asked GitHub again for
 
@@ -254,8 +255,12 @@ def _owner_args():
     return ["--owner", owner] if owner else []
 
 
+def _label_names(pr):
+    return {l["name"] for l in pr.get("labels") or []}
+
+
 def pr_counts():
-    """Open PRs assigned to you that finished auto-review, by what they need next. Cached PR_TTL s, shared via the state folder (GitHub search is rate-limited).
+    """Open PRs assigned to you or authored by you that finished auto-review, by what they need next. Cached PR_TTL s, shared via the state folder (GitHub search is rate-limited).
     None when [code_host] labels has no `ready` label: pl then does not track PRs."""
     lab = _labels()
     if not lab.get("ready"):
@@ -269,23 +274,31 @@ def pr_counts():
             return saved
     if github.limited("search"):
         return _pr_cache["counts"]
-    search = ["gh", "search", "prs", *_owner_args(), "--state", "open", "--label"]
+    search = ["search", "prs", *_owner_args(), "--state", "open", "--label"]
     tail = ["--assignee", "@me", "--limit", "300", "--json", "labels,number,repository,title,url,updatedAt"]
-    r = subprocess.run([*search, lab["ready"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env())
-    f = subprocess.run([*search, lab["failed"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env()) if lab.get("failed") else None
-    if any(x is not None and x.returncode and github.back_off(x.stderr, resource="search") for x in (r, f)):
+    r = ghquota.gh(subprocess.run, [*search, lab["ready"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    f = ghquota.gh(subprocess.run, [*search, lab["failed"], *tail], capture_output=True, text=True, timeout=30, env=C.gh_env()) if lab.get("failed") else None
+    a = ghquota.gh(subprocess.run, [*search[:-1], "--author", "@me", "--limit", "300", *tail[-2:]], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    if any(x is not None and x.returncode and github.back_off(x.stderr, resource="search") for x in (r, f, a)):
         return _pr_cache["counts"]
+    authored = json.loads(a.stdout) if a.returncode == 0 and a.stdout.strip() else []
     failed = json.loads(f.stdout) if f and f.returncode == 0 and f.stdout.strip() else []
+    failed += [p for p in authored if lab.get("failed") and lab["failed"] in _label_names(p)]
     counts = None
     if r.returncode == 0:
         try:
             prs = []
             seen = set()
             for pr in failed:   # stopped on purpose by auto-review: a human decision is needed
+                if pr["url"] in seen:
+                    continue
                 pr["state"], pr["repo"] = "decide", (pr.get("repository") or {}).get("name", "?")
                 seen.add(pr["url"])
                 prs.append(pr)
-            for pr in [x for x in json.loads(r.stdout) if x["url"] not in seen]:
+            for pr in json.loads(r.stdout) + [p for p in authored if lab["ready"] in _label_names(p)]:
+                if pr["url"] in seen:
+                    continue
+                seen.add(pr["url"])
                 ls = [l["name"] for l in pr.get("labels") or []]
                 pr["state"] = "rework" if lab.get("rework") in ls else ("merge" if lab.get("merge_ready") in ls else "gate")
                 pr["repo"] = (pr.get("repository") or {}).get("name", "?")
@@ -351,13 +364,14 @@ def cmd_watch(a):
     from pl import update
     from pl.tui import app as tui
     while True:   # a console that left for a new pl build execs the same command line; a failed exec opens this one again
-        app = tui.PlApp(interval=a.interval, open_card=getattr(a, "open", None), tab=getattr(a, "tab", None))
+        app = tui.PlApp(interval=a.interval, open_card=getattr(a, "open", None), tab=getattr(a, "tab", None),
+                         back=getattr(a, "back", False))
         app.run()
         if not app.restart_into:
             return
         if isinstance(app.restart_into, tuple) and app.restart_into[0] == "profile":
             _, prof, card, tab = app.restart_into
-            cmd = [sys.executable, "-m", "pl", "--profile", prof, "watch",
+            cmd = [sys.executable, "-m", "pl", "--profile", prof, "watch", "--back",
                    *(["--open", card] if card else []),
                    *(["--tab", tab] if tab else [])]
             try:
@@ -379,7 +393,7 @@ def _gh(args):
     """gh with argv only and a 30 s timeout; the parsed JSON list. Raises OSError on a gh error or while rate limited."""
     if hit := github.limited("search"):
         raise OSError(str(hit))
-    r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=30, env=C.gh_env())
+    r = ghquota.gh(subprocess.run, args, capture_output=True, text=True, timeout=30, env=C.gh_env())
     if r.returncode:
         raise OSError(str(github.back_off(r.stderr, resource="search") or r.stderr.strip()[:200]))
     return json.loads(r.stdout or "[]")

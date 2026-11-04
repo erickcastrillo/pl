@@ -3,6 +3,7 @@ import argparse
 import multiprocessing
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -132,9 +133,14 @@ def test_new_profile_refuses_existing_and_round_trips(fake_home, capsys):
     profiles.new_profile("work")
     d = fake_home / ".pl-work"
     assert (d / "config.toml").is_file()
+    original = (d / "config.toml").read_text()
     assert "alias pl-work='PL_CONFIG_DIR=~/.pl-work pl'" in capsys.readouterr().out
+    profiles.new_profile("work")
+    assert "already exists, unchanged" in capsys.readouterr().out
+    (d / "config.toml").write_text("# edited\n")
     with pytest.raises(SystemExit, match="exists"):
         profiles.new_profile("work")
+    (d / "config.toml").write_text(original)
     C.load("work")
     assert C.GATES["spec"] is True
     for k, v in src.items():
@@ -388,3 +394,56 @@ def test_the_dispatcher_says_it_started_with_its_pid(fake_home, monkeypatch, cap
     ev = [json.loads(x) for x in (C.STATE_DIR / "events.jsonl").read_text().splitlines()]
     assert [(e["kind"], e["pid"]) for e in ev] == [("dispatcher_started", os.getpid())]
     assert dispatch.holder_pid() == os.getpid()
+
+
+def _write_profile(name, text):
+    d = Path.home() / f".pl-{name}"
+    d.mkdir()
+    (d / "config.toml").write_text(text)
+
+
+def test_all_accounts_lists_every_profiles_accounts_with_their_source():
+    _write_profile("a", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    _write_profile("b", '[accounts.codex1]\nharness = "codex"\nconfig_dir = "~/.codex"\n')
+    rows, skipped = profiles.all_accounts()
+    assert {(r["name"], r["dir"], tuple(r["profiles"])) for r in rows} == {("main", "~/.claude", ("a",)), ("codex1", "~/.codex", ("b",))}
+    assert skipped == []
+
+
+def test_all_accounts_merges_same_name_and_folder_and_names_both_profiles():
+    _write_profile("a", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    _write_profile("b", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    rows, _ = profiles.all_accounts()
+    assert len(rows) == 1 and rows[0]["profiles"] == ["a", "b"]
+
+
+def test_all_accounts_keeps_same_name_with_different_folders_apart():
+    _write_profile("a", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    _write_profile("b", '[accounts.main]\nconfig_dir = "~/.claude-b"\n')
+    rows, _ = profiles.all_accounts()
+    assert sorted(r["dir"] for r in rows) == ["~/.claude", "~/.claude-b"]
+
+
+def test_all_accounts_skips_an_unparseable_profile_with_one_line():
+    _write_profile("a", '[accounts.main]\nconfig_dir = "~/.claude"\n')
+    _write_profile("b", "this is not toml [")
+    rows, skipped = profiles.all_accounts()
+    assert [r["name"] for r in rows] == ["main"]
+    assert skipped == ["skipped profile b: its config.toml could not be read"]
+
+
+def test_all_accounts_reads_no_account_folder(monkeypatch):
+    _write_profile("a", '[accounts.main]\nconfig_dir = "~/.claude-x"\n')
+    home = Path.home()
+    real_exists, real_resolve = Path.exists, Path.resolve
+
+    def guard(real):
+        def check(self, *args, **kw):
+            assert not str(self).startswith(str(home / ".claude-x")), "account folder touched"
+            return real(self, *args, **kw)
+        return check
+    monkeypatch.setattr(Path, "exists", guard(real_exists))
+    monkeypatch.setattr(Path, "resolve", guard(real_resolve))
+    profiles.all_accounts()
+    monkeypatch.setattr(Path, "exists", real_exists)
+    assert not (home / ".claude-x").exists()

@@ -1,0 +1,4 @@
+id = "2026-10-26.57"
+title = "New loop starts from a template gallery: what each does and needs"
+where = "Loops tab: n, then pick a template or Blank loop"
+try = "pl loops add --template inbox-triage"

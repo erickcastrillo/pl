@@ -10,7 +10,8 @@ from pl import config as C
 
 # type -> "module:Class".
 TYPES = {"github-project": "pl.trackers.github:GitHubProject", "github-issues": "pl.trackers.github:GitHubIssues",
-         "mcp": "pl.trackers.mcp:Mcp", "local": "pl.trackers.local:Local"}
+         "mcp": "pl.trackers.mcp:Mcp", "local": "pl.trackers.local:Local",
+         "vikunja": "pl.trackers.vikunja:Vikunja"}
 
 
 class Tracker(Protocol):
@@ -34,7 +35,65 @@ class Tracker(Protocol):
 _cache = {}
 
 
+_dry = False
+
+
+def set_dry_run(on=True):
+    global _dry
+    _dry = on
+
+
+def dry_run():
+    return _dry
+
+
+class DryRun:
+    """Wraps a tracker while --dry-run is on: reads pass through, writes print what they would do."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if name in ("move", "adopt"):   # only some connectors have them; callers test with hasattr
+            def dry(ref, *a, **kw):
+                self._would(name, ref, {"column": a[0] if a else kw.get("column")})
+                return ref
+            return dry
+        return attr
+
+    def _would(self, verb, item_id, fields):
+        from pl import util
+        shown = ", ".join(f"{k}={_cut(v)!r}" for k, v in fields.items() if k != "verify")
+        print(util.mask(f"would {verb} {item_id}: {shown}"))
+
+    def create(self, column, **fields):
+        self._would("create", "card", {"column": column, **fields})
+        return {"id": "dry-run", "title": fields.get("title", ""), "description": fields.get("description", ""),
+                "tags": list(fields.get("tags", ())), "metadata": fields.get("metadata") or {}, "list_id": column}
+
+    def update(self, item_id, *, verify=True, **fields):
+        self._would("update", item_id, fields)
+        return {**self._inner.card(item_id), **fields}
+
+    def delete(self, item_id):
+        self._would("delete", item_id, {})
+
+    def ensure_column(self, name, *, description=""):
+        self._would("ensure column", name, {})
+        return name
+
+
+def _cut(v):
+    return v[:60] + "..." if isinstance(v, str) and len(v) > 60 else v
+
+
 def get(kind):
+    tracker = _build(kind)
+    return DryRun(tracker) if _dry else tracker
+
+
+def _build(kind):
     """The tracker for "tracker" (the pipeline board) or "intake" (the idea board), built from the [tracker] / [intake] settings."""
     if kind not in ("tracker", "intake"):
         raise SystemExit(f"pl: unknown tracker kind {kind!r}")
@@ -65,6 +124,8 @@ def _marked(write, name=None):
     """A board write that stops every process of the profile reusing a board read from before it (board.cards)."""
     def run(*a, **kw):
         from pl import audit, board
+        before = board.last_write() or 0
+        ok = False
         board.dirty()
         try:
             res = write(*a, **kw)
@@ -74,9 +135,12 @@ def _marked(write, name=None):
             if action_name == "move" and "column" not in fields:
                 fields.append("column")
             audit.append(f"card.{action_name}", card=card_id, detail=fields)
+            ok = True
             return res
         finally:
             board.dirty()
+            if ok:
+                board.patch(action_name, a, kw, res, before)
     return run
 
 

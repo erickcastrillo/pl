@@ -77,12 +77,12 @@ def test_every_pl_command_a_skill_names_exists_in_the_cli():
                 continue
             assert cmd in top, f"{n}: pl {cmd}"
             assert cmd not in subs or not sub or sub in subs[cmd], f"{n}: pl {cmd} {sub}"
-    assert {"card", "move", "section", "depends"} <= seen
+    assert {"card", "move", "section", "depends", "tests"} <= seen
 
 
 def test_pl_stage_skill_ships_with_a_version_and_names_its_commands():
     text = (skills.BUILTIN_DIR / "pl-stage" / "SKILL.md").read_text()
-    assert re.search(r"^pl-builtin-version: 1$", text, re.M)
+    assert re.search(r"^pl-builtin-version: 2$", text, re.M)
     for cmd in ("pl pipelines show --json", "pl card <id>", "pl section <id> <SECTION> --from <file>", 'pl move <id> "<done>"'):
         assert cmd in text
 
@@ -132,22 +132,46 @@ def _plan_skill_text():
     return (skills.BUILTIN_DIR / PLAN_SKILL / "SKILL.md").read_text()
 
 
-def test_pl_plan_files_later_slices_with_plan_and_slice():
-    text = _plan_skill_text()
-    for needed in ("--plan", "--slice", "--title", "pl titles next", "pl titles set"):
-        assert needed in text
-    assert int(skills.VERSION_RE.search(text).group(1)) >= 6
-    assert 'pl idea "Slice <k> of <card title>' not in text
-    ideas = [line for block in re.findall(r"```.*?```", text, re.S) for line in block.splitlines() if line.strip().startswith("pl idea")]
-    assert ideas and all("--plan" in line for line in ideas)
-    assert "(after <id>)" in text and not re.search(r'--title "[^"]*\(after', text)
+def _plan_format_block(text):
+    return re.search(r"## Plan format\s+```(.*?)```", text, re.S).group(1)
 
 
-def test_pl_plan_records_a_refused_number_and_names_slices_by_card():
+def test_pl_plan_writes_slices_on_one_card():
+    text = _shipped("pl-plan")
+    for phrase in ("## Slices", "### Slice 1:", "2 to 5 slices", "build order", "File no slice cards"):
+        assert phrase in text, phrase
+    assert "## Slices" in _plan_format_block(_plan_skill_text())
+
+
+def test_pl_plan_keeps_each_slice_within_max_lines():
+    text = _shipped("pl-plan")
+    step = text.split("3. Size the change")[1].split("4. Write the plan")[0]
+    for phrase in ("max_lines", "outside `tests/`", "on top of"):
+        assert phrase in step, phrase
+
+
+def test_pl_plan_files_no_slice_cards():
     text = _plan_skill_text()
-    assert "Decisions" in text and "guess" in text
-    later = text.split("## Later slices")[1].split("## Decisions")[0]
-    assert "Slice <k>" in later and "Plan <N>" in later and "<card id>" in later
+    for gone in ("## Later slices", "pl titles next", "pl titles set"):
+        assert gone not in text, gone
+    ideas = [line for block in re.findall(r"```.*?```", text, re.S) for line in block.splitlines()
+             if line.strip().startswith("pl idea")]
+    assert not any("--slice" in line for line in ideas)
+
+
+def test_pl_plan_files_the_overflow_as_one_idea():
+    text = _shipped("pl-plan")
+    for phrase in ("More than 5 slices", "pl idea", "pl depends <new id> --on <id>", "Decisions", "never guess"):
+        assert phrase in text, phrase
+    assert text.index("pl idea") < text.index("pl depends <new id> --on <id>")
+
+
+def test_pl_plan_within_budget_keeps_todays_format():
+    text = _shipped("pl-plan")
+    assert "no `## Slices` section" in text
+    fmt = _plan_format_block(_plan_skill_text())
+    for heading in ("## Summary", "## Minimum change", "## Work packages", "## Decisions", "## Risks"):
+        assert heading in fmt, heading
 
 
 def test_an_unedited_pl_plan_v5_is_updated_to_v6(lib, shipped):
@@ -259,12 +283,26 @@ def test_a_loop_prompt_of_a_library_skill_gets_the_plugin_name_on_claude(lib, mo
 
 def test_the_builtin_review_loop_uses_pl_review(tmp_path, monkeypatch):
     lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    p = C._review_prompt("acme/app", lab, {"harness": "claude"})
-    assert p == "/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready rework=pl:rework failed=pl:failed"
-    assert C._review_prompt("acme/app", lab, {"harness": "codex"}).startswith("/pl-review repo=acme/app ")
+    p = C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS)
+    assert p == ("/loop 30m /pl-review repo=acme/app review=pl:auto-review ready=pl:ready rework=pl:rework failed=pl:failed "
+                 "auto_lines=150 auto_files=6")
+    assert C._review_prompt("acme/app", lab, {"harness": "codex"}, C.PR_LIMITS).startswith("/pl-review repo=acme/app ")
     text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge"):
+    for rule in ("remove `<review>`, add `<ready>`", "add both `<ready>` and `<rework>`", "add `<failed>`", "Never merge directly"):
         assert rule in text
+
+
+def test_pl_review_runs_pl_tests_full():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    assert "`pl tests full`" in text and "not available" in text
+
+
+def test_pl_review_runs_the_review_test_set():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    for phrase in ("`pl tests review`", "pl:full-tests", "e2e_ui", "affected: N files", "full suite:", "names the failing tests"):
+        assert phrase in text
+    version = int(re.search(r"pl-builtin-version: (\d+)", text).group(1))
+    assert version >= 9
 
 
 # ---------- pl section: read and write one card section ----------
@@ -399,7 +437,7 @@ def test_a_failed_install_never_stops_the_dispatcher(lib, monkeypatch):
 
 def test_the_review_loop_falls_back_to_the_inline_prompt_while_pl_review_is_missing(lib, monkeypatch):
     lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    svc = {"prompt": C._review_prompt("acme/app", lab, {"harness": "claude"}),
+    svc = {"prompt": C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS),
            "fallback": C._review_text("acme/app", lab, {"harness": "claude"}), "builtin": True}
     assert svc["fallback"].startswith("/loop 30m Review pull requests on acme/app.")
     assert "Never merge" in svc["fallback"]
@@ -587,8 +625,9 @@ def test_pl_run_never_force_pushes_and_takes_the_label_as_an_argument():
 
 def test_review_loop_quotes_labels_with_spaces():
     lab = {"review": "needs review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed"}
-    p = C._review_prompt("acme/app", lab, {"harness": "claude"})
-    assert p == "/loop 30m /pl-review repo=acme/app review='needs review' ready=pl:ready rework=pl:rework failed=pl:failed"
+    p = C._review_prompt("acme/app", lab, {"harness": "claude"}, C.PR_LIMITS)
+    assert p == ("/loop 30m /pl-review repo=acme/app review='needs review' ready=pl:ready rework=pl:rework failed=pl:failed "
+                 "auto_lines=150 auto_files=6")
     assert "quote" in (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
 
 
@@ -610,6 +649,7 @@ def _start(monkeypatch, tmp_path, prompt=None, cfg="rel/profile", stage="run"):
     monkeypatch.setattr(dispatch, "_launch", lambda pane, name, script, p=None: tmp_path / "l.sh")
     monkeypatch.setattr(dispatch, "update", lambda *a, **k: None)
     monkeypatch.setattr(dispatch.events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch.worktrees, "for_run", lambda c: (tmp_path / "wt", None))
     dispatch.start_worker({"id": "c" * 36, "title": "T", "description": ""}, stage, 0, False)
     return seen
 
@@ -626,7 +666,7 @@ LIMITS = " max_lines=300 max_files=10 target_lines=150 target_files=6"
 
 def test_the_builtin_run_stage_gets_the_review_label_and_pr_limits(monkeypatch, tmp_path):
     seen = _start(monkeypatch, tmp_path)
-    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS}") in seen
+    assert ("prompt", f"/pl-run {'c' * 36} review='pl:auto review'{LIMITS} worktree={tmp_path / 'wt'}") in seen
     seen = _start(monkeypatch, tmp_path, prompt="/my-run {id}")
     assert ("prompt", f"/my-run {'c' * 36}") in seen
 
@@ -653,7 +693,7 @@ def test_skills_keep_pull_requests_small():
                  "Make the code explain itself with clear names and small functions. Add a comment only for a reason "
                  "the code cannot show, such as a non-obvious constraint or a workaround, in one line."):
         assert word in run, word
-    for word in ("pl idea", "Later slices", "target_lines", "max_lines"):
+    for word in ("pl idea", "## Slices", "target_lines", "max_lines"):
         assert word in plan, word
     assert "restate" in review
 
@@ -696,31 +736,312 @@ def test_pl_plan_requires_a_depends_on_line():
     assert "Every plan has" in text
 
 
-def test_pl_plan_links_each_later_slice():
+def test_pl_plan_links_the_overflow_idea():
     text = (skills.BUILTIN_DIR / "pl-plan" / "SKILL.md").read_text()
     assert "pl depends" in text and "--on" in text
     idx_depends = text.index("pl depends")
-    idx_idea = text.index('pl idea "Slice')
+    idx_idea = text.index('pl idea "Rest of')
     assert idx_depends > idx_idea
-
 
 
 def _shipped(name):
     return " ".join((skills.BUILTIN_DIR / name / "SKILL.md").read_text().split())
 
 
-def test_pl_plan_splits_into_independent_slices():
+def test_pl_plan_splits_into_vertical_slices():
     text = _shipped("pl-plan")
-    for phrase in ("vertical", "merge in any order", "60 lines", "Depends on", "independent", "after <slice>",
-                   "(after <id>)"):
+    for phrase in ("vertical", "60 lines", "Depends on"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 6" in text
+    assert "pl-builtin-version: 8" in text
+
+
+def test_pl_plan_stacks_slices_that_share_a_file():
+    text = _shipped("pl-plan")
+    for phrase in ("same file", "the stack orders them"):
+        assert phrase in text
+    for gone in ("pl plan check <N>", "pl depends <later id> --on <earlier id>"):
+        assert gone not in text
+
+
+def test_review_loop_passes_the_merge_ready_label_and_auto_merge_size():
+    lab = {"review": "pl:auto-review", "ready": "pl:ready", "rework": "pl:rework", "failed": "pl:failed",
+           "merge_ready": "ship it"}
+    limits = {"pr_auto_merge_lines": 100, "pr_auto_merge_files": 4}
+    p = C._review_prompt("acme/app", lab, {"harness": "codex"}, limits)
+    assert p.endswith("failed=pl:failed merge_ready='ship it' auto_lines=100 auto_files=4")
+    del lab["merge_ready"]
+    p = C._review_prompt("acme/app", lab, {"harness": "codex"}, limits)
+    assert "merge_ready=" not in p and p.endswith("failed=pl:failed auto_lines=100 auto_files=4")
+
+
+def test_pl_review_has_one_merge_rule():
+    text = _shipped("pl-review")
+    for gone in ("Never merges.", "pl:merge-ready", "150 lines", "6 files"):
+        assert gone not in text
+    for phrase in ("<merge_ready>", "<auto_lines>", "--auto --squash", "auto-merge is off", "do not retry",
+                   "Never merge directly"):
+        assert phrase in text
 
 
 def test_pl_review_flags_a_dependency_on_an_unmerged_pr():
     text = _shipped("pl-review")
-    for phrase in ("depends on unmerged PR #N", "gh pr list --repo <repo> --state open", "origin/<baseRefName>",
+    for phrase in ("depends on unmerged PR #N", "pulls?state=open", "origin/<baseRefName>",
                    "even when the tests pass"):
         assert phrase in text
-    assert "pl-builtin-version: 4" in text
+    assert int(re.search(r"^pl-builtin-version: (\d+)$", _raw("pl-review"), re.M).group(1)) >= 10
+
+
+def test_pl_run_assigns_the_pull_request_to_you():
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    create = next(l for l in text.splitlines() if "gh pr create" in l)
+    assert "--assignee @me" in create
+    assert int(re.search(r"^pl-builtin-version: (\d+)$", _raw("pl-review"), re.M).group(1)) >= 8
+
+
+def _run_steps():
+    return (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Steps")[1].split("\n## ")[0]
+
+
+def _step3():
+    return " ".join(_run_steps().split("3. For each work package")[1].split("\n4. ")[0].split())
+
+
+def _rework():
+    return " ".join((skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Rework mode")[1].split("\n## ")[0].split())
+
+
+def test_pl_run_runs_affected_tests_per_package():
+    step = _step3()
+    for words in ("pl tests affected --json", "lint", "`full` true", "not JSON"):
+        assert words in step, words
+
+
+def test_pl_run_has_no_final_full_suite_step():
+    text = _flat("pl-run")
+    assert "run the full test suite once more" not in text
+    assert [int(n) for n in re.findall(r"^(\d+)\. ", _run_steps(), re.M)] == [1, 2, 3, 4, 5, 6]
+    assert len(re.findall(r"full (?:test )?suite", text)) == 3
+
+
+def test_pl_run_rework_uses_the_same_test_rule():
+    rework = _rework()
+    assert ("step 3.3" in rework or "pl tests affected" in rework) and "`full`" in rework
+    assert rework.index("`full`") < rework.index("push to the same branch")
+
+
+def test_pl_run_tests_run_in_the_foreground_with_a_limit():
+    for part in (_step3(), _rework()):
+        assert "foreground" in part and "timeout" in part
+    assert "in the background" not in _flat("pl-run")
+
+
+def test_pl_run_pr_body_lists_the_tests_run():
+    text = _shipped("pl-run")
+    body = text.split("gh pr create")[1].split("7.")[0]
+    assert "affected test files" in body and "full suite" in body and "why" in body
+
+
+def _older_copy_is_updated(lib, shipped, name, old, new):
+    real = (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+    older = shipped / name / "SKILL.md"
+    older.write_text(re.sub(r"^pl-builtin-version: \d+$", f"pl-builtin-version: {old}", real, count=1, flags=re.M))
+    skills.install_builtins()
+    older.write_text(real)
+    assert f"pl-builtin-version: {new}\n" in real
+    assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
+
+
+def test_an_unedited_pl_run_v12_is_updated_to_v13(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 12, 13)
+
+
+def test_an_unedited_pl_review_v9_is_updated_to_v10(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 9, 10)
+
+
+def test_pl_review_tests_a_stacked_pr_against_its_base():
+    text = _shipped("pl-review")
+    for phrase in ("`pl tests review --base origin/<baseRefName>`", "git diff origin/<baseRefName>...HEAD",
+                   "never run `pl tests full`"):
+        assert phrase in text
+    assert "Run the full test suite once" not in text
+
+
+def test_pl_review_does_not_flag_code_from_lower_slices():
+    text = _shipped("pl-review")
+    assert "including lower slices of the same stack, is not a finding" in text
+    assert "depends on unmerged PR #N" in text and "even when the tests pass" in text
+
+
+def test_pl_review_waits_behind_a_lower_pr_in_rework():
+    text = _shipped("pl-review")
+    for phrase in ("carries `<rework>`", "at any depth", "leave `<review>` on it", "The one exception"):
+        assert phrase in text
+    assert text.index("at any depth") < text.index("git worktree add")
+
+
+def test_pl_review_runs_the_review_test_set_and_it_decides_ready():
+    text = _shipped("pl-review")
+    step = text.split("5. Run the tests the change needs")[1].split("6. Apply")[0]
+    assert '"ready"' in step and '"Review finds problems" row' in step
+
+
+def test_pl_review_never_asks_for_a_full_rerun():
+    text = _shipped("pl-review")
+    assert "never ask the builder to rerun the full suite" in text
+    assert "run the full suite" not in text.replace("rerun the full suite", "")
+
+
+def test_pl_run_says_to_add_one_whatsnew_file():
+    run = (Path(skills.BUILTIN_DIR) / "pl-run" / "SKILL.md").read_text()
+    flat = " ".join(run.split())
+    assert "src/pl/whatsnew.d/" in flat and "UTC" in flat and "never edit another entry" in flat
+    step = (Path(__file__).parents[1] / "CLAUDE.md").read_text().split("## Releasing")[1]
+    assert "src/pl/whatsnew.d/" in step and "src/pl/whatsnew.py" not in step
+
+
+GH_SKILLS = ["pl-review", "pl-run", "pl-stage"]
+GRAPHQL_READ = re.compile(r"gh pr (?:view|list|status|checks)\b|gh api graphql")
+
+
+def _raw(name):
+    return (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+
+
+def _graphql_reads(name, text):
+    return [(name, m.group(0)) for line in text.splitlines() if "Projects" not in line
+            for m in [GRAPHQL_READ.search(line)] if m]
+
+
+def _rest_commands(text):
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("gh api") and "-X" not in line]
+
+
+def test_skills_read_github_through_rest_only():
+    for n in GH_SKILLS:
+        assert _graphql_reads(n, _raw(n)) == []
+
+
+def test_graphql_scan_names_the_skill_and_command():
+    text = _raw("pl-review") + "\ngh pr list --json number\n"
+    assert _graphql_reads("pl-review", text) == [("pl-review", "gh pr list")]
+    assert _graphql_reads("pl-review", "gh api graphql -f query=... Projects\n") == []
+
+
+def test_skills_say_why_reads_use_rest():
+    for n in GH_SKILLS:
+        text = _shipped(n)
+        for phrase in ("gh api repos/...", "GraphQL points are shared with pl", "Projects"):
+            assert phrase in text, (n, phrase)
+
+
+def test_rest_reads_use_repos_paths_and_known_placeholders():
+    allowed = {"pl-review": {"repo", "review", "number", "headRefName"}, "pl-run": {"owner", "repo", "number", "label"}}
+    for n, names in allowed.items():
+        commands = _rest_commands(_raw(n))
+        assert commands, n
+        for line in commands:
+            assert "'repos/<" in line and "graphql" not in line, (n, line)
+            assert set(re.findall(r"<(\w+)>", line)) <= names, (n, line)
+    assert "https://github.com/<owner>/<repo>/pull/<number>" in _shipped("pl-run")
+
+
+def test_pl_review_lists_review_prs_through_rest():
+    listing = [x for x in _rest_commands(_raw("pl-review")) if "pulls?state=open" in x and '"<review>"' in x]
+    assert len(listing) == 1 and "--paginate" in listing[0]
+    assert all(f in listing[0] for f in (".head.ref", ".base.ref", ".html_url", "title"))
+    deps = re.findall(r"gh api [^`]*pulls\?state=open[^`]*", _raw("pl-review"))
+    assert len(deps) == 2 and ".number" in deps[1] and ".head.ref" in deps[1]
+
+
+def test_pl_run_rework_reads_the_pr_through_rest():
+    lines = _rest_commands(_raw("pl-run"))
+    pr = [x for x in lines if "pulls/<number>" in x]
+    assert len(pr) == 1 and "repos/<owner>/<repo>/pulls/<number>" in pr[0]
+    assert all(f in pr[0] for f in (".head.ref", ".base.ref", ".labels"))
+    assert any("issues/<number>/comments" in x for x in lines)
+
+
+def _builtin(name):
+    return (skills.BUILTIN_DIR / name / "SKILL.md").read_text()
+
+
+def test_pl_run_runs_tests_only_through_pl_tests():
+    text = _builtin("pl-run")
+    for phrase in ("pl tests affected", "pl tests full", "one run at a time", "foreground", "own worktree"):
+        assert phrase in text
+
+
+def test_pl_review_runs_the_tests_through_pl_tests_review():
+    text = _builtin("pl-review")
+    step = text[text.index("5. Run"):text.index("6.", text.index("5. Run"))]
+    for phrase in ("pl tests review", "pl tests full", "one run at a time", "foreground", "review worktree"):
+        assert phrase in step
+
+
+@pytest.mark.parametrize("name", ["pl-run", "pl-review"])
+def test_builtin_run_and_review_never_start_tests_wide_or_in_the_background(name):
+    text = _builtin(name)
+    assert not re.search(r"-n\s*(auto|\d+)", text)
+    assert not re.search(r"nohup|detached|background", text, re.I)
+    assert not re.search(r"(?<!&)&\s*$", text, re.M)
+    for m in re.finditer("main checkout", text):
+        assert "never" in text[max(0, m.start() - 40):m.start()]
+
+
+def test_pl_run_does_not_add_worktrees():
+    text = (skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text()
+    assert "git worktree add" not in text
+    assert "started you in" in text
+    assert "main checkout" in text and "stop" in text
+
+
+def _stacked():
+    return " ".join((skills.BUILTIN_DIR / "pl-run" / "SKILL.md").read_text().split("## Stacked plans")[1].split("\n## ")[0].split())
+
+
+def test_pl_run_stacks_a_sliced_plan_only_when_it_has_slices():
+    run = _flat("pl-run")
+    for words in ("## Stacked plans", "## Slices", "### Slice k:", "otherwise follow the steps as they are"):
+        assert words in run, words
+
+
+def test_pl_run_builds_each_slice_on_its_own_branch_in_one_worktree():
+    stacked = _stacked()
+    for words in ("-s<k>", "git switch -c", "never a new worktree"):
+        assert words in stacked, words
+
+
+def test_pl_run_counts_each_slice_against_the_branch_below():
+    stacked = _stacked()
+    for words in ("git diff --numstat <previous branch>...HEAD", "origin/<default branch>", "tests/", "max_lines"):
+        assert words in stacked, words
+
+
+def test_pl_run_stops_a_stack_on_an_oversized_slice():
+    stacked = _stacked()
+    for words in ("Run notes", "pl section <id> INPUT", "Open no pull request", "do not move the card"):
+        assert words in stacked, words
+
+
+def test_pl_run_opens_each_slice_on_the_branch_below():
+    stacked = _stacked()
+    for words in ("--base <previous branch>", "--base <default branch>", 'pl move <id> "In progress" --pr', "slice k of n"):
+        assert words in stacked, words
+
+
+def test_pl_run_moves_a_stack_to_pr_open_once_after_the_last_slice():
+    stacked = _stacked()
+    assert 'pl move <id> "PR open" --pr' in stacked
+    assert stacked.index('"In progress" --pr') < stacked.index('pl move <id> "PR open" --pr')
+
+
+def test_pl_run_rework_relabels_only_changed_stack_prs():
+    rework = _rework()
+    for words in ("bottom-up", "whose diff against their base changed", "no force-push"):
+        assert words in rework, words
+
+
+def test_pl_run_v13_ships_stacked_plans():
+    assert skills._builtin("pl-run")[1] >= 13

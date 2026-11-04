@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pl import config as C
+from pl import events
 
 
 @dataclass
@@ -65,6 +66,13 @@ BUILTINS = {
 }
 FIELDS = {f.name for f in dataclasses.fields(Harness)}
 
+LOGIN = {"claude": ["claude", "/login"], "codex": ["codex", "login"], "antigravity": ["agy"]}   # sign-in command, run inside the sandbox VM
+
+
+def login_argv(h):
+    return list(LOGIN.get(h.name, []))
+
+
 # The flags that let a pipeline agent or loop work without stopping for permission; never the Assistant. From each
 # CLI's --help: claude 2.1.286 (auto: a safety classifier approves routine actions and blocks risky ones), codex 0.150.1
 # (never ask, writes only inside the workspace), agy and gemini 0.32.1 (edits only: their one mode that never asks
@@ -73,6 +81,8 @@ UNATTENDED = {"claude": ["--permission-mode", "auto"],
               "codex": ["--ask-for-approval", "never", "--sandbox", "workspace-write"],
               "antigravity": ["--mode", "accept-edits"],
               "gemini": ["--approval-mode", "auto_edit"]}
+# The harness's own read-only mode, for a loop with writes = false. A harness missing here cannot run one.
+READ_ONLY = {"claude": ["--permission-mode", "plan"], "codex": ["--sandbox", "read-only"]}
 STILL_ASKS = {"antigravity": "allow the commands in agy's own settings",
               "gemini": "allow the commands with a gemini policy file (--policy)"}
 # A permission prompt on screen (strings of each CLI's binary at the versions above; claude's read-outside prompt from
@@ -117,6 +127,7 @@ EFFORT_FLAG_RE = re.compile(r"^--effort(?:=|$)|reasoning_effort=", re.I)
 ADD_DIR_FLAGS = {h: ["--add-dir={worktrees_dir}"] for h in ("claude", "codex", "antigravity")}
 ADD_DIR_RE = re.compile(r"^--add-dir(?:=|$)")
 WORKTREES_ENV = "PL_WORKTREES_DIR"   # the same folder for the agent's shell commands (the built-in skills use it)
+XDIST_ENV = "PYTEST_XDIST_AUTO_NUM_WORKERS"
 # a model id pl passes: no whitespace, quote or backslash, and no leading dash (it is never read as a flag)
 MODEL_RE = re.compile(r"[^\s\"'\\-][^\s\"'\\]*")
 
@@ -184,6 +195,26 @@ def model_effort(h, account, stage=None, small=False):
     return model, (effort if effort in EFFORT_LEVELS.get(h.name, ()) else None)
 
 
+def model_reason(h, account, stage=None, small=None, rework=False):
+    """(model, reason) for the record of a launch: the model model_effort picks and where it came from. small is the
+    (lines, files) budget of a small change; a template that sets its own model flag is reported as "template"."""
+    if any(MODEL_FLAG_RE.search(t) for t in h.interactive or ()):
+        return "template", f"[harnesses.{h.name}] template"
+    model, _ = model_effort(h, account, stage, bool(small))
+    cfg = C.STAGES.get(stage) or {}
+    small_models = (cfg.get("small") or {}).get("models") or {}
+    stage_models = cfg.get("models") or {}
+    if not model:
+        return "default", "harness default"
+    if small and small_models.get(h.name) == model:
+        reason = f"small change: {small[0]} lines, {small[1]} files"
+    elif stage_models.get(h.name) == model:
+        reason = f"stage {stage}, harness {h.name}"
+    else:
+        reason = f"account {account}"
+    return model, reason + (" (rework)" if rework else "")
+
+
 def worktrees_dir():
     """The profile's worktrees folder, made (0700) when missing; None when unset or it cannot be made."""
     d = C.WORKTREES_DIR
@@ -196,10 +227,11 @@ def worktrees_dir():
     return Path(d)
 
 
-def _with_model(template, h, account, stage, worktrees=None, small=False):
+def _with_model(template, h, account, stage, worktrees=None, small=False, model=None):
     """(template, values): the model, effort and worktrees folder flags after the program name, unless the template
-    sets that flag."""
-    model, effort = model_effort(h, account, stage, small)
+    sets that flag. model: an agent's model name, which replaces the configured one when it is a valid name."""
+    picked, effort = model_effort(h, account, stage, small)
+    model = model if model and h.name in MODEL_FLAGS and MODEL_RE.fullmatch(model) else picked
     add = []
     if model and not any(MODEL_FLAG_RE.search(t) for t in template):
         add += MODEL_FLAGS[h.name]
@@ -335,45 +367,132 @@ def _typeable(s):
     return CONTROL_RE.sub("", re.sub(r"[\t\n\r]", " ", str(s)))
 
 
-def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False):
+def mcp_flags(h, servers, profile, card_id, stage, window):
+    """The flags that give a harness only these connectors, each as a `pl connectors serve` proxy command (no URL, no token)."""
+    if not servers:
+        return []
+    if h.name not in ("claude", "codex"):
+        events.emit("error", card_id, message=f"{h.name} cannot take connectors; none given to stage {stage}")
+        return []
+    def cmd(name):
+        return [sys.executable, "-m", "pl", "--profile", profile, "connectors", "serve", name,
+                "--card", str(card_id), "--stage", str(stage)]
+    if h.name == "codex":
+        return [f for n in servers for f in ("-c", f"mcp_servers.{n}.command={json.dumps(cmd(n)[0])}",
+                                             "-c", f"mcp_servers.{n}.args={json.dumps(cmd(n)[1:])}")]
+    f = C.STATE_DIR / "launch" / (re.sub(r"[^A-Za-z0-9._-]", "_", window) + ".mcp.json")
+    f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        json.dump({"mcpServers": {n: {"command": cmd(n)[0], "args": cmd(n)[1:]} for n in servers}}, out)
+    return [f"--mcp-config={f}", "--strict-mcp-config"]
+
+
+# Without pl's python or package (upgraded, environment replaced) the agent's gh still runs: the next gh on the PATH.
+_SHIM = """#!/bin/sh
+dir=$(dirname "$0")
+if {py} -c 'import importlib.util as u, sys; sys.exit(u.find_spec("pl.ghwrap") is None)' 2>/dev/null; then
+  PL_GH_SHIM_DIR=$dir exec {py} -m pl.ghwrap "$@"
+fi
+PATH=$(printf %s "$PATH" | tr ':' '\\n' | grep -vxF "$dir" | paste -sd: -)
+export PATH
+exec gh "$@"
+"""
+
+
+def gh_shim():
+    """Write the gh wrapper agents find first on their PATH (the real gh stays behind it); returns its folder."""
+    folder = C.STATE_DIR / "bin"
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder.chmod(0o700)
+    tmp = folder / f".gh.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w") as f:
+        f.write(_SHIM.format(py=shlex.quote(sys.executable)))
+    os.replace(tmp, folder / "gh")
+    return folder
+
+
+def _ledger_account():
+    """The GitHub ledger key the wrapper records under (a login and a short token hash, never a token); None if unknown."""
+    from pl import ghquota
+    try:
+        return ghquota.account()
+    except (SystemExit, OSError):
+        return None
+
+
+def xdist_auto_workers():
+    """pytest -n auto's worker count for one agent: the machine's test worker budget split over max_live_agents, at least 1."""
+    from pl import manager, worker_budget
+    return max(1, worker_budget.max_workers() // manager._limits(manager.managed())["max_live_agents"])
+
+
+def agent_nice():
+    from pl import manager
+    return manager._limits(manager.managed())["agent_nice"]
+
+
+def _nice_line(n):
+    return f"renice -n {int(n)} -p $$ >/dev/null 2>&1" if n > 0 else None
+
+
+def launch_script(h, account, prompt, session_id, label, resume=False, plugin=True, stage=None, worktrees=True, cwd=None, card_id=None, hooks=None, small=False, servers=None, pod=None, model=None):
     """The sh script an agent window runs: every element control-stripped and shlex-quoted. It deletes itself first
     (a script still on disk means the launch never ran), then execs the harness in its own place so the pane shows
     the harness and the window's shell comes back when it exits. resume: the harness's resume argv (with prompt when given).
     plugin: false keeps pl's skills library plugin out of this launch. stage: its [stages.<stage>] effort wins.
     small: the stage's small-change model for h's harness wins over its normal one.
     worktrees: the agent may make git worktrees, so the worktrees folder is made, added and exported (not the Assistant).
-    hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook."""
+    hooks: (card id, window) of a stage agent; a Claude one then reports its events to pl hook.
+    servers: connector names this stage agent's harness gets, through the pl proxy.
+    pod: the pod whose skills the launch is limited to, in place of the profile's (a stage's named agent).
+    model: that agent's model name, which wins over the configured one."""
     from pl import hooks as pl_hooks, pods, skills
-    pod = pods.launch_pod()
+    pod = pod if pod is not None else pods.launch_pod()
     pdir = skills.launch_plugin(h, plugin, pod)
     prompt = skills.library_prompt(h, account, prompt, pdir, pod) if prompt else prompt
     wt = worktrees_dir() if worktrees else None
-    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small)
+    template, values = _with_model(h.resume if resume else h.interactive, h, account, stage, wt, small, model)
     argv = skills.with_plugin(_argv(template, {**values, "prompt": prompt, "session_id": session_id, "label": label}),
                               pdir)
     if hooks and stage and h.name == "claude" and pl_hooks.enabled():
         argv = [argv[0], "--settings", pl_hooks.settings_json(*hooks), *argv[1:]]
+    if servers and stage and hooks:
+        argv = [argv[0], *mcp_flags(h, servers, C.PROFILE_NAME, hooks[0], stage, hooks[1]), *argv[1:]]
     d = C.PROFILES.get(account)
     lines = ["#!/bin/sh", 'rm -f -- "$0"']
+    n = str(xdist_auto_workers())
     from pl import sandbox
     sb = sandbox.settings()
     if sb.get("enabled") and stage:
         vm = sandbox.vm_name()
         workdir = cwd or wt or C.WORK_DIR
-        env_args = []
+        env_args = [f"{XDIST_ENV}={n}"]
         if stage:
             env_args.append(f"PL_STAGE={_typeable(str(stage))}")
         if wt:
             env_args.append(f"{WORKTREES_ENV}={_typeable(wt)}")
-        exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *argv]
+        nice = ["nice", "-n", str(agent_nice())] if agent_nice() > 0 else []
+        exec_argv = ["multipass", "exec", vm, "--working-directory", str(workdir), "--", "env", *env_args, *nice, *argv]
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in exec_argv))
     else:
+        if renice := _nice_line(agent_nice()):
+            lines.append(renice)
+        lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
+        if card := (hooks[0] if hooks else card_id):
+            lines.append(f"export PL_CARD={shlex.quote(_typeable(card))}")
+        if not stage:
+            lines.append(f"export PL_LOOP={shlex.quote(_typeable(label))}")
+        if ledger := _ledger_account():
+            lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(ledger))}")
         if stage:
             lines.append(f"export PL_STAGE={shlex.quote(str(stage))}")
         if h.env_var and d:
             lines.append(f"export {h.env_var}={shlex.quote(_typeable(d))}")
         if wt:
             lines.append(f"export {WORKTREES_ENV}={shlex.quote(_typeable(wt))}")
+        lines.append(f"export {XDIST_ENV}={n}")
         lines.append("exec " + " ".join(shlex.quote(_typeable(a)) for a in argv))
     return "\n".join(lines) + "\n"
 
@@ -454,6 +573,9 @@ def headless_argv(h, account, prompt, stage=None):
         env[h.env_var] = str(d)
     if C.GH_CONFIG_DIR:
         env["GH_CONFIG_DIR"] = str(C.GH_CONFIG_DIR)
+    env["PATH"] = f"{gh_shim()}{os.pathsep}{env.get('PATH', '')}"
+    if ledger := _ledger_account():
+        env["PL_GH_LEDGER"] = ledger
     from pl import pods, skills
     pod = pods.launch_pod()
     pdir = skills.launch_plugin(h, pod=pod)
@@ -481,11 +603,19 @@ def write_run_record(log_path, record_path, started_at, ended_at, exit_code):
                    "tokens": tokens, "exit": int(exit_code)}, f)
 
 
-def headless_script(h, account, prompt, name, log_path, record_path):
-    """The sh script a scheduled loop's window runs: the harness once, headless and unattended, its output in a 0600
-    log, then a 0600 run record (start, end, result, tokens, exit status). It deletes itself first."""
-    argv, _ = headless_argv(unattended_headless(h), account, prompt)
+def headless_script(h, account, prompt, name, log_path, record_path, writes=True):
+    """The sh script a scheduled loop's window runs: the harness once, headless and unattended (read-only when writes
+    is false), its output in a 0600 log, then a 0600 run record (start, end, result, tokens, exit status). It deletes
+    itself first."""
+    argv, env = headless_argv(unattended_headless(h) if writes else read_only_headless(h), account, prompt)
     lines = ["#!/bin/sh", 'rm -f -- "$0"', "umask 077"]
+    if renice := _nice_line(agent_nice()):
+        lines.append(renice)
+    lines.append(f'export PATH={shlex.quote(_typeable(gh_shim()))}:"$PATH"')
+    if "PL_GH_LEDGER" in env:
+        lines.append(f"export PL_GH_LEDGER={shlex.quote(_typeable(env['PL_GH_LEDGER']))}")
+    lines += [f"export {k}={shlex.quote(v)}" for k, v in loop_env(name, writes).items()]
+    lines.append(f"export {XDIST_ENV}={xdist_auto_workers()}")
     if h.env_var and C.PROFILES.get(account):
         lines.append(f"export {h.env_var}={shlex.quote(_typeable(C.PROFILES[account]))}")
     if C.GH_CONFIG_DIR:
@@ -505,6 +635,20 @@ def unattended_headless(h):
     if not flags or any(PERMISSION_FLAG_RE.search(t) for t in h.headless):
         return h
     return dataclasses.replace(h, headless=[*h.headless[:1], *flags, *h.headless[1:]])
+
+
+def read_only_headless(h):
+    """h with its read-only flags after the program name in its headless argv, or None when it has no read-only mode
+    or its template already sets a permission flag (pl never runs a read-only loop with writes)."""
+    flags = READ_ONLY.get(h.name)
+    if not flags or any(PERMISSION_FLAG_RE.search(t) for t in h.headless):
+        return None
+    return dataclasses.replace(h, headless=[*h.headless[:1], *flags, *h.headless[1:]])
+
+
+def loop_env(name, writes, dry_run=False):
+    """The environment a loop run gets; pl's own commands read PL_LOOP_WRITES and PL_DRY_RUN to gate their writes."""
+    return {"PL_LOOP": name, **({} if writes else {"PL_LOOP_WRITES": "0"}), **({"PL_DRY_RUN": "1"} if dry_run else {})}
 
 
 def available(h):

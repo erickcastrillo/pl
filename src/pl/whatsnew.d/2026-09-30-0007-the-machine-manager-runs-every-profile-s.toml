@@ -1,0 +1,4 @@
+id = "2026-09-30.07"
+title = "The machine manager runs every profile's dispatcher, on by default"
+where = "Dashboard: the machine line; D stops or starts this profile's dispatcher"
+try = "pl manager status"

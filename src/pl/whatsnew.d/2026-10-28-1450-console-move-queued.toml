@@ -1,0 +1,3 @@
+title = "A console move during a GitHub budget hold is queued"
+where = "Pipeline tab, v"
+try = "Press v on a card while pl's GitHub budget is held: it says \"queued: move ...\", the row shows \"move to <column> queued, resets HH:MM\", and pl applies the move after the reset."

@@ -197,14 +197,25 @@ pl needs the columns Inbox, Spec ready, Plan for review, Manual, Approved, In pr
 
 `pl profiles new NAME --from-legacy` reads the settings of an older one-file pl script (default `~/.local/bin/pl`, or `--legacy-script PATH`) without running it. It writes a new profile whose tracker and intake use `type = "mcp"`, point at the harness's `.mcp.json` (`--mcp-json`, default `<work dir>/.mcp.json`) and name the server (`--server`), and carry a full tools mapping for a boards-style server. pl copies no keys: only the file path and the server name.
 
-## 7. Security
+## 7. Moving to another board
+
+`pl board migrate --to local|URL|SERVER` copies the columns and cards of the profile's board to another board that speaks the pl protocol, then points `[tracker]` at it. `SERVER` is a server name in the harness MCP file (give `--mcp-config PATH`). A non-loopback URL needs `--token-env VAR`; the token is written to config only as a `${VAR}` reference.
+
+- **Check first.** The target must pass `pl board check` before anything is copied. A failing rule prints `FAIL Rn ...` and exits 1 with nothing copied. `--skip-check` turns the check off, for a board you already checked.
+- **`--dry-run`** prints the check results and what would be copied, and changes nothing on the old board or in the config. The check creates a few test cards on the target and deletes them again.
+- **Resume.** Every copied card carries its source id in `metadata.migrated_from`. A copy that stopped halfway picks up where it was when run again, with no duplicates, even if the local map file (`state/board-migrate.json`) is lost. `[tracker]` stays on the old board until the copy and its verification finish.
+- **`[tracker_previous]`.** The old `[tracker]` is kept under that name and the old config is saved as `config.toml.bak-<time>`. The old board is never changed or deleted, so going back is a config edit.
+- **Card ids change.** Anything that stores an old id stops matching: state files keyed by id, event history, pull request bodies, and links from other pipelines. `metadata.migrated_from.id` keeps the old id on every card. A GitHub source uses issue-backed ids, so `Closes #N` in a pull request no longer links to the card.
+- **No live agents.** Migration refuses while an agent is working on a card; wait for it or `pl restart` it.
+
+## 8. Security
 
 - Secrets stay in the harness's MCP file or in environment variables. pl never writes them to `config.toml`, logs or the screen.
 - A secret written literally into an inline `server` table is not a `${VAR}`, so pl cannot tell it is a secret and does not mask it. That includes a token inside a URL path.
 - A stdio server's error output goes to `mcp-<server>.log` in the profile's state folder, mode 0600, with known secrets masked.
 - Card text is data. pl never runs it or puts it into a shell command unquoted.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Message | Cause |
 | --- | --- |

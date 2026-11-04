@@ -1,0 +1,3 @@
+title = "Failing merge tests go back to rework"
+where = "pl merges, auto-merge loop"
+try = "pl merges --dry-run"

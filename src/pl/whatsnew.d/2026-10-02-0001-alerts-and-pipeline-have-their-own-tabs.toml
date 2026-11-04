@@ -1,0 +1,4 @@
+id = "2026-10-02.01"
+title = "Alerts and Pipeline have their own tabs; the board is now Kanban"
+where = "! Alerts · @ Pipeline · 4 Kanban"
+try = "pl alerts"

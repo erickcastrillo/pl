@@ -484,7 +484,7 @@ def _every_gh_call(monkeypatch):
     watch._gh(["search", "prs"])
     watch.pr_counts()
     commands.cmd_intent(argparse.Namespace(pr="https://github.com/o/r/pull/1"))
-    assert len(envs) == 5 and dict(os.environ) == before     # os.environ itself is never changed
+    assert len(envs) == 6 and dict(os.environ) == before     # os.environ itself is never changed
     return envs
 
 
@@ -498,7 +498,7 @@ def test_every_gh_call_gets_the_profiles_gh_config_dir(monkeypatch, tmp_path):
 
 def test_gh_calls_inherit_the_environment_when_gh_config_dir_is_unset(monkeypatch):
     monkeypatch.setattr(C, "GH_CONFIG_DIR", None, raising=False)
-    assert _every_gh_call(monkeypatch) == [None] * 5
+    assert _every_gh_call(monkeypatch) == [None] * 6
 
 
 @pytest.mark.parametrize("name", ["", "  "])

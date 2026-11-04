@@ -12,7 +12,7 @@ from pl import config as C
 from pl import alerts, events, harnesses
 from pl.agents import pane_exists
 from pl.board import lists
-from pl.util import notify, now_iso, parse_iso
+from pl.util import mask, now_iso, parse_iso
 
 
 def profile_state():
@@ -136,6 +136,8 @@ def mark_exhausted(profile, screen):
     if profile in C.PROFILES:
         entry = {"until": rec["until"], "reason": rec["reason"], "by_profile": C.PROFILE_NAME, "next_check": first, "checks": 0}
         _update_machine(lambda data: data.__setitem__(_folder(profile), entry))
+    events.failure("account_parked", "warning", f"{profile} parked until {rec['until'][11:16]} UTC: {rec['reason']}",
+                   account=profile, reason=mask(rec["reason"][:80]))
     return rec["until"]
 
 
@@ -279,6 +281,8 @@ def _check(name):
     kind, result, reset = _call(name, h)
     now, rec = time.time(), parking(name)
     events.emit("account_check", None, account=name, result=kind)
+    if kind == "error":
+        events.failure("account_check_failed", "warning", f"{name}: {result}", account=name)
     if kind == "ok":
         unpark_machine([name])
         _update(C.PROFILE_STATE, lambda st: st.pop(name, None))
@@ -299,8 +303,7 @@ def _check(name):
     until = parking(name).get("until") or ""
     fix = f"parked until {until[11:16]} UTC; {check_note(name)}; pl accounts --reset {name} un-parks it"
     print(f"account {name} checked: {result}")
-    if why := alerts.open(f"account_parked:{name}", "warn", f"Account {name} is parked: usage limit", fix):
-        notify(alerts.headline(why, f"Account {name} is still parked"), check_note(name))
+    alerts.open(f"account_parked:{name}", "warn", f"Account {name} is parked: usage limit", fix)
     return kind
 
 

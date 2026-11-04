@@ -8,6 +8,7 @@ import pytest
 from pl import cli, standup, watch
 from pl import config as C
 from pl.tui.app import PlApp
+from tui_wait import settle, view_app, wait_until
 
 NOW = datetime(2026, 9, 30, 12, 0, 0, tzinfo=timezone.utc)
 START = NOW - timedelta(hours=24)
@@ -238,18 +239,16 @@ async def test_s_on_the_dashboard_shows_the_standup_and_y_copies_it(monkeypatch)
     app = PlApp(snapshot_provider=_provider)
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
     async with app.run_test(size=(160, 48)) as pilot:
-        await pilot.app.workers.wait_for_complete()
-        await pilot.pause()
+        await settle(pilot)
         await pilot.press("s")
-        await pilot.app.workers.wait_for_complete()
-        await pilot.pause()
+        await wait_until(pilot, lambda: type(app.screen).__name__ == "StandupScreen", "the standup screen")
         screen = app.screen
         assert type(screen).__name__ == "StandupScreen"
         assert "feat: merged one" in screen.text
         await pilot.press("y")
         assert len(copied) == 1 and copied[0].startswith("*Standup") and "feat: merged one" in copied[0]
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(pilot, lambda: type(app.screen).__name__ != "StandupScreen", "the standup screen to close")
         assert type(app.screen).__name__ != "StandupScreen"
 
 
@@ -259,7 +258,7 @@ async def test_s_does_nothing_off_the_dashboard(monkeypatch):
     async with app.run_test(size=(160, 48)) as pilot:
         await pilot.app.workers.wait_for_complete()
         await pilot.press("7", "s")
-        await pilot.pause()
+        await pilot.pause()   # nothing to wait for: checks the press was ignored
         assert type(app.screen).__name__ != "StandupScreen"
 
 
@@ -270,17 +269,12 @@ def test_help_lists_standup(monkeypatch, capsys):
     assert "pl standup" in capsys.readouterr().out
 
 
-async def _settled(pilot):
-    await pilot.app.workers.wait_for_complete()
-    await pilot.pause()
-
-
 async def test_dashboard_has_a_standup_panel_with_the_counts(monkeypatch):
     from pl.tui.dashboard import StandupPanel
     monkeypatch.setattr(standup, "pr_summary", lambda start: PRS)
     app = PlApp(snapshot_provider=_provider)
     async with app.run_test(size=(80, 24)) as pilot:
-        await _settled(pilot)
+        await settle(pilot)
         panel = app.query_one(StandupPanel)
         assert "Standup (last 24 h)" in panel.border_title
         assert "1 merged (1 yours), 2 opened" in panel.text and "Needs you: 3" in panel.text
@@ -290,14 +284,17 @@ async def test_dashboard_has_a_standup_panel_with_the_counts(monkeypatch):
 async def test_standup_panel_still_shows_the_rest_when_prs_are_unavailable(monkeypatch):
     from pl.tui.dashboard import StandupPanel
     monkeypatch.setattr(standup, "pr_summary", lambda start: "gh is not installed")
-    app = PlApp(snapshot_provider=_provider)
+    app = view_app(StandupPanel)
     async with app.run_test(size=(80, 24)) as pilot:
-        await _settled(pilot)
-        text = app.query_one(StandupPanel).text
+        panel = app.query_one(StandupPanel)
+        panel.update_for(_provider()["snapshot"])
+        await wait_until(pilot, lambda: "Pipeline:" in panel.text, "the standup panel to build")
+        text = panel.text
         assert "PRs: unavailable (gh is not installed)" in text and "Pipeline:" in text
 
 
 async def test_unchanged_snapshot_does_not_rebuild_the_panel_and_prs_are_cached(monkeypatch):
+    from pl.tui.dashboard import StandupPanel
     calls = {"text": 0, "prs": 0}
     real = standup.text
 
@@ -319,14 +316,17 @@ async def test_unchanged_snapshot_does_not_rebuild_the_panel_and_prs_are_cached(
             d["snapshot"]["needs"]["attention"] = 4
         changing["n"] += 1
         return d
-    app = PlApp(snapshot_provider=provider)
+    app = view_app(StandupPanel)
     async with app.run_test(size=(80, 24)) as pilot:
-        await _settled(pilot)
-        app.refresh_data()
-        await _settled(pilot)
+        panel = app.query_one(StandupPanel)
+        panel.update_for(provider()["snapshot"])
+        await wait_until(pilot, lambda: "Pipeline:" in panel.text, "the standup panel to build")
+        panel.update_for(provider()["snapshot"])
+        await settle(pilot)
         assert calls == {"text": 1, "prs": 1}          # same rows and needs: no rebuild
-        app.refresh_data()
-        await _settled(pilot)
+        panel.update_for(provider()["snapshot"])
+        await wait_until(pilot, lambda: calls["text"] >= 2, "the standup panel to rebuild")
+        await settle(pilot)
         assert calls == {"text": 2, "prs": 1}          # snapshot changed: rebuilt, PRs still cached
 
 
@@ -338,14 +338,14 @@ async def test_y_on_the_standup_panel_copies_it(monkeypatch):
     app = PlApp(snapshot_provider=_provider)
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
     async with app.run_test(size=(80, 24)) as pilot:
-        await _settled(pilot)
+        await settle(pilot)
         panel = app.query_one(StandupPanel)
         panel.focus()
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.focused is panel, "the panel to take focus")
         await pilot.press("y")
         assert len(copied) == 1 and "feat: merged one" in copied[0]
         await pilot.press("s")
-        await _settled(pilot)
+        await settle(pilot)
         assert type(app.screen).__name__ == "StandupScreen"
 
 
@@ -395,14 +395,14 @@ async def test_y_copies_the_slack_version_and_says_so(monkeypatch):
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
     monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
     async with app.run_test(size=(80, 24)) as pilot:
-        await _settled(pilot)
+        await settle(pilot)
         app.query_one(StandupPanel).focus()
-        await pilot.pause()
+        await wait_until(pilot, lambda: app.focused is app.query_one(StandupPanel), "the panel to take focus")
         await pilot.press("y")
         assert len(copied) == 1 and copied[0].startswith("*Standup") and "<https://github.com/o/api/pull/12|" in copied[0]
         assert "copied for Slack" in notes
         await pilot.press("s")
-        await _settled(pilot)
+        await settle(pilot)
         await pilot.press("y")
         assert copied[1].startswith("*Standup") and notes[-1] == "copied for Slack"
 

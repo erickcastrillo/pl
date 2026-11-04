@@ -1,0 +1,4 @@
+id = "2026-10-25.08"
+title = "Chat answers questions via the brain with checked source links"
+where = "Chat: plain questions and 'remember this' answered when [brain] chat = true"
+try = "send a question in chat"

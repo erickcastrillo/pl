@@ -166,27 +166,12 @@ def test_cli_brain_end_and_undo(capsys, monkeypatch):
     assert forgot == ["m-cli-1"]
 
 
-def test_tui_brain_ctrl_r_notifies_saved_n_with_undo(monkeypatch):
-    from pl.tui.brain import BrainView
-    view = BrainView()
-    view.conversation_id = "conv-tui-1"
-    _setup_conv("conv-tui-1", [{"role": "user", "text": "Note this."}])
-    monkeypatch.setattr(brain, "_distil_model", lambda text: [
-        {"kind": "decision", "text": "Note 1"},
-        {"kind": "preference", "text": "Note 2"},
-        {"kind": "fact", "text": "Note 3"},
-    ])
-    monkeypatch.setattr(brain.recall, "add", lambda *a, **k: "m-tui")
-    notified = []
-
-    class FakeApp:
-        def notify(self, msg, markup=False):
-            notified.append(msg)
-        def push_screen(self, screen, callback):
-            pass
-
-    view._app = FakeApp()
-    view.action_restart()
-
-    assert any("saved 3 · u undo" in n for n in notified)
-
+def test_prune_keeps_the_assistants_recent_conversation():
+    import os
+    import time
+    old = _setup_conv("old-one", [{"ts": "2020-01-01T00:00:00+00:00", "role": "user", "text": "x"}])
+    os.utime(old, (time.time() - 400 * 86400,) * 2)
+    cur = brain.conv_new()
+    brain.conv_append(cur, "user", "recent")
+    assert brain.prune() == [old]
+    assert (brain._conv_dir() / f"{cur}.jsonl").exists() and not old.exists()

@@ -1,0 +1,4 @@
+id = "2026-10-26.85"
+title = "Stalled agents are nudged, then restarted"
+where = "Alerts tab: stalled; [dispatch] stall_minutes"
+try = "pl alerts"

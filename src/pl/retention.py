@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pl import board, events
 from pl import config as C
 from pl.board import cards
-from pl.util import now_iso, parse_iso, short_id
+from pl.util import ask, now_iso, parse_iso, short_id
 
 RETENTION_EVERY = 86400   # seconds between daily retention passes
 _LAST = {"at": None}
@@ -244,18 +244,27 @@ def forget(contact, *, dry_run=False):
     return {"cards": cards_count, "logs": logs_count, "memory": 0, "audit": audit_count}
 
 
+def _refresh_backup():
+    from pl import backup
+    if backup.folder() is None:
+        return
+    backup.refresh()
+    print("the git backup keeps the contact in its earlier commits: rewrite or purge that history "
+          "(for example git filter-repo), then force-push; the current board.json is clean", file=sys.stderr)
+
+
 def cmd_forget(a):
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit(2)
         try:
-            ok = input(f"Forget contact {a.contact}? [y/N]: ")
+            ok = ask("forget", f"Forget contact {a.contact}? [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):
             print("nothing changed")
             return 0
     counts = forget(a.contact, dry_run=a.dry_run)
+    if not a.dry_run:
+        _refresh_backup()
     if a.json:
         return print(json.dumps(counts))
     print(f"cards: {counts['cards']}\nlogs: {counts['logs']}")

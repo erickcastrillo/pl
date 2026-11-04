@@ -5,7 +5,7 @@ from datetime import datetime
 
 from pl import alerts, board, events, harnesses
 from pl import config as C
-from pl.util import now_iso, notify
+from pl.util import now_iso
 
 EVENTS = ("Notification", "Stop")
 HOOK_TIMEOUT = 2   # seconds Claude Code may spend on a hook
@@ -17,7 +17,10 @@ def settings_json(card_id, window):
     (2 for a foreign card) from ever blocking the agent, and covers pl missing from PATH."""
     def hook(event):
         cmd = f"pl hook {event} --card {shlex.quote(card_id)} --window {shlex.quote(window)} || true"
-        return [{"hooks": [{"type": "command", "command": cmd, "timeout": HOOK_TIMEOUT}]}]
+        entry = {"hooks": [{"type": "command", "command": cmd, "timeout": HOOK_TIMEOUT}]}
+        if event == "Notification":   # only a permission prompt: an idle "waiting for your input" one is not a wait for you
+            entry["matcher"] = "permission_prompt"
+        return [entry]
     return json.dumps({"hooks": {e: hook(e) for e in EVENTS}})
 
 
@@ -46,10 +49,9 @@ def _record(c, w, a):
         w["finished_turn"] = True
     board.update(c["id"], metadata={"worker": w})
     events.emit("state_transition", c["id"], source="hook", event=a.event)
-    if a.event == "Notification" and (why := alerts.open(
-            f"permission_wait:{c['id']}", "warn", f"agent waiting for permission: {c['title'][:40]}",
-            f"answer it in the agent window (pl card {a.card}); README: Permissions")):
-        notify(alerts.headline(why, f"Agent waiting for permission: {c['title'][:40]}"), w["permission_wait"])
+    if a.event == "Notification":
+        alerts.open(f"permission_wait:{c['id']}", "warn", f"{w.get('stage')} agent waiting for permission: {c['title'][:40]}",
+                    f"answer it in the agent window (pl card {a.card}); README: Permissions", cards=[c["id"]])
 
 
 def hook_permission(w):

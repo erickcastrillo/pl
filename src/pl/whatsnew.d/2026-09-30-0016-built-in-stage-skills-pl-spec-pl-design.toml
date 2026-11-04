@@ -1,0 +1,4 @@
+id = "2026-09-30.16"
+title = "Built-in stage skills: pl-spec, pl-design, pl-plan, pl-run and pl-review"
+where = "new profiles use them; edit them in Settings, Skills (library); pl skills reset NAME puts one back"
+try = "pl setup --use-builtin-stages"

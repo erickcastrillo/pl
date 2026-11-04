@@ -163,3 +163,57 @@ def test_token_absent_from_logs_events_and_json(tmp_path, monkeypatch):
         if p.is_file():
             assert secret not in p.read_text(errors="ignore"), f"secret leaked in {p}"
 
+
+
+def _two_connectors(monkeypatch):
+    from pl import manager
+    conns = {
+        "s": {"role": "messaging", "adapter": "slack", "token": "${SL_TOKEN}", "allow": ["U1"]},
+        "d": {"role": "messaging", "adapter": "discord", "token": "${DC_TOKEN}", "allow": ["1"]},
+        "i": {"role": "messaging", "adapter": "irc", "token": "${IRC_TOKEN}", "allow": ["1"]},
+    }
+    monkeypatch.setattr(manager, "_machine_toml", lambda: {"connectors": conns})
+
+
+def test_adapter_builds_slack_and_discord_connectors(monkeypatch):
+    from pl import chat
+    from pl.chat.discord import Discord
+    from pl.chat.slack import Slack
+    _two_connectors(monkeypatch)
+    assert isinstance(chat.adapter("s"), Slack)
+    assert isinstance(chat.adapter("d"), Discord)
+
+
+def test_adapter_unknown_type_still_raises(monkeypatch):
+    from pl import chat
+    _two_connectors(monkeypatch)
+    with pytest.raises(KeyError, match="unknown adapter"):
+        chat.adapter("i")
+
+
+def test_route_with_no_names_clears_the_kind():
+    _run_chat("add", "telegram", "--name", "tg", "--token", "${TG_TOKEN}", "--allow", "1", "--yes")
+    _run_chat("add", "slack", "--name", "sl", "--token", "${TG_TOKEN}", "--allow", "U1", "--yes")
+    assert _run_chat("route", "digest", "tg", "sl").returncode == 0
+    assert _run_chat("route", "gates", "tg").returncode == 0
+    r = _run_chat("route", "digest")
+    assert r.returncode == 0, r.stderr
+    listed = json.loads(_run_chat("list", "--json").stdout)["connectors"]
+    assert listed["tg"]["routes"] == ["gates"]
+    assert listed["sl"]["routes"] == []
+
+
+def test_route_unknown_name_still_fails():
+    _run_chat("add", "telegram", "--name", "tg", "--token", "${TG_TOKEN}", "--allow", "1", "--yes")
+    r = _run_chat("route", "alerts", "nope")
+    assert r.returncode == 1
+    assert "not found" in r.stderr
+
+
+def test_route_keeps_token_reference_not_value(tmp_path, monkeypatch):
+    monkeypatch.setenv("TG_TOKEN", "sekret-123456")
+    _run_chat("add", "telegram", "--name", "tg", "--token-env", "TG_TOKEN", "--allow", "1", "--yes")
+    assert _run_chat("route", "alerts", "tg").returncode == 0
+    written = "".join(p.read_text() for p in (tmp_path / "machine").rglob("*.toml"))
+    assert "${TG_TOKEN}" in written
+    assert "sekret-123456" not in written

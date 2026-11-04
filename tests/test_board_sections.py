@@ -79,3 +79,19 @@ def test_pl_card_prints_unreadable_and_the_text_found(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "metadata: unreadable\n" + broken_tail in out
 
+
+
+def test_plan_slice_reads_whole_numbers_from_metadata():
+    assert board.plan_slice({"metadata": {"plan": 21, "slice": 2}}) == (21, 2)
+    assert board.plan_slice({"metadata": {"plan": "21", "slice": " 5 "}}) == (21, 5)
+    assert board.plan_slice({"metadata": {"plan": 21}}) == (21, None)
+    assert board.plan_slice({}) == (None, None)
+    assert board.plan_slice({"metadata": {"plan": "abc", "slice": "²"}}) == (None, None)
+    assert board.plan_slice({"metadata": {"plan": True, "slice": 2.5}}) == (None, None)
+
+
+def test_plan_order_sorts_by_slice_then_card_id():
+    def c(cid, s):
+        return {"id": cid, "metadata": {"plan": 21, **({"slice": s} if s is not None else {})}}
+    cards = [c("o/r#9", 5), c("o/r#3", 1), c("o/r#12", 2), c("o/r#4", 2), c("o/r#1", None)]
+    assert [x["id"] for x in sorted(cards, key=board.plan_order)] == ["o/r#3", "o/r#4", "o/r#12", "o/r#9", "o/r#1"]

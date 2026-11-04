@@ -1,0 +1,3 @@
+title = "Large plans become one stack of 2 to 5 slices on one card"
+where = "Plan stage (pl-plan)"
+try = "Plan a card too big for target_lines and read its ## Slices section"

@@ -239,3 +239,25 @@ def test_contact_id_in_refs_and_case_insensitivity(fake_board, monkeypatch):
     res = json.loads(buf.getvalue())
     assert res["cards"] == 1
     assert "contacts" not in fake_board.items["c1"]["metadata"].get("refs", {})
+
+
+def test_forget_refreshes_the_backup_and_warns_about_history(fake_board, monkeypatch, capsys):
+    from pl import backup
+    refreshed = []
+    monkeypatch.setattr(backup, "folder", lambda: "/some/clone")
+    monkeypatch.setattr(backup, "refresh", lambda: refreshed.append(1))
+    monkeypatch.setattr(sys, "argv", ["pl", "forget", "--contact", CONTACT_A, "--yes", "--json"])
+    cli.main()
+    out = capsys.readouterr()
+    assert refreshed == [1]
+    assert json.loads(out.out)["audit"] == 1
+    assert "backup" in out.err and "history" in out.err
+
+
+def test_forget_dry_run_leaves_the_backup_alone(fake_board, monkeypatch, capsys):
+    from pl import backup
+    monkeypatch.setattr(backup, "folder", lambda: "/some/clone")
+    monkeypatch.setattr(backup, "refresh", lambda: pytest.fail("dry run must not back up"))
+    monkeypatch.setattr(sys, "argv", ["pl", "forget", "--contact", CONTACT_A, "--yes", "--dry-run", "--json"])
+    cli.main()
+    assert "history" not in capsys.readouterr().err

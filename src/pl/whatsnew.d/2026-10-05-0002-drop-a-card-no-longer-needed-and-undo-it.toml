@@ -1,0 +1,4 @@
+id = "2026-10-05.02"
+title = "Drop a card no longer needed, and undo it: it goes to Done marked dropped, its agent stopped"
+where = "Pipeline: d drops (asks for a reason), z shows Done, u undoes a drop"
+try = "pl drop <id> --reason TEXT"

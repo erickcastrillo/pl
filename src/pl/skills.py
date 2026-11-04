@@ -15,8 +15,11 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 from pl import config as C
-from pl import harnesses, pods
+from pl import harnesses, jsonout, pods
+from pl.util import ask
 
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,48}")
 KINDS = {"skill": "skills", "agent": "agents", "command": "commands"}
@@ -24,7 +27,7 @@ SHARED, LIBRARY = "shared", "library"
 # How a library skill reaches an account, by harness. Claude Code, Codex and Antigravity follow a symlinked skill folder
 # (Codex keeps its skills in $CODEX_HOME/skills, Antigravity in ~/.gemini/skills).
 LINKABLE = {"claude", "codex", "antigravity"}
-TEMPLATE = ("---\nname: {name}\ndescription: Say in one sentence when to use this {kind}.\n---\n\n# {name}\n\n"
+TEMPLATE = ("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\n"
             "## When to use\n\n- \n\n## Steps\n\n1. \n")
 
 
@@ -257,11 +260,18 @@ def _base(account, kind):
     return base
 
 
-def create(account, kind, name):
+def create(account, kind, name, description=""):
     """Write a new SKILL.md (in its own folder) or agent/command .md from the template; returns its path."""
     _check_name(name)
     if kind not in KINDS:
         raise SystemExit(f"pl: unknown kind {kind!r}")
+    desc = " ".join(description.split()) or f"Say in one sentence when to use this {kind}."
+    try:
+        plain = yaml.safe_load(f"d: {desc}") == {"d": desc}
+    except yaml.YAMLError:
+        plain = False
+    if not plain:
+        desc = json.dumps(desc)
     base = _base(account, kind)
     dest = base / name if kind == "skill" else base / f"{name}.md"
     if os.path.lexists(dest):
@@ -270,7 +280,7 @@ def create(account, kind, name):
         dest.mkdir()
         dest /= "SKILL.md"
     with open(dest, "x", encoding="utf-8") as f:
-        f.write(TEMPLATE.format(name=name, kind=kind))
+        f.write(TEMPLATE.format(name=name, description=desc))
     return dest
 
 
@@ -334,6 +344,10 @@ def share(account, name):
     shutil.move(str(src), str(dest))
     os.symlink(dest, src, target_is_directory=True)
     return dest
+
+
+def _links_to(path, target):
+    return path.is_symlink() and path.resolve() == target.resolve()
 
 
 def link(name, account):
@@ -445,6 +459,8 @@ def plugin_dir(pod=None):
         if isinstance(pod, dict):
             for sname in pod.get("skills", []):
                 src = lib / sname
+                if not src.is_dir() and (own := pods.skill_dir(sname)):
+                    src = own
                 if src.is_dir() and not (link_ / sname).exists():
                     os.symlink(src, link_ / sname, target_is_directory=True)
             for plug in pod.get("plugins", []):
@@ -516,6 +532,8 @@ def library_prompt(h, account, prompt, plugin=None, pod=None):
         return prompt
     try:
         f = library() / name / "SKILL.md"
+        if not f.is_file() and pod and (own := pods.skill_dir(name)):
+            f = own / "SKILL.md"
         if not f.is_file():
             return prompt
         root = harnesses.config_dir(account)
@@ -525,7 +543,7 @@ def library_prompt(h, account, prompt, plugin=None, pod=None):
             wd = Path(C.WORK_DIR) / ".claude" / "skills" / name if C.WORK_DIR else None
             own = os.path.lexists(root / "commands" / f"{name}.md") if root else False
             return prompt if own or not plugin or (wd and os.path.lexists(wd)) else f"{loop}/pl:{name}{rest}"
-        text = _read(_safe(library(), f))
+        text = _read(_safe(f.parent.parent, f))
         d = C.STATE_DIR / "launch"
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
         _clean_inlined(d)
@@ -698,11 +716,12 @@ def _cmd_reset(a):
     if a.name not in builtin_names():
         raise SystemExit(f"pl: {a.name!r} is not a built-in skill ({', '.join(builtin_names())})")
     dest = library() / a.name / "SKILL.md"
+    if getattr(a, "dry_run", False):
+        print(f"would replace {dest} with the shipped version of {a.name}")
+        return 0
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit("pl skills reset: no terminal to confirm on; add --yes")
         try:
-            ok = input(f"Replace {dest} with the shipped version of {a.name}? A backup is kept. [y/N]: ")
+            ok = ask("skills reset", f"Replace {dest} with the shipped version of {a.name}? A backup is kept. [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):
@@ -736,9 +755,7 @@ def _cmd_enable(a):
                 for c in cmds:
                     print(f"  {c}")
             if not getattr(a, "yes", False):
-                if not sys.stdin.isatty():
-                    raise SystemExit("pl: refused: enabling hooks without a terminal needs --yes")
-                ans = input(f"Enable hooks for plugin {plug_name}? [y/N] ")
+                ans = ask("skills add", f"Enable hooks for plugin {plug_name}? [y/N] ")
                 if ans.strip().lower() not in ("y", "yes"):
                     raise SystemExit("pl: aborted")
         plugins = pod_tbl.setdefault("plugins", tomlkit.array())
@@ -792,25 +809,57 @@ def _cmd_disable(a):
 
 
 def cmd_skills(a):
-    """pl skills list | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
+    """pl skills list [--json] | install SOURCE | update --check | update NAME [--yes] [--dry-run] [--sha SHA] | remove NAME [--yes] | share NAME [--account A] | link NAME [ACCOUNT] | reset NAME [--yes] | enable | disable."""
     if a.skills_cmd == "enable":
         return _cmd_enable(a)
     if a.skills_cmd == "disable":
         return _cmd_disable(a)
     if a.skills_cmd == "reset":
         return _cmd_reset(a)
+    if a.skills_cmd == "install":
+        from pl import skill_sources
+        return skill_sources.install(a.source, a.yes, sys.stdout, dry_run=a.dry_run, name=a.name, plugin=a.plugin)
+    if a.skills_cmd == "update":
+        from pl import skill_sources
+        if a.check:
+            return skill_sources.check(sys.stdout, as_json=a.json)
+        if not a.name:
+            print("pl skills update: name a skill, or use --check", file=sys.stderr)
+            return 2
+        return skill_sources.update(a.name, a.yes, sys.stdout, dry_run=a.dry_run, sha=a.sha)
+    if a.skills_cmd == "remove":
+        from pl import skill_sources
+        return skill_sources.remove(a.name, a.yes, sys.stdout)
     if a.skills_cmd == "share":
-        print(f"shared: {share(a.account or harnesses.default_account(), a.name)} (a link is left in its place)")
+        account = a.account or harnesses.default_account()
+        placed = _root(account) / "skills" / a.name
+        if _links_to(placed, library() / a.name):
+            print(f"{placed} already exists, unchanged")
+        elif getattr(a, "dry_run", False):
+            print(f"would share {placed} into {library() / a.name} (a link would be left in its place)")
+        else:
+            print(f"shared: {share(account, a.name)} (a link is left in its place)")
     elif a.skills_cmd == "link":
         target = getattr(a, "account", None) or "all"
-        if target == "all":
+        if getattr(a, "dry_run", False):
+            print(f"would link {a.name} into {target if target != 'all' else 'every linkable account'}")
+        elif target == "all":
             msgs = install_in_all_harnesses(a.name)
             if not msgs:
                 print(f"skill {a.name} is already linked into all accounts (or no linkable accounts configured)")
             for m in msgs:
                 print(m)
+        elif _links_to(placed := _base(target, "skill") / a.name, library() / a.name):
+            print(f"{placed} already exists, unchanged")
         else:
             print(f"linked: {link(a.name, target)}")
+    elif getattr(a, "json", False):
+        from pl import skill_sources
+        rec = skill_sources.records()
+        jsonout.emit({"skills": [{"name": i["name"], "account": i["account"], "kind": i["kind"], "origin": i["origin"],
+                                  "in_library": i["library"], "linked": i["linked"], "description": i["description"],
+                                  **({"source": rec[i["name"]]} if i["name"] in rec and (i["account"] == LIBRARY or i["library"]) else {})}
+                                 for i in scan()], "library": str(library())})
     else:
         rows = [(i["name"], i["account"], i["kind"], i["origin"],
                  ", ".join(i["linked"]) if i["account"] == LIBRARY else ("library" if i["library"] else ""),

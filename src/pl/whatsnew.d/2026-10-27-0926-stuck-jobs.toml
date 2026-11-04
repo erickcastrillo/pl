@@ -1,0 +1,3 @@
+title = "An agent waiting only on background jobs that cannot report is stalled"
+where = "Alerts tab: stalled; [watchdog] job_minutes"
+try = "pl alerts"

@@ -49,8 +49,8 @@ def _wp2_expected(args, legacy):
         out = out.replace("  --reset NAME|all", "  --check-trust         show whether each Claude account trusts the work and worktrees folders\n                        (reads only)\n  --reset NAME|all")
     if args[:1] == ["board"]:
         out = out.replace("usage: pl board [-h] action",
-                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check}")
-        out = out.replace("action\n", "{init,serve,check}\n")
+                          "usage: pl board [-h] [--stdio] [--listen HOST:PORT] [--token-env VAR] {init,serve,check,migrate}")
+        out = out.replace("action\n", "{init,serve,check,migrate}\n")
         flags = "  --stdio\n  --listen HOST:PORT\n  --token-env VAR\n"
         if "options:\n" in out:
             out = out.replace("options:\n", f"options:\n{flags}")
@@ -80,7 +80,10 @@ def _wp2_expected(args, legacy):
         out = out.replace("kill-switch}", "kill-switch,triggers}")   # pl triggers
         out = out.replace("triggers}", "triggers,question,answer}")   # pl question, pl answer
         out = out.replace("skills,update,", "skills,pods,update,")   # pl pods (list, show)
+        out = out.replace("skills,pods,update,", "skills,pods,loops,update,")   # pl loops (list, add, pause, resume, rm)
         out = out.replace("skills,update,local-model}", "skills,update,local-model,forget}")   # pl forget (removes a contact everywhere)
+        out = out.replace("local-model,forget}", "local-model,forget,memory}")   # pl memory (search, add, show)
+        out = out.replace("forget,memory}", "forget,memory,pipelines}")   # pl pipelines (list, show)
         out = out.replace(",board,card,section,", ",board,card,titles,section,")   # pl titles check (title/metadata drift)
         out = out.replace("intent} ...\n", "intent}\n          ...\n", 1)  # the longer choice list no longer fits " ..." on its line
         out = out.replace("  pl profiles [--reset NAME|all]\n", WP3_DOC + "  pl accounts [--reset NAME|all] [--check-trust]\n")
@@ -167,3 +170,55 @@ def test_every_mapped_command_parses(tmp_path, monkeypatch):
         except SystemExit as exc:
             assert exc.code in (0, None), f"{key}: {cmd} failed with exit {exc.code}"
 
+
+
+def test_every_loops_tab_key_has_a_pl_loops_command(monkeypatch, tmp_path):
+    from pl import cli
+    from pl.tui.loops import LoopsView
+    from pl.tui.parity import LOOPS_KEYS, NAV
+
+    keys = {b.key: b.action for b in LoopsView.BINDINGS}
+    for key, action in keys.items():
+        assert key in LOOPS_KEYS or action in NAV, f"Loops tab key {key} ({action}) has no pl loops command"
+    assert {"e", "p", "g", "d", "n"} <= set(LOOPS_KEYS)
+    prof = tmp_path / ".pl-fake"
+    prof.mkdir()
+    (prof / "config.toml").write_text("")
+    monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for key, cmd in LOOPS_KEYS.items():
+        monkeypatch.setattr(sys, "argv", [*cmd.split()[:3], "--help"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code in (0, None), f"{key}: {cmd}"
+
+
+def test_command_for_finds_class_then_plain_then_card_parity():
+    from pl.tui.parity import command_for
+
+    assert command_for("PlApp", "standup") == "pl standup"
+    assert command_for("CardsView", "drop") == "pl drop <id>"
+    assert command_for("CardScreen", "approve") == "pl approve <id>"
+    assert command_for("PlApp", "review('approve')") == "pl approve <id>"
+    assert command_for("LoopsView", "pause", key="p") == "pl loops pause"
+
+
+def test_command_for_navigation_is_none():
+    from pl.tui.parity import command_for
+
+    assert command_for("PlApp", "tab('cards')") is None
+    assert command_for("X", "app.focus_next") is None
+
+
+def test_group_of_puts_each_kind_in_its_group():
+    from pl.tui.parity import group_of
+
+    assert group_of("tab('cards')", None) == "navigate"
+    assert group_of("new", "pl idea") == "add"
+    assert group_of("drop", "pl drop <id>") == "act on the selection"
+    assert group_of("standup", "pl standup") == "other"
+
+
+def test_assistant_undo_maps_to_pl_brain_undo():
+    from pl.tui.parity import COMMANDS
+    assert COMMANDS["AssistantView.undo"] == "pl brain undo CONV"

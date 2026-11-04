@@ -1,0 +1,4 @@
+id = "2026-10-03.01"
+title = "A folder trust prompt shows on the card and raises an alert"
+where = "Needs you: waiting: trust the folder; pl never answers it"
+try = "pl alerts"

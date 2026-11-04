@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pl import board, events, trackers
 from pl import config as C
 from pl.harnesses import _typeable
-from pl.util import parse_iso
+from pl.util import ask, parse_iso
 
 UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 ACCEPTED_FORMS = "accepted forms: like 30s, 5m, 1h, 1d"
@@ -573,10 +573,8 @@ def _cmd_add(a) -> int:
         raise SystemExit(2)
 
     if not a.yes:
-        if not sys.stdin.isatty():
-            raise SystemExit("pl triggers add: no terminal to confirm on; add --yes")
         try:
-            ok = input(f"Add trigger {a.name}? [y/N]: ")
+            ok = ask("triggers add", f"Add trigger {a.name}? [y/N]: ")
         except EOFError:
             ok = ""
         if ok.strip().lower() not in ("y", "yes"):

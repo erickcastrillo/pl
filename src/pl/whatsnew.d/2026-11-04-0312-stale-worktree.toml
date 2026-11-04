@@ -1,0 +1,3 @@
+title = "A set-aside worktree rebuilds, and a failed one says so"
+where = "pl list, console, alerts"
+try = "move a card's worktree folder away, then let the next pass start its run"

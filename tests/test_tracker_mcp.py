@@ -352,10 +352,10 @@ def test_http_header_secret_never_leaks(script, monkeypatch, caplog):
         deadline = time.time() + 20
         while time.time() < deadline:
             try:
-                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                socket.create_connection(("127.0.0.1", port), timeout=0.05).close()
                 break
             except OSError:
-                time.sleep(0.1)
+                time.sleep(0.02)
         caplog.set_level(logging.DEBUG)
         monkeypatch.setenv("PL_TEST_TOKEN", SECRET)
         cfg = {"type": "mcp", "board_id": "b-1",
@@ -409,14 +409,16 @@ def test_a_secret_straddling_the_error_cut_is_never_leaked(script, monkeypatch, 
 
 
 def test_a_stuck_call_times_out_and_the_server_process_is_gone(script):
-    t = tracker(stdio_cfg(script, timeout=3, tools=tools(cards={"tool": "whoami", "args": {}},
-                                                         card={"tool": "slow", "args": {"seconds": 60}})))
+    t = tracker(stdio_cfg(script, timeout=30, tools=tools(cards={"tool": "whoami", "args": {}},
+                                                          card={"tool": "slow", "args": {"seconds": 60}})))
     pid = int(t.cards()[0]["id"])
+    (s,) = M._sessions.values()
+    s.timeout = 0.2
     with pytest.raises(SystemExit, match="timed out"):
         t.card("any")
     deadline = time.time() + 10
     while _alive(pid) and time.time() < deadline:
-        time.sleep(0.1)
+        time.sleep(0.02)
     assert not _alive(pid)
 
 
@@ -440,16 +442,16 @@ def test_close_lets_ctrl_c_through(script, monkeypatch):
 
 
 def test_close_during_a_stuck_call_stops_the_server(script, monkeypatch):
-    monkeypatch.setattr(M, "CLOSE_WAIT", 1, raising=False)
+    monkeypatch.setattr(M, "CLOSE_WAIT", 0.2, raising=False)
     t = tracker(stdio_cfg(script, timeout=30, tools=tools(cards={"tool": "whoami", "args": {}},
                                                           card={"tool": "slow", "args": {"seconds": 60}})))
     pid = int(t.cards()[0]["id"])
     threading.Thread(target=lambda: pytest.raises(SystemExit, t.card, "any"), daemon=True).start()
-    time.sleep(0.5)
+    time.sleep(0.1)
     M.close_all()  # what atexit runs, also after Ctrl-C
     deadline = time.time() + 8
     while _alive(pid) and time.time() < deadline:
-        time.sleep(0.1)
+        time.sleep(0.02)
     alive = _alive(pid)
     if alive:
         os.kill(pid, signal.SIGKILL)
@@ -457,10 +459,12 @@ def test_close_during_a_stuck_call_stops_the_server(script, monkeypatch):
 
 
 def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_session(script):
-    t = tracker(stdio_cfg(script, timeout=2, tools=tools(cards={"tool": "whoami", "args": {}},
-                                                         card={"tool": "slow", "args": {"seconds": 60}})))
+    # start-up gets 30s; the call under test keeps a 0.3s deadline
+    t = tracker(stdio_cfg(script, timeout=30, tools=tools(cards={"tool": "whoami", "args": {}},
+                                                          card={"tool": "slow", "args": {"seconds": 60}})))
     t.cards()
     (old,) = M._sessions.values()
+    old.timeout = 0.3
     t0 = time.time()
     log, pids, done = {}, [], threading.Event()
 
@@ -469,7 +473,7 @@ def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_se
             t.card("a")
 
     def queued():
-        time.sleep(0.3)
+        time.sleep(0.05)
         try:
             t.cards()
         except SystemExit as e:
@@ -478,18 +482,18 @@ def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_se
         done.set()
 
     def fresh():
-        time.sleep(4)
-        while not done.is_set() or time.time() - t0 < 5:
+        done.wait(5)
+        for _ in range(3):
             try:
                 pids.append(tracker(t.cfg).cards()[0]["id"])
             except SystemExit as e:
                 pids.append(str(e))
-            time.sleep(0.3)
+            time.sleep(0.05)
 
     ths = [threading.Thread(target=f) for f in (stuck, queued, fresh)]
     [h.start() for h in ths]
     [h.join(40) for h in ths]
-    assert log["b_took"] < 2 + 3, log  # the caller's 2s timeout plus the dead session's shutdown, not 2s + 15s
+    assert log["b_took"] < 0.3 + 8, log  # the caller's 0.3s timeout plus the dead session's shutdown under load
     assert len(set(pids)) == 1 and pids[0].isdigit(), pids  # the queued failure did not close the new session
     key, (cur,) = next(iter(M._sessions)), M._sessions.values()
     M._drop(key, old)  # a stale caller dropping its dead session leaves the live one alone
@@ -497,12 +501,15 @@ def test_a_caller_queued_behind_a_stuck_call_fails_in_time_and_spares_the_new_se
 
 
 def test_time_spent_queued_counts_against_the_callers_timeout(script):
-    t = tracker(stdio_cfg(script, timeout=2, tools=tools(card={"tool": "slow", "args": {"seconds": 1.5}})))
+    # start-up gets 30s; the call under test keeps a 0.35s deadline
+    t = tracker(stdio_cfg(script, timeout=30, tools=tools(card={"tool": "slow", "args": {"seconds": 0.25}})))
     t.columns()
-    first = threading.Thread(target=pytest.raises, args=(SystemExit, t.card, "a"))  # 1.5s: inside its own timeout
+    (live,) = M._sessions.values()
+    live.timeout = 0.35
+    first = threading.Thread(target=pytest.raises, args=(SystemExit, t.card, "a"))  # 0.25s: inside its own timeout
     first.start()
-    time.sleep(0.3)
-    with pytest.raises(SystemExit, match="timed out"):  # queued 1.2s + 1.5s would pass 2s
+    time.sleep(0.05)
+    with pytest.raises(SystemExit, match="timed out"):  # queued 0.20s + 0.25s would pass 0.35s
         t.card("b")
     first.join()
 
@@ -580,10 +587,10 @@ def test_debug_logs_of_the_sdk_and_httpx_never_show_a_resolved_secret(script, mo
         deadline = time.time() + 20
         while time.time() < deadline:
             try:
-                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                socket.create_connection(("127.0.0.1", port), timeout=0.05).close()
                 break
             except OSError:
-                time.sleep(0.1)
+                time.sleep(0.02)
         for n in names:
             logging.getLogger(n).setLevel(logging.DEBUG)
         caplog.set_level(logging.DEBUG)
@@ -663,7 +670,7 @@ def test_flat_write_arguments_and_paged_cards(script):
 def test_get_unknown_type_names_the_valid_types(monkeypatch):
     monkeypatch.setattr(C, "TRACKER", {"type": "nope"})
     trackers.reset()
-    with pytest.raises(SystemExit, match=r"unknown tracker type 'nope' \(valid: github-issues, github-project, local, mcp\)"):
+    with pytest.raises(SystemExit, match=r"unknown tracker type 'nope' \(valid: github-issues, github-project, local, mcp, vikunja\)"):
         trackers.get("tracker")
 
 

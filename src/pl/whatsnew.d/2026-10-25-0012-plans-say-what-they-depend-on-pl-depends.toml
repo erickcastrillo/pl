@@ -1,0 +1,4 @@
+id = "2026-10-25.12"
+title = "Plans say what they depend on; pl depends --from-plans records it"
+where = "pl-plan skill, pl depends"
+try = "pl depends --from-plans --dry-run"

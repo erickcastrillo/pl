@@ -1,0 +1,4 @@
+id = "2026-10-26.84"
+title = "Test that notifications reach you"
+where = "pl notify test; pl doctor warns when nothing is set up"
+try = "pl notify test --chat <name>"

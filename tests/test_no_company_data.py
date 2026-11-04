@@ -37,6 +37,31 @@ TOKEN = re.compile(r"[a-z0-9_@.\-]+")
 MAX_TERM = 40
 
 
+COMMON_VENDORS = frozenset({
+    "2bed2032ed3d8300b7714ff77101e6c43637597977337c699191dd844c86a72d",
+    "afe4d16f403a383f07814bbe04a5e7c5a7dc62ba5ce4040fc85514c29e0e88ae",
+    "91b6da07adf530f8a9710301b4fd94c3828058e4942a68e48627dc28c6688778",
+    "3ccbd9105a45d8fcd4a0101c6532c599f6f59cfa4d4ce378792f547a869a4bea",
+    "576ba7c2e4abb7184ca409154dbbbd5306c1a80747fbce4148ea6271fd21e776",
+    "9f4d422f361728816036982f11cb1d0b12d3d0e6cb4b9e30748e6ba47263d47c",
+    "d56d16d88324bdc4f441ca0a834e9250b5cf44464763d0de98a6ff684f5f7ca4",
+    "1dd8cb03d5dc9395eb21d9988e104a1de25673a0fc52b9e65f43fecc29e01dfa",
+    "58b4537b616e657203a685e86b79ab85c981615d4c0ad243608f457cbbe0de34",
+    "89d01c9ba73cb5c4fbd849c699875ddbb1fd302cadaf1cee4552e92e73676835",
+    "8a72266588ef612e2a307a78d4a903496240406ed2635e18ab918c27e8b60c40",
+    "e473f24d4325d51a933cc18105bcf311cc10d10c3db12204467b1bfe9df27f7e",
+    "d7ccdd668ce4b5192dc67bac630ab21572f0ece11b8986e65e0bfe7eff0ec086",
+    "b555592a1435e0a9bd23daf7b0b11d59bb08a854504242301105c79fa2c4f407",
+    "e2d67f41fee239d12faf598242412e25b357740b9a20a5b14c9795dcae320bf5",
+    "4ba3e8e3765f2970eb37fae535353dd623d40a0507848c3c1dd240a5a7eb995e",
+    "ee46e2d141d53f08cc6dc5102319ddb97817480ce931d2b6381bf7ccca94bed0",
+    "4f53c6c301f98610918a5418c65988fab5fd03f9d217902bff2f03c2daef56b4",
+    "cb2317426a5c336d2b0a044101bb5f53bcc1b5ca1630f486fb707b9b1f549cbe",
+    "c47b618e17c75f06e90df0828701b8325fbe3995a58ce7427a384bb5cfc11f58",
+    "615fc4fc0da886b3340a04a3c7c0f9b27fd9f5ee1504741fba8952affbdf59ba",
+})   # common payment, mail, CRM and chat vendors
+
+
 def _sha(s):
     return hashlib.sha256(s.encode()).hexdigest()
 
@@ -112,3 +137,8 @@ def test_the_docs_use_the_allowed_repo_url():
     for name in ("README.md", "INSTALL.md"):
         text = (ROOT / name).read_text().lower()
         assert any(_sha(m) in ALLOWED_URLS for m in URL.findall(text)), name
+
+
+def test_no_vendor_names_in_connector_code():
+    files = sorted((ROOT / "src/pl").glob("connectors*.py"))
+    assert files and [h for p in files for h in _text_hits(p.name, p.read_text(), banned=COMMON_VENDORS)] == []

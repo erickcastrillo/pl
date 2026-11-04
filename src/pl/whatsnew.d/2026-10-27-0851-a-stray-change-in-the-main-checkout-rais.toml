@@ -1,0 +1,3 @@
+title = "A stray change in the main checkout raises an alert"
+where = "Activity → Alerts: names the live run agents; pl never touches the changes"
+try = "pl alerts"

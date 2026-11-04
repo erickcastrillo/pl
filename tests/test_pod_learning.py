@@ -1,6 +1,17 @@
 import json
 
+import pytest
+
 from pl import commands, config as C, dispatch, pods
+
+
+@pytest.fixture(autouse=True)
+def restore_config():
+    # every test here loads a throwaway profile; put pl.config back so later tests see the settings they set up
+    saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    yield
+    for k, v in saved.items():
+        setattr(C, k, v)
 
 
 def test_a_removed_sentence_is_recorded_on_approval(monkeypatch, tmp_path):
@@ -167,9 +178,9 @@ def test_removals_in_two_pods_do_not_add_up(tmp_path):
     pods.learn("card-1", "PLAN", draft, approved, pod="engineering")
     pods.learn("card-2", "PLAN", draft, approved, pod="engineering")
 
-    # Two removals in sales
-    pods.learn("card-3", "PLAN", draft, approved, pod="sales")
-    pods.learn("card-4", "PLAN", draft, approved, pod="sales")
+    # Two removals in billing
+    pods.learn("card-3", "PLAN", draft, approved, pod="billing")
+    pods.learn("card-4", "PLAN", draft, approved, pod="billing")
 
     sugg_file = C.STATE_DIR / "pod-suggestions.json"
     assert not sugg_file.exists()
@@ -246,29 +257,29 @@ def test_a_dismissed_rule_is_not_suggested_again(tmp_path, capsys):
 def test_cli_pods_rule_add_and_accept(monkeypatch, tmp_path, capsys):
     prof = tmp_path / ".pl-test"
     prof.mkdir(parents=True)
-    (prof / "config.toml").write_text('[pipeline]\npod = "sales"\n')
+    (prof / "config.toml").write_text('[pipeline]\npod = "billing"\n')
     monkeypatch.setenv("PL_CONFIG_DIR", str(prof))
     C.load("test", config_dir=str(prof))
 
     import sys
     from pl import cli
 
-    # Test pl pods rule add sales "Always qualify leads" --yes
-    monkeypatch.setattr(sys, "argv", ["pl", "pods", "rule", "add", "sales", "Always qualify leads", "--yes"])
+    # Test pl pods rule add billing "Always qualify leads" --yes
+    monkeypatch.setattr(sys, "argv", ["pl", "pods", "rule", "add", "billing", "Always qualify leads", "--yes"])
     cli.main()
     out = capsys.readouterr().out
-    assert "added the rule to sales (version 1)" in out
+    assert "added the rule to billing (version 1)" in out
 
-    pod_file = pods.pod_file("sales")
+    pod_file = pods.pod_file("billing")
     assert pod_file.is_file()
     assert "- Always qualify leads" in pod_file.read_text()
 
     # Create a suggestion
     draft = "Always qualify leads.\nOffer 50% discount."
     approved = "Always qualify leads."
-    pods.learn("card-1", "PLAN", draft, approved, pod="sales")
-    pods.learn("card-2", "PLAN", draft, approved, pod="sales")
-    pods.learn("card-3", "PLAN", draft, approved, pod="sales")
+    pods.learn("card-1", "PLAN", draft, approved, pod="billing")
+    pods.learn("card-2", "PLAN", draft, approved, pod="billing")
+    pods.learn("card-3", "PLAN", draft, approved, pod="billing")
 
     data = json.loads((C.STATE_DIR / "pod-suggestions.json").read_text())
     sugg_id = next(iter(data.keys()))
@@ -277,7 +288,7 @@ def test_cli_pods_rule_add_and_accept(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["pl", "pods", "rule", "accept", sugg_id, "--yes"])
     cli.main()
     out = capsys.readouterr().out
-    assert "accepted rule for sales: Never write: Offer 50% discount." in out
+    assert "accepted rule for billing: Never write: Offer 50% discount." in out
     assert "- Never write: Offer 50% discount." in pod_file.read_text()
 
 

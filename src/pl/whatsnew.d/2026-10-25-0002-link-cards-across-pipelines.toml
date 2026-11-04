@@ -1,0 +1,4 @@
+id = "2026-10-25.02"
+title = "Link cards across pipelines"
+where = "pl card shows links"
+try = "pl link <id> engineering:<id> --relation built-for"
