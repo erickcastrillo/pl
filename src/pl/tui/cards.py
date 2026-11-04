@@ -18,7 +18,7 @@ from pl.agents import jump_to_window
 from pl.board import card, plan_order, plan_slice, sections
 from pl.commands import adopt, done, drop, held_move, hold, move_to, restart, retry, undrop, unhold
 from pl.tui.chrome import close, empty_state, show_first_heading, skip_headings
-from pl.tui.live import LiveScreen
+from pl.tui.live import AGENT_COLOURS, AgentPane, LiveScreen
 from pl.tui.loops import COPIERS, _copy_run
 from pl.tui.needs import detail, needs_groups, needs_me, needs_you_count, review_kind, start_review
 from pl.tui.review import ConfirmScreen, ReviewScreen, confirm_and_approve, open_editor, review_file, safe_link, write_section
@@ -195,13 +195,30 @@ def todo_markdown(now):
     return "# Agent todos\n\n" + "\n".join(f"- {TODO_MARK.get(s, '[ ]')} {t}" for s, t in todos) + "\n\n" if todos else ""
 
 
+def live_worker(c):
+    """The card's worker when its pane exists on this machine, else None. An unknown pane must not hide the card."""
+    try:
+        w = (c.get("metadata") or {}).get("worker") or {}
+        pane = w.get("pane")
+        if pane and w.get("host") in (None, C.HOST) and agent_screen.pane_alive(pane):
+            return w
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 class CardScreen(Screen):
     """The whole card, read-only. The card is read again in a worker; its text is data, never markup."""
     DEFAULT_CSS = """
     #card-head { height: auto; padding: 0 1; border: round $primary; }
     #card-doc { height: 1fr; border: round $primary; }
+    #card-body { height: 1fr; }
+    #card-left { width: 1fr; }
+    CardScreen.-split #card-head { max-height: 40%; }
     """
     BINDINGS = [Binding("escape", "close", "close"),
+                Binding("G", "agent_end", "follow agent"),
+                Binding("tab,shift+tab", "switch_side", show=False),
                 Binding("y", "copy", "copy card text"), Binding("O", "open", "open in browser"),
                 Binding("a", "approve", "approve"), Binding("x", "send_back", "send back"),
                 Binding("p", "hold", "hold / release"), Binding("R", "restart", "restart agent"),
@@ -213,9 +230,12 @@ class CardScreen(Screen):
         _rename_key(self, "y", f"copy {pipeline.ui()['item']} text")
 
     def compose(self):
-        yield Static(Text(f"loading… {short_id(self.card_id)}", style="dim"), id="card-head", markup=False)
-        with VerticalScroll(id="card-doc"):
-            yield Markdown("", open_links=False, id="card-md")
+        with Horizontal(id="card-body"):
+            with Vertical(id="card-left"):
+                yield Static(Text(f"loading… {short_id(self.card_id)}", style="dim"), id="card-head", markup=False)
+                with VerticalScroll(id="card-doc"):
+                    yield Markdown("", open_links=False, id="card-md")
+            yield AgentPane(id="card-agent")
         yield Footer()
 
     def on_mount(self):
@@ -242,17 +262,34 @@ class CardScreen(Screen):
                     pushed = tui_prs.last_push(urls)
                 except Exception:  # noqa: BLE001 - an unknown push time must not hide the card
                     pushed = None
-            self.app.call_from_thread(self._show, c, url, queued, pushed)
+            self.app.call_from_thread(self._show, c, url, queued, pushed, live_worker(c))
         self.run_worker(run, thread=True, group="card")
 
     def _failed(self, msg):
         self.query_one("#card-head", Static).update(Text(f"could not read the {pipeline.ui()['item']}: {msg}", style="red"))
 
-    async def _show(self, c, url, queued=None, pushed=None):
+    async def _show(self, c, url, queued=None, pushed=None, live=None):
         self.card = c
         self.query_one("#card-head", Static).update(card_head(c, self.col, url if safe_link(url) else None, self.approved, queued, pushed))
         await self.query_one("#card-md", Markdown).update(todo_markdown(self.now) + card_markdown(c.get("description")))
         self.query_one("#card-doc").focus()
+        if live:
+            self.query_one(AgentPane).start(live)
+            self.add_class("-split")
+            self.refresh_bindings()
+
+    def _split(self):
+        return self.has_class("-split")
+
+    def action_agent_end(self):
+        self.query_one("#agent-scroll").scroll_end(animate=False)
+
+    def action_switch_side(self):
+        if not self._split():
+            self.focus_next()
+            return
+        other = "#agent-scroll" if self.query_one("#card-doc").has_focus else "#card-doc"
+        self.query_one(other).focus()
 
     def action_close(self):
         close(self)
@@ -278,6 +315,8 @@ class CardScreen(Screen):
             self.app.notify("only web links open from here", markup=False)
 
     def check_action(self, action, parameters):
+        if action == "agent_end":
+            return True if self._split() else None
         if action in ("approve", "send_back"):
             m = (self.card or {}).get("metadata") or {}
             is_gate = (self.col == "Plan for review") or (
@@ -503,7 +542,6 @@ def drop_back(c):
 
 
 AGENT_LINES, AGENT_SECONDS = 20, 2
-AGENT_COLOURS = {"stopped": "red", "waiting for you": "yellow", "working": "green"}
 
 
 class CardsView(CardActions, Horizontal):
