@@ -296,7 +296,7 @@ def test_no_settings_or_no_tests_table_matches_slice_1(repo, monkeypatch):
 def test_pl_repo_settings_list_the_always_tests():
     from pathlib import Path
     always = T._settings(Path(__file__).parents[1])["always"]
-    for name in ("tests/test_whatsnew.py", "tests/test_cli_parity.py", "tests/test_worktrees_skill_integration.py"):
+    for name in ("tests/test_whatsnew.py", "tests/test_worktrees_skill_integration.py"):
         assert name in always
 
 

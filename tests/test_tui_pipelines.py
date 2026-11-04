@@ -94,6 +94,7 @@ def test_picker_row_for_a_pipeline_with_no_summary_yet_has_type_dash():
 async def test_P_opens_the_picker_and_enter_switches_on_the_same_tab():
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
         app.action_tab("prs")
         await wait_until(pilot, lambda: app.active_tab == "prs", "the Pull requests tab")
         await pilot.press("P")
@@ -154,6 +155,7 @@ class _FakeManager:
 
 
 async def _tab_and_press(pilot, app, *keys, tab="prs"):
+    await settle(pilot)   # the startup focus message would switch back to Home after the switch below
     app.action_tab(tab)
     await wait_until(pilot, lambda: app.active_tab == tab, f"the {tab} tab")
     await pilot.press(*keys)
@@ -357,6 +359,7 @@ async def test_enter_on_new_pipeline_opens_the_wizard_at_step_1():
 async def test_cancelling_the_wizard_from_the_picker_changes_nothing(temp_home):
     app = _app()
     async with app.run_test(size=(176, 48)) as pilot:
+        await settle(pilot)
         app.action_tab("prs")
         await wait_until(pilot, lambda: app.active_tab == "prs", "the Pull requests tab")
         await _open_picker(app, pilot)
