@@ -9,7 +9,10 @@ pl drives an idea → spec → plan → PR funnel through the AI coding harness 
 - Settings come from a profile folder (`~/.pl-<name>` or `PL_CONFIG_DIR`); with no profile, `pl` tells you to run `pl setup` (the old legacy paths are gone). Modules read settings as `from pl import config as C` and `C.NAME` at call time, never `from pl.config import NAME`.
 
 ## Commands
-- `uv sync` · `uv run pytest -q` · `uv run ruff check src tests`
+- `uv sync` · `uv run ruff check src tests`
+- While developing: `pl tests affected` lists the test files your change can reach (import graph plus the `always` list in `.pl/tests.toml`, compared to the merge base with main) and prints the command to run them.
+- Before a merge: `uv run pytest -q -n auto` (about 2 minutes; plain serial `pytest -q` takes about 12).
+- Full runs are 2 to 3 times slower and TUI tests can flake while pl's pipeline agents load the machine. Run the full suite on a quiet machine when you can.
 
 ## Conventions
 - Python ≥ 3.11, standard library first; dependencies: textual, tomlkit, mcp, PyYAML. Plain functions over classes unless a connector interface needs one.

@@ -49,8 +49,10 @@ Follow [INSTALL.md](INSTALL.md) step by step, and run each step's check before t
 Read [CLAUDE.md](CLAUDE.md) first. It has the layout, conventions and security checklist. Before you call a change done:
 
 ```
-uv run pytest -q
+uv run pytest -q -n auto
 uv run ruff check src tests
 ```
+
+While you work, `pl tests affected` prints the command for only the tests your change can reach. Run the full suite above before a merge, on a quiet machine if you can: TUI tests can flake while pl's pipeline agents are busy.
 
 Keep company, product and person names out of the repository: code, docs and examples use neutral placeholders such as `your-org` and `your-repo`. `tests/test_no_company_data.py` enforces this.
