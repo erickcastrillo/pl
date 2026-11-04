@@ -57,3 +57,15 @@ def read(pane, lines=20):
     """(text, word, why) of one pane, read once."""
     text = capture(pane, lines)
     return text, *status(text, harnesses.pane_command(pane) if text is not None else "")
+
+
+def pane_alive(pane):
+    """True when tmux names this pane, False when it does not, None when tmux cannot be asked.
+    tmux 3.6 prints an empty line and exits 0 for a missing pane, so the output decides, not the exit code."""
+    if not pane:
+        return False
+    try:
+        r = harnesses._run(["tmux", "display-message", "-p", "-t", pane, "#{pane_id}"])
+    except OSError:
+        return None
+    return r.returncode == 0 and (r.stdout or "").strip() == pane

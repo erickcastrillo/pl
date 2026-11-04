@@ -8,10 +8,74 @@ from textual.worker import get_current_worker
 
 from pl import agent_screen
 from pl.tui.chrome import close
+from pl.util import age, mask, parse_iso
 
 REFRESH_SECONDS = 2
 SCROLLBACK_LINES = 2000
+AGENT_SECONDS = 1
 NO_WINDOW = "no agent window"
+AGENT_COLOURS = {"stopped": "red", "waiting for you": "yellow", "working": "green"}
+
+
+def agent_head(w, word, why):
+    """The one-line header of an agent's window: stage, account, model, status word and elapsed time; missing values are left out."""
+    status = f"{word}: {why}" if why else word
+    who = w.get("profile") or w.get("harness")
+    model = w.get("model")
+    account = f"{who} ({model})" if who and model else who or (f"({model})" if model else "")
+    started = parse_iso(w.get("started_at"))
+    parts = [f"{w['stage']} agent" if w.get("stage") else "", account]
+    head = Text(" · ".join(mask(str(p)) for p in parts if p))
+    head.append((" · " if head.plain else "") + mask(status), AGENT_COLOURS.get(word, "dim"))
+    if started:
+        head.append(f" · {age(started)}")
+    return head
+
+
+class AgentPane(Vertical):
+    """A read-only column with one worker's live tmux text. It never sends a key to the pane."""
+    DEFAULT_CSS = """
+    AgentPane { display: none; width: 1fr; height: 1fr; border-left: vkey $primary; }
+    #agent-scroll { height: 1fr; }
+    """
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.worker, self._latest, self._drawn = {}, None, None
+
+    def compose(self):
+        yield Static(Text(""), id="agent-head", markup=False)
+        with VerticalScroll(id="agent-scroll"):
+            yield Static(Text(NO_WINDOW, style="dim"), id="agent-body", markup=False)
+
+    def start(self, worker):
+        self.worker = worker
+        self.display = True
+        self.query_one("#agent-head", Static).update(agent_head(worker, "working", ""))
+        self._poll()
+        self.set_interval(AGENT_SECONDS, self._poll)
+
+    def _poll(self):
+        if self.app.screen is not self.screen:
+            return
+        self.run_worker(self._read, thread=True, group="card-agent", exclusive=True)
+
+    def _read(self):
+        result = agent_screen.read(self.worker.get("pane"), lines=SCROLLBACK_LINES)
+        if not get_current_worker().is_cancelled:
+            self.app.call_from_thread(self._show, *result)
+
+    def _show(self, text, word, why):
+        self.query_one("#agent-head", Static).update(agent_head(self.worker, word, why))
+        if text is None:
+            return
+        self._latest = text
+        scroll = self.query_one("#agent-scroll", VerticalScroll)
+        follow = self._drawn is None or scroll.scroll_y >= scroll.max_scroll_y - 1
+        if follow and text != self._drawn:
+            self._drawn = text
+            self.query_one("#agent-body", Static).update(Text.from_ansi(text))
+            self.call_after_refresh(scroll.scroll_end, animate=False)
 
 
 class LiveScreen(ModalScreen):

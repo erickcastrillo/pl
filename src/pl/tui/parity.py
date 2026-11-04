@@ -68,6 +68,8 @@ COMMANDS = {
 }
 
 NAV = {
+    "switch_side",
+    "agent_end",
     "brain",
     "collapse_start",
     "dismiss_start",
