@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, pr_done, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
                        run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1181,6 +1181,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"auto-merge skipped this pass: {e}", file=sys.stderr)
             if not dry:
                 events.failure("pass_step_skipped", "warning", f"auto-merge skipped this pass: {e}", step="auto-merge")
+        try:
+            pr_done.sweep(all_cards, reg, dry)
+        except (Exception, SystemExit) as e:
+            print(f"pr-done skipped this pass: {e}", file=sys.stderr)
+            if not dry:
+                events.failure("pass_step_skipped", "warning", f"pr-done skipped this pass: {e}", step="pr-done")
         try:
             from pl import triggers
             triggers.run_due(dry=dry)

@@ -433,7 +433,7 @@ def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
     hits = matches(a.id, cards())
     if hits:
-        for line in done(a.id, hits):
+        for line in done(a.id, hits, note=a.note):
             print(line)
         return
     pc = product_card(a.id) if len(a.id) >= 32 else None
@@ -452,11 +452,16 @@ def cmd_done(a):
     print(f"done {short_id(pc['id'])}  {pc['title'][:70]}  (Product board, was in {product_col(pc['list_id'])})")
 
 
-def done(ref, cs=None):
+def done(ref, cs=None, note=None, reason=None):
     """A person's call: move one Feature Pipeline card (and its linked Product card) to Done. cs: the cards to pick
-    from, default every pipeline card. A live agent is not stopped. Returns lines to show."""
-    c = card(pick(ref, cards() if cs is None else cs, "pl done")["id"])   # two matches: refused, never the first
-    update(c["id"], list_id=col_id("Done"), metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None})
+    from, default every pipeline card. note: ends the description under "## Closed <date>", once. reason: kept in the
+    metadata. A live agent is not stopped. Returns lines to show."""
+    c = card(pick(ref, cs if cs is not None else cards(), "pl done")["id"])   # two matches: refused, never the first
+    meta = {"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None, **({"done_reason": reason} if reason else {})}
+    fields = {}
+    if note and note.strip() and note.strip() not in (c.get("description") or ""):   # a retried move must not add a second section
+        fields["description"] = check_size((c.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{note.strip()}\n")
+    update(c["id"], list_id=col_id("Done"), metadata=meta, **fields)
     m, out = c.get("metadata") or {}, []
     if m.get("product_card") and intake_configured() and "Done" in product_lists():
         try:
