@@ -10,7 +10,6 @@ from pathlib import Path
 from pl import config as C
 from pl import tests_affected
 from pl.trackers import github
-from pl.tui.prs import checks
 from pl.worktrees import _stop_group
 
 _popen = subprocess.Popen
@@ -34,6 +33,7 @@ def _name(c):
 
 
 def _failed(c):
+    from pl.tui.prs import checks   # pl.tui.prs pulls in textual: only a merge check needs it
     return checks([c])[1] == 1
 
 
@@ -46,6 +46,7 @@ def ci(pr, settings):
     blocking = [n for n in failed if n not in ignore]
     if blocking:
         return False, f"CI check failed: {', '.join(blocking)}"
+    from pl.tui.prs import checks
     passed, _, pending = checks(rollup)
     if pending:
         return None, f"CI pending ({pending} of {len(rollup)}), not decided"
