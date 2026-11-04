@@ -172,6 +172,16 @@ def _set_aside(path: Path, card_id: str) -> str | None:
     return None
 
 
+def multi_repo(work: Path) -> bool:
+    """True when work is not a git repo but holds git repos."""
+    if (work / ".git").exists():
+        return False
+    try:
+        return any((d / ".git").exists() for d in work.iterdir() if d.is_dir())
+    except OSError:
+        return False
+
+
 def planned_path(c) -> Path:
     work = Path(C.WORK_DIR)
     return Path(C.WORKTREES_DIR or work.parent) / f"{work.name}-pl-{slug_of(c)}"
@@ -182,6 +192,8 @@ def for_run(c) -> tuple[Path | None, str | None]:
     Only fetch and worktree add touch the repository, never the main checkout's files."""
     work, slug = Path(C.WORK_DIR), slug_of(c)
     branch = f"pl/{slug}"
+    if multi_repo(work):
+        return work, None   # a folder of several repos: the run skill makes one worktree per repo itself
 
     def git(*args):
         try:
