@@ -122,7 +122,7 @@ def test_git_calls_have_a_timeout_and_never_prompt(monkeypatch):
     monkeypatch.setattr(worktrees, "_run", git)
     REAL_FOR_RUN(CARD)
     mutating = [kw for argv, kw in zip(git.calls, git.kwargs) if argv[1] in ("fetch", "worktree") and argv[2] != "list"]
-    assert len(mutating) == 2
+    assert len(mutating) == 3
     for kw in mutating:
         assert kw["timeout"] > 0 and kw["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
@@ -137,7 +137,7 @@ def test_a_git_timeout_is_a_failed_worktree(monkeypatch, hang):
 
 
 def test_never_touches_main_checkout_files(monkeypatch):
-    allowed = {("worktree", "list"), ("worktree", "add"), ("fetch", "origin"), ("show-ref",), ("rev-parse",)}
+    allowed = {("worktree", "list"), ("worktree", "add"), ("worktree", "prune"), ("fetch", "origin"), ("show-ref",), ("rev-parse",)}
     for kw in ({}, {"local_branch": True}, {"remote_branch": True}):
         git = FakeGit(**kw)
         monkeypatch.setattr(worktrees, "_run", git)
@@ -195,7 +195,7 @@ def test_worktree_failure_launches_nothing(launch):
     launch.result = (None, "fatal: x")
     _start()
     assert not [a for a in launch.tmux if a[0] in ("new-window", "new-session")]
-    assert launch.updates == []
+    assert len(launch.updates) == 1
     errors = [e for e in launch.events if e[0] == "error"]
     assert len(errors) == 1 and "fatal: x" in errors[0][2]["message"]
     assert ("alert", "worktree:acme/app#7", "high") in launch.events
@@ -295,3 +295,147 @@ def test_empty_folder_is_removed_not_set_aside(monkeypatch):
     _dest().mkdir(parents=True)
     assert REAL_FOR_RUN(CARD) == (_dest(), None)
     assert _stale_siblings() == []
+
+
+def _order(git):
+    return [tuple(a[1:3]) for a in git.calls]
+
+
+def test_missing_folder_with_a_registration_is_pruned_and_added(monkeypatch):
+    git = FakeGit()
+    monkeypatch.setattr(worktrees, "_run", git)
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    order = _order(git)
+    assert order.index(("worktree", "prune")) < order.index(("worktree", "list")) < order.index(("worktree", "add"))
+
+
+def _real_repo(tmp_path):
+    """A local repo with a bare origin, set as the work dir."""
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(tmp_path / "home"), "PATH": __import__("os").environ["PATH"]}
+
+    def git(*args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd or C.WORK_DIR, env=env, capture_output=True, text=True, check=True).stdout
+
+    origin = tmp_path / "origin.git"
+    git("init", "-q", "--bare", "-b", "main", str(origin), cwd=tmp_path)
+    git("init", "-q", "-b", "main", ".")
+    git("commit", "-q", "--allow-empty", "-m", "first")
+    git("remote", "add", "origin", str(origin))
+    git("push", "-q", "origin", "main")
+    git("remote", "set-head", "origin", "main")
+    return git
+
+
+def _registered(git):
+    return [l.split(" ", 1)[1] for l in git("worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]
+
+
+def test_real_git_missing_folder_rebuilds(tmp_path, monkeypatch):
+    git = _real_repo(tmp_path)
+    monkeypatch.setattr(worktrees, "_run", subprocess.run)
+    path, err = REAL_FOR_RUN(CARD)
+    assert err is None
+    import shutil
+    shutil.rmtree(path)
+    assert REAL_FOR_RUN(CARD) == (path, None)
+    assert str(path) in _registered(git)
+
+
+def test_real_git_folder_in_the_way_is_renamed_and_unregistered(tmp_path, monkeypatch):
+    git = _real_repo(tmp_path)
+    monkeypatch.setattr(worktrees, "_run", subprocess.run)
+    path, err = REAL_FOR_RUN(CARD)
+    assert err is None
+    git("worktree", "remove", "--force", str(path))
+    git("branch", "-D", f"pl/{_slug()}")
+    path.mkdir()
+    (path / "mine.txt").write_text("keep")
+    assert REAL_FOR_RUN(CARD) == (path, None)
+    [moved] = _stale_siblings()
+    assert (moved / "mine.txt").read_text() == "keep"
+    assert str(moved) not in _registered(git)
+
+
+def test_real_git_stale_registered_folder_is_renamed_and_branch_freed(tmp_path, monkeypatch):
+    git = _real_repo(tmp_path)
+    monkeypatch.setattr(worktrees, "_run", subprocess.run)
+    path, _ = REAL_FOR_RUN(CARD)
+    git("-C", str(path), "checkout", "-q", "--detach")   # no longer on the card's branch: not reusable
+    assert REAL_FOR_RUN(CARD) == (path, None)
+    [moved] = _stale_siblings()
+    assert str(moved) not in _registered(git) and str(path) in _registered(git)
+
+
+def test_real_git_other_cards_worktree_is_untouched(tmp_path, monkeypatch):
+    git = _real_repo(tmp_path)
+    monkeypatch.setattr(worktrees, "_run", subprocess.run)
+    other = {"id": "acme/app#8", "title": "Other card", "metadata": {}}
+    other_path, err = REAL_FOR_RUN(other)
+    assert err is None
+    import shutil
+    shutil.rmtree(_dest(), ignore_errors=True)
+    path, err = REAL_FOR_RUN(CARD)
+    assert err is None
+    assert other_path.is_dir() and str(other_path) in _registered(git)
+
+
+def _slice_listing(name):
+    return f"worktree {_dest()}\nHEAD abc\nbranch refs/heads/pl/{name}\n\n"
+
+
+def test_worktree_on_own_slice_branch_is_reused(monkeypatch):
+    _dest().mkdir(parents=True)
+    git = FakeGit(listing=_slice_listing(f"{_slug()}-s2"))
+    monkeypatch.setattr(worktrees, "_run", git)
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    assert git.adds() == [] and _stale_siblings() == []
+
+
+def test_slice_branch_of_another_cards_folder_is_not_claimed(monkeypatch):
+    other = _dest().with_name(_dest().name + "-s2")
+    other.mkdir(parents=True)
+    git = FakeGit(listing=f"worktree {other}\nHEAD abc\nbranch refs/heads/pl/{_slug()}-s2\n\n")
+    monkeypatch.setattr(worktrees, "_run", git)
+    assert REAL_FOR_RUN(CARD) == (_dest(), None)
+    assert len(git.adds()) == 1
+
+
+def _failed_card(**meta):
+    return {"id": "acme/app#7", "title": "Add thing", "list_id": "x", "metadata": meta}
+
+
+def test_worktree_failure_marks_the_card_and_names_card_path_and_git_message(launch):
+    launch.result = (None, "fatal: x")
+    _start()
+    [(args, kw)] = launch.updates
+    text = kw["metadata"]["worktree_failed"]
+    assert str(_dest()) in text and "fatal: x" in text
+    alert = next(e for e in launch.events if e[0] == "alert")
+    assert alert[1] == "worktree:acme/app#7"
+
+
+def test_repeat_failure_writes_and_emits_once(launch):
+    launch.result = (None, "fatal: x")
+    card = {"id": "acme/app#7", "title": "Add thing", "metadata": {"worktree_failed": f"{_dest()}: fatal: x"}}
+    dispatch.start_worker(card, "run", 0, False)
+    assert launch.updates == []
+    assert not [e for e in launch.events if e[0] == "error"]
+
+
+def test_worktree_failed_card_reads_as_needs_a_person(monkeypatch):
+    from pl import agents
+    monkeypatch.setattr(agents, "col_name", lambda lid: "Approved")
+    c = _failed_card(worktree_failed="p: fatal", pipeline_mode="auto")
+    for text in (agents.worker_view(c, {}), agents.person_wait(c, "dead")):
+        assert text == "worktree failed: needs a person" and "waiting" not in text
+
+
+def test_next_good_start_resolves_alert_and_clears_state(launch):
+    resolved = []
+    launch.result = (launch.result[0], None)
+    dispatch.alerts.resolve = lambda key: resolved.append(key)
+    card = {"id": "acme/app#7", "title": "Add thing", "metadata": {"worktree_failed": "p: fatal"}}
+    dispatch.start_worker(card, "run", 0, False)
+    assert resolved == ["worktree:acme/app#7"]
+    assert any(kw.get("metadata") == {"worktree_failed": None} for _, kw in launch.updates)
