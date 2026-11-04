@@ -1847,6 +1847,8 @@ async def test_80x24_every_top_tab_and_sub_tab_fits(monkeypatch):
                 assert outer.region.y < 24 and outer.virtual_size.width <= 80, view
                 inner = app.query_one(f"#{gid}-views", TabbedContent)
                 if len(views) > 1:
+                    # a switched-to group's sub-tab bar has no region until its first layout pass; measure after it
+                    await settle(pilot, lambda: inner.query_one(Tabs).region.height > 0, f"the {view} sub-tabs laid out")
                     assert 0 < inner.query_one(Tabs).region.bottom < 24 and inner.query_one(Tabs).virtual_size.width <= 80, view
 
 
@@ -2630,13 +2632,16 @@ async def test_palette_finds_an_action_by_name_or_meaning(monkeypatch):
 async def test_palette_runs_an_action_on_the_current_tab(monkeypatch):
     _fake_card_read(monkeypatch, [])
     provider = Provider()
-    app = PlApp(snapshot_provider=provider)
+    # an hour between timed refreshes, so the only provider call in this test is the one the palette's refresh makes
+    app = PlApp(snapshot_provider=provider, interval=3600)
     async with app.run_test(size=(176, 80)) as pilot:
         await pilot.press("3")
         await settle(pilot)
         before = len(provider.threads)
         _find(_palette(app), "refresh (r)")[0].callback()
-        await settle(pilot)
+        # palette.run defers twice (call_after_refresh, then call_later) before the refresh worker starts, so wait
+        # for the provider call itself rather than a fixed number of queue drains
+        await settle(pilot, lambda: len(provider.threads) > before, "the refresh to call the provider")
         assert len(provider.threads) > before
 
 

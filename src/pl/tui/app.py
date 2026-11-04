@@ -318,9 +318,46 @@ NARROW_BELOW = 120   # columns: below this the list fills the width and the deta
 
 class ViewFooter(Footer):
     """The footer with the active view's main keys first, then help and the view switch, so a narrow terminal cuts the
-    console-wide keys."""
+    console-wide keys.
+
+    Textual's Footer schedules a recompose on every bindings update. Those fire on every focus move, about 23 times
+    while the console starts, and each recompose mounts and styles about 30 widgets again even when the keys it shows
+    stay the same. Here at most one recompose is pending at a time, and it runs only when what the footer would show
+    has changed: the active view (it orders the keys) and each binding's key, label, visibility, state and tip.
+    This replaces Footer.bindings_changed (Textual 8.2), keeping its rules: wait for the app's focus and this screen."""
+
+    _shown = None       # what the last compose showed
+    _pending = False    # a recompose is scheduled and has not run yet
+
+    def _showing(self, screen):
+        try:
+            active = screen.active_bindings
+        except Exception:   # a screen that is closing: treat as changed
+            return None
+        keys = tuple((b.key, b.action, b.description, b.key_display, b.show, getattr(b.group, "description", None),
+                      bool(enabled), tooltip) for _node, b, enabled, tooltip in active.values())
+        return getattr(self.app, "active_tab", None), self.compact, self.show_command_palette, keys
+
+    def _unchanged(self, screen):
+        return self._shown is not None and self._showing(screen) == self._shown
+
+    def bindings_changed(self, screen):
+        self._bindings_ready = True
+        if not screen.app.app_focus or not self.is_attached or screen is not self.screen:
+            return
+        if self._pending or self._unchanged(screen):
+            return
+        self._pending = True
+        self.call_after_refresh(self._recompose_if_changed)
+
+    async def _recompose_if_changed(self):
+        self._pending = False
+        if self.is_attached and not self._unchanged(self.screen):
+            await self.recompose()
 
     def compose(self):
+        if self._bindings_ready:
+            self._shown = self._showing(self.screen)
         main = MAIN_KEYS.get(self.app.active_tab, [])
 
         def rank(item):

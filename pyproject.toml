@@ -22,11 +22,14 @@ build-backend = "hatchling.build"
 packages = ["src/pl"]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "pytest-xdist", "ruff"]
+dev = ["pytest", "pytest-asyncio", "pytest-timeout>=2.4.0", "pytest-xdist", "ruff"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# A hung test fails after 2 minutes and names itself, instead of holding a run until GitHub's 6-hour job limit.
+# The slowest test takes about 7 s on a loaded machine, so 120 s never cuts a healthy one.
+timeout = 120
 markers = ["e2e: end-to-end tests against real tmux and harness CLIs (skipped unless PL_E2E=1)"]
 
 [tool.ruff.lint]

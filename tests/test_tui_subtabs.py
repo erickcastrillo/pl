@@ -6,7 +6,7 @@ from textual.widgets import Footer, Input
 from textual.widgets._footer import FooterKey
 
 from pl import config as C
-from pl.tui.app import PlApp
+from pl.tui.app import PlApp, ViewFooter
 from pl.tui.chrome import MAIN_KEYS, groups
 from test_tui_views import FakeAssistant, Provider, fake_home, settle  # noqa: F401 - fake_home is an autouse fixture there
 from tui_wait import wait_until
@@ -210,6 +210,33 @@ async def test_ac10_footer_at_80x24_shows_each_views_main_keys(view):
                 assert k.region.width > 0 and k.region.right <= 80, (view, k.action, k.region)
         if not app._typing():   # a printable key in a text box is text, so the footer drops those bindings
             assert any(k.action == "help" for k in keys), [k.action for k in keys]
+
+
+async def test_footer_recomposes_only_when_its_keys_change(monkeypatch):
+    """Textual's Footer recomposes on every bindings update (about 23 while the console starts); each one mounts and
+    styles every key again. ViewFooter keeps one recompose pending at most and skips it when nothing it shows changed."""
+    calls = []
+    real = ViewFooter.recompose
+
+    async def counting(self):
+        calls.append(self.app.active_tab)
+        return await real(self)
+    monkeypatch.setattr(ViewFooter, "recompose", counting)
+    app = PlApp(snapshot_provider=Provider(), interval=3600)
+    async with app.run_test(size=(200, 24)) as pilot:
+        await start(pilot)
+        await settle(pilot)
+        at_start = len(calls)
+        assert at_start <= 3, calls
+        footer = app.query_one(ViewFooter)
+        for _ in range(5):   # what focus moves that do not change the keys send
+            footer.bindings_changed(app.screen)
+        await settle(pilot)
+        assert len(calls) == at_start, calls
+        app.action_tab("cards")
+        await wait_for(pilot, lambda: "move_column" in {k.action for k in footer_keys(app)},
+                       "the cards view's move_column key in the footer")
+        assert len(calls) > at_start
 
 
 async def test_footer_keeps_console_keys_after_view_keys():
