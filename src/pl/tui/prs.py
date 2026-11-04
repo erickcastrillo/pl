@@ -210,7 +210,7 @@ class PrsView(Horizontal):
             d.styles.height = "auto"
             yield d
             with VerticalScroll(id="prs-body"):
-                yield Markdown("", open_links=False, id="prs-md")
+                yield Markdown(open_links=False, id="prs-md")
 
     def show(self, data):
         g = pr_groups(data["snapshot"]["rows"])

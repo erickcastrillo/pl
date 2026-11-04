@@ -18,7 +18,7 @@ async def wait_until(pilot, condition, what, timeout=5.0):
         except NoMatches:
             pass
         await pilot.app.workers.wait_for_complete()
-        await pilot.pause()   # no delay: only drains the message queue between checks
+        await pilot.pause(0)   # no delay: only drains the message queue between checks
     pytest.fail(f"timed out after {timeout}s waiting for {what}")
 
 
@@ -29,7 +29,9 @@ async def wait_for_screen(pilot, name):
 async def settle(pilot, condition=None, what="the app to settle"):
     await pilot.app.workers.wait_for_complete()
     if condition is None:
-        await pilot.pause()   # one queue drain so messages posted by the workers are handled
+        await pilot.pause(0)   # one queue drain so messages posted by the workers are handled
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause(0)   # drain callbacks posted from thread workers
     else:
         await wait_until(pilot, condition, what)
 

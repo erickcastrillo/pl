@@ -283,3 +283,114 @@ def fresh_agent_defs():
     """The dispatcher reads agent definitions once per pass: no test sees the previous test's."""
     from pl import dispatch
     dispatch.forget_agents()
+
+
+@pytest.fixture(autouse=True)
+def no_real_tui_panel_subprocesses(monkeypatch):
+    """CommandPanel, ConnectorsPanel, SkillsView, and AgentsView run background workers that call their
+    module-level _run: tests see empty lists, never real pl CLI subprocesses."""
+    from pl.tui import agentdefs, connectors, panels, settings, skills
+
+    fake_run = lambda argv, *a, **kw: subprocess.CompletedProcess(argv, 0, "[]", "")  # noqa: E731
+    monkeypatch.setattr(panels, "_run", fake_run)
+    monkeypatch.setattr(connectors, "_run", fake_run)
+    monkeypatch.setattr(skills, "_run", fake_run)
+    monkeypatch.setattr(agentdefs, "_run", fake_run)
+    monkeypatch.setattr(settings, "_gh_summary", lambda: "gh: test")
+
+
+@pytest.fixture(autouse=True)
+def fast_empty_markdown_mount(monkeypatch):
+    """Skipping update("") on empty Markdown mount avoids spinning a markdown-it parser in an executor."""
+    from markdown_it import MarkdownIt
+    from textual.await_complete import AwaitComplete
+    from textual.widgets import Markdown
+    from textual.widgets._markdown import MarkdownBlock
+
+    async def _on_mount(self, event):
+        initial = self._initial_markdown
+        self._initial_markdown = None
+        if initial:
+            await self.update(initial)
+        else:
+            self._markdown = ""
+            self.post_message(Markdown.TableOfContentsUpdated(self, None).set_sender(self))
+
+    def _fast_update(self, markdown: str) -> AwaitComplete:
+        self._theme = self.app.theme
+        parser = MarkdownIt("gfm-like") if self._parser_factory is None else self._parser_factory()
+        markdown_block = self.query("MarkdownBlock")
+        self._markdown = markdown
+        self._table_of_contents = None
+
+        async def await_update() -> None:
+            async with self.lock:
+                tokens = parser.parse(markdown)
+                removed = False
+
+                async def mount_batch(batch: list[MarkdownBlock]) -> None:
+                    nonlocal removed
+                    if removed:
+                        await self.mount_all(batch)
+                    else:
+                        with self.app.batch_update():
+                            await markdown_block.remove()
+                            await self.mount_all(batch)
+                        removed = True
+
+                batch: list[MarkdownBlock] = []
+                for block in self._parse_markdown(tokens):
+                    batch.append(block)
+                    if len(batch) == 200:
+                        await mount_batch(batch)
+                        batch.clear()
+                if batch:
+                    await mount_batch(batch)
+                if not removed:
+                    await markdown_block.remove()
+
+            lines = markdown.splitlines()
+            self._last_parsed_line = len(lines) - (1 if lines and lines[-1] else 0)
+            self.post_message(Markdown.TableOfContentsUpdated(self, self.table_of_contents).set_sender(self))
+
+        return AwaitComplete(await_update())
+
+    monkeypatch.setattr(Markdown, "_on_mount", _on_mount)
+    monkeypatch.setattr(Markdown, "update", _fast_update)
+
+
+@pytest.fixture(autouse=True)
+def fast_textual_wait_for_idle(monkeypatch):
+    """Eliminate wait_for_idle(0) CPU-time spin in Pilot and App, and drain screen between multi-key presses."""
+    import textual._wait
+    import textual.app
+    import textual.pilot
+    from textual.app import ScreenStackError
+    from textual.dom import DOMNode
+
+    async def _fast_wait_for_idle(min_sleep=0, max_sleep=1):
+        if min_sleep and min_sleep > 0:
+            await asyncio.sleep(min_sleep)
+        else:
+            await asyncio.sleep(0.01)
+
+    async def _fast_press(self, *keys: str) -> None:
+        for key in keys:
+            await self._app._press_keys((key,))
+            await self._wait_for_screen()
+
+    orig_refresh = DOMNode.refresh_bindings
+
+    def safe_refresh_bindings(self):
+        try:
+            orig_refresh(self)
+        except ScreenStackError:
+            pass
+
+    monkeypatch.setattr(textual._wait, "wait_for_idle", _fast_wait_for_idle)
+    monkeypatch.setattr(textual.pilot, "wait_for_idle", _fast_wait_for_idle)
+    monkeypatch.setattr(textual.app, "wait_for_idle", _fast_wait_for_idle)
+    monkeypatch.setattr(textual.pilot.Pilot, "press", _fast_press)
+    monkeypatch.setattr(DOMNode, "refresh_bindings", safe_refresh_bindings)
+
+

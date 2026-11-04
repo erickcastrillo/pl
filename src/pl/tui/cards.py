@@ -234,7 +234,7 @@ class CardScreen(Screen):
             with Vertical(id="card-left"):
                 yield Static(Text(f"loading… {short_id(self.card_id)}", style="dim"), id="card-head", markup=False)
                 with VerticalScroll(id="card-doc"):
-                    yield Markdown("", open_links=False, id="card-md")
+                    yield Markdown(open_links=False, id="card-md")
             yield AgentPane(id="card-agent")
         yield Footer()
 
@@ -586,7 +586,7 @@ class CardsView(CardActions, Horizontal):
             yield Static(Text(""), id="cards-detail")
             yield Static(Text(""), id="cards-agent", markup=False)
             with VerticalScroll(id="cards-body"):
-                yield Markdown("", open_links=False, id="cards-md")
+                yield Markdown(open_links=False, id="cards-md")
 
     def on_mount(self):
         self.query_one("#cards-agent").display = False

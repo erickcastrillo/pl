@@ -87,7 +87,12 @@ def signed_in(tmp_path, monkeypatch):
         return True
     monkeypatch.setattr(connectors_oauth, "_open", browser)
     connectors.cmd_connectors(add_args())
-    time.sleep(1.2)
+    server.expires = 0
+    from pl import secrets
+    sec = secrets.get("billing")
+    if sec and "expires_at" in sec:
+        sec["expires_at"] = time.time() - 10
+        secrets.put("billing", sec)
     return server
 
 
