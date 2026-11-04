@@ -10,6 +10,7 @@ import pytest
 
 from pl import config as C
 from pl import dispatch, manager, worker_budget
+from inproc import cached_build_ids
 
 REAL_NOTIFY = manager._notify   # the fixture replaces it; the timeout test needs the real one
 TR = '[tracker]\ntype = "mcp"\n'   # a managed profile needs a tracker; one without it is a config error
@@ -32,6 +33,7 @@ def machine(tmp_path, monkeypatch):
         log.append(list(argv))
         return subprocess.CompletedProcess(argv, 1 if argv[:2] == ["tmux", "has-session"] else 0, "", "")
     monkeypatch.setattr(subprocess, "run", run)
+    cached_build_ids(monkeypatch)   # every tick reads the installed build; hash the package once
     notes, alive = [], set()
     monkeypatch.setattr(manager, "_notify", lambda title, msg, cmds=(): notes.append((title, msg)))
     monkeypatch.setattr(manager, "_alive", lambda pid, what, since=None: pid in alive)   # no real kill(pid, 0) or ps

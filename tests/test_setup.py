@@ -10,6 +10,7 @@ import tomllib
 
 import pytest
 
+from inproc import install, script
 from pl import cli, setup
 from pl import config as C
 
@@ -126,6 +127,41 @@ done({"data": {name: {"clientMutationId": None}}})
 """
 
 
+def _gh_in_process(gql):
+    """FAKE_GH as a function, so setup's ~50 gh calls per test start no process; gql runs FAKE_GQL in-process."""
+    def gh(args, env):
+        with open(env["GH_LOG"], "a") as f:
+            f.write(f"GH_CONFIG_DIR={env.get('GH_CONFIG_DIR', '')} {' '.join(args)}\n")
+        unsigned = bool(env.get("GH_UNSIGNED"))
+        sub = " ".join((args + ["", ""])[:2])
+        if sub == "auth status":
+            cfg = env.get("GH_CONFIG_DIR")
+            if unsigned or (cfg and not os.path.exists(os.path.join(cfg, "signed-in"))):
+                return 1, "", "You are not logged into any GitHub hosts.\n"
+            return 0, ("github.com\n  Logged in to github.com account octo (keyring)\n  - Token: gho_PLANTEDTOKEN\n"
+                       "  Logged in to github.com account octo-work (keyring)\n"), ""
+        if sub == "project create":
+            return 0, '{"number": 7, "url": "https://github.com/orgs/acme/projects/7"}\n', ""
+        if sub == "project view":
+            return 0, '{"number": 3, "url": "https://github.com/orgs/acme/projects/3"}\n', ""
+        if sub in ("project field-list", "api graphql") and unsigned:
+            return 4, "", "not logged in\n" if sub == "project field-list" else ""
+        if sub in ("project field-list", "project field-create", "api graphql"):
+            return gql(args, env)
+        if sub == "label list":
+            if unsigned:
+                return 4, "", ""
+            try:
+                with open(env["LABELS_JSON"]) as f:
+                    return 0, f.read(), ""
+            except OSError:
+                return 0, "[]\n", ""
+        if sub == "label create":
+            return 0, "", ""
+        return 9, "", f"unexpected gh {' '.join(args)}\n"
+    return gh
+
+
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
     saved = {k: v for k, v in vars(C).items() if k.isupper()}
@@ -134,7 +170,8 @@ def fake_home(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     bin_ = tmp_path / "bin"
     bin_.mkdir()
-    _exe(bin_ / "gh", FAKE_GH)
+    _exe(bin_ / "gh", FAKE_GH)   # on disk for PATH lookups; calls answer in-process (the same behaviour, no process)
+    install(monkeypatch, {bin_ / "gh": _gh_in_process(script(FAKE_GQL))})
     _exe(bin_ / "claude", "#!/bin/sh\nexit 0\n")
     _exe(bin_ / "uv", '#!/bin/sh\necho "uv $*" >> "$GH_LOG"\n')
     monkeypatch.setenv("PATH", f"{bin_}:/usr/bin:/bin")
