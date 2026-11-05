@@ -1440,7 +1440,8 @@ async def test_a_second_ctrl_x_while_sending_does_nothing(board, monkeypatch):
         await pilot.press(*"split WP2", "ctrl+x")
         await wait_until(pilot, lambda: "sending back" in str(screen.query_one("#review-notes").border_title), "the send-back to start")
         assert "sending back" in str(screen.query_one("#review-notes").border_title)
-        await pilot.press("ctrl+x", "x")
+        await pilot.press("ctrl+x")   # one key per press: both in one call sat out the 5 s gate below
+        await pilot.press("x")
         await pilot.pause()   # nothing to wait for: checks the second press was ignored
         gate.set()
         await settle(pilot)
