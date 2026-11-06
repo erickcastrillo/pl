@@ -236,13 +236,14 @@ class PipelinesScreen(ModalScreen):
     def on_option_list_option_selected(self, event):
         app = self.app
         self.dismiss(None)
+        # On the app, not here: Textual sends a screen's answer through whoever pushed it, and this screen is closing.
         if event.option.id == "new-pipeline":
             from pl.tui.newpipeline import NewPipelineScreen
-            app.push_screen(NewPipelineScreen(), lambda name: name and app.switch_to(name, tab="cards"))
+            app.call_later(app.push_screen, NewPipelineScreen(), lambda name: name and app.switch_to(name, tab="cards"))
             return
         row = self.rows[event.option_index]
         if not row["current"]:
-            self.app.choose_pipeline(row)
+            app.call_later(app.choose_pipeline, row)
 
     def action_cancel(self):
         self.dismiss(None)

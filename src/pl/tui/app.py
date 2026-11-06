@@ -642,9 +642,12 @@ class PlApp(App):
 
     @work(thread=True, group="dispatcher")
     def start_and_switch(self, name, tab):
-        """The start D does inside a stopped pipeline; with the manager off, that pipeline's own console starts it on mount."""
+        """The start D does inside a stopped pipeline. The manager does not run an autostart-off profile, and its console
+        does not start it on mount, so that one starts here; with the manager off, the pipeline's own console starts it."""
         try:
-            if manager.enabled():
+            if manager.autostart_off(name):
+                manager.start_unmanaged(name)
+            elif manager.enabled():
                 if manager.restart(name, "restart", source="console-D") is None:
                     raise RuntimeError("the manager did not answer")
                 if not manager.running():

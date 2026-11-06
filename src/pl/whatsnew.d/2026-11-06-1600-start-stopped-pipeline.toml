@@ -1,0 +1,3 @@
+title = "Choosing a stopped pipeline now starts it and switches"
+where = "P in the console; pl manager restart NAME"
+try = "press P, pick a stopped pipeline, press enter"
