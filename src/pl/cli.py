@@ -4,6 +4,16 @@
                           drop an idea (and files) into Triage on the intake board, unassigned, to be
                           assessed; --start assigns it to you so the pipeline pulls it in;
                           --plan/--slice title the card 'Plan N slice M: <--title or first line>' and record both in its metadata
+  pl idea --interview "text" [--title T] [--account NAME] [--repo NAME]...
+                          on a terminal: the harness asks one question at a time until the brief is clear, then it files to
+                          the Inbox only on your yes; Ctrl-C leaves a draft. --account picks who interviews (the card's stage
+                          agents are chosen as usual); --repo pins a repo tag; --doc, --start, --plan, --slice and --dry-run are refused
+  pl interview start "text" [--title T] [--account NAME] [--repo NAME]... [--json] | answer <idea-id> ["answer"] [--json]
+             | resume <idea-id> | show <idea-id> [--json] | file <idea-id> [--dry-run] [--json] | list [--all] [--json]
+                          the same interview step by step, and the same drafts as the Ideas tab: start and answer each run one
+                          harness turn (up to 180 s) and print the next question or that the brief is clear; a failed turn exits 1
+                          with the draft unchanged (answer with no text retries a first turn that failed); file makes the Inbox
+                          card; resume goes on interactively on a terminal
   pl list [--all] [--plan N]
                           both boards: the Feature Pipeline by column with agent state, then the intake board's
                           cards assigned to you (5 per column; --product shows them all; --all includes Done)
@@ -265,7 +275,7 @@ from pl.util import BadInput
 
 PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFIG_DIR)"
 # commands that change the pipeline; the event is a record for the Activity feed, not a guard
-ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "pull", "adopt",
+ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "interview", "pull", "adopt",
                      "restart", "hold", "unhold", "depends")
 # commands parsed before the profile loads, each by its own module
 PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "tests", "manager", "mcp", "ask")
@@ -365,6 +375,7 @@ def _main():
             pass
     {"idea": cmd_idea, "list": cmd_list, "review": cmd_review, "approve": cmd_approve, "reject": cmd_reject,
      "outbox": cmd_outbox,
+     "interview": lambda a: __import__("pl.interview").interview.cmd_interview(a),
      "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
      "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
@@ -416,6 +427,16 @@ def build_parser():
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
     p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p.add_argument("--interview", action="store_true", help="on a terminal: be questioned until the brief is clear, then file on your yes")
+    p = sub.add_parser("interview"); pi = p.add_subparsers(dest="interview_cmd", required=True)
+    JSON_HELP = "print one JSON document (shape in docs/cli-json.md)"
+    q = pi.add_parser("start"); q.add_argument("text"); q.add_argument("--title"); q.add_argument("--account", choices=list(C.PROFILES), help="who interviews; the card's stage agents are chosen as usual")
+    q.add_argument("--repo", action="append", default=[], help="pin a repo tag on the card"); q.add_argument("--json", action="store_true", help=JSON_HELP)
+    q = pi.add_parser("answer"); q.add_argument("idea_id"); q.add_argument("text", nargs="?", help="the answer; leave out only to retry a first turn that failed"); q.add_argument("--json", action="store_true", help=JSON_HELP)
+    q = pi.add_parser("resume"); q.add_argument("idea_id")
+    q = pi.add_parser("show"); q.add_argument("idea_id"); q.add_argument("--json", action="store_true", help=JSON_HELP)
+    q = pi.add_parser("file"); q.add_argument("idea_id"); q.add_argument("--dry-run", action="store_true", help="say what would be filed and change nothing"); q.add_argument("--json", action="store_true", help=JSON_HELP)
+    q = pi.add_parser("list"); q.add_argument("--all", action="store_true", help="include filed ideas"); q.add_argument("--json", action="store_true", help=JSON_HELP)
     p = sub.add_parser("list"); p.add_argument("--fresh", action="store_true", help="read the board from GitHub, not the shared copy"); p.add_argument("--json", action="store_true", help="print one JSON document (shape in docs/cli-json.md)"); p.add_argument("--all", action="store_true", help="include Done"); p.add_argument("--product", action="store_true", help="only the Product board, every card assigned to you"); p.add_argument("--plan", type=_plan_number, metavar="N", help="only that plan's cards, ordered by slice (Done included)")
     p = sub.add_parser("review"); p.add_argument("what", nargs="?"); p.add_argument("--here", action="store_true", help="open in this terminal (or a tmux window) instead of a new iTerm window")
     p = sub.add_parser("approve"); p.add_argument("id"); p.add_argument("--force", action="store_true"); p.add_argument("--confirm", action="store_true", help="approve a reply that goes to a recipient outside the thread")

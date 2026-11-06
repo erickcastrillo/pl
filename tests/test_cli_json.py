@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pl import alerts, board, commands, events, jsonout, local_model, manager, profiles, skills, standup, update, usage, watch
+from pl import alerts, board, commands, events, harnesses, ideas, interview, jsonout, local_model, manager, profiles, skills, standup, trackers, update, usage, watch
 from pl import config as C
 from pl.trackers import mcp
 
@@ -78,6 +78,21 @@ def fake_machine_reads(monkeypatch):
     monkeypatch.setattr(update, "check", lambda: "v99.0.0")
 
 
+INTERVIEW_ID = "abcdefabcdef"
+CLEAR_BRIEF = {"problem": "p", "who": "w", "outcome": "o", "in_scope": ["i"], "out_of_scope": ["x"], "repos": ["r"], "open_questions": []}
+
+
+@pytest.fixture(autouse=True)
+def fake_interview(monkeypatch, tmp_path):
+    monkeypatch.setattr(C, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(C, "ACCOUNTS", {"work": {"harness": "claude"}})
+    monkeypatch.setattr(harnesses, "_run", lambda argv, **kw: types.SimpleNamespace(
+        returncode=0, stderr="", stdout=json.dumps({"question": None, "brief": CLEAR_BRIEF})))
+    monkeypatch.setattr(trackers, "get", lambda kind: types.SimpleNamespace(
+        cards=lambda: [], columns=lambda: {"Done": "L9"}, create=lambda column, **kw: {"id": "acme/app#8"}))
+    ideas.save({**ideas.new_idea("x", account="work"), "id": INTERVIEW_ID, "asked": True, "brief": CLEAR_BRIEF})
+
+
 def _local_model(a):
     with pytest.raises(SystemExit) as e:
         local_model.cmd_local_model(a)
@@ -89,13 +104,20 @@ NS = {"list": dict(all=False, product=False), "card": dict(id="x", delete=False)
       "usage": dict(since=None, by="account", github=False),
       "standup": dict(since=None, markdown=False, slack=False, summary=False),
       "accounts": dict(reset=None), "profiles": dict(profiles_cmd=None), "intent": dict(pr=PR),
-      "manager-status": {}, "local-model": {}, "whatsnew": {}, "skills-list": dict(skills_cmd="list"), "update-check": dict(check=True)}
+      "manager-status": {}, "local-model": {}, "whatsnew": {}, "skills-list": dict(skills_cmd="list"), "update-check": dict(check=True),
+      "interview-start": dict(interview_cmd="start", text="x", title=None, account=None, repo=[]),
+      "interview-answer": dict(interview_cmd="answer", idea_id=INTERVIEW_ID, text="y"),
+      "interview-show": dict(interview_cmd="show", idea_id=INTERVIEW_ID),
+      "interview-file": dict(interview_cmd="file", idea_id=INTERVIEW_ID, dry_run=False),
+      "interview-list": dict(interview_cmd="list", all=False)}
 FN = {"list": commands.cmd_list, "card": commands.cmd_card, "section": commands.cmd_section, "alerts": alerts.cmd_alerts,
       "usage": usage.cmd_usage, "standup": standup.cmd_standup, "accounts": commands.cmd_profiles,
       "profiles": profiles.cmd_profiles, "intent": commands.cmd_intent,
       "manager-status": lambda a: manager.cmd_manager(["status", "--json"]), "local-model": _local_model,
       "whatsnew": lambda a: __import__("pl.whatsnew").whatsnew.cmd_whatsnew(["--json"]),
-      "skills-list": skills.cmd_skills, "update-check": update.cmd_update}
+      "skills-list": skills.cmd_skills, "update-check": update.cmd_update,
+      "interview-start": interview.cmd_interview, "interview-answer": interview.cmd_interview, "interview-show": interview.cmd_interview,
+      "interview-file": interview.cmd_interview, "interview-list": interview.cmd_interview}
 ALL = list(FN)
 
 

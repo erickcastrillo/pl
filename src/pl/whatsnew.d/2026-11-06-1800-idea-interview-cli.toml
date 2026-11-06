@@ -1,0 +1,3 @@
+title = "The idea interview now runs from the command line and MCP"
+where = "pl idea --interview; pl interview; MCP pl_interview_*"
+try = "pl idea --interview \"your idea\""

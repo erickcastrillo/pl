@@ -242,7 +242,7 @@ def turn(idea, answer=None):
         h = harnesses.get(new["harness"]) if new.get("harness") else harnesses.account_harness(new["account"])
         state = {"title": new["title"], "transcript": new["transcript"], "brief": new["brief"]}
         argv, env = harnesses.headless_argv(h, new["account"], INSTRUCTIONS + json.dumps(state, ensure_ascii=False, indent=1))
-        r = harnesses._run(argv, env=env, cwd=C.WORK_DIR, timeout=180)
+        r = harnesses._run(argv, env=env, cwd=C.WORK_DIR, timeout=180, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return idea, "the harness did not answer within 180 seconds"
     except (OSError, SystemExit) as e:
@@ -255,6 +255,8 @@ def turn(idea, answer=None):
             or not isinstance(obj.get("brief", {}), dict):
         return idea, "the harness did not reply with a JSON object {question, brief}; nothing changed, try again"
     new["brief"] = clean_brief(obj.get("brief") or {}, new["brief"])
+    if pins := new.get("pinned_repos"):     # named with --repo: the person's word, not the harness's to drop
+        new["brief"]["repos"] = pins + [r for r in new["brief"]["repos"] if r not in pins]
     new["question"] = _text(q) if q is not None and q.strip() else None
     new["asked"] = True
     if new["question"]:
@@ -298,7 +300,7 @@ def approve(idea):
                 save(cur)
             except OSError as e:
                 raise SystemExit(f"pl: the card {item['id']} was created but the idea could not be saved ({e}); "
-                                 "press A again to link them")
+                                 "file it again to link them (A in the console, or pl interview file)")
         events.emit("idea_approved", item["id"], idea_id=cur["id"])
         return cur
     finally:

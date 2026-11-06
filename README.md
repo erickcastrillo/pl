@@ -270,7 +270,7 @@ They use only `pl` and `git` (and `gh` for pull requests), so they run on every 
 
 **Use your own skills instead:** set the stage's `prompt` (for example `/my-spec {id}`) in `config.toml` or the Settings tab, and `[loops.auto-review] prompt` for reviews. An account skill with the same name as a built-in wins over the library copy. A profile made before the built-in skills keeps its prompts; `pl setup --use-builtin-stages --slug NAME` switches it, after a backup of `config.toml`, and prints each prompt it changes.
 
-Other commands: `pl setup`, `pl idea`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl section`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl rework`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
+Other commands: `pl setup`, `pl idea`, `pl interview`, `pl list`, `pl review`, `pl approve`, `pl reject`, `pl dispatch`, `pl pull`, `pl adopt`, `pl done`, `pl move`, `pl retry`, `pl board init`, `pl card`, `pl section`, `pl pause`, `pl resume`, `pl accounts`, `pl intent`, `pl rework`, `pl standup`, `pl usage`, `pl alerts`, `pl move-agent`, `pl manager`, `pl skills`, `pl whatsnew`. Each has `--help`. `pl --version` prints the installed version.
 
 Every Claude loop restarts fresh when it is idle above 80% of its context window. `[loops.<name>] max_context = 60` sets another percent; `0` turns it off.
 
