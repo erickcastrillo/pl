@@ -10,6 +10,7 @@ import pytest
 
 from pl import accounts, agents, alerts, dispatch, harnesses
 from pl import config as C
+from pl.util import now_iso
 
 REAL_LIVE_WINDOW = dispatch.live_agent_window   # conftest fakes the module name for every other test
 REAL_GATE = dispatch.untrusted_folder   # conftest fakes it for every other test
@@ -379,9 +380,10 @@ def test_the_dispatcher_alerts_on_the_trust_prompt_and_types_nothing(monkeypatch
 
 
 def _trusted_agent(monkeypatch, trusts, **meta):
-    """A Claude spec agent at the trust prompt for /Users/me/Code/Proj; returns (keys sent, events emitted, stops)."""
+    """A Claude spec agent at the trust prompt for /Users/me/Code/Proj; returns (keys sent, events emitted, stops).
+    It started just now: an old start would add a stage_slow warning to the events these tests compare."""
     w = {"stage": "spec", "pane": "%1", "window": "@1", "session_id": "s", "profile": "claude", "harness": "claude",
-         "started_at": "2020-01-01T00:00:00+00:00"}
+         "started_at": now_iso()}
     keys, evs, stops = [], [], []
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: keys.append(a))
     monkeypatch.setattr(dispatch, "notify", lambda t, m: None)

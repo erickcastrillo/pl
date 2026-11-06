@@ -41,6 +41,14 @@ def no_reconcile_in_dispatch_passes(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_slow_work_from_earlier_tests():
+    """slowwork keeps open warnings in memory: left there, the next dispatcher pass on this worker emits a cleared event."""
+    from pl import slowwork
+    slowwork._open.clear()
+    slowwork._since.clear()
+
+
+@pytest.fixture(autouse=True)
 def no_real_idle_clock(monkeypatch):
     """The stall watchdog asks tmux how long each live agent has been quiet: tests see a busy agent."""
     from pl import agents
