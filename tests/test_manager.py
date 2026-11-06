@@ -1428,3 +1428,86 @@ def test_show_without_agent_nice_in_an_old_status_omits_it(machine):
         assert "nice" not in manager.show()
     finally:
         f.close()
+
+
+def _profile(tmp_path, monkeypatch, name, body):
+    d = tmp_path / f".pl-{name}"
+    (d / "state").mkdir(parents=True, exist_ok=True)
+    (d / "config.toml").write_text('[tracker]\ntype = "local"\n\n' + body)
+    return d
+
+
+def test_autostart_off_reads_the_named_profile(tmp_path, monkeypatch):
+    _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    _profile(tmp_path, monkeypatch, "on", "[dispatch]\nautostart = true\n")
+    _profile(tmp_path, monkeypatch, "plain", "")
+    assert manager.autostart_off("off") is True
+    assert manager.autostart_off("on") is False
+    assert manager.autostart_off("plain") is False
+    assert manager.autostart_off("missing") is False
+
+
+def _lock_after(monkeypatch, states):
+    seq = iter(states)
+    last = [False]
+
+    def locked(_path):
+        last[0] = next(seq, last[0])
+        return last[0]
+    monkeypatch.setattr("pl.profiles._is_locked", locked)
+
+
+def test_start_unmanaged_starts_it_clears_old_requests_and_leaves_the_config(tmp_path, monkeypatch):
+    d = _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    before = (d / "config.toml").read_text()
+    for kind in ("stop", "restart"):
+        (manager._path(kind)).mkdir(parents=True)
+        (manager._path(kind) / "off").write_text("cli")
+    calls = []
+    monkeypatch.setattr("pl.dispatch.start_for", lambda *a, **k: calls.append((a, k)))
+    _lock_after(monkeypatch, [False, True])
+    assert "started" in manager.start_unmanaged("off")
+    assert calls[0][0][:2] == (d, "pl-off") and not calls[0][1].get("managed")
+    assert not (manager._path("stop") / "off").exists() and not (manager._path("restart") / "off").exists()
+    assert (d / "config.toml").read_text() == before
+
+
+def test_start_unmanaged_does_nothing_when_it_already_runs(tmp_path, monkeypatch):
+    _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    monkeypatch.setattr("pl.dispatch.start_for", lambda *a, **k: pytest.fail("started twice"))
+    _lock_after(monkeypatch, [True])
+    assert "already running" in manager.start_unmanaged("off")
+
+
+def test_start_unmanaged_raises_when_tmux_refuses(tmp_path, monkeypatch):
+    _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    monkeypatch.setattr("pl.dispatch.start_for", lambda *a, **k: "tmux: no server")
+    _lock_after(monkeypatch, [False])
+    with pytest.raises(RuntimeError, match="tmux: no server"):
+        manager.start_unmanaged("off")
+
+
+def test_start_unmanaged_raises_when_it_never_takes_the_lock(tmp_path, monkeypatch):
+    _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    monkeypatch.setattr("pl.dispatch.start_for", lambda *a, **k: None)
+    monkeypatch.setattr("pl.dispatch.LOCK_WAIT", 0.05)
+    _lock_after(monkeypatch, [False])
+    with pytest.raises(RuntimeError, match="no lock"):
+        manager.start_unmanaged("off")
+
+
+def test_manager_restart_on_autostart_off_starts_it_without_a_request(tmp_path, monkeypatch, capsys):
+    _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    monkeypatch.setattr("pl.dispatch.start_for", lambda *a, **k: None)
+    _lock_after(monkeypatch, [False, True])
+    assert manager.cmd_manager(["restart", "off"]) == 0
+    assert "started" in capsys.readouterr().out
+    assert not (manager._path("restart") / "off").exists()
+
+
+def test_manager_restart_on_autostart_off_exits_non_zero_when_the_start_fails(tmp_path, monkeypatch, capsys):
+    _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+    monkeypatch.setattr("pl.dispatch.start_for", lambda *a, **k: "tmux: no server")
+    _lock_after(monkeypatch, [False])
+    assert manager.cmd_manager(["restart", "off"]) == 1
+    assert "tmux: no server" in capsys.readouterr().err

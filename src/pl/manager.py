@@ -574,6 +574,44 @@ def restart(name, kind="restart", source="cli"):
             + ("" if running() else " (manager not running)"))
 
 
+def autostart_off(name):
+    """The profile says [dispatch] autostart = false, so the manager never runs it and ignores its request files.
+    A profile that is missing or does not load is False here; managed() reports those."""
+    try:
+        t = tomllib.loads((Path.home() / f".pl-{name}" / "config.toml").read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    d = t.get("dispatch")
+    return isinstance(d, dict) and d.get("autostart", True) is False
+
+
+def start_unmanaged(name):
+    """Start an autostart-off profile's dispatcher now, in its own tmux session, without changing its config: it runs
+    until stopped and is not restarted if it exits. Clears its old requests, as the newest request wins. A status line,
+    or RuntimeError when it did not start."""
+    from pl import dispatch
+    from pl.profiles import _is_locked, list_profiles
+    row = next((r for r in list_profiles(check_lock=False) if r["name"] == name), None)
+    if row is None:
+        raise RuntimeError(f"no profile {name}")
+    d = Path(row["dir"])
+    lock = d / "state" / "pl-dispatch.lock"
+    if _is_locked(lock):
+        return f"{name}: its dispatcher is already running"
+    for kind in ("stop", "restart"):
+        (_path(kind) / name).unlink(missing_ok=True)
+    gh = tomllib.loads((d / "config.toml").read_text()).get("code_host", {}).get("gh_config_dir")
+    err = dispatch.start_for(d, row["tmux_session"], d / Path(gh).expanduser() if isinstance(gh, str) and gh else None)
+    if err:
+        raise RuntimeError(err)
+    end = time.monotonic() + dispatch.LOCK_WAIT
+    while not _is_locked(lock):
+        if time.monotonic() > end:
+            raise RuntimeError(f"no lock after {dispatch.LOCK_WAIT:g} s; see tmux window {row['tmux_session']}:dispatch")
+        time.sleep(0.1)
+    return f"{name}: dispatcher started; its autostart is off, so the manager does not restart it if it exits"
+
+
 def _same_install(st):
     """The manager behind status st runs the pl this console runs: the same package folder (a manager from before
     build ids records none: the same Python, from its command line)."""
@@ -789,6 +827,13 @@ def cmd_manager(argv):
     a = ap.parse_args(argv)
     if a.action == "run":
         return _run_loop()
+    if a.action == "restart" and a.profile and autostart_off(a.profile):
+        try:
+            print(start_unmanaged(a.profile))
+        except RuntimeError as e:
+            print(f"pl manager restart: {a.profile}: failed to start its dispatcher: {e}", file=sys.stderr)
+            return 1
+        return 0
     if a.action == "restart" or a.action == "stop" and a.profile:
         note = restart(a.profile, a.action)
         if note is None:

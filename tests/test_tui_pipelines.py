@@ -393,3 +393,60 @@ def test_picker_rows_never_include_new_pipeline():
     rows = picker_rows({"home": _three_summaries()})
     assert len(rows) == 3
     assert all(r["name"] != "+ New pipeline" for r in rows)
+
+
+async def test_enter_in_the_picker_on_a_stopped_pipeline_starts_it_and_switches(monkeypatch):
+    # The picker closes before the prompt answers: the answer must still arrive.
+    fm = _FakeManager(monkeypatch)
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_picker(app, pilot)
+        await pilot.press("down", "down", "enter")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
+        await pilot.press("enter")
+        await wait_until(pilot, lambda: len(fm.calls) == 2 and app.restart_into, "the dispatcher start and the switch")
+        assert fm.calls[0] == ("restart", "support", "restart", "console-D")
+        assert app.restart_into[:2] == ("profile", "support")
+
+
+async def test_s_in_the_picker_on_a_stopped_pipeline_switches(monkeypatch):
+    fm = _FakeManager(monkeypatch)
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_picker(app, pilot)
+        await pilot.press("down", "down", "enter")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
+        await pilot.press("s")
+        await wait_until(pilot, _switched(app), "the switch to support")
+        assert app.restart_into[:2] == ("profile", "support") and fm.calls == []
+
+
+async def test_enter_starts_an_autostart_off_pipeline_directly_and_switches(monkeypatch):
+    fm = _FakeManager(monkeypatch)
+    monkeypatch.setattr(manager, "autostart_off", lambda name: name == "support")
+    started = []
+    monkeypatch.setattr(manager, "start_unmanaged", lambda name: started.append(name) or f"{name}: started")
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _tab_and_press(pilot, app, "alt+3")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
+        await pilot.press("enter")
+        await wait_until(pilot, lambda: app.restart_into, "the switch")
+        assert started == ["support"] and fm.calls == []
+
+
+async def test_a_failed_autostart_off_start_is_shown_and_still_switches(monkeypatch):
+    _FakeManager(monkeypatch)
+    monkeypatch.setattr(manager, "autostart_off", lambda name: True)
+
+    def fail(name):
+        raise RuntimeError("no lock after 5 s")
+    monkeypatch.setattr(manager, "start_unmanaged", fail)
+    app = _app()
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _tab_and_press(pilot, app, "alt+3")
+        await wait_until(pilot, _screen_is(app, StoppedScreen), "the stopped-pipeline prompt")
+        await pilot.press("enter")
+        await wait_until(pilot, lambda: any("no lock" in n.message for n in app._notifications) and app.restart_into,
+                         "the failure notice and the switch")
+        assert app.restart_into[:2] == ("profile", "support")
