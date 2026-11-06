@@ -24,8 +24,9 @@ def _no_dry_run_after():
     trackers.set_dry_run(False)
 
 READ_TOOLS = {"pl_inbox", "pl_list", "pl_card", "pl_section", "pl_alerts", "pl_standup", "pl_usage", "pl_activity",
-              "pl_agents_list", "pl_agents_show"}
-WRITE_TOOLS = {"pl_idea", "pl_section_write", "pl_approve", "pl_agents_use"}
+              "pl_agents_list", "pl_agents_show", "pl_interview_show", "pl_interview_list"}
+WRITE_TOOLS = {"pl_idea", "pl_section_write", "pl_approve", "pl_agents_use", "pl_interview_start", "pl_interview_answer",
+               "pl_interview_file"}
 ALLOWED = READ_TOOLS | WRITE_TOOLS
 CARD = {"id": "acme/app#7", "title": "A card", "list_id": "L1", "tags": [], "updated_at": "2026-10-25T10:00:00+00:00",
         "metadata": {}, "description": "# PIPELINE: SPEC\nthe spec\n"}
@@ -141,6 +142,36 @@ async def test_write_tools_run_the_matching_commands(monkeypatch):
     assert seen == [(["idea", "Add dark mode", "--title", "Dark mode"], None),
                     (["section", "acme/app#7", "SPEC", "--from", "-"], "the new spec"),
                     (["approve", "acme/app#7"], None)]
+
+
+async def test_interview_tools_run_the_matching_commands(monkeypatch):
+    seen = []
+
+    def fake(argv, stdin=None):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, '{"id": "abc"}\n', "")
+
+    monkeypatch.setattr(mcp_serve, "_pl", fake)
+    res = await call("pl_interview_start", {"text": "--title sneaky", "title": "T", "repo": ["api", "web"], "account": "work"})
+    assert json.loads(res.content[0].text) == {"id": "abc"}
+    await call("pl_interview_answer", {"id": "--all", "text": "--dry-run"})
+    await call("pl_interview_answer", {"id": "abc"})
+    await call("pl_interview_show", {"id": "abc"})
+    await call("pl_interview_file", {"id": "abc"})
+    await call("pl_interview_list", {"all": True})
+    assert seen == [["interview", "start", "--json", "--title", "T", "--account", "work", "--repo", "api", "--repo", "web", "--", "--title sneaky"],
+                    ["interview", "answer", "--json", "--", "--all", "--dry-run"],
+                    ["interview", "answer", "--json", "--", "abc"],
+                    ["interview", "show", "--json", "--", "abc"],
+                    ["interview", "file", "--json", "--", "abc"],
+                    ["interview", "list", "--json", "--all"]]
+
+
+async def test_a_failed_interview_turn_becomes_a_tool_error(monkeypatch):
+    monkeypatch.setattr(mcp_serve, "_pl", lambda argv, stdin=None: subprocess.CompletedProcess(
+        argv, 1, '{"id": "abc", "error": "boom"}\n', "pl interview: boom; draft abc kept"))
+    res = await call("pl_interview_answer", {"id": "abc", "text": "email"})
+    assert res.isError and "draft abc kept" in res.content[0].text
 
 
 async def test_section_write_refuses_other_sections():

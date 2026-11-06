@@ -53,6 +53,117 @@
   ],
   "pr": "str"
  },
+ "interview-answer": {
+  "brief": {
+   "in_scope": [
+    "str"
+   ],
+   "open_questions": [],
+   "out_of_scope": [
+    "str"
+   ],
+   "outcome": "str",
+   "problem": "str",
+   "repos": [
+    "str"
+   ],
+   "who": "str"
+  },
+  "card_id": "NoneType",
+  "clear": "bool",
+  "id": "str",
+  "question": "NoneType",
+  "status": "str",
+  "title": "str"
+ },
+ "interview-file": {
+  "brief": {
+   "in_scope": [
+    "str"
+   ],
+   "open_questions": [],
+   "out_of_scope": [
+    "str"
+   ],
+   "outcome": "str",
+   "problem": "str",
+   "repos": [
+    "str"
+   ],
+   "who": "str"
+  },
+  "card_id": "str",
+  "clear": "bool",
+  "id": "str",
+  "question": "NoneType",
+  "status": "str",
+  "title": "str"
+ },
+ "interview-list": {
+  "ideas": [
+   {
+    "card_id": "NoneType",
+    "clear": "bool",
+    "created_at": "str",
+    "id": "str",
+    "question": "NoneType",
+    "status": "str",
+    "title": "str"
+   }
+  ]
+ },
+ "interview-show": {
+  "brief": {
+   "in_scope": [
+    "str"
+   ],
+   "open_questions": [],
+   "out_of_scope": [
+    "str"
+   ],
+   "outcome": "str",
+   "problem": "str",
+   "repos": [
+    "str"
+   ],
+   "who": "str"
+  },
+  "card_id": "NoneType",
+  "clear": "bool",
+  "id": "str",
+  "question": "NoneType",
+  "status": "str",
+  "title": "str",
+  "transcript": [
+   {
+    "role": "str",
+    "text": "str"
+   }
+  ]
+ },
+ "interview-start": {
+  "brief": {
+   "in_scope": [
+    "str"
+   ],
+   "open_questions": [],
+   "out_of_scope": [
+    "str"
+   ],
+   "outcome": "str",
+   "problem": "str",
+   "repos": [
+    "str"
+   ],
+   "who": "str"
+  },
+  "card_id": "NoneType",
+  "clear": "bool",
+  "id": "str",
+  "question": "NoneType",
+  "status": "str",
+  "title": "str"
+ },
  "list": {
   "intake": [],
   "pipeline": [

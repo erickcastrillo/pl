@@ -25,6 +25,9 @@ from pl.util import BadInput, age, load_state, notify, now_iso, parse_iso, short
 
 
 def cmd_idea(a):
+    if getattr(a, "interview", False):
+        from pl import interview
+        return interview.cmd_idea_interview(a)
     text = a.text.strip()
     if not text:
         raise BadInput("pl idea: the idea text is empty")
