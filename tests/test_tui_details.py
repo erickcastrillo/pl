@@ -53,6 +53,7 @@ async def test_details_show_columns_stages_gates_board_loops_agents(monkeypatch)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(details, "_run", fake_run)
+    monkeypatch.setattr(details.manager, "dispatcher_alive", lambda lock: True)
 
     summary = {
         "disp": "running",
@@ -103,6 +104,19 @@ async def test_details_show_columns_stages_gates_board_loops_agents(monkeypatch)
 
         # Dispatcher switch
         assert "D" in rendered
+
+
+async def test_details_header_shows_the_shared_answer(monkeypatch):
+    seen = []
+    monkeypatch.setattr(details, "_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, json.dumps({"name": "sales"}), ""))
+    for alive, word in ((True, "running"), (False, "stopped")):
+        monkeypatch.setattr(details.manager, "dispatcher_alive", lambda lock, alive=alive: seen.append(str(lock)) or alive)
+        screen = DetailsScreen("sales", summary={"disp": "running" if not alive else "stopped"})
+        app = DetailsApp(screen)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot, lambda: screen.data is not None, "the pipeline to load")
+            assert f"● {word}" in screen_text(app)
+    assert all(p.endswith(".pl-sales/state/pl-dispatch.lock") for p in seen)
 
 
 async def test_d_asks_then_runs_the_dispatcher_command(monkeypatch):

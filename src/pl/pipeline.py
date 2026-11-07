@@ -194,8 +194,12 @@ def _profile_pipeline_name(dir_) -> str:
 
 def _list_rows() -> list[dict]:
     from pl import profiles, summary
-    return [{"profile": r["name"], "pipeline": _profile_pipeline_name(r["dir"]),
-             "summary": summary.read(Path(r["dir"]))} for r in profiles.list_profiles(check_lock=False)]
+    rows = []
+    for r in profiles.list_profiles():
+        s = summary.read(Path(r["dir"]))
+        rows.append({"profile": r["name"], "pipeline": _profile_pipeline_name(r["dir"]), "running": r["running"],
+                     "summary": {**s, "running": r["running"]} if s else s})
+    return rows
 
 
 def _fail(msg):
@@ -287,5 +291,5 @@ def cmd_pipelines(a):
             print(json.dumps(rows))
             return
         for r in rows:
-            state = "running" if (r["summary"] or {}).get("running") else "stopped"
+            state = "running" if r["running"] else "stopped"
             print(f"  {r['profile']:<14}{r['pipeline']:<16}{state}")
