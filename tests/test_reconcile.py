@@ -224,3 +224,53 @@ def test_dispatch_once_calls_reconcile(fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(reconcile, "sweep", lambda *a: seen.append(a) or (_ for _ in ()).throw(RuntimeError("boom")))
     fake.run([])
     assert len(seen) == 1
+
+
+# ---------- a run agent that stopped mid-plan ----------
+
+SLICED = "# PIPELINE: PLAN\n### Slice 1: a\nx\n\n### Slice 2: b\ny"
+
+
+def _view(*states, unread=False):
+    return {"slices": [{"k": i + 1, "name": "s", "state": s, "pr": None} for i, s in enumerate(states)], "strays": [], "unread": unread}
+
+
+def test_ac3_stays_in_progress_newest_pr_linked_and_labeled(world, monkeypatch):
+    world.word, world.labels = "finished", []
+    monkeypatch.setattr(reconcile.slices, "view", lambda c, *a, **k: _view("merged", "none"))
+    reconcile.sweep([_card(desc=SLICED, pr_urls=[PR])], {}, {})
+    assert world.moves == [] and "--add-label" in _edits(world)[0]
+
+
+def test_ac4_last_slice_open_moves_to_pr_open(world, monkeypatch):
+    world.word = "finished"
+    monkeypatch.setattr(reconcile.slices, "view", lambda c, *a, **k: _view("merged", "open"))
+    reconcile.sweep([_card(desc=SLICED, pr_urls=[PR])], {}, {})
+    assert world.moves == [("o/r#7", "PR open")]
+
+
+def test_reconcile_unread_pr_retries_and_does_not_move(world, monkeypatch):
+    world.word = "finished"
+    calls = []
+    monkeypatch.setattr(reconcile.slices, "view", lambda c, *a, **k: calls.append(1) or _view("merged", "open", unread=True))
+    st = {}
+    reconcile.sweep([_card(desc=SLICED, pr_urls=[PR])], {}, st)
+    reconcile.sweep([_card(desc=SLICED, pr_urls=[PR])], {}, st)
+    assert world.moves == [] and len(calls) == 2
+
+
+def test_reconcile_part_built_card_is_checked_once_per_agent_session(world, monkeypatch):
+    world.word = "finished"
+    calls = []
+    monkeypatch.setattr(reconcile.slices, "view", lambda c, *a, **k: calls.append(1) or _view("merged", "none"))
+    st = {}
+    for _ in range(2):
+        reconcile.sweep([_card(desc=SLICED, pr_urls=[PR])], {}, st)
+    assert len(calls) == 1
+
+
+def test_reconcile_card_with_no_slices_behaves_as_before(world, monkeypatch):
+    world.word = "finished"
+    monkeypatch.setattr(reconcile.slices, "view", lambda *a, **k: pytest.fail("no slices: no read"))
+    reconcile.sweep([_card(pr_urls=[PR])], {}, {})
+    assert world.moves == [("o/r#7", "PR open")]

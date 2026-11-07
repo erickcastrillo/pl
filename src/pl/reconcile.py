@@ -2,7 +2,7 @@
 import json
 import sys
 
-from pl import agent_screen, agents, alerts, board, events, move_agent, pipeline, rework, worktrees
+from pl import agent_screen, agents, alerts, board, events, move_agent, pipeline, rework, slices, worktrees
 from pl import config as C
 from pl.trackers import github
 from pl.util import cmd_id, parse_iso, short_id
@@ -132,9 +132,10 @@ def _card(c, reg, done, active, empty):
         if not _finished(w, reg) or not (url := (m.get("pr_urls") or [None])[-1] or _lookup(c, col, empty)):
             return
         ok = _link(c, url, changes, active)
-        if ok and col != C.STAGE_DONE_AT["run"]:
+        built = ok and slices.built(c)   # a part-built stack stays In progress; None: unread, try again
+        if built and col != C.STAGE_DONE_AT["run"]:
             ok = _move(c, C.STAGE_DONE_AT["run"], changes, active)
-        ok = ok and _fix_labels(c, url, changes, active)
+        ok = ok and _fix_labels(c, url, changes, active) and built is not None
     else:
         return
     if changes:

@@ -5,7 +5,7 @@ import json
 import re
 import urllib.parse
 
-from pl import agents, board, events, jsonout, judgment, merge_check, rework
+from pl import agents, board, events, jsonout, judgment, merge_check, rework, slices
 from pl import config as C
 from pl.board import col_name, sections
 from pl.trackers import github
@@ -275,6 +275,11 @@ def _finish(card, url, all_cards, dry):
         _save_pending(_pending() - {url})
     if all(_closed(u) for _, _, u in rework._prs(card) if u != url):
         try:
+            if slices.planned(card) and not dry:
+                v = slices.view(card)
+                if v["unread"] or slices.unmerged(v):
+                    print(f"{short_id(card['id'])}: merged; slices left, stays open")   # the next pass holds it with an alert
+                    return
             if not dry:
                 commands.done(card["id"], all_cards)
         except SystemExit as e:
@@ -286,7 +291,7 @@ def _retry_finished(all_cards, dry):
     merge was noted in the pending file before the record was written."""
     pending = _pending()
     for c in all_cards:
-        if col_name(c.get("list_id")) != "PR open":
+        if col_name(c.get("list_id")) != "PR open" or slices.held(c):
             continue
         url = ((c.get("metadata") or {}).get("auto_merged") or {}).get("pr") or next((u for _, _, u in rework._prs(c) if u in pending), None)
         if url:

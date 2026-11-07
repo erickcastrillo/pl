@@ -912,3 +912,40 @@ def test_single_pr_tests_failure_still_goes_to_rework(host):
     _add(host, _card("c1"), _pr(1))
     _run()
     assert ["api", "-X", "POST", "repos/acme/app/issues/1/labels", "-f", "labels[]=pl:needs-rework"] in host.calls
+
+
+# --- sliced plans: the card stays out of Done while a slice is unmerged ---
+
+SLICED = "# PIPELINE: PLAN\n### Slice 1: a\nx\n\n### Slice 2: b\ny"
+
+
+def _view(*states):
+    return {"slices": [{"k": i + 1, "name": "s", "state": s, "pr": None} for i, s in enumerate(states)], "strays": [], "unread": False}
+
+
+def test_ac5_last_recorded_pr_merged_card_stays_out_of_done(passing, monkeypatch, capsys):
+    _add(passing, _card("c1", desc=SLICED), _pr(1))
+    monkeypatch.setattr(merges.slices, "view", lambda c: _view("merged", "none"))
+    assert merges.run_pass(passing.cards, dry=False) == [URL.format(1)]
+    (card,) = passing.cards
+    assert card["list_id"] == "PR open" and "auto_merged" in card["metadata"] and len(_merges_in(passing)) == 1
+    assert "slices left, stays open" in capsys.readouterr().out
+
+
+def test_ac5_held_card_is_not_retried_each_pass(passing, monkeypatch):
+    _add(passing, _card("c1", desc=SLICED), _pr(1))
+    monkeypatch.setattr(merges.slices, "view", lambda c: _view("merged", "none"))
+    merges.run_pass(passing.cards, dry=False)
+    (card,) = passing.cards
+    card["metadata"]["slice_hold"] = {"sig": merges.slices.signature(card), "missing": [2], "strays": []}
+    passing.prs[1]["state"] = "MERGED"
+    passing.updates.clear()
+    merges.run_pass(passing.cards, dry=False)
+    assert passing.updates == [] and len(_merges_in(passing)) == 1
+
+
+def test_all_slices_merged_finishes_as_before(passing, monkeypatch):
+    _add(passing, _card("c1", desc=SLICED), _pr(1))
+    monkeypatch.setattr(merges.slices, "view", lambda c: _view("merged", "merged"))
+    merges.run_pass(passing.cards, dry=False)
+    assert passing.cards[0]["list_id"] == "Done"

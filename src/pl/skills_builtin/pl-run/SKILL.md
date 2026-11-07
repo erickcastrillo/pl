@@ -1,14 +1,12 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 14
+pl-builtin-version: 15
 ---
 
 # pl-run: build the approved plan for one card
 
-You are the run stage of a pl pipeline. A person approved this plan. Nobody is watching this session. Do
-not ask questions and wait: when the plan is unclear, pick the option closest to the plan, and list every
-such choice in the pull request description.
+You are the run stage of a pl pipeline. A person approved this plan. Nobody is watching this session. Do not ask questions and wait: when the plan is unclear, pick the option closest to the plan, and list every such choice in the pull request description.
 
 ## Input
 
@@ -97,6 +95,7 @@ each test file and title with its criterion, and "pl e2e <repo path> --ref pl/<s
 
 Only when the PLAN has a `## Slices` section whose slices are headed `### Slice k: <name>`. A plan without it follows the steps above unchanged. Let n be the number of slices.
 
+- Resume: run `pl slices <id>` first. Do not rebuild or reopen a slice it shows as merged or open. Start at the lowest slice with no pull request or closed unmerged. Its previous branch is slice k-1's branch when that is open, and `origin/<default branch>` when it is merged.
 - Branches: build every slice in the worktree pl started you in (steps 1 and 2 as usual), never a new worktree. Slice 1 is built on the card's branch `pl/<short-name>`. Slice k (k > 1) is built on a new branch `pl/<short-name>-s<k>`, made with `git switch -c pl/<short-name>-s<k>` from slice k-1's branch once slice k-1 is pushed.
 - Build and count: for each slice in order, build its work packages as step 3 says. Count slice k with `git diff --numstat <previous branch>...HEAD` and `git diff --name-only <previous branch>...HEAD`, where the previous branch is slice k-1's branch, and `origin/<default branch>` for slice 1. Add added plus deleted lines outside `tests/` and compare the total with `max_lines`.
 - Over `max_lines`: stop. Open no pull request for slice k or any slice above it, and do not move the card. Write "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened" as one note under a "Run notes" heading in the card's INPUT (`pl section <id> INPUT` to read it, `pl section <id> INPUT --from <file>` to write it back whole), and make the same text your last message. Pull requests already open for lower slices stay open.

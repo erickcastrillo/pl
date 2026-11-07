@@ -369,3 +369,36 @@ def test_ac16_unreadable_pr_named_and_exit_2(host):
     host.prs[2] = (SystemExit("budget"), "")
     out, code = run(slices.cmd_slices, id=None)
     assert code == 2 and "could not check" in out and short(c) in out
+
+
+# ---------- In progress ----------
+
+def in_progress(finished, nums=(1, 2)):
+    return make(column="In progress", nums=nums, worker={"stage": "run", "session_id": "s", "finished_turn": finished})
+
+
+def test_ac8_in_progress_alert_after_finished_turn(host, monkeypatch):
+    monkeypatch.setattr(pr_done.agents, "worker_status", lambda w, reg: ("alive", None))
+    c = in_progress(True)
+    host.prs[1] = ("merged", title(1))
+    host.prs[2] = ("open", title(2))
+    sweep()
+    (a,) = slice_alerts()
+    assert column(c) == "In progress" and "slices 3 have" in a["title"]
+
+
+def test_ac8_no_alert_while_the_agent_is_working(host, monkeypatch):
+    monkeypatch.setattr(pr_done.agents, "worker_status", lambda w, reg: ("alive", None))
+    in_progress(False)
+    sweep()
+    assert slice_alerts() == [] and host.calls == []
+
+
+def test_in_progress_open_stack_with_every_slice_built_raises_no_alert(host, monkeypatch):
+    monkeypatch.setattr(pr_done.agents, "worker_status", lambda w, reg: ("alive", None))
+    in_progress(True, nums=(1, 2, 3))
+    host.prs[1] = ("merged", title(1))
+    host.prs[2] = ("open", title(2))
+    host.prs[3] = ("open", title(3))
+    sweep()
+    assert slice_alerts() == []
