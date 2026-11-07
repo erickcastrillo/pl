@@ -28,9 +28,9 @@ def env(tmp_path, monkeypatch):
         d = argv[1] if argv[0] == "-C" else None
         name = d.rsplit("/", 1)[-1] if d else None
         if argv[2:4] == ["status", "--porcelain"]:
-            return 0, " M f\n" if name in state["dirty"] else ""
+            return state.get("status_rc", 0), " M f\n" if name in state["dirty"] else ""
         if argv[2:3] == ["log"]:
-            return 0, "abc commit\n" if name in state["unpushed"] else ""
+            return state.get("log_rc", 0), "abc commit\n" if name in state["unpushed"] else ""
         if argv[2:3] == ["rev-parse"]:
             return 0, str(root / "common.git") + "\n"
         return 0, ""
@@ -48,10 +48,11 @@ def by_name(rows):
     return {r["name"]: r for r in rows}
 
 
-def test_inventory_ignores_foreign_worktrees(env):
+def test_inventory_lists_foreign_worktrees_as_no_card(env):
     env["make"]("scratch")
     (worktrees.C.WORKTREES_DIR / "plain-file").write_text("x")
-    assert worktrees.inventory() == []
+    rows = worktrees.inventory()
+    assert [(r["name"], r["action"], r["reason"]) for r in rows] == [("scratch", "keep", "no card on this board")]
 
 
 def test_inventory_keeps_uncommitted_and_unpushed(env):
@@ -72,12 +73,113 @@ def test_inventory_keeps_active_cards_and_live_agents(env):
     assert {r["action"] for r in rows.values()} == {"keep"}
 
 
-def test_inventory_marks_clean_done_or_orphaned_for_removal(env):
-    env["make"]("r-pl-fin"); env["make"]("r-pl-gone")
+def test_inventory_marks_clean_done_for_removal(env):
+    env["make"]("r-pl-fin")
     env["cards"] = [card("fin", "Done")]
-    rows = by_name(worktrees.inventory())
-    assert rows["r-pl-fin"]["action"] == rows["r-pl-gone"]["action"] == "remove"
-    assert rows["r-pl-gone"]["card"] is None
+    assert worktrees.inventory()[0]["action"] == "remove"
+
+
+def test_no_card_is_kept_by_report_and_gc(env):
+    env["make"]("r-pl-gone")
+    row = worktrees.inventory()[0]
+    assert (row["action"], row["reason"], row["card"]) == ("keep", "no card on this board", None)
+    assert not any("status" in c for c in env["calls"])
+    worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
+    assert not any("remove" in c for c in env["calls"])
+
+
+def test_status_failure_is_cannot_inspect_never_remove(env):
+    env["make"]("r-pl-fin")
+    env["cards"] = [card("fin", "Done")]
+    env["status_rc"] = 128
+    row = worktrees.inventory()[0]
+    assert (row["action"], row["reason"]) == ("keep", "cannot inspect")
+
+
+def test_log_failure_is_cannot_inspect(env):
+    env["make"]("r-pl-fin")
+    env["cards"] = [card("fin", "Done")]
+    env["log_rc"] = 128
+    assert worktrees.inventory()[0]["reason"] == "cannot inspect"
+
+
+def test_stale_folder_with_git_file_is_state_unknown_not_remove(env):
+    env["make"]("r-pl-fin.stale-20261101-120000")
+    env["cards"] = [card("fin", "Done")]
+    row = worktrees.inventory()[0]
+    assert (row["action"], row["reason"], row["stale"], row["card"]) == ("keep", "stale, state unknown", True, "o/r#fin")
+    assert not any("status" in c for c in env["calls"])
+
+
+def test_plain_stale_folder_is_listed(env):
+    d = C.WORKTREES_DIR / "r-pl-x.stale-20261101-120000-2"
+    d.mkdir()
+    (d / "f").write_text("x" * 10)
+    row = worktrees.inventory()[0]
+    assert (row["stale"], row["size"], row["card"]) == (True, 10, None)
+
+
+def test_symlink_is_not_listed(env, tmp_path):
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (C.WORKTREES_DIR / "r-pl-link.stale-20261101-120000").symlink_to(target)
+    assert worktrees.inventory() == []
+
+
+def test_size_survives_a_file_that_vanishes(env, monkeypatch):
+    env["make"]("r-pl-fin")
+    real = worktrees.os.lstat
+
+    def lstat(p, *a, **k):
+        if str(p).endswith("/f"):
+            raise FileNotFoundError(p)
+        return real(p, *a, **k)
+    monkeypatch.setattr(worktrees.os, "lstat", lstat)
+    assert worktrees._size(C.WORKTREES_DIR / "r-pl-fin") == 9
+
+
+def test_inventory_without_sizes_does_not_walk(env, monkeypatch):
+    env["make"]("r-pl-fin")
+    monkeypatch.setattr(worktrees, "_size", lambda p: pytest.fail("walked"))
+    assert "size" not in worktrees.inventory(sizes=False)[0]
+
+
+def test_list_shows_size_and_total_line(env, capsys):
+    env["make"]("r-pl-fin"); env["make"]("r-pl-busy")
+    env["cards"] = [card("fin", "Done"), card("busy", "In progress")]
+    worktrees.cmd_worktrees(SimpleNamespace(action="list", yes=False, json=False))
+    out = capsys.readouterr().out
+    assert "109 B" in out
+    assert "2 folders, 218 B, 109 B can be removed" in out.splitlines()[-1]
+
+
+def test_list_json_has_rows_and_totals_in_bytes(env, capsys):
+    env["make"]("r-pl-fin"); env["make"]("r-pl-busy")
+    env["cards"] = [card("fin", "Done"), card("busy", "In progress")]
+    worktrees.cmd_worktrees(SimpleNamespace(action="list", yes=False, json=True))
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["total"] == {"folders": 2, "size": 218, "removable": 109}
+    assert {r["name"]: r["size"] for r in doc["rows"]} == {"r-pl-fin": 109, "r-pl-busy": 109}
+
+
+def test_gc_json_is_still_a_list(env, capsys):
+    env["make"]("r-pl-fin")
+    env["cards"] = [card("fin", "Done")]
+    worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=False, json=True))
+    rows = json.loads(capsys.readouterr().out)
+    assert isinstance(rows, list) and rows[0]["size"] == 109
+
+
+def test_empty_folder_prints_zero_total(env, capsys):
+    worktrees.cmd_worktrees(SimpleNamespace(action="list", yes=False, json=False))
+    assert capsys.readouterr().out.strip() == "0 folders, 0 B, 0 B can be removed"
+
+
+def test_bare_worktrees_command_lists():
+    from pl import cli
+    a = cli.build_parser().parse_args(["worktrees"])
+    assert a.action == "list"
+
 
 
 def test_worktrees_list_output(env, capsys):

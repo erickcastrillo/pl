@@ -143,8 +143,8 @@
                           one manager per machine, on by default (every console starts it): it keeps every
                           profile's dispatcher running (those with [dispatch] autostart not false) and writes a
                           machine status the consoles read; machine.toml [manager] enabled = false turns it off
-  pl worktrees list | gc [--dry-run] [--yes] [--json]
-                          the worktrees pl-run made in the worktrees folder: their card, column and keep/remove;
+  pl worktrees [list] | gc [--dry-run] [--yes] [--json]
+                          the worktrees pl-run made in the worktrees folder: their size, card, column and keep/remove, then a total;
                           gc lists what is safe to remove (finished card, clean, all pushed); --yes removes it
   pl update [--check [--json]]  print the commands that update pl (it never runs them); --check says whether a newer
                           release exists. The console and dispatcher check once a day (PL_NO_UPDATE_CHECK=1 or
@@ -614,12 +614,12 @@ def build_parser():
     q.add_argument("--yes", action="store_true", help="do not ask first")
     q = pk.add_parser("disable"); q.add_argument("name"); q.add_argument("--pod", required=True, help="pod name")
     q.add_argument("--yes", action="store_true", help="do not ask first")
-    p = sub.add_parser("worktrees"); p.add_argument("action", choices=["list", "gc", "bootstrap"])
+    p = sub.add_parser("worktrees"); p.add_argument("action", nargs="?", default="list", choices=["list", "gc", "bootstrap"])
     p.add_argument("path", nargs="?", help="bootstrap: the new worktree")
     p.add_argument("--yes", action="store_true", help="gc: remove what the dry run lists (default: only list)")
     p.add_argument("--dry-run", action="store_true", help="gc: list only (the default); bootstrap: say what would be copied, linked and run")
     p.add_argument("--card", help="bootstrap: the card that gets the setup log and, on a failure, a note")
-    p.add_argument("--json", action="store_true", help="gc: the list as JSON")
+    p.add_argument("--json", action="store_true", help="list: {rows, total}; gc: the rows as a list")
     p = sub.add_parser("update"); p.add_argument("--check", action="store_true", help="only say whether a newer pl exists"); p.add_argument("--json", action="store_true", help="with --check: print one JSON document (shape in docs/cli-json.md)")
     p = sub.add_parser("notify"); p.add_argument("action", choices=["test"]); p.add_argument("--chat", metavar="NAME", help="also send the test to this chat connector")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true", help="print the checks as JSON")

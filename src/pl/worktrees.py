@@ -1,10 +1,11 @@
-"""pl worktrees list | gc [--yes] [--json]: the worktrees pl-run made in the profile's worktrees folder, and which are safe to remove.
+"""pl worktrees [list] | gc [--yes] [--json]: the worktrees pl-run made in the profile's worktrees folder, and which are safe to remove.
 sweep(): the same cleanup on dispatcher passes, with the [worktrees] settings."""
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 from collections import deque
@@ -39,38 +40,82 @@ def agent_hold(c):
     return ("running", None) if worker_status(w, registry())[0] in ("alive", "starting") else None
 
 
+_STALE = re.compile(r"\.stale-(\d{8})-(\d{6})(?:-\d+)?$")
+
+
 def _inspect(path, c):
     """(action, reason) for one worktree folder and the card it belongs to, if any."""
-    if c:
-        if hold := agent_hold(c):
-            return "keep", f"agent {hold[0]}"
-        column = col_name(c["list_id"])
-        if column != "Done":
-            return "keep", f"card {column}"
-    if _git(["-C", str(path), "status", "--porcelain"])[1].strip():
+    if not c:
+        return "keep", "no card on this board"
+    if hold := agent_hold(c):
+        return "keep", f"agent {hold[0]}"
+    column = col_name(c["list_id"])
+    if column != "Done":
+        return "keep", f"card {column}"
+    rc, out = _git(["-C", str(path), "status", "--porcelain"])
+    if rc:
+        return "keep", "cannot inspect"
+    if out.strip():
         return "keep", "uncommitted changes"
-    if _git(["-C", str(path), "log", "HEAD", "--not", "--remotes", "--oneline"])[1].strip():
-        return "keep", "unpushed commits"
-    return "remove", "finished card" if c else "no card on the board"
+    rc, out = _git(["-C", str(path), "log", "HEAD", "--not", "--remotes", "--oneline"])
+    if rc:
+        return "keep", "cannot inspect"
+    return ("keep", "unpushed commits") if out.strip() else ("remove", "finished card")
 
 
-def inventory():
+def _stale_row(d, name, cs):
+    c = _card_for(_STALE.split(name)[0].split("-pl-", 1)[-1], cs)
+    return {"name": name, "path": str(d), "card": c["id"] if c else None,
+            "column": col_name(c["list_id"]) if c else None,
+            "action": "keep", "reason": "stale, state unknown", "stale": True}
+
+
+def inventory(sizes=True):
     root = C.WORKTREES_DIR
     if not root or not root.is_dir():
         return []
     cs, rows = cards(), []
     for d in sorted(root.iterdir()):
-        if not (d / ".git").exists() or "-pl-" not in d.name:
+        if d.is_symlink() or not d.is_dir():
             continue
-        c = _card_for(d.name.split("-pl-", 1)[1], cs)
-        action, reason = _inspect(d, c)
-        rows.append({"name": d.name, "path": str(d), "card": c["id"] if c else None,
-                     "column": col_name(c["list_id"]) if c else None, "action": action, "reason": reason})
+        if _STALE.search(d.name):
+            row = _stale_row(d, d.name, cs)
+        elif (d / ".git").exists():
+            c = _card_for(d.name.split("-pl-", 1)[-1], cs)
+            action, reason = _inspect(d, c)
+            row = {"name": d.name, "path": str(d), "card": c["id"] if c else None,
+                   "column": col_name(c["list_id"]) if c else None, "action": action, "reason": reason}
+        else:
+            continue
+        if sizes:
+            row["size"] = _size(d)
+        rows.append(row)
     return rows
 
 
 def _size(path):
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+    total = 0
+    for dirpath, _, files in os.walk(path):
+        for f in files:
+            try:
+                st = os.lstat(os.path.join(dirpath, f))
+            except OSError:
+                continue
+            if not stat.S_ISLNK(st.st_mode):
+                total += st.st_size
+    return total
+
+
+def _human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n} B" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+
+
+def _totals(rows):
+    return {"folders": len(rows), "size": sum(r.get("size", 0) for r in rows),
+            "removable": sum(r.get("size", 0) for r in rows if r["action"] == "remove")}
 
 
 def _remove(rows):
@@ -81,7 +126,7 @@ def _remove(rows):
         if r["action"] != "remove":
             continue
         path = Path(r["path"])
-        size = _size(path)
+        size = r.get("size") if r.get("size") is not None else _size(path)
         common = _git(["-C", r["path"], "rev-parse", "--git-common-dir"])[1].strip()
         rc, out = _git(["--git-dir", common, "worktree", "remove", r["path"]])
         if rc:
@@ -105,10 +150,14 @@ def cmd_worktrees(a):
     rows = inventory()
     if a.action == "gc" and a.json:
         print(json.dumps(rows, indent=1))
+    elif a.action == "list" and a.json:
+        print(json.dumps({"rows": rows, "total": _totals(rows)}, indent=1))
     elif a.action == "list" or not a.yes:
         for r in rows:
             verdict = "remove" if r["action"] == "remove" else f"keep: {r['reason']}"
-            print(f"{r['name']:<50} {r['card'] or '-':<28} {r['column'] or '-':<12} {verdict}")
+            print(f"{r['name']:<50} {_human(r['size']):>9} {r['card'] or '-':<28} {r['column'] or '-':<12} {verdict}")
+        t = _totals(rows)
+        print(f"{t['folders']} folders, {_human(t['size'])}, {_human(t['removable'])} can be removed")
         if a.action == "gc":
             print(f"\n{sum(r['action'] == 'remove' for r in rows)} to remove; nothing changed (pl worktrees gc --yes removes them)")
     if a.action == "gc" and a.yes:
