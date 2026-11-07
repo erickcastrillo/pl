@@ -35,7 +35,12 @@ def env(tmp_path, monkeypatch):
             return 0, str(root / "common.git") + "\n"
         return 0, ""
 
-    monkeypatch.setattr(worktrees, "_git", git)
+    def run(argv, cwd=None, **kw):
+        rc, out = git(["-C", cwd, *argv[1:]] if argv[1] != "--git-dir" else argv[1:])
+        return SimpleNamespace(returncode=rc, stdout=out, stderr="")
+
+    monkeypatch.setattr(worktrees, "_run", run)
+    monkeypatch.setattr(C, "WORK_DIR", None)
     monkeypatch.setattr(worktrees, "cards", lambda: state["cards"])
     monkeypatch.setattr(worktrees, "col_name", lambda cid: cid)
     monkeypatch.setattr(worktrees, "registry", lambda: {})
@@ -200,20 +205,17 @@ def test_worktrees_gc_dry_run_and_json(env, capsys):
     assert not any("remove" in c for c in env["calls"])
 
 
-def test_worktrees_gc_yes_removes_and_reports_space(env, capsys):
+def test_worktrees_gc_yes_removes_and_reports_space(env, capsys, monkeypatch):
     env["make"]("r-pl-fin"); env["make"]("r-pl-busy"); env["make"]("r-pl-bad")
     env["cards"] = [card("fin", "Done"), card("busy", "In progress"), card("bad", "Done")]
-    real = worktrees._git
+    real = worktrees._run
 
-    def flaky(argv):
+    def flaky(argv, **kw):
         if "remove" in argv and argv[-1].endswith("r-pl-bad"):
-            return 1, "locked"
-        return real(argv)
-    worktrees._git = flaky
-    try:
-        worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
-    finally:
-        worktrees._git = real
+            return SimpleNamespace(returncode=1, stdout="locked", stderr="")
+        return real(argv, **kw)
+    monkeypatch.setattr(worktrees, "_run", flaky)
+    worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
     removed = [c[-1] for c in env["calls"] if "remove" in c]
     assert removed == [str(C.WORKTREES_DIR / "r-pl-fin")]
     assert any("prune" in c for c in env["calls"])
@@ -239,17 +241,15 @@ def test_gc_keeps_held_agent_worktree(env):
     assert (row["action"], row["reason"]) == ("keep", "agent held")
 
 
-def test_gc_yes_writes_worktree_cleanup_event(env, tmp_path):
+def test_gc_yes_writes_worktree_cleanup_event(env, tmp_path, monkeypatch):
     from pl import events
     C.STATE_DIR = tmp_path / "state"
     env["make"]("r-pl-fin"); env["make"]("r-pl-bad")
     env["cards"] = [card("fin", "Done"), card("bad", "Done")]
-    real = worktrees._git
-    worktrees._git = lambda argv: (1, "locked") if "remove" in argv and argv[-1].endswith("r-pl-bad") else real(argv)
-    try:
-        worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
-    finally:
-        worktrees._git = real
+    real = worktrees._run
+    monkeypatch.setattr(worktrees, "_run", lambda argv, **kw: SimpleNamespace(returncode=1, stdout="locked", stderr="")
+                        if "remove" in argv and argv[-1].endswith("r-pl-bad") else real(argv, **kw))
+    worktrees.cmd_worktrees(SimpleNamespace(action="gc", yes=True, json=False))
     found = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
     assert [(e["card"], e["by"]) for e in found] == [("o/r#fin", "gc")]
     assert found[0]["path"] == str(C.WORKTREES_DIR / "r-pl-fin")

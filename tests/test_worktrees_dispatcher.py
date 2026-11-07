@@ -154,7 +154,7 @@ def test_sweep_removes_clean_merged_done_card(wt_env):
         "id": "c1",
         "title": "Clean slice 1",
         "list_id": "Done",
-        "metadata": {"pipeline_mode": "auto", "pr_urls": [pr_url]},
+        "metadata": {"pipeline_mode": "auto", "pr_urls": [pr_url], "branch": "pl/c1"},
     }
 
     worktrees.sweep([card])
@@ -291,7 +291,7 @@ def test_sweep_handles_removal_failure_with_warning(wt_env, capsys, monkeypatch)
         "id": "c1",
         "title": "Clean slice 1",
         "list_id": "Done",
-        "metadata": {"pipeline_mode": "auto", "dropped_at": "2026-10-23T00:00:00Z"},
+        "metadata": {"pipeline_mode": "auto", "dropped_at": "2026-10-23T00:00:00Z", "branch": "pl/c1"},
     }
 
     # Should not raise exception
@@ -514,3 +514,60 @@ def test_sweep_names_a_folder_it_could_not_delete(wt_env, capsys, monkeypatch):
     worktrees.sweep([card])
     lines = [l for l in capsys.readouterr().out.splitlines() if str(wt_path) in l]
     assert len(lines) == 1
+
+
+# --- Slice 2: each worktree belongs to its own card ---
+
+
+def _c(id, title, column="Done", **meta):
+    return {"id": id, "title": title, "list_id": column, "metadata": meta}
+
+
+def test_match_ignores_a_card_sharing_the_first_20_characters(wt_env):
+    from pl import worktrees
+    cards = [_c("a", "add the export button to the report page"), _c("b", "add the export button to the board")]
+    p = C.WORKTREES_DIR / "repo-pl-add-the-export-button-to-the-board"
+    assert worktrees._match_card(p, "", cards)["id"] == "b"
+    p2 = C.WORKTREES_DIR / "repo-pl-add-the-export-button-to-something-else"
+    assert worktrees._match_card(p2, "", cards) is None
+
+
+def test_match_ignores_a_card_number_inside_the_name(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-slice-2-of-the-thing"
+    assert worktrees._match_card(p, "pl/slice-2-of-the-thing", [_c("o/r#2", "other work")]) is None
+
+
+def test_match_uses_recorded_worktree_then_branch_then_slug(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-zzz"
+    by_path = _c("p", "one", worktree=str(p))
+    by_branch = _c("b", "two", branch="pl/zzz")
+    by_slug = _c("s", "zzz")
+    assert worktrees._match_card(p, "pl/zzz", [by_slug, by_branch, by_path])["id"] == "p"
+    assert worktrees._match_card(p, "pl/zzz", [by_slug, by_branch])["id"] == "b"
+    assert worktrees._match_card(p, "pl/zzz", [by_slug])["id"] == "s"
+
+
+def test_match_accepts_slice_branch(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-other-name"
+    assert worktrees._match_card(p, "pl/zzz-s3", [_c("s", "zzz")])["id"] == "s"
+    assert worktrees._match_card(p, "pl/zzz-sx", [_c("s", "zzz")]) is None
+
+
+def test_two_cards_same_slug_prefers_the_card_not_done(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-zzz"
+    cards = [_c("old", "zzz", "Done"), _c("live", "zzz", "In progress")]
+    assert worktrees._match_card(p, "pl/zzz", cards)["id"] == "live"
+
+
+def test_no_match_asks_github_nothing(wt_env):
+    from pl import worktrees
+    wt_path = C.WORKTREES_DIR / "repo-pl-nobody"
+    wt_path.mkdir()
+    wt_env.worktrees = [{"path": wt_path, "branch": "pl/nobody"}]
+    others = [_c(f"o{i}", f"Other {i}", pr_urls=[f"https://github.com/org/repo/pull/{i}"]) for i in range(5)]
+    worktrees.sweep(others)
+    assert _gh_views(wt_env) == []

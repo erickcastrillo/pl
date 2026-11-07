@@ -19,12 +19,6 @@ from pl.board import cards, col_name
 from pl.util import mask, slug_of
 
 
-def _git(argv):
-    """The one subprocess seam of this module; tests fake it."""
-    r = subprocess.run(["git", *argv], capture_output=True, text=True)
-    return r.returncode, r.stdout
-
-
 def _card_for(name, cs):
     return next((c for c in cs if (s := slug_of(c)) and name and (s.startswith(name) or name.startswith(s))), None)
 
@@ -52,19 +46,19 @@ def _inspect(path, c):
     column = col_name(c["list_id"])
     if column != "Done":
         return "keep", f"card {column}"
-    rc, out = _git(["-C", str(path), "status", "--porcelain"])
+    rc, out = _in(path, "status", "--porcelain")
     if rc:
         return "keep", "cannot inspect"
     if out.strip():
         return "keep", "uncommitted changes"
-    rc, out = _git(["-C", str(path), "log", "HEAD", "--not", "--remotes", "--oneline"])
+    rc, out = _in(path, "log", "HEAD", "--not", "--remotes", "--oneline")
     if rc:
         return "keep", "cannot inspect"
     return ("keep", "unpushed commits") if out.strip() else ("remove", "finished card")
 
 
 def _stale_row(d, name, cs):
-    c = _card_for(_STALE.split(name)[0].split("-pl-", 1)[-1], cs)
+    c = _match_card(d.with_name(_STALE.sub("", name)), "", cs)
     return {"name": name, "path": str(d), "card": c["id"] if c else None,
             "column": col_name(c["list_id"]) if c else None,
             "action": "keep", "reason": "stale, state unknown", "stale": True}
@@ -75,13 +69,14 @@ def inventory(sizes=True):
     if not root or not root.is_dir():
         return []
     cs, rows = cards(), []
+    branches = {w["path"].resolve(): w.get("branch") or "" for w in _list_worktrees(C.WORK_DIR)} if C.WORK_DIR else {}
     for d in sorted(root.iterdir()):
         if d.is_symlink() or not d.is_dir():
             continue
         if _STALE.search(d.name):
             row = _stale_row(d, d.name, cs)
-        elif (d / ".git").exists():
-            c = _card_for(d.name.split("-pl-", 1)[-1], cs)
+        elif (d / ".git").exists() or d.resolve() in branches:
+            c = _match_card(d, branches.get(d.resolve(), ""), cs)
             action, reason = _inspect(d, c)
             row = {"name": d.name, "path": str(d), "card": c["id"] if c else None,
                    "column": col_name(c["list_id"]) if c else None, "action": action, "reason": reason}
@@ -127,8 +122,8 @@ def _remove(rows):
             continue
         path = Path(r["path"])
         size = r.get("size") if r.get("size") is not None else _size(path)
-        common = _git(["-C", r["path"], "rev-parse", "--git-common-dir"])[1].strip()
-        rc, out = _git(["--git-dir", common, "worktree", "remove", r["path"]])
+        common = _in(path, "rev-parse", "--git-common-dir")[1].strip()
+        rc, out = _in(path.parent, "--git-dir", common, "worktree", "remove", r["path"])
         if rc:
             failed += 1
             print(f"pl worktrees: could not remove {r['name']}: {out.strip() or 'git worktree remove failed'}")
@@ -137,7 +132,7 @@ def _remove(rows):
         removed, freed = removed + 1, freed + size
         commons.add(common)
     for common in commons:
-        _git(["--git-dir", common, "worktree", "prune"])
+        _in(C.WORKTREES_DIR, "--git-dir", common, "worktree", "prune")
     return removed, failed, freed
 
 
@@ -168,6 +163,15 @@ def cmd_worktrees(a):
 
 _run = subprocess.run
 GIT_TIMEOUT = 60
+
+
+def _in(cwd, *args):
+    """(returncode, stdout) of one git command in cwd; a timeout is 124, which reads as cannot inspect."""
+    try:
+        r = _run(["git", *args], capture_output=True, text=True, cwd=str(cwd), timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    return r.returncode, r.stdout or ""
 
 
 def _list_worktrees(work_dir: Path) -> list[dict]:
@@ -340,43 +344,24 @@ def _has_unpushed(path: Path, branch: str | None) -> bool:
     return r_diff.returncode != 0 or int(r_diff.stdout.strip() or "0") > 0
 
 
-def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
-    wt_path = wt["path"].resolve()
-    branch = wt.get("branch") or ""
-    branch_short = branch.removeprefix("pl/")
-    repo_name = Path(C.WORK_DIR).name if C.WORK_DIR else ""
-
-    for c in all_cards:   # the free matches first, over every card: a PR lookup costs a GitHub call
-        m = c.get("metadata") or {}
-        if m.get("worktree") and Path(m["worktree"]).resolve() == wt_path:
-            return c
-        if m.get("branch") and m["branch"] in (branch, branch_short):
-            return c
-
-        slug = slug_of(c)
-        clean_dir = wt_path.name
-        if repo_name:
-            clean_dir = clean_dir.removeprefix(f"{repo_name}-pl-").removeprefix("pl-")
-        if branch_short and (branch_short == slug or branch_short.startswith(slug[:20]) or slug.startswith(branch_short)):
-            return c
-        if clean_dir and (clean_dir == slug or clean_dir.startswith(slug[:20]) or slug.startswith(clean_dir)):
-            return c
-
-        cid = str(c.get("id") or "").split("#")[-1]
-        if cid:
-            parts = {branch_short, clean_dir, *branch_short.split("-"), *clean_dir.split("-")}
-            if cid in parts or f"card-{cid}" in parts or f"pl-{cid}" in parts:
-                return c
-
-    for c in all_cards:
-        for url in (c.get("metadata") or {}).get("pr_urls") or []:
-            if url not in pr_cache:
-                pr_cache[url] = _pr_info(url)
-            pr = pr_cache.get(url)
-            if pr and pr.get("headRefName") in (branch, branch_short):
-                return c
-
+def _match_card(path, branch, all_cards):
+    """The card that owns this worktree, by the recorded path, the recorded branch, the folder's slug or pl/<slug>[-sN];
+    a live card wins over a finished one with the same slug."""
+    name = path.name.split("-pl-", 1)[-1]
+    own = re.fullmatch(r"pl/(.+?)(?:-s\d+)?", branch or "")
+    tests = (lambda c, m: m.get("worktree") and Path(m["worktree"]).resolve() == path.resolve(),
+             lambda c, m: m.get("branch") and m["branch"] == branch,
+             lambda c, m: slug_of(c) == name,
+             lambda c, m: own and slug_of(c) in (own.group(1), (branch or "").removeprefix("pl/")))
+    for test in tests:
+        found = [c for c in all_cards if test(c, c.get("metadata") or {})]
+        if found:
+            return next((c for c in found if _column(c) != "Done"), found[0])
     return None
+
+
+def _column(c):
+    return c.get("column") or col_name(c["list_id"])
 
 
 def sweep(all_cards: list[dict], dry: bool = False) -> None:
@@ -399,7 +384,7 @@ def sweep(all_cards: list[dict], dry: bool = False) -> None:
         except Exception:
             continue
 
-        card = _find_card(wt, all_cards, pr_cache)
+        card = _match_card(wt_path, wt.get("branch") or "", all_cards)
         if not card:
             continue
 
