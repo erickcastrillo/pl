@@ -48,10 +48,10 @@ such choice in the pull request description.
    skill says `pl/<short-name>`.
 
 3. For each work package, in order (an "End-to-end tests" package comes last, as below):
-   1. Write the tests the package lists. Run them with the command `pl tests affected` prints and confirm they fail for the expected reason.
+   1. Write the tests the package lists. Run them with the commands `pl tests affected` prints and confirm they fail for the expected reason.
    2. Make the change the package describes, and nothing else. When `pl section <id> DESIGN` has a `## Mockup` section and the package names an artboard, read that artboard first, build what it shows for this package, and do the section's check before step 5. In pl itself, a what's-new entry is one new file in
       `src/pl/whatsnew.d/` named with the current UTC date and time (`YYYY-MM-DD-HHMM-<slug>.toml`); never edit another entry.
-   3. Run the package's tests until they pass. Run tests only with the command `pl tests affected --json` prints in "command" (`pl tests full`, the full suite, when the JSON has `full` true or the command fails: non-zero exit, or output that is not JSON),
+   3. Run the package's tests until they pass. Run tests only with every command in "commands" of `pl tests affected --json` (`pl tests full`, the full suite, when the JSON has `full` true or the command fails: non-zero exit, or output that is not JSON),
       one run at a time, in the foreground under `timeout 1200`, inside the card's own worktree, never in the main checkout; then run the project's lint command and read both results before going on.
    4. Check `git diff --stat` against the plan's "Minimum change" budget (remove code if over), then commit with a message naming the work package.
 
