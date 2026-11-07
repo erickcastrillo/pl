@@ -141,6 +141,13 @@ def _alive(pid, what, since=None):
     return what in cmd and not (since and up is not None and _clock() - up > since + 5)
 
 
+def dispatcher_alive(lock) -> bool:
+    """The one answer every surface gives to "is this dispatcher running?": the pid in the lock file is a live
+    `pl dispatch`. Takes no lock and creates no file."""
+    pid, since = _holder(Path(lock))
+    return bool(pid) and _alive(pid, "pl dispatch", since)
+
+
 def holder_pid():
     return _holder(_path("manager.lock"))[0]
 
@@ -206,15 +213,16 @@ def managed():
                 C._apply(g, t)
             except Exception:  # noqa: BLE001 - a profile whose loops do not load has none
                 g["SERVICES"] = {}
-            pid, since = _holder(d / "state" / "pl-dispatch.lock")
+            lock = d / "state" / "pl-dispatch.lock"
+            pid = _holder(lock)[0]
             try:   # the pl build the dispatcher started with; None from one older than build ids
-                built = re.search(r" build (\S+)", (d / "state" / "pl-dispatch.lock").read_text())
+                built = re.search(r" build (\S+)", lock.read_text())
             except OSError:
                 built = None
             slots = sum(v for k in ("max_runs", "max_prep")
                         if isinstance(v := g["DISPATCH"].get(k), int) and not isinstance(v, bool))
             out.append({"loops": set(g["SERVICES"]), "slots": slots, "name": name, "dir": d, "session": row["tmux_session"], "pid": pid,
-                        "build": built and built.group(1), "running": bool(pid) and _alive(pid, "pl dispatch", since),
+                        "build": built and built.group(1), "running": dispatcher_alive(lock),
                         "gh": d / Path(gh).expanduser() if isinstance(gh, str) and gh else None,
                         "attention": str(Path(att).expanduser()) if isinstance(att, str) and att else None})
         except Exception as e:  # noqa: BLE001 - one bad profile never stops the others

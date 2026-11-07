@@ -485,6 +485,25 @@ def test_alive_needs_the_command_and_a_start_before_the_lock_was_written(monkeyp
     assert REAL_ALIVE(4, "pl dispatch", since) is True
 
 
+def test_dispatcher_alive_is_false_for_a_dead_or_reused_pid_and_a_missing_lock(tmp_path, monkeypatch):
+    import os
+    lock = tmp_path / "pl-dispatch.lock"
+    assert manager.dispatcher_alive(lock) is False and not lock.exists()
+    lock.write_text("pid 4 on h since 2026-09-30T10:00:00+00:00")
+    monkeypatch.setattr(manager, "_alive", REAL_ALIVE)
+    monkeypatch.setattr(manager, "_clock", lambda: __import__("pl.util", fromlist=["x"]).parse_iso("2026-09-30T10:01:00+00:00"))
+    monkeypatch.setattr(os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    assert manager.dispatcher_alive(lock) is False          # dead pid
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+    out = ["1-02:00:00 python -m pl dispatch\n"]
+    monkeypatch.setattr(manager, "_run", lambda argv, timeout=None: subprocess.CompletedProcess(argv, 0, out[0], ""))
+    assert manager.dispatcher_alive(lock) is True
+    out[0] = "1-02:00:00 vim notes\n"                       # another command has the pid
+    assert manager.dispatcher_alive(lock) is False
+    out[0] = "00:05 python -m pl dispatch\n"                # started after the lock was written
+    assert manager.dispatcher_alive(lock) is False
+
+
 def test_a_tick_checks_the_dispatcher_pid_against_the_lock_time(machine, monkeypatch):
     from pl.util import parse_iso
     (machine["home"] / ".pl-work" / "state" / "pl-dispatch.lock").write_text("pid 9 on h since 2026-09-30T10:00:00+00:00")

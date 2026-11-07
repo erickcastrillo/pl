@@ -75,12 +75,16 @@ def test_second_dispatcher_for_same_profile_refused_other_profile_allowed(fake_h
         child.join(30)
 
 
-def test_list_profiles_running_vs_stopped_and_creates_no_lock(fake_home):
+def test_list_profiles_running_vs_stopped_and_creates_no_lock(fake_home, monkeypatch):
+    from pl import manager
     _profile(fake_home, "busy", '[tracker]\nboard_id = "b-1"\n[accounts.x]\nconfig_dir = "~/hx"\n')
     _profile(fake_home, "idle")
     (fake_home / ".pl-nocfg").mkdir()          # no config.toml: not a profile
-    C.load("busy")
-    lock = dispatch.dispatch_lock()
+    lock = fake_home / ".pl-busy" / "state" / "pl-dispatch.lock"
+    lock.parent.mkdir()
+    lock.write_text("pid 77 on h since 2026-09-30T10:00:00+00:00")
+    alive = {77}
+    monkeypatch.setattr(manager, "_alive", lambda pid, what, since=None: pid in alive and what == "pl dispatch")
     rows = {r["name"]: r for r in profiles.list_profiles()}
     assert set(rows) == {"busy", "idle"}
     assert rows["busy"]["running"] is True and rows["idle"]["running"] is False
@@ -90,8 +94,21 @@ def test_list_profiles_running_vs_stopped_and_creates_no_lock(fake_home):
     assert rows["busy"]["accounts"] == {"x": str(fake_home / "hx")}
     assert not (fake_home / ".pl-idle" / "state").exists()
     assert not (fake_home / ".claude-attention").exists()
-    lock.close()
+    alive.clear()
     assert {r["name"]: r["running"] for r in profiles.list_profiles()}["busy"] is False
+
+
+def test_pl_profiles_never_takes_the_dispatch_lock(fake_home, monkeypatch, capsys):
+    import fcntl
+    _profile(fake_home, "busy")
+    lock = fake_home / ".pl-busy" / "state" / "pl-dispatch.lock"
+    lock.parent.mkdir()
+    lock.write_text("pid 77 on h since 2026-09-30T10:00:00+00:00")
+    taken = []
+    monkeypatch.setattr(fcntl, "flock", lambda f, op: taken.append(f))
+    monkeypatch.setattr(sys, "argv", ["pl", "profiles"])
+    cli.main()
+    assert taken == []
 
 
 def test_list_profiles_has_no_row_without_a_profile_folder(fake_home):

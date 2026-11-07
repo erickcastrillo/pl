@@ -100,8 +100,67 @@ def test_list_reads_the_pipeline_name_and_summary_without_loading_the_profile(fa
     C.load("dev")
     pipeline.cmd_pipelines(_args(pipelines_cmd="list", json=True))
     rows = {r["profile"]: r for r in json.loads(capsys.readouterr().out)}
-    assert rows["sales"]["pipeline"] == "sales" and rows["sales"]["summary"]["running"] is True
+    assert rows["sales"]["pipeline"] == "sales" and rows["sales"]["summary"]["running"] is False
     assert rows["dev"]["pipeline"] == "engineering" and rows["dev"]["summary"] is None
+
+
+def _lock(d, pid=77):
+    (d / "state").mkdir(exist_ok=True)
+    (d / "state" / "pl-dispatch.lock").write_text(f"pid {pid} on h since 2026-09-30T10:00:00+00:00")
+
+
+def _fake_alive(monkeypatch, pids):
+    from pl import manager
+    monkeypatch.setattr(manager, "_alive", lambda pid, what, since=None: pid in pids)
+
+
+def _listed(capsys, **kw):
+    pipeline.cmd_pipelines(_args(pipelines_cmd="list", **kw))
+    return capsys.readouterr().out
+
+
+def test_list_says_stopped_when_the_summary_says_running_but_the_dispatcher_is_gone(fake_home, monkeypatch, capsys):
+    d = _profile(fake_home, "sales", NEW_CLIENT_CONFIG)
+    (d / "state").mkdir()
+    (d / "state" / "summary.json").write_text(json.dumps({"running": True, "at": 1}))
+    _lock(d)
+    _fake_alive(monkeypatch, set())
+    assert "stopped" in _listed(capsys) and "running" not in _listed(capsys)
+
+
+@pytest.mark.parametrize("summary", [{"running": False, "at": 1}, None])
+def test_list_says_running_for_a_live_dispatcher_with_an_old_or_missing_summary(fake_home, monkeypatch, capsys, summary):
+    d = _profile(fake_home, "sales", NEW_CLIENT_CONFIG)
+    (d / "state").mkdir()
+    if summary:
+        (d / "state" / "summary.json").write_text(json.dumps(summary))
+    _lock(d)
+    _fake_alive(monkeypatch, {77})
+    assert "running" in _listed(capsys)
+
+
+def test_list_json_has_a_top_level_running_that_matches_the_text(fake_home, monkeypatch, capsys):
+    live = _profile(fake_home, "live")
+    dead = _profile(fake_home, "dead")
+    for d in (live, dead):
+        (d / "state").mkdir()
+        (d / "state" / "summary.json").write_text(json.dumps({"running": d is dead, "at": 1}))
+    _lock(live, 77)
+    _lock(dead, 78)
+    _fake_alive(monkeypatch, {77})
+    rows = {r["profile"]: r for r in json.loads(_listed(capsys, json=True))}
+    assert rows["live"]["running"] is True and rows["live"]["summary"]["running"] is True
+    assert rows["dead"]["running"] is False and rows["dead"]["summary"]["running"] is False
+    text = _listed(capsys)
+    assert any(ln.split()[0] == "live" and ln.split()[-1] == "running" for ln in text.splitlines())
+    assert any(ln.split()[0] == "dead" and ln.split()[-1] == "stopped" for ln in text.splitlines())
+
+
+def test_list_a_never_started_profile_is_stopped_exits_cleanly_and_creates_no_lock(fake_home, capsys):
+    d = _profile(fake_home, "fresh")
+    out = _listed(capsys)
+    assert out.split()[-1] == "stopped"
+    assert not (d / "state").exists()
 
 
 # ---------- Plan 10 slice 6: add, export, import ----------
