@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed, and turn on auto-merge only for a small, safe pull request that passes. Never merges directly. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 12
+pl-builtin-version: 13
 ---
 
 # pl-review: review labelled pull requests
@@ -72,7 +72,7 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       `pl tests review --base origin/<baseRefName> --label <each label of the pull request>`. Run each command it prints in the
       foreground, one run at a time. For every pull request, stacked or not, the tests are only what `pl tests review --base origin/<baseRefName>` prints; never run `pl tests full` for a pull request that `pl tests review` can select tests for. If `pl tests review` is not available (an older pl), run the command `pl tests full` prints; if
       `pl tests full` is not available either, run the repository's own full test suite once.
-      - Its first line says which set runs and why: "affected: N files", or "full suite: <reason>", with "; plus e2e_ui" when
+      - Its first line says which set runs and why: "affected: N files", "mapped: N commands", "no mapping for N files: ...", joined by `; `, or "full suite: <reason>", with "; plus e2e_ui" when
         the console e2e suite also runs. When it prints only `affected: 0 files`, nothing needs a run and the tests pass.
         `no mapping for N files: ...` means pl cannot tell what tests those files; it is not a pass, and the review comment
         must name those files as not tested. It may follow `affected: N files; `.

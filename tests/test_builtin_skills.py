@@ -307,9 +307,9 @@ def test_pl_review_runs_the_review_test_set():
 
 def test_pl_review_says_no_mapping_is_not_a_pass():
     text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
-    for phrase in ("no mapping", "not a pass", "not tested", "only `affected: 0 files`"):
+    for phrase in ("no mapping", "not a pass", "not tested", "only `affected: 0 files`", "mapped:"):
         assert phrase in text
-    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 12
+    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 13
 
 
 # ---------- pl section: read and write one card section ----------
@@ -824,6 +824,11 @@ def test_pl_run_runs_affected_tests_per_package():
         assert words in step, words
 
 
+def test_pl_run_runs_every_command_in_commands():
+    step = _step3()
+    assert 'every command in "commands"' in step and "`full` true" in step and "not JSON" in step
+
+
 def test_pl_run_has_no_final_full_suite_step():
     text = _flat("pl-run")
     assert "run the full test suite once more" not in text
@@ -859,12 +864,12 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v13_is_updated_to_v14(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 13, 14)
+def test_an_unedited_pl_run_v14_is_updated_to_v15(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 14, 15)
 
 
-def test_an_unedited_pl_review_v11_is_updated_to_v12(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 11, 12)
+def test_an_unedited_pl_review_v12_is_updated_to_v13(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 12, 13)
 
 
 def test_a_mockup_binds_design_plan_run_and_review():
