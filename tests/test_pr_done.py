@@ -1,5 +1,6 @@
 """Cards in PR open or In progress move to Done when all their pull requests are merged, on any tracker."""
 import json
+import re
 import types
 
 import pytest
@@ -36,10 +37,15 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def host(monkeypatch):
     """The fake code host: url number -> pull request JSON (or an exception to raise); every call is logged."""
-    h = types.SimpleNamespace(prs={}, calls=[])
+    h = types.SimpleNamespace(prs={}, calls=[], comments={}, reviews={}, comments_fail=None)
 
     def gh(args):
-        if args[0] != "api" or not args[1].startswith("repos/o/r/pulls/"):   # other dispatcher steps' reads
+        if args[:2] == ["api", "--paginate"] and (m := re.match(r"repos/o/r/(?:issues|pulls)/(\d+)/(comments|reviews)", args[2])):
+            h.calls.append(list(args))
+            if h.comments_fail:
+                raise h.comments_fail
+            return "\n".join(json.dumps(x) for x in (h.comments if m.group(2) == "comments" else h.reviews).get(int(m.group(1)), []))
+        if args[0] != "api" or not re.fullmatch(r"repos/o/r/pulls/\d+", args[1]):   # other dispatcher steps' reads
             return "{}"
         h.calls.append(list(args))
         got = h.prs[int(args[1].rsplit("/", 1)[1])]
@@ -565,3 +571,67 @@ def test_held_card_has_no_prs_for_the_other_passes(host):
     host.prs[1] = declared("a")
     sweep(c)
     assert rework._prs(fresh(c)) == []
+
+
+def note(body, who="MEMBER", at="2026-11-04T00:00:00Z"):
+    return {"author_association": who, "body": body, "created_at": at}
+
+
+def test_comment_by_member_holds(host):
+    c = make()
+    host.prs[1] = MERGED
+    host.comments[1] = [note(f"{HEAD}\n- install the timer")]
+    sweep(c)
+    assert column(c) == "PR open" and fresh(c)["metadata"]["manual_steps"]["steps"] == [{"pr": "o/r#1", "text": "install the timer"}]
+
+
+def test_newest_comment_replaces_description(host):
+    c = make()
+    host.prs[1] = declared("old")
+    host.comments[1] = [note(f"{HEAD}\n- newer", at="2026-11-04T00:00:00Z"), note(f"{HEAD}\n- newest", at="2026-11-05T00:00:00Z")]
+    sweep(c)
+    assert [s["text"] for s in fresh(c)["metadata"]["manual_steps"]["steps"]] == ["newest"]
+
+
+def test_comment_saying_none_clears_that_pr_only(host):
+    c = make(urls=(PR1, PR2))
+    host.prs.update({1: declared("a"), 2: declared("b")})
+    host.comments[1] = [note(f"{HEAD}\nNone")]
+    sweep(c)
+    assert fresh(c)["metadata"]["manual_steps"]["steps"] == [{"pr": "o/r#2", "text": "b"}]
+
+
+def test_steps_from_two_prs_are_shown_together(host, capsys):
+    c = make(urls=(PR1, PR2))
+    host.prs.update({1: declared("a"), 2: MERGED})
+    host.comments[2] = [note(f"{HEAD}\n- b")]
+    sweep(c)
+    out = card_text(c, capsys)
+    assert "manual steps remaining (2):" in out and "o/r#1: a" in out and "o/r#2: b" in out
+
+
+def test_comment_by_outsider_is_ignored(host):
+    c = make()
+    host.prs[1] = MERGED
+    host.comments[1] = [note(f"{HEAD}\n- x", who="NONE"), note(f"{HEAD}\n- y", who="CONTRIBUTOR")]
+    sweep(c)
+    assert column(c) == "Done"
+
+
+def test_unreadable_comments_stay_open_then_retry(host):
+    c = make()
+    host.prs[1] = MERGED
+    host.comments_fail = SystemExit("gh: HTTP 403 rate limit")
+    sweep(c)
+    assert column(c) == "PR open"
+    host.comments_fail = None
+    sweep(c)
+    assert column(c) == "Done"
+
+
+def test_review_body_by_member_holds(host):
+    c = make()
+    host.prs[1] = MERGED
+    host.reviews[1] = [{"author_association": "OWNER", "body": f"{HEAD}\n- hand edit", "created_at": "2026-11-04T00:00:00Z"}]
+    sweep(c)
+    assert fresh(c)["metadata"]["manual_steps"]["steps"] == [{"pr": "o/r#1", "text": "hand edit"}]

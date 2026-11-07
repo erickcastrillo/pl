@@ -58,7 +58,7 @@ def host(monkeypatch):
         if args[:2] == ["label", "create"]:
             ns.repo_labels.add(args[2])
         elif args[0] == "api" and "--jq" in args:
-            return "\n".join(ns.comments.get(int(args[2].split("/issues/")[1].split("/")[0]), []))
+            return "\n".join(ns.comments.get(int(args[2].split("/issues/")[1].split("/")[0]), [])) if "/issues/" in args[2] else ""
         elif args[0] == "api" and "/labels/" in args[1] and "-X" not in args:
             if urllib.parse.unquote(args[1].rsplit("/", 1)[1]) not in ns.repo_labels:
                 raise SystemExit("gh: Not Found (HTTP 404)")

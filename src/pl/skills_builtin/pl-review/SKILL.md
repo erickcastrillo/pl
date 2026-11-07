@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed, and turn on auto-merge only for a small, safe pull request that passes. Never merges directly. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 11
+pl-builtin-version: 12
 ---
 
 # pl-review: review labelled pull requests
@@ -102,6 +102,8 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       and do not retry or run `gh pr merge` without `--auto`.
 
       A "depends on unmerged PR #N" finding is a problem: use the "Review finds problems" row, even when the tests pass.
+
+      Anything that needs a person after merge, and any acceptance criterion the review could not prove, goes in the review comment under a `## Manual steps remaining` heading as a list. pl holds the card open for a person once the pull request merges; a later comment with that heading replaces the list for that pull request only until the card is held. Never run `pl done` to clear them.
 
       ```
       gh pr edit <number> --repo <repo> --remove-label <review> --add-label <ready>

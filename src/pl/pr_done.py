@@ -50,9 +50,49 @@ def parse_steps(text):
     return steps[:MAX_STEPS] + ([f"and {len(steps) - MAX_STEPS} more, see the PR"] if len(steps) > MAX_STEPS else [])
 
 
+WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
+COMMENT_JQ = ".[] | {author_association, body, created_at}"
+REVIEW_JQ = ".[] | {author_association, body, created_at: .submitted_at}"
+
+
+def _comments(repo, number):
+    """The comments and review bodies of a pull request, oldest first, or None when they cannot be read."""
+    items = []
+    for path, jq in ((f"repos/{repo}/issues/{number}/comments?per_page=100", COMMENT_JQ),
+                     (f"repos/{repo}/pulls/{number}/reviews?per_page=100", REVIEW_JQ)):
+        try:
+            out = github._gh(["api", "--paginate", path, "--jq", jq])
+            items += [x for x in (json.loads(line) for line in out.splitlines() if line.strip()) if isinstance(x, dict)]
+        except (SystemExit, ValueError, AttributeError):
+            return None
+    return sorted(items, key=lambda x: x.get("created_at") or "")
+
+
+def _declared(p):
+    """The steps one pull request declares: the newest section by a person with write access wins over the description's.
+    None when its comments cannot be read."""
+    items = _comments(p["repo"], p["number"])
+    if items is None:
+        return None
+    steps = parse_steps(p["body"])
+    for it in items:
+        if it.get("author_association") in WRITERS and (got := parse_steps(it.get("body") or "")) is not None:
+            steps = got
+    return steps or []
+
+
 def steps_of(states):
-    """[{"pr": "o/r#1", "text": ...}] across the pull requests that were not closed unmerged."""
-    return [{"pr": f"{p['repo']}#{p['number']}", "text": t} for p in states if p["state"] != "closed" for t in parse_steps(p["body"]) or []]
+    """[{"pr": "o/r#1", "text": ...}] across the pull requests that were not closed unmerged, or None when a
+    pull request's comments cannot be read."""
+    out = []
+    for p in states:
+        if p["state"] == "closed":
+            continue
+        got = _declared(p)
+        if got is None:
+            return None
+        out += [{"pr": f"{p['repo']}#{p['number']}", "text": t} for t in got]
+    return out
 
 
 def _state(url, seen):
@@ -138,6 +178,8 @@ def hold_if_declared(c, dry):
     if None in states:
         return True
     steps = steps_of(states)
+    if steps is None:
+        return True
     if steps:
         _hold(c, steps, dry)
     return bool(steps)
@@ -178,6 +220,9 @@ def sweep(all_cards, reg, dry):
         if all(s["state"] == "merged" for s in states):
             if _built(c, len(states)):
                 steps = steps_of(states)
+                if steps is None:
+                    active.add(f"{KEY}{c['id']}")
+                    continue
                 _hold(c, steps, dry) if steps else _close(c, _note(states), dry)
         elif not any(s["state"] == "open" for s in states) and not dry:
             _closed_alert(c, [s for s in states if s["state"] == "closed"], active)
