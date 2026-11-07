@@ -278,6 +278,10 @@ PROFILE_HELP = "pl profile: settings, state and logs in ~/.pl-NAME (or $PL_CONFI
 # commands that change the pipeline; the event is a record for the Activity feed, not a guard
 ASSISTANT_ACTIONS = ("approve", "reject", "done", "drop", "undrop", "move", "retry", "pause", "resume", "move-agent", "idea", "interview", "pull", "adopt",
                      "restart", "hold", "unhold", "depends")
+def _interview_read(a):
+    return a.cmd == "interview" and a.interview_cmd in ("show", "list")
+
+
 # commands parsed before the profile loads, each by its own module
 PRE_COMMANDS = ("setup", "whatsnew", "chat", "e2e", "tests", "manager", "mcp", "ask")
 NO_PROFILE = "pl: no profile yet: run pl setup to create one (or pick one with pl --profile NAME)"
@@ -362,9 +366,9 @@ def _main():
         trackers.set_dry_run()
     from pl import ghquota
     ghquota.set_role(("assistant " if os.environ.get("PL_ASSISTANT") else "") + f"pl {a.cmd}")   # who spends GitHub's budget
-    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in assistant.PL_WRITES and a.cmd != "idea":
+    if os.environ.get("PL_LOOP_WRITES") == "0" and a.cmd in assistant.PL_WRITES and a.cmd != "idea" and not _interview_read(a):
         raise BadInput("pl: read-only loop: file the action as an idea")
-    if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS:   # the Activity feed shows the changes it made
+    if os.environ.get("PL_ASSISTANT") and a.cmd in ASSISTANT_ACTIONS and not _interview_read(a):   # the Activity feed shows the changes it made
         events.emit("assistant_action", getattr(a, "id", None) or getattr(a, "card", None), command=a.cmd)
     if os.environ.get("PL_SOURCE"):
         card_id = getattr(a, "id", None) or getattr(a, "card", None)

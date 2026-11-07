@@ -36,7 +36,7 @@ READ_TOOLS = ["Read", "Glob", "Grep", "LS", "NotebookRead"]
 BRAIN_TOOLS = "mcp__pl-brain__*"
 BRAIN_ASK = ["mcp__pl-brain__pl_file_card"]
 READ_ONLY = ["Bash(pl list*)", "Bash(pl inbox*)", "Bash(pl card *)", "Bash(pl alerts*)", "Bash(pl usage*)", "Bash(pl standup*)", "Bash(pl activity*)",
-             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl help*)", "Bash(pl jobs*)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl agents list*)", "Bash(pl agents show*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl plan*)", "Bash(pl sync*)",
+             "Bash(pl manager status*)", "Bash(pl accounts)", "Bash(pl whatsnew)", "Bash(pl help*)", "Bash(pl jobs*)", "Bash(pl update*)", "Bash(pl local-model*)", "Bash(pl doctor*)", "Bash(pl agents list*)", "Bash(pl agents show*)", "Bash(pl pods list*)", "Bash(pl pods show*)", "Bash(pl pods history*)", "Bash(pl models list*)", "Bash(pl models test*)", "Bash(pl memory search*)", "Bash(pl memory show*)", "Bash(pl pipelines list*)", "Bash(pl pipelines show*)", "Bash(pl titles*)", "Bash(pl plan*)", "Bash(pl sync*)", "Bash(pl interview show*)", "Bash(pl interview list*)",
              "Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(gh pr view*)", "Bash(gh pr list*)"]
 PL_WRITES = ("idea", "interview", "review", "approve", "reject", "dispatch", "pull", "adopt", "done", "drop", "undrop", "move", "board", "retry", "caps", "loops",
              "restart", "hold", "unhold", "rework", "merges", "kill-switch", "link", "outbox", "question", "answer", "retention", "forget", "sandbox", "worktrees", "hook", "depends", "brain",
@@ -48,7 +48,9 @@ GH_TOP = ("agent-task", "alias", "api", "attestation", "auth", "browse", "cache"
 GH_PR_WRITES = ("checkout", "close", "comment", "create", "edit", "lock", "merge", "ready", "reopen", "revert",
                 "review", "unlock", "update-branch")
 # --ac, --r, --d: argparse also takes a unique prefix of a long flag (--ack, --reset, --delete)
-ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES), *(f"Bash(pl agents {c}*)" for c in ("use", "add", "edit", "remove")),
+INTERVIEW_STEPS = ("start", "answer", "resume", "file", "discard")   # show and list are reads
+ASK_RULES = ["Bash(pl -*)", *(f"Bash(pl {c}*)" for c in PL_WRITES if c != "interview"),
+             "Bash(pl interview)", "Bash(pl interview -*)", *(f"Bash(pl interview {c}*)" for c in INTERVIEW_STEPS), *(f"Bash(pl agents {c}*)" for c in ("use", "add", "edit", "remove")),
              "Bash(pl agents -*)", "Bash(pl agents)", "Bash(pl alerts *--ac*)",
              "Bash(pl accounts *--r*)", "Bash(pl card *--d*)", "Bash(pl titles set*)", "Bash(pl titles *--fix*)", "Bash(pl manager *start*)", "Bash(pl manager *stop*)",
              "Bash(pl manager *run*)", "Bash(pl manager -*)", "Bash(gh -*)", *(f"Bash(gh {c}*)" for c in GH_TOP), "Bash(gh pr -*)",
