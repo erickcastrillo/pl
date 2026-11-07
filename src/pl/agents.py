@@ -91,13 +91,21 @@ def slice_order(c):
     return (0, int(m.group(1)), int(m.group(2))) if m else (1, 0, 0)
 
 
+def held_steps(c, col=None):
+    """The manual steps a merged card is held for, only while it is in the column it was held in."""
+    held = (c.get("metadata") or {}).get("manual_steps")
+    if not isinstance(held, dict) or held.get("column") != (col or col_name(c.get("list_id"))):
+        return []
+    return held.get("steps") or []
+
+
 def deps_open(c, all_cards):
     """The ids in metadata.depends_on that are not met: missing from the board, not in Done, or dropped."""
     by_id = {x["id"]: x for x in all_cards}
     unmet = []
     for dep in (c.get("metadata") or {}).get("depends_on") or []:
         d = by_id.get(dep)
-        if not d or col_name(d.get("list_id")) != "Done" or (d.get("metadata") or {}).get("dropped_at"):
+        if not d or (col_name(d.get("list_id")) != "Done" and not held_steps(d)) or (d.get("metadata") or {}).get("dropped_at"):
             unmet.append(dep)
     return unmet
 

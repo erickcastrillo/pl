@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
-from pl.agents import NEW_WINDOW_SCRIPT, deps_open, registry, worker_status, worker_view
+from pl.agents import NEW_WINDOW_SCRIPT, deps_open, held_steps, registry, worker_status, worker_view
 from pl import audit, confirm, events, ghquota, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.trackers.github import OverBudget
@@ -21,7 +21,7 @@ from pl.board import (card, cards, check_size, col_id, col_name, find_card, fres
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, forget_agents, held_gate, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
-from pl.util import BadInput, age, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
+from pl.util import BadInput, age, mask, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
 
 
 def cmd_idea(a):
@@ -466,6 +466,9 @@ def done(ref, cs=None, note=None, reason=None):
     metadata. A live agent is not stopped. Returns lines to show."""
     c = card(pick(ref, cs if cs is not None else cards(), "pl done")["id"])   # two matches: refused, never the first
     meta = {"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None, **({"done_reason": reason} if reason else {})}
+    if steps := held_steps(c):
+        meta["manual_steps"] = None
+        note = "Manual steps open when closed:\n" + "\n".join(f"- {s['pr']}: {s['text']}" for s in steps) + (f"\n\n{note.strip()}" if note and note.strip() else "")
     fields = {}
     if note and note.strip() and not _closed_with(c.get("description") or "", note.strip()):   # a retried move must not add a second section
         fields["description"] = check_size((c.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{note.strip()}\n")
@@ -702,6 +705,10 @@ def cmd_card(a):
         print(f"depends on {', '.join(short_id(d) for d in deps)}")
     if col_name(c["list_id"]) == "Done":
         print(closed_line(c))
+    if steps := held_steps(c):
+        print(f"manual steps remaining ({len(steps)}):")
+        for s in steps:
+            print(f"  {s['pr']}: {mask(s['text'])}")
     if used["caps"]:
         print(_caps_line(used))
     if c.get("unreadable"):
