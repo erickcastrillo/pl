@@ -1,7 +1,7 @@
 ---
 name: pl-plan
 description: Turn a pl card's approved SPEC (and DESIGN, if any) into a plan of small work packages with tests first and a minimum-change budget, write it as the card's PLAN section, and move the card to Plan for review. Use as the plan stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 8
+pl-builtin-version: 9
 ---
 
 # pl-plan: write the implementation plan for one card
@@ -81,6 +81,9 @@ For a sliced plan, budget and Depends on describe the whole plan; each slice sta
 - Tests first: the failing tests to write before the code, by file and test name.
   Cover the main path, one error case, and one regression case when it is a bug fix.
 - Acceptance criteria: which AC-n from the spec this package proves, and how to check it.
+- Mockup: only for a package that adds or changes a screen when the DESIGN has a `## Mockup` section. Name the
+  artboard and the parts of it this package builds. Its acceptance criteria then name the layout order, the exact
+  words and the states that artboard shows.
 
 ### WP2: ...
 ### WPn: End-to-end tests
@@ -136,6 +139,8 @@ artifacts: [frontend/playwright-report, frontend/test-results]
 
 - Every plan has exactly one `Depends on:` line: the card ids this card needs merged first, or `Depends on: none`. Write it at the start of the line, without bold or a list marker.
 - Every acceptance criterion in the spec maps to at least one work package.
+- When the DESIGN has a `## Mockup` section, every package that adds or changes a screen names its artboard, and no
+  package builds a screen, control or wording the artboard does not show.
 - Order the packages so each one leaves the tests green on its own.
 - The End-to-end tests package counts toward the budget like any other package.
 - A small fix is one package of one or two files. Do not split a small change into many packages.

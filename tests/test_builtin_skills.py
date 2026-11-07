@@ -753,7 +753,7 @@ def test_pl_plan_splits_into_vertical_slices():
     for phrase in ("vertical", "60 lines", "Depends on"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 8" in text
+    assert "pl-builtin-version: 9" in text
 
 
 def test_pl_plan_stacks_slices_that_share_a_file():
@@ -852,12 +852,21 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v12_is_updated_to_v13(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 12, 13)
+def test_an_unedited_pl_run_v13_is_updated_to_v14(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 13, 14)
 
 
-def test_an_unedited_pl_review_v9_is_updated_to_v10(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 9, 10)
+def test_an_unedited_pl_review_v10_is_updated_to_v11(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 10, 11)
+
+
+def test_a_mockup_binds_design_plan_run_and_review():
+    design, plan, run, review = (_shipped(n) for n in ("pl-design", "pl-plan", "pl-run", "pl-review"))
+    assert "## Mockup" in design and "Match rule" in design and "Mockup check" in design
+    assert "design system" in design and "never from the mockup" in design
+    assert "artboard" in plan and "## Mockup" in plan
+    assert "## Mockup" in run and "check before step 5" in run
+    assert "Mockup check" in review and "artboard" in review
 
 
 def test_pl_review_tests_a_stacked_pr_against_its_base():

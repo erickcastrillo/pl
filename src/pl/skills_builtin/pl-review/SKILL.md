@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed, and turn on auto-merge only for a small, safe pull request that passes. Never merges directly. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 10
+pl-builtin-version: 11
 ---
 
 # pl-review: review labelled pull requests
@@ -60,6 +60,12 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       - scope: files or features the description does not explain;
       - dependencies: a module, function, file or config key the change imports, calls or edits that is not on `origin/<baseRefName>`. Check with `git grep` on `origin/<baseRefName>`. Code on the base branch, including lower slices of the same stack, is not a finding. When it is missing there, look for it on the other open pull requests from the list in sub-step 1 (`git fetch origin <headRefName>`, then `git grep` on it). Found on an open pull request that is not below this one (above it, or in another stack): report "depends on unmerged PR #N" as a finding. Every pull request must build on its base branch alone;
       - tests: changed behaviour with no test that would fail without the change;
+      - mockup: when the card's DESIGN has a `## Mockup` section (`pl section <card id> DESIGN`, the card id from
+        `pl intent`), compare each changed screen with its artboard: layout and order, exact words, states and
+        controls. Each of these is a finding: a difference the pull request's "Mockup check" section does not
+        explain; a screen, control or wording the artboard does not show; colour, spacing or size values copied from
+        the mockup instead of the design system; a screen change with no "Mockup check" section at all. Design
+        system values that differ slightly from the mockup are not a finding;
       - comments that restate what the code does. List these only when the review already finds other
         problems. A comment alone never makes a pull request need rework.
    5. Run the tests the change needs, inside the review worktree (`${PL_WORKTREES_DIR:-..}/review-<number>`), never in this checkout:
