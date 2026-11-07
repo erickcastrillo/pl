@@ -66,6 +66,10 @@ class FakeGitRunner:
         self.dirty_paths = set()
         self.unpushed_branches = set()
         self.fail_removals = False
+        self.heads = {}       # path -> HEAD sha
+        self.pr_lists = {}    # branch -> merged PR dict found by `gh pr list --head`
+        self.gh_fails = False
+        self.status_fails = set()
 
     def __call__(self, argv, capture_output=True, text=True, cwd=None, check=False, **kw):
         self.commands.append((list(argv), cwd))
@@ -95,12 +99,19 @@ class FakeGitRunner:
 
             elif sub == "status":
                 p = Path(cwd) if cwd else None
+                if p in self.status_fails:
+                    return types.SimpleNamespace(returncode=128, stdout="", stderr="fatal")
                 if p and p in self.dirty_paths:
                     return types.SimpleNamespace(returncode=0, stdout=" M dirty.txt\n", stderr="")
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
             elif sub == "rev-parse":
-                return types.SimpleNamespace(returncode=0, stdout="hash\n", stderr="")
+                return types.SimpleNamespace(returncode=0, stdout=self.heads.get(Path(cwd), "hash") + "\n", stderr="")
+
+            elif sub == "rev-list" and argv[-1] == "--remotes":
+                branch = next((w.get("branch") for w in self.worktrees if w["path"] == Path(cwd)), None)
+                n = 2 if branch in self.unpushed_branches else 0
+                return types.SimpleNamespace(returncode=0, stdout=f"{n}\n", stderr="")
 
             elif sub == "rev-list":
                 spec = argv[-1]
@@ -111,6 +122,11 @@ class FakeGitRunner:
                 return types.SimpleNamespace(returncode=0, stdout="0\n", stderr="")
 
         elif cmd == "gh":
+            if self.gh_fails:
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="boom")
+            if argv[1] == "pr" and argv[2] == "list":
+                hit = self.pr_lists.get(argv[argv.index("--head") + 1])
+                return types.SimpleNamespace(returncode=0, stdout=json.dumps([hit] if hit else []), stderr="")
             if argv[1] == "pr" and argv[2] == "view":
                 url = argv[3]
                 data = self.pr_views.get(url, {"state": "OPEN", "headRefName": "some-branch"})
@@ -154,7 +170,7 @@ def test_sweep_removes_clean_merged_done_card(wt_env):
         "id": "c1",
         "title": "Clean slice 1",
         "list_id": "Done",
-        "metadata": {"pipeline_mode": "auto", "pr_urls": [pr_url]},
+        "metadata": {"pipeline_mode": "auto", "pr_urls": [pr_url], "branch": "pl/c1"},
     }
 
     worktrees.sweep([card])
@@ -291,7 +307,7 @@ def test_sweep_handles_removal_failure_with_warning(wt_env, capsys, monkeypatch)
         "id": "c1",
         "title": "Clean slice 1",
         "list_id": "Done",
-        "metadata": {"pipeline_mode": "auto", "dropped_at": "2026-10-23T00:00:00Z"},
+        "metadata": {"pipeline_mode": "auto", "dropped_at": "2026-10-23T00:00:00Z", "branch": "pl/c1"},
     }
 
     # Should not raise exception
@@ -349,7 +365,7 @@ def test_a_merged_pr_is_asked_about_once_across_passes(wt_env, monkeypatch):
     wt_env.worktrees = [{"path": wt_path, "branch": "pl/c1"}]
     url = "https://github.com/org/repo/pull/1"
     wt_env.pr_views[url] = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z", "headRefName": "pl/c1"}
-    monkeypatch.setattr(worktrees, "_is_dirty", lambda p: True)   # kept, so the next pass looks at it again
+    wt_env.unpushed_branches.add("pl/c1")   # kept, so the next pass looks at it again
     card = {"id": "c1", "title": "C1", "list_id": "Done", "metadata": {"branch": "pl/c1", "pr_urls": [url]}}
     worktrees.sweep([card])
     worktrees.sweep([card])
@@ -492,7 +508,7 @@ def test_sweep_runs_only_worktree_commands_in_the_main_checkout(wt_env):
     allowed = (["git", "worktree", "list"], ["git", "worktree", "remove"], ["git", "worktree", "prune"])
     in_main = [cmd for cmd, cwd in wt_env.commands if str(cwd) == str(C.WORK_DIR)]
     assert any(cmd[:3] == ["git", "worktree", "remove"] for cmd in in_main)
-    assert all(cmd[:3] in allowed for cmd in in_main)
+    assert all(cmd[:3] in allowed for cmd in in_main), in_main
     assert not [cmd for cmd, _ in wt_env.commands if {"reset", "checkout", "stash", "clean"} & set(cmd)]
 
 
@@ -514,3 +530,332 @@ def test_sweep_names_a_folder_it_could_not_delete(wt_env, capsys, monkeypatch):
     worktrees.sweep([card])
     lines = [l for l in capsys.readouterr().out.splitlines() if str(wt_path) in l]
     assert len(lines) == 1
+
+
+# --- Slice 2: each worktree belongs to its own card ---
+
+
+def _c(id, title, column="Done", **meta):
+    return {"id": id, "title": title, "list_id": column, "metadata": meta}
+
+
+def test_match_ignores_a_card_sharing_the_first_20_characters(wt_env):
+    from pl import worktrees
+    cards = [_c("a", "add the export button to the report page"), _c("b", "add the export button to the board")]
+    p = C.WORKTREES_DIR / "repo-pl-add-the-export-button-to-the-board"
+    assert worktrees._match_card(p, "", cards)["id"] == "b"
+    p2 = C.WORKTREES_DIR / "repo-pl-add-the-export-button-to-something-else"
+    assert worktrees._match_card(p2, "", cards) is None
+
+
+def test_match_ignores_a_card_number_inside_the_name(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-slice-2-of-the-thing"
+    assert worktrees._match_card(p, "pl/slice-2-of-the-thing", [_c("o/r#2", "other work")]) is None
+
+
+def test_match_uses_recorded_worktree_then_branch_then_slug(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-zzz"
+    by_path = _c("p", "one", worktree=str(p))
+    by_branch = _c("b", "two", branch="pl/zzz")
+    by_slug = _c("s", "zzz")
+    assert worktrees._match_card(p, "pl/zzz", [by_slug, by_branch, by_path])["id"] == "p"
+    assert worktrees._match_card(p, "pl/zzz", [by_slug, by_branch])["id"] == "b"
+    assert worktrees._match_card(p, "pl/zzz", [by_slug])["id"] == "s"
+
+
+def test_match_accepts_slice_branch(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-other-name"
+    assert worktrees._match_card(p, "pl/zzz-s3", [_c("s", "zzz")])["id"] == "s"
+    assert worktrees._match_card(p, "pl/zzz-sx", [_c("s", "zzz")]) is None
+
+
+def test_two_cards_same_slug_prefers_the_card_not_done(wt_env):
+    from pl import worktrees
+    p = C.WORKTREES_DIR / "repo-pl-zzz"
+    cards = [_c("old", "zzz", "Done"), _c("live", "zzz", "In progress")]
+    assert worktrees._match_card(p, "pl/zzz", cards)["id"] == "live"
+
+
+def test_no_match_asks_github_nothing(wt_env):
+    from pl import worktrees
+    wt_path = C.WORKTREES_DIR / "repo-pl-nobody"
+    wt_path.mkdir()
+    wt_env.worktrees = [{"path": wt_path, "branch": "pl/nobody"}]
+    others = [_c(f"o{i}", f"Other {i}", pr_urls=[f"https://github.com/org/repo/pull/{i}"]) for i in range(5)]
+    worktrees.sweep(others)
+    assert _gh_views(wt_env) == []
+
+
+# --- Slice 3: one decision for report, gc and the dispatcher ---
+
+MERGED = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z"}
+
+
+def _gh_lists(runner):
+    return [cmd for cmd, _ in runner.commands if cmd[:3] == ["gh", "pr", "list"]]
+
+
+def _verdict_of(card):
+    from pl import worktrees
+    rows = worktrees.inventory([card], sizes=False)
+    return rows[0]["action"], rows[0]["reason"]
+
+
+def test_commit_after_pr_last_commit_is_unpushed(wt_env):
+    path, card = _merged_done_card(wt_env)
+    wt_env.unpushed_branches.add("pl/c1")
+    assert _verdict_of(card) == ("keep", "unpushed commits")
+
+
+def test_squash_merged_deleted_branch_head_equals_pr_is_removed(wt_env):
+    path, card = _merged_done_card(wt_env)
+    wt_env.unpushed_branches.add("pl/c1")   # the branch was deleted, so every commit looks unpushed
+    wt_env.heads[path] = "abc123"
+    url = card["metadata"]["pr_urls"][0]
+    wt_env.pr_views[url]["headRefOid"] = "abc123"
+    assert _verdict_of(card) == ("remove", "finished card")
+
+
+def test_old_cache_entry_without_oid_is_asked_once_more(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    path, card = _merged_done_card(wt_env)
+    url = card["metadata"]["pr_urls"][0]
+    worktrees._settled_path().parent.mkdir(parents=True)
+    worktrees._settled_path().write_text(json.dumps({url: {"state": "MERGED", "headRefName": "pl/c1"}}))
+    worktrees.inventory([card], sizes=False)
+    worktrees.inventory([card], sizes=False)
+    assert len(_gh_views(wt_env)) == 1
+
+
+def test_done_card_without_pr_finds_merged_pr_by_branch(wt_env):
+    path, card = _merged_done_card(wt_env)
+    card["metadata"]["pr_urls"] = []
+    wt_env.pr_lists["pl/c1"] = {**MERGED, "headRefName": "pl/c1", "headRefOid": "x"}
+    assert _verdict_of(card) == ("remove", "finished card")
+
+
+def test_done_card_with_no_pr_anywhere_keeps_with_reason(wt_env):
+    path, card = _merged_done_card(wt_env)
+    card["metadata"]["pr_urls"] = []
+    assert _verdict_of(card) == ("keep", "no merged PR on the card")
+
+
+def test_branch_miss_is_not_asked_again_within_a_day(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    path, card = _merged_done_card(wt_env)
+    card["metadata"]["pr_urls"] = []
+    worktrees.inventory([card], sizes=False)
+    worktrees.inventory([card], sizes=False)
+    assert len(_gh_lists(wt_env)) == 1
+
+
+def test_gh_failure_keeps_the_worktree(wt_env):
+    path, card = _merged_done_card(wt_env)
+    wt_env.gh_fails = True
+    assert _verdict_of(card)[0] == "keep"
+
+
+def test_several_repos_keeps_every_row(wt_env):
+    path, card = _merged_done_card(wt_env)
+    (C.WORK_DIR / "a").mkdir()
+    (C.WORK_DIR / "a" / ".git").write_text("x")
+    assert _verdict_of(card) == ("keep", "several repositories in the work folder")
+
+
+def test_sweep_removes_merged_clean_worktree_and_names_card_and_path(wt_env, tmp_path):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    path, card = _merged_done_card(wt_env)
+    worktrees.sweep([card])
+    assert len(_removals(wt_env)) == 1 and str(path) in _removals(wt_env)[0]
+    ev = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
+    assert (ev[0]["card"], ev[0]["path"]) == ("c1", str(path))
+
+
+def test_sweep_leaves_dirty_and_untracked(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    wt_env.dirty_paths.add(path)
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+
+
+def test_sweep_leaves_card_not_done_and_live_agent(wt_env, monkeypatch):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    card["list_id"] = "PR open"
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+
+
+def test_sweep_leaves_uninspectable(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    wt_env.status_fails.add(path)
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+
+
+def test_cleanup_false_removes_nothing_and_report_still_shows(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    C.WORKTREES = {"cleanup": False}
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+    assert worktrees.inventory([card], sizes=False)[0]["action"] == "remove"
+
+
+def test_report_and_sweep_agree_on_every_case(wt_env):
+    from pl import worktrees
+    cases = {"fin": {}, "dirty": {"dirty": 1}, "ahead": {"ahead": 1}, "live": {"col": "In progress"},
+             "nopr": {"nopr": 1}, "broken": {"broken": 1}, "dropped": {"dropped": 1}}
+    cards, registered = [], []
+    for name, how in cases.items():
+        path, card = _merged_done_card(wt_env, name)
+        registered += wt_env.worktrees
+        if how.get("dirty"):
+            wt_env.dirty_paths.add(path)
+        if how.get("ahead"):
+            wt_env.unpushed_branches.add(f"pl/{name}")
+        if how.get("col"):
+            card["list_id"] = how["col"]
+        if how.get("nopr"):
+            card["metadata"]["pr_urls"] = []
+        if how.get("broken"):
+            wt_env.status_fails.add(path)
+        if how.get("dropped"):
+            card["metadata"] = {"dropped_at": "2026-10-23T00:00:00Z"}
+        cards.append(card)
+    wt_env.worktrees = registered
+    expected = {r["name"] for r in worktrees.inventory(cards, sizes=False) if r["action"] == "remove"}
+    worktrees.sweep(cards)
+    removed = {Path(cmd[-1]).name for cmd in _removals(wt_env)}
+    assert removed == expected == {"repo-pl-fin", "repo-pl-dropped"}
+
+
+def test_sweep_does_not_walk_sizes(wt_env, monkeypatch):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    monkeypatch.setattr(worktrees, "_size", lambda p: pytest.fail("walked"))
+    worktrees.sweep([card])
+    assert len(_removals(wt_env)) == 1
+
+
+# --- Slice 4: stale_days and the stale verdicts ---
+
+
+def test_stale_days_default_is_14(fake_home):
+    _profile(fake_home)
+    assert C.WORKTREES["stale_days"] == 14
+    _profile(fake_home, "[worktrees]\nstale_days = 3\n")
+    assert C.WORKTREES["stale_days"] == 3
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "1.5", '"7"', "true"])
+def test_stale_days_validation_error(bad):
+    assert "worktrees.stale_days must be a positive whole number" in C.validate(tomlkit.parse(f"[worktrees]\nstale_days = {bad}\n"))
+
+
+def test_stale_days_validation_accepts_positive_whole_number():
+    assert C.validate(tomlkit.parse("[worktrees]\nstale_days = 7\n")) == []
+
+
+# --- Slice 5: stale retention and gc --stale ---
+
+
+def _stale_folder(name="repo-pl-c1", age_days=20, record=None):
+    import datetime as dt
+    when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=age_days)
+    d = C.WORKTREES_DIR / f"{name}.stale-{when:%Y%m%d-%H%M%S}"
+    d.mkdir()
+    (d / "f").write_text("x")
+    if record is not None:
+        (d / ".pl-set-aside.json").write_text(json.dumps(record))
+    return d
+
+
+SAVED = {"uncommitted": False, "unpushed": 0}
+
+
+def test_sweep_deletes_expired_saved_stale_and_emits_event(wt_env, tmp_path):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    d = _stale_folder(record=SAVED)
+    worktrees.sweep([_c("c1", "c1", "Done")])
+    assert not d.exists()
+    [ev] = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
+    assert (ev["card"], ev["path"], ev["by"]) == ("c1", str(d), "sweep")
+
+
+def test_sweep_keeps_young_unsaved_and_unknown_stale(wt_env):
+    from pl import worktrees
+    young = _stale_folder("repo-pl-a", 2, SAVED)
+    unsaved = _stale_folder("repo-pl-b", 90, {"uncommitted": True, "unpushed": 0})
+    unknown = _stale_folder("repo-pl-c", 90)
+    worktrees.sweep([])
+    assert young.exists() and unsaved.exists() and unknown.exists()
+
+
+def test_cleanup_false_keeps_stale(wt_env):
+    from pl import worktrees
+    d = _stale_folder(record=SAVED)
+    C.WORKTREES = {"cleanup": False, "stale_days": 14}
+    worktrees.sweep([])
+    assert d.exists()
+
+
+def test_remove_stale_refuses_path_outside_worktrees_dir(wt_env, tmp_path, capsys):
+    from pl import worktrees
+    outside = tmp_path / "elsewhere.stale-20260101-000000"
+    outside.mkdir()
+    row = {"name": outside.name, "path": str(outside), "card": None, "action": "remove", "stale": True}
+    assert worktrees._remove([row]) == (0, 1, 0)
+    assert outside.exists()
+
+
+def test_remove_stale_never_follows_a_symlink(wt_env, tmp_path):
+    from pl import worktrees
+    target = tmp_path / "precious"
+    target.mkdir()
+    (target / "f").write_text("x")
+    link = C.WORKTREES_DIR / "repo-pl-c1.stale-20260101-000000"
+    link.symlink_to(target)
+    worktrees._remove([{"name": link.name, "path": str(link), "card": None, "action": "remove", "stale": True}])
+    assert (target / "f").exists() and link.is_symlink()
+
+
+def test_rmtree_failure_is_reported_and_emits_nothing(wt_env, tmp_path, monkeypatch, capsys):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    d = _stale_folder(record=SAVED)
+    monkeypatch.setattr(worktrees.shutil, "rmtree", lambda *a, **k: None)
+    worktrees.sweep([_c("c1", "c1", "Done")])
+    assert d.exists() and str(d) in capsys.readouterr().out
+    assert [e for e in events._read() if e["kind"] == "worktree_cleanup"] == []
+
+
+def test_report_and_sweep_agree_with_stale_folders(wt_env):
+    from pl import worktrees
+    gone = _stale_folder("repo-pl-a", 20, SAVED)
+    _stale_folder("repo-pl-b", 20)
+    _stale_folder("repo-pl-c", 1, SAVED)
+    expected = {r["name"] for r in worktrees.inventory([], sizes=False) if r["action"] == "remove"}
+    worktrees.sweep([])
+    left = {p.name for p in C.WORKTREES_DIR.iterdir()}
+    assert expected == {gone.name} and gone.name not in left and len(left) == 2
+
+
+@pytest.mark.parametrize("record", [{}, {"uncommitted": False}, {"unpushed": 0}, {"uncommitted": 0, "unpushed": 0},
+                                    {"uncommitted": False, "unpushed": False}, {"uncommitted": False, "unpushed": "0"}])
+def test_incomplete_stale_record_fails_closed(wt_env, record):
+    from pl import worktrees
+    d = _stale_folder("repo-pl-x", 90, record)
+    [row] = [r for r in worktrees.inventory([], sizes=False) if r["path"] == str(d)]
+    assert (row["action"], row["reason"]) == ("keep", "stale, state unknown")
+    worktrees.sweep([])
+    assert d.exists()

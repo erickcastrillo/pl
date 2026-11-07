@@ -448,3 +448,79 @@ def test_next_good_start_resolves_alert_and_clears_state(launch):
     dispatch.start_worker(card, "run", 0, False)
     assert resolved == ["worktree:acme/app#7"]
     assert any(kw.get("metadata") == {"worktree_failed": None} for _, kw in launch.updates)
+
+
+# --- Slice 4: the state of a folder is recorded before it is set aside ---
+
+
+class InFolderGit(FakeGit):
+    def __init__(self, dirty="", ahead="0", fail_in_folder=False, **kw):
+        super().__init__(**kw)
+        self.dirty, self.ahead, self.fail_in_folder = dirty, ahead, fail_in_folder
+
+    def __call__(self, argv, **kw):
+        sub = argv[1:]
+        if kw.get("cwd") == str(_dest()):
+            self.calls.append(argv)
+            if self.fail_in_folder:
+                return subprocess.CompletedProcess(argv, 128, "", "fatal")
+            out = {"branch": "pl/feature\n", "rev-parse": "abc123\n", "status": self.dirty, "rev-list": f"{self.ahead}\n"}
+            return subprocess.CompletedProcess(argv, 0, out[sub[0]], "")
+        return super().__call__(argv, **kw)
+
+
+def _registered_folder(monkeypatch, **kw):
+    git = InFolderGit(**kw)
+    monkeypatch.setattr(worktrees, "_run", git)
+    _dest().mkdir(parents=True)
+    (_dest() / ".git").write_text("gitdir: x")
+    (_dest() / "work.txt").write_text("keep")
+    return git
+
+
+def _record_of(folder):
+    return worktrees._read_stale_record(folder)
+
+
+def test_set_aside_records_state_readable_after_rename(monkeypatch):
+    _registered_folder(monkeypatch)
+    REAL_FOR_RUN(CARD)
+    [moved] = _stale_siblings()
+    rec = _record_of(moved)
+    assert (rec["card"], rec["branch"], rec["head"], rec["uncommitted"], rec["unpushed"]) == (CARD["id"], "pl/feature", "abc123", False, 0)
+    assert rec["at"]
+
+
+def test_set_aside_records_dirty_and_unpushed(monkeypatch):
+    _registered_folder(monkeypatch, dirty=" M f\n", ahead="2")
+    REAL_FOR_RUN(CARD)
+    rec = _record_of(_stale_siblings()[0])
+    assert (rec["uncommitted"], rec["unpushed"]) == (True, 2)
+
+
+def test_set_aside_git_failure_writes_no_record(monkeypatch):
+    _registered_folder(monkeypatch, fail_in_folder=True)
+    REAL_FOR_RUN(CARD)
+    assert _record_of(_stale_siblings()[0]) is None
+
+
+def test_plain_folder_gets_no_record(monkeypatch):
+    monkeypatch.setattr(worktrees, "_run", FakeGit())
+    _dest().mkdir(parents=True)
+    (_dest() / "x").write_text("x")
+    REAL_FOR_RUN(CARD)
+    assert not list(_stale_siblings()[0].glob(".pl-set-aside.json"))
+
+
+def test_failed_rename_removes_record(monkeypatch):
+    _registered_folder(monkeypatch)
+    monkeypatch.setattr(worktrees.os, "rename", lambda *a: (_ for _ in ()).throw(OSError(13, "denied")))
+    path, err = REAL_FOR_RUN(CARD)
+    assert path is None and "denied" in err
+    assert not (_dest() / ".pl-set-aside.json").exists()
+
+
+def test_record_is_mode_0600(monkeypatch):
+    _registered_folder(monkeypatch)
+    REAL_FOR_RUN(CARD)
+    assert (_stale_siblings()[0] / ".pl-set-aside.json").stat().st_mode & 0o777 == 0o600
