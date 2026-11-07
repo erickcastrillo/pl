@@ -111,8 +111,9 @@ def held(c):
     return h if isinstance(h, dict) and h.get("sig") == signature(c) else None
 
 
-def hold(c, v):
-    h = {"sig": signature(c), "missing": [s["k"] for s in unmerged(v)], "strays": v["strays"]}
+def hold(c, v, left=None):
+    """Record why the card stays open: the slices in left (default the unmerged ones) and the untitled pull requests."""
+    h = {"sig": signature(c), "missing": [s["k"] for s in (unmerged(v) if left is None else left)], "strays": v["strays"]}
     board.update(c["id"], metadata={"slice_hold": h})
     c["metadata"] = {**(c.get("metadata") or {}), "slice_hold": h}
     return h
@@ -189,3 +190,11 @@ def cmd_slices(a):
     if unread:
         print("could not check: " + ", ".join(unread))
         raise SystemExit(2)
+
+
+def built(c):
+    """True when no slice still needs a pull request (always, with no read, for a plan without slices); None when unread."""
+    if not planned(c):
+        return True
+    v = view(c)
+    return None if v["unread"] else not unbuilt(v) and not v["strays"]

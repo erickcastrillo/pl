@@ -852,8 +852,8 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v13_is_updated_to_v14(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 13, 14)
+def test_an_unedited_pl_run_v14_is_updated_to_v15(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 14, 15)
 
 
 def test_an_unedited_pl_review_v10_is_updated_to_v11(lib, shipped):
@@ -1054,3 +1054,10 @@ def test_pl_run_rework_relabels_only_changed_stack_prs():
 
 def test_pl_run_v13_ships_stacked_plans():
     assert skills._builtin("pl-run")[1] >= 13
+
+
+def test_pl_run_stacked_plans_says_how_to_resume():
+    stacked = _stacked()
+    for words in ("Resume: run `pl slices <id>` first", "Do not rebuild or reopen a slice it shows as merged or open",
+                  "lowest slice with no pull request or closed unmerged"):
+        assert words in stacked, words

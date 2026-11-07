@@ -22,6 +22,18 @@ def _ended(c, reg):
     return not w or agents.worker_status(w, reg)[0] == "dead"
 
 
+def _finished_turn(c):
+    return bool(((c.get("metadata") or {}).get("worker") or {}).get("finished_turn"))
+
+
+def _hold_unbuilt(c, seen, active):
+    v = slices.view(c, seen)
+    if v["unread"]:
+        return slices.keep_alert(c, active)
+    if left := slices.unbuilt(v):
+        slices.alert(c, slices.hold(c, v, left), active)
+
+
 def _close(c, note, dry):
     from pl import commands   # commands imports dispatch, which imports this module
     if dry:
@@ -75,7 +87,7 @@ def sweep(all_cards, reg, dry):
         col = board.col_name(c.get("list_id"))
         if c.get("unreadable") or col not in WATCHED or not urls:
             continue
-        if col == "In progress" and not _ended(c, reg):
+        if col == "In progress" and not _ended(c, reg) and not (slices.planned(c) and _finished_turn(c)):
             continue
         if slices.planned(c) and slices.held(c):
             held.add(f"{slices.KEY}{c['id']}")   # held until its pull requests or plan change: no read
@@ -88,6 +100,8 @@ def sweep(all_cards, reg, dry):
             _close_or_hold(c, states, seen, held, dry)
         elif not any(s["state"] == "open" for s in states) and not dry:
             _closed_alert(c, [s for s in states if s["state"] == "closed"], active)
+        elif col == "In progress" and slices.planned(c) and not dry:
+            _hold_unbuilt(c, seen, held)
     if not dry:
         alerts.sweep(KEY, active, notify)
         slices.sweep_alerts(held)
