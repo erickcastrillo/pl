@@ -1,3 +1,5 @@
+import sys
+
 from pl.cli import main
 
-main()
+sys.exit(main())

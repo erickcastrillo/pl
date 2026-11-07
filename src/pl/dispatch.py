@@ -20,7 +20,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, pr_done, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (GATE_RE, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
+from pl.agents import (GATE_RE, held_steps, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
                        run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections
 from pl.product import mirror_to_product, pull_new
@@ -1452,7 +1452,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             print(f"{short_id(c['id'])}  cleared the leftover run release hold")
             update(c["id"], metadata=dict.fromkeys(RELEASE_KEYS))
             m = c["metadata"] = {**m, **dict.fromkeys(RELEASE_KEYS)}
-        if hold_agent_draft(c, col, dry) or stage is None or hold_reason(c) or m.get("question"):   # a split or parked card gets no agent and holds no slot
+        if hold_agent_draft(c, col, dry) or stage is None or hold_reason(c) or m.get("question") or held_steps(c, col):   # a split, parked or manual-step card gets no agent and holds no slot
             mirror_to_product(c, col, dry)
             continue
         mirror_to_product(c, col, dry)
@@ -1780,7 +1780,7 @@ def check_pr_person_alerts(all_cards):
     active = set()
     for c in all_cards:
         m = c.get("metadata") or {}
-        if col_name(c["list_id"]) != C.STAGE_DONE_AT["run"] or m.get("pipeline_mode") != "auto":
+        if col_name(c["list_id"]) != C.STAGE_DONE_AT["run"] or m.get("pipeline_mode") != "auto" or held_steps(c):
             continue
         rw, urls = m.get("rework") or {}, [u for _, _, u in rework._prs(c)]
         why = []
@@ -1886,7 +1886,7 @@ def check_alerts(all_cards, failed, st=None):
     for c in all_cards:
         t = parse_iso(c.get("updated_at") or "")
         if (c.get("metadata") or {}).get("pipeline_mode") == "auto" and col_name(c["list_id"]) == C.STAGE_DONE_AT["run"] \
-                and t and now - t > PR_WAIT:
+                and t and now - t > PR_WAIT and not held_steps(c):
             key = f"pr_waiting:{c['id']}"
             waiting.add(key)
             alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on")

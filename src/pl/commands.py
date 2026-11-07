@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
-from pl.agents import NEW_WINDOW_SCRIPT, deps_open, registry, worker_status, worker_view
+from pl.agents import NEW_WINDOW_SCRIPT, deps_open, held_steps, registry, worker_status, worker_view
 from pl import audit, confirm, events, ghquota, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, slices, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.trackers.github import OverBudget
@@ -21,13 +21,16 @@ from pl.board import (card, cards, check_size, col_id, col_name, find_card, fres
 from pl.dispatch import MAX_ATTEMPTS, approved_label, busy_agents, card_caps, forget_agents, held_gate, paused, stop_worker
 from pl.product import (linked_product_ids, load_seen, product_card, product_cards_mine, product_col, product_lists,
                         intake_configured, pull_new, pull_one, pull_reason_to_skip)
-from pl.util import BadInput, age, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
+from pl.util import BadInput, age, mask, load_state, notify, now_iso, parse_iso, short_id, slug_of, tmux
 
 
 def cmd_idea(a):
     if getattr(a, "interview", False):
         from pl import interview
         return interview.cmd_idea_interview(a)
+    want_hold = getattr(a, "hold", False)
+    if want_hold and a.start:
+        raise BadInput("pl idea: --hold and --start conflict: --hold keeps agents off the card, --start starts it")
     text = a.text.strip()
     if not text:
         raise BadInput("pl idea: the idea text is empty")
@@ -40,6 +43,7 @@ def cmd_idea(a):
             raise SystemExit("pl idea: --plan and --slice go together, both whole numbers from 1")
         title = ideas.plan_title(plan, slice_no, a.title or line)
     from_loop = os.environ.get("PL_LOOP_WRITES") == "0"   # a read-only loop only proposes: unstarted, tagged
+    held = direct and (want_hold or from_loop)   # parked card: the dispatcher starts no agent until pl unhold
     if os.environ.get("PL_DRY_RUN") == "1":
         print(f"would file: {title}")
         return
@@ -66,18 +70,29 @@ def cmd_idea(a):
             **({"plan": plan, "slice": slice_no} if plan is not None else {})}
     desc = "\n".join(["## Where this came from", f"`pl idea`{f' by {C.USER_EMAIL}' if C.USER_EMAIL else ''} on {now_iso()[:10]}.", "", "## The idea"] + body)
     if direct:
-        meta = {**meta, "pipeline_mode": "auto", **({"profile": a.account} if a.account else {})}
+        # a held card gets pipeline_mode only once its parked tag is confirmed (below), so no pass can start it before
+        meta = {**meta, **({"held_at": now_iso(), "held_by": C.USER_EMAIL} if held else {"pipeline_mode": "auto"}),
+                **({"profile": a.account} if a.account else {})}
         desc, title = render({"INPUT": ideas._plain(desc)}), ideas.clean_title(title)
     check_size(desc)
     t = trackers.get("tracker" if direct else "intake")
-    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []),
+    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []) + (["parked"] if held else []),
                     metadata=meta, assigned_to=trackers.me(t) if a.start and not from_loop else None)
+    if trackers.dry_run():   # DryRun.create printed the preview; its placeholder id is not a card
+        return
     if not item.get("id"):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
+    if trackers.dry_run():
+        return
+    if held:
+        if "parked" not in (card(item["id"]).get("tags") or []):
+            raise SystemExit(f"pl idea: the parked tag could not be set on {item['id']}; the card stays out of the pipeline, so no agent starts (pl adopt {item['id']} takes it in)")
+        update(item["id"], metadata={"pipeline_mode": "auto"})
     events.emit("idea_approved", item["id"])
     where = "pipeline board, Inbox" if direct else "intake board, Triage"
     print(f"created {item['id'] if direct else short_id(item['id'])}  {title}\n  {where}, {len(docs)} document(s)\n  {t.url(item['id'])}")
-    print("  the dispatcher writes its spec on its next pass" if direct
+    print(f"  held: no agent starts on it until you run pl unhold {item['id']}" if held
+          else "  the dispatcher writes its spec on its next pass" if direct
           else "  assigned to you: the pipeline pulls it in within a few minutes" if a.start
           else "  unassigned, waiting to be assessed; assign it to yourself (or rerun with --start) to start the pipeline")
 
@@ -436,7 +451,7 @@ def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
     hits = matches(a.id, cards())
     if hits:
-        for line in done(a.id, hits, note=a.note, drop_slices=getattr(a, "drop_slices", None)):
+        for line in done(a.id, hits, note=a.note, reason="pl done", drop_slices=getattr(a, "drop_slices", None)):
             print(line)
         return
     if getattr(a, "drop_slices", None) is not None:
@@ -491,6 +506,9 @@ def done(ref, cs=None, note=None, reason=None, drop_slices=None, checked=False):
     if not checked and slices.planned(c):
         dropped, dropped_text = _dropped_slices(c, drop_slices)
     meta = {"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None, **({"done_reason": reason} if reason else {}), **dropped}
+    if steps := held_steps(c):
+        meta["manual_steps"] = None
+        note = "Manual steps open when closed:\n" + "\n".join(f"- {s['pr']}: {s['text']}" for s in steps) + (f"\n\n{note.strip()}" if note and note.strip() else "")
     fields = {}
     text = "\n".join(t for t in (dropped_text, (note or "").strip()) if t)
     if text and not _closed_with(c.get("description") or "", text):   # a retried move must not add a second section
@@ -602,10 +620,16 @@ def held_move(ref, column, pr, e, was=None):
 def move_card(ref, column, pr=None):
     """The body of pl move, also what the dispatcher replays: record the pull request, then move. Returns the card id."""
     cid = None
+    if column == "Done":
+        fresh_next()
+        t = trackers.get("tracker")
+        cid = t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"]
+        if col_name(card(cid)["list_id"]) != "Done":
+            update(cid, metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "done_reason": "pl move"})
     if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
         fresh_next()     # it writes what it read: never from a copy that may be minutes old
         t = trackers.get("tracker")
-        cid = t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"]   # only the GitHub tracker resolves ids from text
+        cid = cid or (t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"])   # only the GitHub tracker resolves ids from text
         urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})
@@ -693,6 +717,16 @@ def _caps_line(used):
     return f"caps: {mins}   {toks}"
 
 
+def closed_line(c):
+    m = c.get("metadata") or {}
+    if not (m.get("done_at") or m.get("dropped_at")):
+        return "closed: no record"
+    reason = "dropped" if m.get("dropped_at") else m.get("done_reason") or "no reason recorded"
+    n = len(m.get("pr_urls") or [])
+    prs = "no PR" if n == 0 else "1 PR" if n == 1 else f"{n} PRs"
+    return f"closed: {reason}, {prs}, {m.get('dropped_at') or m.get('done_at')}"
+
+
 def cmd_card(a):
     if getattr(a, "fresh", False):
         fresh_next()
@@ -710,6 +744,12 @@ def cmd_card(a):
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
     if deps := (c.get("metadata") or {}).get("depends_on"):
         print(f"depends on {', '.join(short_id(d) for d in deps)}")
+    if col_name(c["list_id"]) == "Done":
+        print(closed_line(c))
+    if steps := held_steps(c):
+        print(f"manual steps remaining ({len(steps)}):")
+        for s in steps:
+            print(f"  {s['pr']}: {mask(s['text'])}")
     if used["caps"]:
         print(_caps_line(used))
     if c.get("unreadable"):

@@ -1,7 +1,7 @@
 ---
 name: pl-review
 description: Review open pull requests that carry pl's review label, then label each one ready, rework or failed, and turn on auto-merge only for a small, safe pull request that passes. Never merges directly. Use as pl's built-in auto-review loop; the arguments name the repository and the labels.
-pl-builtin-version: 11
+pl-builtin-version: 14
 ---
 
 # pl-review: review labelled pull requests
@@ -72,8 +72,10 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       `pl tests review --base origin/<baseRefName> --label <each label of the pull request>`. Run each command it prints in the
       foreground, one run at a time. For every pull request, stacked or not, the tests are only what `pl tests review --base origin/<baseRefName>` prints; never run `pl tests full` for a pull request that `pl tests review` can select tests for. If `pl tests review` is not available (an older pl), run the command `pl tests full` prints; if
       `pl tests full` is not available either, run the repository's own full test suite once.
-      - Its first line says which set runs and why: "affected: N files", or "full suite: <reason>", with "; plus e2e_ui" when
+      - Its first line says which set runs and why: "affected: N files", "mapped: N commands", "no mapping for N files: ...", joined by `; `, or "full suite: <reason>", with "; plus e2e_ui" when
         the console e2e suite also runs. When it prints only `affected: 0 files`, nothing needs a run and the tests pass.
+        `no mapping for N files: ...` means pl cannot tell what tests those files; it is not a pass, and the review comment
+        must name those files as not tested. It may follow `affected: N files; `.
       - The full suite runs when the diff touches conftest.py, pyproject.toml, uv.lock or a `full_on` pattern of `.pl/tests.toml`,
         when `pl tests affected` itself falls back to full, or when the change spans more than `full_over` modules (default 20).
       - e2e_ui is added when the diff touches `src/pl/tui/` or `tests/e2e_ui/`.
@@ -89,11 +91,12 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       - **Data changes**: data backfill routines, bulk data operations, seed scripts, or purge jobs.
       - **Security sensitivity**: auth controllers/handlers, token validation, password/key handling, or role authorization rules.
       - **Size**: changes over `<auto_lines>` lines outside tests or over `<auto_files>` files.
+      - **No mapping**: `pl tests review` printed `no mapping for ...`, so some changed files have no tests. A repository lists test-free paths in `no_tests` of `.pl/tests.toml` to avoid this.
 
       | Outcome | Action |
       | --- | --- |
       | Review passes & Safe for Auto-Merge (Small change, no migrations, no data changes, no security risks) | remove `<review>`, add `<ready>` and `<merge_ready>`, then run `gh pr merge <number> --repo <repo> --auto --squash` |
-      | Review passes & Requires Human Review (Contains migrations, data changes, security sensitivity, or exceeds auto-merge size, or no `merge_ready` argument) | remove `<review>`, add `<ready>` only, comment why a person must merge |
+      | Review passes & Requires Human Review (Contains migrations, data changes, security sensitivity, exceeds auto-merge size, has files with no mapping, or no `merge_ready` argument) | remove `<review>`, add `<ready>` only, comment why a person must merge |
       | Review finds problems | post problems as one PR comment in plain words, remove `<review>`, add both `<ready>` and `<rework>` |
       | Review cannot run | comment why, remove `<review>`, add `<failed>`; a person decides, then adds `<review>` back |
 
@@ -102,6 +105,8 @@ With no `merge_ready` argument, skip that label and auto-merge, and treat every 
       and do not retry or run `gh pr merge` without `--auto`.
 
       A "depends on unmerged PR #N" finding is a problem: use the "Review finds problems" row, even when the tests pass.
+
+      Anything that needs a person after merge, and any acceptance criterion the review could not prove, goes in the review comment under a `## Manual steps remaining` heading as a list. pl holds the card open for a person once the pull request merges; a later comment with that heading replaces the list for that pull request only until the card is held. Never run `pl done` to clear them.
 
       ```
       gh pr edit <number> --repo <repo> --remove-label <review> --add-label <ready>

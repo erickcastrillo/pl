@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from pl import config as C
-from pl import ghquota
+from pl import ghquota, manager
 from pl.accounts import exhausted_profiles, parking
 from pl.agents import died_label, hold_reason, pane_tail, person_wait, registry, worker_status, worker_view
 from pl.board import cards, col_name, sections
@@ -124,8 +124,6 @@ def watch_snapshot():
     pk = {p: parking(p) for p in bad}   # the machine-wide entry too: another profile may have parked it
     prof = "  ".join(f"{p}: " + (f"PARKED until {parked_until(pk[p].get('until'))}" + _checked(pk[p]) if p in bad else "ok")
                      + f" ({per_prof[p]['agents']} running, {per_prof[p]['queued']} queued)" for p in C.PROFILES)
-    disp = subprocess.run(["tmux", "list-panes", "-t", f"{C.TMUX_SESSION}:dispatch", "-F", "#{pane_current_command}"],
-                          capture_output=True, text=True).stdout.strip()
     n_auto = sum(1 for r in rows if r["card"] and (r["card"].get("metadata") or {}).get("pipeline_mode") == "auto")
     pause = paused()
     drain = (f"draining, {busy_agents(reg)} working" if busy_agents(reg) else "DRAINED, safe to shut down") if pause else ""
@@ -141,7 +139,7 @@ def watch_snapshot():
                 + "   |   LOOPS: " + " · ".join(f"{n} {'on' if n in wins.values() else 'off'}" for n in C.SERVICES)
                 + (f"   |   PRs awaiting merge check: {pc['gate']}" if pc else ""))
     return {"rows": rows, "done": done, "prof": prof, "parked": bool(bad), "at": datetime.now().strftime("%H:%M:%S"), "summary": summary, "summary2": summary2,
-            "needs": needs, "disp": "running" if disp.startswith("python") else f"NOT RUNNING ({disp or 'no window'})"}
+            "needs": needs, "disp": "running" if manager.dispatcher_alive(C.LOCK_FILE) else "NOT RUNNING"}
 
 
 def _checked(r):

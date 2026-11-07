@@ -12,7 +12,7 @@ import time
 import pytest
 
 from pl import config as C
-from pl import board, dispatch, events, trackers, watch
+from pl import board, dispatch, events, manager, trackers, watch
 from pl.trackers import github
 from pl.tui import app as tui_app
 from pl.tui.app import PlApp
@@ -747,7 +747,7 @@ def test_an_hour_with_an_idle_dispatcher_the_console_reads_no_board_and_40_searc
     """Measured before: a pass every 300 s (an idle board) and a console refresh every 60 s made 36 board reads
     (24 by the console: it reused a save for 120 s only) and 48 PR searches (4 every 5 minutes)."""
     C.DISPATCH["interval"] = 300                          # the dispatcher's wait on an idle board
-    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    monkeypatch.setattr(manager, "dispatcher_alive", lambda lock: True)
     _hour(monkeypatch, 60, pass_every=300)
     assert reads(gh) == 12                                # the dispatcher's own reads; the console reuses every one
     assert gh.count("search", "prs") <= 40                # open PRs 3 every 5 minutes, PR activity 2 every 30
@@ -877,7 +877,7 @@ def test_a_second_read_in_one_pass_after_another_process_write_is_fresh(gh):
 
 
 def test_readers_reuse_a_save_for_at_most_330_seconds_however_long_the_dispatcher_waits(gh, monkeypatch):
-    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    monkeypatch.setattr(manager, "dispatcher_alive", lambda lock: True)
     now = [time.time()]                                   # one fake clock from the save on: a slow fake gh adds no age
     monkeypatch.setattr(board, "_clock", lambda: now[0])
     monkeypatch.setattr(github, "_clock", lambda: now[0])
@@ -1076,7 +1076,7 @@ def test_a_refresh_seeding_between_fresh_next_and_the_write_does_not_feed_it_an_
 
 
 def test_a_seeded_copy_never_outlives_the_saves_hold(gh, monkeypatch):
-    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    monkeypatch.setattr(manager, "dispatcher_alive", lambda lock: True)
     t0 = time.time()
     _at(monkeypatch, t0)
     _pass()                                               # the dispatcher's save at t0, held 270 s
@@ -1847,7 +1847,7 @@ def _col_of(cid, cs=None):
 
 
 def test_ten_commands_in_share_seconds_read_the_board_once(gh, monkeypatch):
-    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    monkeypatch.setattr(manager, "dispatcher_alive", lambda lock: False)
     for _ in range(10):
         _process()
         board.cards()
@@ -1894,14 +1894,31 @@ def test_a_stopped_dispatchers_long_hold_counts_only_share_seconds(gh, monkeypat
     board.share("write", hold=300)
     board.cards()
     _at(monkeypatch, 1200.0)
-    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: True)
+    monkeypatch.setattr(manager, "dispatcher_alive", lambda lock: True)
     _process()
     board.cards()
     assert reads(gh) == 1
-    monkeypatch.setattr(dispatch, "dispatcher_running", lambda: False)
+    monkeypatch.setattr(manager, "dispatcher_alive", lambda lock: False)
     _process()
     board.cards()
     assert reads(gh) == 2
+
+
+def test_a_board_read_never_takes_the_dispatch_lock(gh, monkeypatch):
+    import fcntl
+    _at(monkeypatch, 1000.0)
+    _process("write")
+    board.share("write", hold=300)
+    board.cards()
+    C.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    C.LOCK_FILE.write_text("pid 55 on h since 2026-09-30T10:00:00+00:00")
+    monkeypatch.setattr(manager, "_alive", lambda pid, what, since=None: True)
+    taken = []
+    monkeypatch.setattr(fcntl, "flock", lambda f, op: taken.append(f))
+    _at(monkeypatch, 1200.0)
+    _process()
+    board.cards()
+    assert reads(gh) == 1 and taken == []
 
 
 def test_the_save_is_0600_and_holds_at_key_and_cards(gh):

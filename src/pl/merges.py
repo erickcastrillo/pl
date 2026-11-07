@@ -5,7 +5,7 @@ import json
 import re
 import urllib.parse
 
-from pl import agents, board, events, jsonout, judgment, merge_check, rework
+from pl import agents, board, events, jsonout, judgment, merge_check, pr_done, rework
 from pl import config as C
 from pl.board import col_name, sections
 from pl.trackers import github
@@ -275,8 +275,8 @@ def _finish(card, url, all_cards, dry):
         _save_pending(_pending() - {url})
     if all(_closed(u) for _, _, u in rework._prs(card) if u != url):
         try:
-            if not dry:
-                commands.done(card["id"], all_cards)
+            if not dry and not pr_done.hold_if_declared(card, dry):
+                commands.done(card["id"], all_cards, reason="all PRs merged")
         except SystemExit as e:
             print(f"{short_id(card['id'])}: merged, but not moved to Done yet ({e}); the next pass retries")
 
@@ -286,7 +286,7 @@ def _retry_finished(all_cards, dry):
     merge was noted in the pending file before the record was written."""
     pending = _pending()
     for c in all_cards:
-        if col_name(c.get("list_id")) != "PR open":
+        if col_name(c.get("list_id")) != "PR open" or agents.held_steps(c):
             continue
         url = ((c.get("metadata") or {}).get("auto_merged") or {}).get("pr") or next((u for _, _, u in rework._prs(c) if u in pending), None)
         if url:

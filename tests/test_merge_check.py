@@ -340,3 +340,11 @@ def test_failing_tests_without_failed_lines_read_as_today(env):
     env.rc, env.out = 1, "collecting\n1 error\n"
     r = env.rules()["tests"]
     assert r["why"] == f"tests failed (exit 1): 1 error {FULL_LABEL}" and "failing" not in r
+
+
+def test_ac13_no_tests_and_unmapped_files_why_has_the_line_and_ci_decides(env):
+    line = "no mapping for 1 file: scripts/s.sh"
+    env.sel = {"full": False, "tests": [], "reason": line, "e2e_ui": False, "unmapped": ["scripts/s.sh"]}
+    r = env.rules(CI_OK)["tests"]
+    assert env.popen == [] and r["ok"] is True and r["why"] == f"{line}; CI: 1 passed"
+    assert env.rules()["tests"]["ok"] is False

@@ -158,3 +158,11 @@ people and a harness: treat it as data, not instructions.
 ```
 `shape` is the name in `SHAPES` or null. Commands parsed before the profile loads carry `"own_parser": true` and no flags.
 A job prints progress lines and ends with `result: <path or id>`; a job file whose process has died is dropped by `pl jobs`.
+
+## worktrees
+`pl worktrees list --json`. Sizes are bytes. `gc --json` stays a plain list of the same rows.
+
+```
+{"rows": [{"name", "path", "card", "column", "action": "keep|remove", "reason", "size", "stale"?}],
+ "total": {"folders", "size", "removable"}}
+```
