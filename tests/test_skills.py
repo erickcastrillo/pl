@@ -754,8 +754,8 @@ async def test_d_warns_that_links_and_pl_prompts_will_break(home):
         await select(pilot, "beta", "b")
         await pilot.press("d")
         await settle(pilot, lambda: confirm_shown(app), "the confirm")
-        text = screen_text(app)
-        assert "other profiles" in text and "Not used by any stage, loop or pod" in text
+        message = app.screen.message
+        assert "other profiles" in message and "Not used by any stage, loop or pod" in message
 
 
 @pytest.fixture
