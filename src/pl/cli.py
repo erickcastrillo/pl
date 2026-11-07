@@ -35,7 +35,9 @@
   pl move <id> "<column>" [--pr URL]
                           move a pipeline card (a GitHub issue number works too) to a column; --pr records the
                           pull request in the card's pr_urls
-  pl done <id> [--note]   move a pipeline card or a Product card to Done (your call); --note appends the evidence
+  pl done <id> [--note] [--drop-slices REASON]
+                          move a pipeline card or a Product card to Done (your call); --note appends the evidence;
+                          a card with a slice not merged is refused unless --drop-slices gives the reason
   pl drop <id> [--reason TEXT]
                           a pipeline card no longer needed: stops its live agent, moves it to Done marked dropped
                           (not done) with who, when, why and the column it was in; its linked Product card goes to Done
@@ -448,7 +450,7 @@ def build_parser():
     p.add_argument("--max-prep", type=int, default=None, help="max spec/design/plan agents in flight"); p.add_argument("--no-pull", action="store_true", help="do not pull from the Product board")
     p = sub.add_parser("pull"); p.add_argument("id", nargs="?"); p.add_argument("--list", action="store_true"); p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("adopt"); p.add_argument("id"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
-    p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'"); p.add_argument("--drop-slices", metavar="REASON", help="close a card whose plan has slices without a merged pull request, recording the reason"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("drop"); p.add_argument("id"); p.add_argument("--reason", help="why it is no longer needed (kept on the card)"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("undrop"); p.add_argument("id"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("hold"); p.add_argument("id"); p.add_argument("--reason", help="why it waits (kept on the card)"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
