@@ -130,6 +130,19 @@ def _hold(c, steps, dry):
     print(f"{short_id(c['id'])}: merged, {len(steps)} manual step(s) remaining; held for pl done")
 
 
+def hold_if_declared(c, dry):
+    """True when the card must not close now: it was held for declared steps, or a pull request could not be read
+    (the caller retries on its next pass)."""
+    seen = {}
+    states = [_state(u, seen) for _, _, u in rework._prs(c)]
+    if None in states:
+        return True
+    steps = steps_of(states)
+    if steps:
+        _hold(c, steps, dry)
+    return bool(steps)
+
+
 def _closed_alert(c, closed, active):
     cid = c["id"]
     active.add(f"{KEY}{cid}")

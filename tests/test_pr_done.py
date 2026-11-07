@@ -556,3 +556,12 @@ def test_step_text_never_run_masked_sections_unchanged(host, capsys, monkeypatch
     assert board.sections(fresh(c)["description"]).keys() == board.sections(c["description"]).keys()
     commands.done(c["id"], [fresh(c)])
     assert "ghp_" + "a" * 36 not in fresh(c)["description"]
+
+
+def test_held_card_has_no_prs_for_the_other_passes(host):
+    from pl import rework
+    c = make()
+    assert len(rework._prs(c)) == 1
+    host.prs[1] = declared("a")
+    sweep(c)
+    assert rework._prs(fresh(c)) == []
