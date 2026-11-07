@@ -283,11 +283,11 @@ def test_in_progress_with_fewer_prs_than_slices_stays(host):
     assert column(c) == "In progress"
 
 
-def test_pr_open_with_fewer_prs_than_slices_moves(host):
+def test_pr_open_with_fewer_prs_than_slices_stays(host):
     c = make(plan=PLAN2)
     host.prs[1] = MERGED
     sweep(c)
-    assert column(c) == "Done"
+    assert column(c) == "PR open"
 
 
 # ---------- WP3: a pull request closed unmerged goes to a person ----------

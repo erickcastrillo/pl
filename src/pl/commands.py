@@ -13,7 +13,7 @@ from pathlib import Path
 from pl import config as C
 from pl.accounts import check_note, exhausted_profiles, next_profile, parking, profile_state, unpark_machine
 from pl.agents import NEW_WINDOW_SCRIPT, deps_open, registry, worker_status, worker_view
-from pl import audit, confirm, events, ghquota, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, trackers, usage, worktrees
+from pl import audit, confirm, events, ghquota, harnesses, heldwrites, ideas, move_agent, notifications, outbound, outward, pipeline, pods, recall, slices, trackers, usage, worktrees
 from pl.jsonout import emit
 from pl.trackers.github import OverBudget
 from pl.board import (card, cards, check_size, col_id, col_name, find_card, fresh_next, lists, matches, pick, plan_order, plan_slice,
@@ -436,9 +436,11 @@ def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
     hits = matches(a.id, cards())
     if hits:
-        for line in done(a.id, hits, note=a.note):
+        for line in done(a.id, hits, note=a.note, drop_slices=getattr(a, "drop_slices", None)):
             print(line)
         return
+    if getattr(a, "drop_slices", None) is not None:
+        raise SystemExit("pl done: --drop-slices is for pipeline cards; this is a Product card")
     pc = product_card(a.id) if len(a.id) >= 32 else None
     if pc is None:
         ms = matches(a.id, product_cards_mine())
@@ -460,15 +462,39 @@ def _closed_with(description, note):
     return bool(found) and last.partition("\n")[2].strip() == note
 
 
-def done(ref, cs=None, note=None, reason=None):
+def _dropped_slices(c, drop_slices):
+    """(metadata, text for "## Closed") for closing a sliced card; refuses while a slice is unmerged and not dropped."""
+    v = slices.view(c)
+    if v["unread"]:
+        raise SystemExit(f"pl done: could not read the pull requests of {short_id(c['id'])}; not moved, try again")
+    left = slices.unmerged(v)
+    if left and drop_slices is None:
+        lines = ", ".join(f"slice {s['k']} ({'no pull request' if s['state'] == 'none' else s['state'] + ' unmerged'})" for s in left)
+        raise SystemExit(f"pl done: {short_id(c['id'])} has slices not merged: {lines}; "
+                         'close it anyway with: pl done <id> --drop-slices "<reason>"')
+    if not left:
+        return {}, ""
+    nums = [s["k"] for s in left]
+    meta = {"dropped_slices": {"numbers": nums, "reason": drop_slices.strip(), "by": C.USER_EMAIL, "at": now_iso()}}
+    return meta, f"Dropped slices {', '.join(map(str, nums))}: {drop_slices.strip()}"
+
+
+def done(ref, cs=None, note=None, reason=None, drop_slices=None, checked=False):
     """A person's call: move one Feature Pipeline card (and its linked Product card) to Done. cs: the cards to pick
     from, default every pipeline card. note: ends the description under "## Closed <date>", once. reason: kept in the
-    metadata. A live agent is not stopped. Returns lines to show."""
+    metadata. drop_slices: the reason to close a card whose plan has unmerged slices; without it that is refused.
+    checked: the caller has already checked the slices. A live agent is not stopped. Returns lines to show."""
+    if drop_slices is not None and not drop_slices.strip():
+        raise SystemExit("pl done: --drop-slices needs a reason")
     c = card(pick(ref, cs if cs is not None else cards(), "pl done")["id"])   # two matches: refused, never the first
-    meta = {"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None, **({"done_reason": reason} if reason else {})}
+    dropped, dropped_text = ({}, "")
+    if not checked and slices.planned(c):
+        dropped, dropped_text = _dropped_slices(c, drop_slices)
+    meta = {"done_by": C.USER_EMAIL, "done_at": now_iso(), "worker": None, **({"done_reason": reason} if reason else {}), **dropped}
     fields = {}
-    if note and note.strip() and not _closed_with(c.get("description") or "", note.strip()):   # a retried move must not add a second section
-        fields["description"] = check_size((c.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{note.strip()}\n")
+    text = "\n".join(t for t in (dropped_text, (note or "").strip()) if t)
+    if text and not _closed_with(c.get("description") or "", text):   # a retried move must not add a second section
+        fields["description"] = check_size((c.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{text}\n")
     update(c["id"], list_id=col_id("Done"), metadata=meta, **fields)
     m, out = c.get("metadata") or {}, []
     if m.get("product_card") and intake_configured() and "Done" in product_lists():

@@ -3,11 +3,8 @@
 Each dispatcher pass reads the pull requests (one REST call each) of the cards in PR open, and of those in In progress
 whose run agent has ended. Merged everywhere: Done, with a "## Closed" section naming each merge. No open one and some
 closed unmerged: an open pr_closed alert. A pull request that cannot be read changes nothing; the next pass tries again."""
-import json
-import re
 
-from pl import agents, alerts, board, rework
-from pl.trackers import github
+from pl import agents, alerts, board, slices
 from pl.util import cmd_id, notify, short_id
 
 WATCHED = ("PR open", "In progress")
@@ -15,35 +12,9 @@ REASON = "all PRs merged"
 KEY = "pr_closed:"
 
 
-def _state(url, seen):
-    """{"url", "repo", "number", "state": merged|open|closed, "at", "sha"}, or None when it cannot be read."""
-    if url in seen:
-        return seen[url]
-    m = rework.PR_URL.match(url)
-    got = None
-    if m:
-        try:
-            pr = json.loads(github._gh(["api", f"repos/{m.group(1)}/pulls/{m.group(2)}"]))
-            got = {"url": url, "repo": m.group(1), "number": int(m.group(2)),
-                   "state": "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open",
-                   "at": pr.get("merged_at") or "", "sha": pr.get("merge_commit_sha") or ""}
-        except (SystemExit, ValueError, AttributeError):   # RateLimited and OverBudget are SystemExits
-            got = None
-    seen[url] = got
-    return got
-
-
 def _note(prs):
     lines = [f"- {p['repo']}#{p['number']} merged {p['at']} ({p['sha'][:9] or 'commit unknown'})" for p in prs]
     return "All pull requests merged:\n" + "\n".join(lines)
-
-
-def _built(c, n):
-    """False for an In progress stacked card with more slices in its plan than pull requests: the rest is not built."""
-    if board.col_name(c["list_id"]) != "In progress":
-        return True
-    plan = board.sections(c.get("description")).get("PLAN") or ""
-    return len(re.findall(r"^### Slice \d+", plan, re.M)) <= n
 
 
 def _ended(c, reg):
@@ -61,7 +32,7 @@ def _close(c, note, dry):
         c["list_id"] = now["list_id"]
         return
     try:
-        for line in commands.done(c["id"], [c], note=note, reason=REASON):
+        for line in commands.done(c["id"], [c], note=note, reason=REASON, checked=True):
             print(line)
     except SystemExit as e:
         print(f"{short_id(c['id'])}: merged, but not moved to Done yet ({e}); the next pass retries")
@@ -80,8 +51,22 @@ def _closed_alert(c, closed, active):
         notify(alerts.headline(why, title), fix)
 
 
+def _close_or_hold(c, states, seen, active, dry):
+    if not slices.planned(c):
+        return _close(c, _note(states), dry)
+    v = slices.view(c, seen)
+    if v["unread"]:
+        return slices.keep_alert(c, active)
+    if not slices.unmerged(v):
+        return _close(c, _note(states), dry)
+    if dry:
+        print(f"would hold {short_id(c['id'])}: slices {', '.join(str(s['k']) for s in slices.unmerged(v))} not merged")
+        return
+    slices.alert(c, slices.hold(c, v), active)
+
+
 def sweep(all_cards, reg, dry):
-    active = set()
+    active, held = set(), set()
     seen = {}
     for c in all_cards:
         urls = (c.get("metadata") or {}).get("pr_urls") or []
@@ -90,14 +75,17 @@ def sweep(all_cards, reg, dry):
             continue
         if col == "In progress" and not _ended(c, reg):
             continue
-        states = [_state(u, seen) for u in urls]
+        if slices.planned(c) and slices.held(c):
+            held.add(f"{slices.KEY}{c['id']}")   # held until its pull requests or plan change: no read
+            continue
+        states = [slices.pr_state(u, seen) for u in urls]
         if None in states:
             active.add(f"{KEY}{c['id']}")   # a failed read neither opens nor clears an alert
             continue
         if all(s["state"] == "merged" for s in states):
-            if _built(c, len(states)):
-                _close(c, _note(states), dry)
+            _close_or_hold(c, states, seen, held, dry)
         elif not any(s["state"] == "open" for s in states) and not dry:
             _closed_alert(c, [s for s in states if s["state"] == "closed"], active)
     if not dry:
         alerts.sweep(KEY, active, notify)
+        slices.sweep_alerts(held)
