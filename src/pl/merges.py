@@ -276,7 +276,7 @@ def _finish(card, url, all_cards, dry):
     if all(_closed(u) for _, _, u in rework._prs(card) if u != url):
         try:
             if not dry:
-                commands.done(card["id"], all_cards)
+                commands.done(card["id"], all_cards, reason="all PRs merged")
         except SystemExit as e:
             print(f"{short_id(card['id'])}: merged, but not moved to Done yet ({e}); the next pass retries")
 

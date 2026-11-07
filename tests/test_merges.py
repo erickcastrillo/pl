@@ -33,7 +33,7 @@ def host(monkeypatch):
     """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call;
     ns.comments: {number: [comment body]}; ns.repo_labels: the labels the repository already has."""
     ns = types.SimpleNamespace(prs={}, cards=[], calls=[], refuse={}, default="main", events=[], updates=[], done_fails=0, update_error=None,
-                               comments={}, repo_labels=set(), check_calls=[], closing=False)
+                               comments={}, repo_labels=set(), check_calls=[], closing=False, done_reasons=[])
 
     def fake_gh(args):
         ns.calls.append(args)
@@ -64,7 +64,8 @@ def host(monkeypatch):
         ns.updates.append((cid, fields))
         next(c for c in ns.cards if c["id"] == cid)["metadata"].update(fields.get("metadata") or {})
 
-    def fake_done(cid, cs=None):
+    def fake_done(cid, cs=None, reason=None):
+        ns.done_reasons.append(reason)
         if ns.done_fails:
             ns.done_fails -= 1
             raise SystemExit("pl done: boom")
@@ -439,6 +440,12 @@ def test_merged_card_goes_to_done_with_note_and_one_event(passing):
     assert card["list_id"] == "Done"
     assert card["metadata"]["auto_merged"]["note"] == "merged by auto-merge: acme/app#123"
     assert passing.events == [("auto_merged", "c123", {"pr": 123, "repo": "acme/app", "method": "squash"})]
+
+
+def test_auto_merge_finish_records_the_reason(passing):
+    _ready(passing, 123)
+    merges.run_pass(passing.cards, dry=False)
+    assert passing.done_reasons == ["all PRs merged"]
 
 
 def test_second_candidate_is_judged_after_first_merge(passing):

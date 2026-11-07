@@ -436,7 +436,7 @@ def cmd_done(a):
     """A human's call: move a Feature Pipeline card, or a Product card, to Done."""
     hits = matches(a.id, cards())
     if hits:
-        for line in done(a.id, hits, note=a.note):
+        for line in done(a.id, hits, note=a.note, reason="pl done"):
             print(line)
         return
     pc = product_card(a.id) if len(a.id) >= 32 else None
@@ -576,10 +576,16 @@ def held_move(ref, column, pr, e, was=None):
 def move_card(ref, column, pr=None):
     """The body of pl move, also what the dispatcher replays: record the pull request, then move. Returns the card id."""
     cid = None
+    if column == "Done":
+        fresh_next()
+        t = trackers.get("tracker")
+        cid = t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"]
+        if col_name(card(cid)["list_id"]) != "Done":
+            update(cid, metadata={"done_by": C.USER_EMAIL, "done_at": now_iso(), "done_reason": "pl move"})
     if pr is not None:   # recorded before the move: the move tells the dispatcher the run is done
         fresh_next()     # it writes what it read: never from a copy that may be minutes old
         t = trackers.get("tracker")
-        cid = t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"]   # only the GitHub tracker resolves ids from text
+        cid = cid or (t.ref_id(ref) if hasattr(t, "ref_id") else find_card(ref)["id"])   # only the GitHub tracker resolves ids from text
         urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})
@@ -667,6 +673,16 @@ def _caps_line(used):
     return f"caps: {mins}   {toks}"
 
 
+def closed_line(c):
+    m = c.get("metadata") or {}
+    if not (m.get("done_at") or m.get("dropped_at")):
+        return "closed: no record"
+    reason = "dropped" if m.get("dropped_at") else m.get("done_reason") or "no reason recorded"
+    n = len(m.get("pr_urls") or [])
+    prs = "no PR" if n == 0 else "1 PR" if n == 1 else f"{n} PRs"
+    return f"closed: {reason}, {prs}, {m.get('dropped_at') or m.get('done_at')}"
+
+
 def cmd_card(a):
     if getattr(a, "fresh", False):
         fresh_next()
@@ -684,6 +700,8 @@ def cmd_card(a):
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
     if deps := (c.get("metadata") or {}).get("depends_on"):
         print(f"depends on {', '.join(short_id(d) for d in deps)}")
+    if col_name(c["list_id"]) == "Done":
+        print(closed_line(c))
     if used["caps"]:
         print(_caps_line(used))
     if c.get("unreadable"):

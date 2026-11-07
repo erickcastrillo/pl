@@ -343,3 +343,70 @@ def test_dry_run_opens_no_alert(host):
     host.prs[1] = CLOSED
     sweep(c, dry=True)
     assert open_alerts() == []
+
+
+# ---------- closing record ----------
+
+def card_text(c, capsys):
+    capsys.readouterr()
+    commands.cmd_card(types.SimpleNamespace(id=c["id"], fresh=False, delete=False, json=False))
+    return capsys.readouterr().out
+
+
+def closed_line(out):
+    return next((l for l in out.splitlines() if l.startswith("closed:")), None)
+
+
+def test_card_shows_closed_line_for_merged_card(capsys):
+    c = make(urls=(PR1, PR2))
+    commands.done(c["id"], [c], reason="all PRs merged")
+    assert closed_line(card_text(c, capsys)).startswith("closed: all PRs merged, 2 PRs, ")
+
+
+def test_pl_done_records_reason_and_no_pr(capsys):
+    c = make(urls=())
+    commands.cmd_done(types.SimpleNamespace(id=c["id"], note=None))
+    assert fresh(c)["metadata"]["done_reason"] == "pl done"
+    assert closed_line(card_text(c, capsys)).startswith("closed: pl done, no PR, ")
+
+
+def test_one_pr_is_singular(capsys):
+    c = make()
+    commands.done(c["id"], [c], reason="pl done")
+    assert closed_line(card_text(c, capsys)).startswith("closed: pl done, 1 PR, ")
+
+
+def test_done_card_without_record_says_no_record(capsys):
+    c = make("Done")
+    assert closed_line(card_text(c, capsys)) == "closed: no record"
+
+
+def test_done_at_without_reason_says_no_reason_recorded(capsys):
+    c = make("Done", done_at="2026-11-01T00:00:00+00:00")
+    assert closed_line(card_text(c, capsys)).startswith("closed: no reason recorded, ")
+
+
+def test_dropped_card_says_dropped(capsys):
+    c = make("Done", dropped_at="2026-11-01T00:00:00+00:00", done_at="2026-11-01T00:00:00+00:00")
+    assert closed_line(card_text(c, capsys)).startswith("closed: dropped, ")
+
+
+def test_pl_move_done_records_done_at_and_reason(capsys):
+    c = make()
+    commands.move_card(c["id"], "Done")
+    m = fresh(c)["metadata"]
+    assert m["done_reason"] == "pl move" and m["done_at"] and m["done_by"] == "octo@example.com"
+    assert board.col_name(fresh(c)["list_id"]) == "Done"
+    assert closed_line(card_text(c, capsys)).startswith("closed: pl move, 1 PR, ")
+
+
+def test_pl_move_done_on_a_done_card_keeps_its_record():
+    c = make("Done", done_at="2026-11-01T00:00:00+00:00", done_reason="all PRs merged")
+    commands.move_card(c["id"], "Done")
+    m = fresh(c)["metadata"]
+    assert m["done_reason"] == "all PRs merged" and m["done_at"] == "2026-11-01T00:00:00+00:00"
+
+
+def test_closed_line_only_on_done_cards(capsys):
+    c = make()
+    assert closed_line(card_text(c, capsys)) is None
