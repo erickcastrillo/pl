@@ -169,10 +169,17 @@ def test_a_read_only_loop_cannot_move_or_approve_a_card(profile, read_only_loop,
 class FakeTracker:
     def __init__(self):
         self.created = []
+        self.updates = []
 
     def create(self, column, **kw):
         self.created.append((column, kw))
         return {"id": "9"}
+
+    def card(self, _id):
+        return {"id": "9", "tags": self.created[-1][1]["tags"]}
+
+    def update(self, item_id, **kw):
+        self.updates.append((item_id, kw))
 
     def url(self, _id):
         return "u"
@@ -186,6 +193,8 @@ def idea(profile, monkeypatch):
     monkeypatch.setattr(trackers, "me", lambda _t: "me")
     monkeypatch.setattr(events, "emit", lambda *a, **k: None)
     monkeypatch.setattr(commands, "intake_configured", lambda: False)
+    monkeypatch.setattr(commands, "card", t.card)
+    monkeypatch.setattr(commands, "update", t.update)
     args = types.SimpleNamespace(text="Chase Acme invoice", title=None, doc=[], account=None, repo=[], start=True)
     return t, lambda: commands.cmd_idea(args)
 
@@ -195,7 +204,8 @@ def test_an_idea_from_a_read_only_loop_is_filed_unstarted_and_tagged(idea, read_
     file_idea()
     (column, kw), = t.created
     assert column == "Inbox" and kw["assigned_to"] is None
-    assert {"proposed", "loop:invoices"} <= set(kw["tags"])
+    assert {"proposed", "loop:invoices", "parked"} <= set(kw["tags"])
+    assert "pipeline_mode" not in kw["metadata"] and t.updates == [("9", {"metadata": {"pipeline_mode": "auto"}})]
 
 
 def test_a_dry_run_idea_is_printed_not_filed(idea, read_only_loop, monkeypatch, capsys):

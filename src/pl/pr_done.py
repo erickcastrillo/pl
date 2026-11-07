@@ -3,13 +3,99 @@
 Each dispatcher pass reads the pull requests (one REST call each) of the cards in PR open, and of those in In progress
 whose run agent has ended. Merged everywhere: Done, with a "## Closed" section naming each merge. No open one and some
 closed unmerged: an open pr_closed alert. A pull request that cannot be read changes nothing; the next pass tries again."""
+import json
+import re
 
-from pl import agents, alerts, board, slices
-from pl.util import cmd_id, notify, short_id
+from pl import agents, alerts, board, rework, slices
+from pl.trackers import github
+from pl.util import cmd_id, mask, notify, now_iso, short_id
 
 WATCHED = ("PR open", "In progress")
 REASON = "all PRs merged"
 KEY = "pr_closed:"
+SECTION = re.compile(r"^#{1,6}[ \t]+manual steps remaining[ \t]*$", re.I)
+ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.*)$")
+STEP_CHARS, MAX_STEPS = 300, 20
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+
+def parse_steps(text):
+    """None when the text has no "## Manual steps remaining" section, else its steps (one line each; [] when it is empty
+    or says None). Headings inside code fences or HTML comments do not count."""
+    lines, fenced, inside, steps = HTML_COMMENT.sub("", text or "").splitlines(), False, False, []
+    for line in lines:
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if inside and re.match(r"^#{1,2}[ \t]", line):
+            break
+        if SECTION.match(line):
+            inside = True
+        elif inside and line.strip():
+            item = ITEM.match(line)
+            if item:
+                steps.append(item.group(1).strip())
+            elif steps:
+                steps[-1] += " " + line.strip()
+            else:
+                steps.append(line.strip())
+    if not inside:
+        return None
+    steps = [t for t in steps if t]
+    if len(steps) == 1 and re.fullmatch(r"none\.?", steps[0], re.I):
+        return []
+    steps = [mask(t)[:STEP_CHARS] for t in steps]
+    return steps[:MAX_STEPS] + ([f"and {len(steps) - MAX_STEPS} more, see the PR"] if len(steps) > MAX_STEPS else [])
+
+
+WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
+COMMENT_JQ = ".[] | {author_association, body, created_at}"
+REVIEW_JQ = ".[] | {author_association, body, created_at: .submitted_at}"
+
+
+def _comments(repo, number):
+    """The comments and review bodies of a pull request, oldest first, or None when they cannot be read."""
+    items = []
+    for path, jq in ((f"repos/{repo}/issues/{number}/comments?per_page=100", COMMENT_JQ),
+                     (f"repos/{repo}/pulls/{number}/reviews?per_page=100", REVIEW_JQ)):
+        try:
+            out = github._gh(["api", "--paginate", path, "--jq", jq])
+            items += [x for x in (json.loads(line) for line in out.splitlines() if line.strip()) if isinstance(x, dict)]
+        except (SystemExit, ValueError, AttributeError):
+            return None
+    return sorted(items, key=lambda x: x.get("created_at") or "")
+
+
+def _declared(p):
+    """The steps one pull request declares: the newest section by a person with write access wins over the description's.
+    None when its comments cannot be read."""
+    items = _comments(p["repo"], p["number"])
+    if items is None:
+        return None
+    steps = parse_steps(p["body"])
+    for it in items:
+        if it.get("author_association") in WRITERS and (got := parse_steps(it.get("body") or "")) is not None:
+            steps = got
+    return steps or []
+
+
+def steps_of(states):
+    """[{"pr": "o/r#1", "text": ...}] across the pull requests that were not closed unmerged, or None when a
+    pull request's comments cannot be read."""
+    out = []
+    for p in states:
+        if p["state"] == "closed":
+            continue
+        got = _declared(p)
+        if got is None:
+            return None
+        out += [{"pr": f"{p['repo']}#{p['number']}", "text": t} for t in got]
+    return out
+
+
+_state = slices.pr_state
 
 
 def _note(prs):
@@ -53,6 +139,41 @@ def _close(c, note, dry):
     c["metadata"] = {**(c.get("metadata") or {}), "worker": None}
 
 
+def _hold(c, steps, dry):
+    """Keep a merged card in its column with the steps a person must finish; `pl done` is the release."""
+    if dry:
+        print(f"would hold {short_id(c['id'])}: {len(steps)} manual step(s) remaining")
+        return
+    now = board.card(c["id"])
+    col = board.col_name(now["list_id"])
+    if col not in WATCHED:
+        c["list_id"] = now["list_id"]
+        return
+    held = {"column": col, "at": now_iso(), "steps": steps}
+    try:
+        board.update(c["id"], metadata={"manual_steps": held, "worker": None})
+    except SystemExit as e:
+        print(f"{short_id(c['id'])}: merged with manual steps, but not held yet ({e}); the next pass retries")
+        return
+    c["metadata"] = {**(c.get("metadata") or {}), "manual_steps": held, "worker": None}
+    print(f"{short_id(c['id'])}: merged, {len(steps)} manual step(s) remaining; held for pl done")
+
+
+def hold_if_declared(c, dry):
+    """True when the card must not close now: it was held for declared steps, or a pull request could not be read
+    (the caller retries on its next pass)."""
+    seen = {}
+    states = [_state(u, seen) for _, _, u in rework._prs(c)]
+    if None in states:
+        return True
+    steps = steps_of(states)
+    if steps is None:
+        return True
+    if steps:
+        _hold(c, steps, dry)
+    return bool(steps)
+
+
 def _closed_alert(c, closed, active):
     cid = c["id"]
     active.add(f"{KEY}{cid}")
@@ -63,45 +184,61 @@ def _closed_alert(c, closed, active):
         notify(alerts.headline(why, title), fix)
 
 
-def _close_or_hold(c, states, seen, active, dry):
+def _close_or_steps(c, states, active, dry):
+    steps = steps_of(states)
+    if steps is None:
+        active.add(f"{KEY}{c['id']}")
+        return
+    _hold(c, steps, dry) if steps else _close(c, _note(states), dry)
+
+
+def _close_or_hold(c, states, seen, slice_held, active, dry):
     if not slices.planned(c):
-        return _close(c, _note(states), dry)
+        return _close_or_steps(c, states, active, dry)
     v = slices.view(c, seen, search=True)
     if v["unread"]:
-        return slices.keep_alert(c, active)
+        return slices.keep_alert(c, slice_held)
     if not dry:
         slices.adopt(c, v)
     if not slices.unmerged(v):
-        return _close(c, _note(states), dry)
+        return _close_or_steps(c, states, active, dry)
     if dry:
         print(f"would hold {short_id(c['id'])}: slices {', '.join(str(s['k']) for s in slices.unmerged(v))} not merged")
         return
-    slices.alert(c, slices.hold(c, v), active)
+    slices.alert(c, slices.hold(c, v), slice_held)
 
 
 def sweep(all_cards, reg, dry):
-    active, held = set(), set()
+    active, slice_held = set(), set()
     seen = {}
     for c in all_cards:
         urls = (c.get("metadata") or {}).get("pr_urls") or []
         col = board.col_name(c.get("list_id"))
-        if c.get("unreadable") or col not in WATCHED or not urls:
+        if c.get("unreadable"):
+            continue
+        held = (c.get("metadata") or {}).get("manual_steps")
+        if held and held.get("column") != col and col != "Done" and not dry:
+            board.update(c["id"], metadata={"manual_steps": None})
+            c["metadata"] = {**c["metadata"], "manual_steps": None}
+        elif held and held.get("column") == col:
+            continue
+        if col not in WATCHED or not urls:
             continue
         if col == "In progress" and not _ended(c, reg) and not (slices.planned(c) and _finished_turn(c)):
             continue
         if slices.planned(c) and slices.held(c):
-            held.add(f"{slices.KEY}{c['id']}")   # held until its pull requests or plan change: no read
+            slice_held.add(f"{slices.KEY}{c['id']}")   # held until its pull requests or plan change: no read
             continue
-        states = [slices.pr_state(u, seen) for u in urls]
+        states = [_state(u, seen) for u in urls]
         if None in states:
             active.add(f"{KEY}{c['id']}")   # a failed read neither opens nor clears an alert
             continue
         if all(s["state"] == "merged" for s in states):
-            _close_or_hold(c, states, seen, held, dry)
+            _close_or_hold(c, states, seen, slice_held, active, dry)
         elif not any(s["state"] == "open" for s in states) and not dry:
             _closed_alert(c, [s for s in states if s["state"] == "closed"], active)
         elif col == "In progress" and slices.planned(c) and not dry:
-            _hold_unbuilt(c, seen, held)
+            _hold_unbuilt(c, seen, slice_held)
     if not dry:
         alerts.sweep(KEY, active, notify)
-        slices.sweep_alerts(held)
+        slices.sweep_alerts(slice_held)

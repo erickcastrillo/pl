@@ -108,8 +108,8 @@ def cards():
         at, floor = got.get("at"), share_seconds()
         hold = floor
         if (got.get("hold") or 0) > floor:
-            from pl.dispatch import dispatcher_running   # a stopped dispatcher's long hold no longer applies
-            if dispatcher_running():
+            from pl.manager import dispatcher_alive   # a stopped dispatcher's long hold no longer applies
+            if dispatcher_alive(C.LOCK_FILE):
                 hold = got["hold"]
         hold = min(hold, REUSE_MAX) * pace   # low budget: longer
         stamp = max(at, got.get("patched") or 0) if isinstance(at, (int, float)) else 0

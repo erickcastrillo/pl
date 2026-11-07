@@ -154,30 +154,54 @@ async def test_one_profile_skips_home_and_opens_as_today(monkeypatch, tmp_path):
         assert app.active_tab == "dashboard"
 
 
-def test_a_stale_summary_shows_stopped():
-    now = time.time()
-    stale = [{
-        "name": "stale-pipe",
-        "running": True,
-        "at": now - 100,
-        "interval": 30,
-        "columns": [],
-    }]
-    rows = home_rows(stale)
-    assert len(rows) == 1
-    assert rows[0]["running"] is False
-    assert rows[0]["status"] == "stopped"
+def _profile_dir(tmp_path, summary=None, lock=None):
+    d = tmp_path / ".pl-eng"
+    (d / "state").mkdir(parents=True)
+    if summary is not None:
+        (d / "state" / "summary.json").write_text(json.dumps(summary))
+    if lock:
+        (d / "state" / "pl-dispatch.lock").write_text(lock)
+    return d
 
-    fresh = [{
-        "name": "fresh-pipe",
-        "running": True,
-        "at": now - 10,
-        "interval": 30,
-        "columns": [],
-    }]
-    fresh_rows = home_rows(fresh)
-    assert fresh_rows[0]["running"] is True
-    assert fresh_rows[0]["status"] == "running"
+
+def _alive_pids(monkeypatch, pids):
+    from pl import manager
+    monkeypatch.setattr(manager, "_alive", lambda pid, what, since=None: pid in pids)
+
+
+LOCK = "pid 77 on h since 2026-09-30T10:00:00+00:00"
+
+
+def test_read_says_running_for_a_live_dispatcher_with_an_old_or_missing_summary(tmp_path, monkeypatch):
+    from pl.tui.home import read
+    _alive_pids(monkeypatch, {77})
+    d = _profile_dir(tmp_path, {"running": False, "at": 1, "columns": []}, LOCK)
+    assert read(d)["running"] is True and home_rows([read(d)])[0]["status"] == "running"
+    (d / "state" / "summary.json").unlink()
+    r = read(d)
+    assert r["missing"] and r["running"] is True and home_rows([r])[0]["status"] == "running"
+
+
+def test_read_says_stopped_when_the_summary_says_running_and_the_lock_is_stale(tmp_path, monkeypatch):
+    from pl.tui.home import read
+    _alive_pids(monkeypatch, set())
+    d = _profile_dir(tmp_path, {"running": True, "at": time.time(), "columns": []}, LOCK)
+    assert read(d)["running"] is False and home_rows([read(d)])[0]["status"] == "stopped"
+
+
+def test_home_rows_use_the_running_value_however_old_the_summary_is():
+    old = {"name": "old", "running": True, "at": 1, "interval": 30, "columns": []}
+    assert home_rows([old])[0]["status"] == "running"
+    assert home_rows([{**old, "running": False}])[0]["status"] == "stopped"
+
+
+def test_picker_rows_match_home_rows_for_a_live_dispatcher_with_no_summary(tmp_path, monkeypatch):
+    from pl.tui import switcher
+    from pl.tui.home import read
+    _alive_pids(monkeypatch, {77})
+    d = _profile_dir(tmp_path, None, LOCK)
+    summary = read(d)
+    assert switcher.picker_rows({"home": [summary]})[0]["running"] is home_rows([summary])[0]["running"] is True
 
 
 def test_oldest_wait_as_written_by_summary_py_is_an_iso_time():

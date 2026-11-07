@@ -33,7 +33,7 @@ def host(monkeypatch):
     """A fake code host and board. ns.prs: {number: pull request}; ns.cards: the board; ns.calls: every gh call;
     ns.comments: {number: [comment body]}; ns.repo_labels: the labels the repository already has."""
     ns = types.SimpleNamespace(prs={}, cards=[], calls=[], refuse={}, default="main", events=[], updates=[], done_fails=0, update_error=None,
-                               comments={}, repo_labels=set(), check_calls=[], closing=False)
+                               comments={}, repo_labels=set(), check_calls=[], closing=False, done_reasons=[], bodies={}, read_fails=0)
 
     def fake_gh(args):
         ns.calls.append(args)
@@ -48,11 +48,17 @@ def host(monkeypatch):
             return ""
         if args[:2] == ["pr", "view"]:
             return json.dumps(ns.prs[int(args[2])])
+        if args[0] == "api" and "/pulls/" in args[1] and "-X" not in args:
+            if ns.read_fails:
+                ns.read_fails -= 1
+                raise SystemExit("gh: HTTP 502")
+            n = int(args[1].rsplit("/", 1)[1])
+            return json.dumps({"merged": True, "state": "closed", "merged_at": "2026-11-03T10:00:00Z", "merge_commit_sha": "abcdef0123", "body": ns.bodies.get(n, "")})
         assert args[0] in ("api", "label"), args
         if args[:2] == ["label", "create"]:
             ns.repo_labels.add(args[2])
         elif args[0] == "api" and "--jq" in args:
-            return "\n".join(ns.comments.get(int(args[2].split("/issues/")[1].split("/")[0]), []))
+            return "\n".join(ns.comments.get(int(args[2].split("/issues/")[1].split("/")[0]), [])) if "/issues/" in args[2] else ""
         elif args[0] == "api" and "/labels/" in args[1] and "-X" not in args:
             if urllib.parse.unquote(args[1].rsplit("/", 1)[1]) not in ns.repo_labels:
                 raise SystemExit("gh: Not Found (HTTP 404)")
@@ -64,7 +70,8 @@ def host(monkeypatch):
         ns.updates.append((cid, fields))
         next(c for c in ns.cards if c["id"] == cid)["metadata"].update(fields.get("metadata") or {})
 
-    def fake_done(cid, cs=None):
+    def fake_done(cid, cs=None, reason=None):
+        ns.done_reasons.append(reason)
         if ns.done_fails:
             ns.done_fails -= 1
             raise SystemExit("pl done: boom")
@@ -439,6 +446,65 @@ def test_merged_card_goes_to_done_with_note_and_one_event(passing):
     assert card["list_id"] == "Done"
     assert card["metadata"]["auto_merged"]["note"] == "merged by auto-merge: acme/app#123"
     assert passing.events == [("auto_merged", "c123", {"pr": 123, "repo": "acme/app", "method": "squash"})]
+
+
+def test_auto_merge_finish_records_the_reason(passing):
+    _ready(passing, 123)
+    merges.run_pass(passing.cards, dry=False)
+    assert passing.done_reasons == ["all PRs merged"]
+
+
+STEPS = "Done.\n\n## Manual steps remaining\n- install the timer\n"
+
+
+def _reads(host):
+    return [c for c in host.calls if c[0] == "api" and "/pulls/" in c[1]]
+
+
+@pytest.fixture
+def real_cards(host, monkeypatch):
+    monkeypatch.setattr(merges.board, "card", lambda cid: next(c for c in host.cards if c["id"] == cid))
+    monkeypatch.setattr(merges.board, "col_name", lambda lid: lid)
+    return host
+
+
+def test_auto_merged_pr_with_steps_is_held_not_done(passing, real_cards):
+    _ready(passing, 123)
+    passing.bodies[123] = STEPS
+    merges.run_pass(passing.cards, dry=False)
+    (card,) = passing.cards
+    assert card["list_id"] == "PR open" and passing.done_reasons == []
+    assert card["metadata"]["manual_steps"]["steps"] == [{"pr": "acme/app#123", "text": "install the timer"}]
+    assert "auto_merged" in card["metadata"]
+
+
+def test_auto_merged_pr_without_steps_still_goes_to_done(passing, real_cards):
+    _ready(passing, 123)
+    passing.bodies[123] = "no section"
+    merges.run_pass(passing.cards, dry=False)
+    assert passing.cards[0]["list_id"] == "Done"
+
+
+def test_unreadable_pr_at_finish_retries_next_pass(passing, real_cards):
+    _ready(passing, 123)
+    passing.read_fails = 1
+    merges.run_pass(passing.cards, dry=False)
+    (card,) = passing.cards
+    assert card["list_id"] == "PR open" and passing.done_reasons == []
+    passing.prs[123]["state"] = "MERGED"
+    merges.run_pass(passing.cards, dry=False)
+    assert card["list_id"] == "Done" and len(_merges_in(passing)) == 1
+
+
+def test_held_card_is_not_finished_again(passing, real_cards):
+    _ready(passing, 123)
+    passing.bodies[123] = STEPS
+    merges.run_pass(passing.cards, dry=False)
+    reads, writes = len(_reads(passing)), len(passing.updates)
+    passing.prs[123]["state"] = "MERGED"
+    merges.run_pass(passing.cards, dry=False)
+    merges.run_pass(passing.cards, dry=False)
+    assert len(_reads(passing)) == reads and len(passing.updates) == writes and passing.done_reasons == []
 
 
 def test_second_candidate_is_judged_after_first_merge(passing):

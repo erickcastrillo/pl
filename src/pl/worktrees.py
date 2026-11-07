@@ -1,12 +1,15 @@
-"""pl worktrees list | gc [--yes] [--json]: the worktrees pl-run made in the profile's worktrees folder, and which are safe to remove.
+"""pl worktrees [list] | gc [--yes] [--json]: the worktrees pl-run made in the profile's worktrees folder, and which are safe to remove.
 sweep(): the same cleanup on dispatcher passes, with the [worktrees] settings."""
 import json
+import math
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,12 +19,6 @@ from pl import events, ghquota
 from pl.agents import registry, worker_status
 from pl.board import cards, col_name
 from pl.util import mask, slug_of
-
-
-def _git(argv):
-    """The one subprocess seam of this module; tests fake it."""
-    r = subprocess.run(["git", *argv], capture_output=True, text=True)
-    return r.returncode, r.stdout
 
 
 def _card_for(name, cs):
@@ -39,61 +36,203 @@ def agent_hold(c):
     return ("running", None) if worker_status(w, registry())[0] in ("alive", "starting") else None
 
 
-def _inspect(path, c):
-    """(action, reason) for one worktree folder and the card it belongs to, if any."""
-    if c:
-        if hold := agent_hold(c):
-            return "keep", f"agent {hold[0]}"
-        column = col_name(c["list_id"])
-        if column != "Done":
-            return "keep", f"card {column}"
-    if _git(["-C", str(path), "status", "--porcelain"])[1].strip():
+_STALE = re.compile(r"\.stale-(\d{8})-(\d{6})(?:-\d+)?$")
+
+
+def _verdict(path, branch, c):
+    """(action, reason) for one worktree: the one decision the report, gc and the dispatcher share. Cheapest check first."""
+    if C.WORK_DIR and multi_repo(Path(C.WORK_DIR)):
+        return "keep", "several repositories in the work folder"
+    if not c:
+        return "keep", "no card on this board"
+    if hold := agent_hold(c):
+        return "keep", f"agent {hold[0]}"
+    if (column := _column(c)) != "Done":
+        return "keep", f"card {column}"
+    rc, out = _in(path, "status", "--porcelain")
+    if rc:
+        return "keep", "cannot inspect"
+    if out.strip():
         return "keep", "uncommitted changes"
-    if _git(["-C", str(path), "log", "HEAD", "--not", "--remotes", "--oneline"])[1].strip():
-        return "keep", "unpushed commits"
-    return "remove", "finished card" if c else "no card on the board"
+    dropped = bool((c.get("metadata") or {}).get("dropped_at"))
+    prs = _card_prs(c, "" if dropped else branch)
+    if not dropped and not any(_merged(p) or p.get("state") == "CLOSED" for p in prs):
+        return "keep", "no merged PR on the card"
+    unpushed = _unpushed(path, prs)
+    if unpushed is None:
+        return "keep", "cannot inspect"
+    return ("keep", "unpushed commits") if unpushed else ("remove", "finished card")
 
 
-def inventory():
+def _merged(pr):
+    return pr.get("state") == "MERGED" or bool(pr.get("mergedAt"))
+
+
+def _card_prs(c, branch):
+    urls = (c.get("metadata") or {}).get("pr_urls") or []
+    if urls:
+        return [pr for url in urls if (pr := _pr_info(url))]
+    return [pr] if branch and (pr := _pr_for_branch(branch)) else []
+
+
+def _unpushed(path, prs):
+    """True/False, or None when git cannot say. A HEAD that is a merged PR's last commit is saved, even when its branch is gone."""
+    rc, head = _in(path, "rev-parse", "HEAD")
+    if not rc and head.strip() and any(p.get("headRefOid") == head.strip() for p in prs if _merged(p)):
+        return False
+    rc, out = _in(path, "rev-list", "--count", "HEAD", "--not", "--remotes")
+    if rc or not out.strip().isdigit():
+        return None
+    return int(out) > 0
+
+
+def _stale_row(d, name, cs):
+    c = _match_card(d.with_name(_STALE.sub("", name)), "", cs)
+    record = _read_stale_record(d)
+    left = _days_left(name)
+    action = "keep"
+    if record is None or not _is_complete(record):
+        reason = "stale, state unknown"
+    elif record["uncommitted"] or record["unpushed"]:
+        reason = "stale, unsaved work"
+    elif left:
+        reason = f"stale, {left} days left"
+    else:
+        action, reason = "remove", "stale, saved and past retention"
+    return {"name": name, "path": str(d), "card": c["id"] if c else None, "column": _column(c) if c else None,
+            "action": action, "reason": reason, "stale": True, "expired": not left}
+
+
+def _is_complete(record):
+    """Only a record shaped the way pl writes it can vouch for a folder; anything else fails closed."""
+    unpushed = record.get("unpushed")
+    return isinstance(record.get("uncommitted"), bool) and type(unpushed) is int and unpushed >= 0
+
+
+def _days_left(name):
+    m = _STALE.search(name)
+    set_aside = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - set_aside).total_seconds() / 86400
+    return max(0, math.ceil((C.WORKTREES or {}).get("stale_days", 14) - age))
+
+
+def inventory(cs=None, sizes=True):
     root = C.WORKTREES_DIR
     if not root or not root.is_dir():
         return []
-    cs, rows = cards(), []
+    cs, rows = cards() if cs is None else cs, []
+    branches = {w["path"].resolve(): w.get("branch") or "" for w in _list_worktrees(C.WORK_DIR)} if C.WORK_DIR else {}
     for d in sorted(root.iterdir()):
-        if not (d / ".git").exists() or "-pl-" not in d.name:
+        if d.is_symlink() or not d.is_dir():
             continue
-        c = _card_for(d.name.split("-pl-", 1)[1], cs)
-        action, reason = _inspect(d, c)
-        rows.append({"name": d.name, "path": str(d), "card": c["id"] if c else None,
-                     "column": col_name(c["list_id"]) if c else None, "action": action, "reason": reason})
+        if _STALE.search(d.name):
+            row = _stale_row(d, d.name, cs)
+        elif (d / ".git").exists() or d.resolve() in branches:
+            c = _match_card(d, branches.get(d.resolve(), ""), cs)
+            action, reason = _verdict(d, branches.get(d.resolve(), ""), c)
+            row = {"name": d.name, "path": str(d), "card": c["id"] if c else None,
+                   "column": _column(c) if c else None, "action": action, "reason": reason}
+        else:
+            continue
+        if sizes:
+            row["size"] = _size(d)
+        rows.append(row)
     return rows
 
 
 def _size(path):
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+    total = 0
+    for dirpath, _, files in os.walk(path):
+        for f in files:
+            try:
+                st = os.lstat(os.path.join(dirpath, f))
+            except OSError:
+                continue
+            if not stat.S_ISLNK(st.st_mode):
+                total += st.st_size
+    return total
 
 
-def _remove(rows):
+def _human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n} B" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+
+
+def _totals(rows):
+    return {"folders": len(rows), "size": sum(r.get("size", 0) for r in rows),
+            "removable": sum(r.get("size", 0) for r in rows if r["action"] == "remove")}
+
+
+def _remove(rows, by="gc"):
     """Remove every row marked remove; one line per failure, the rest go on. (removed, failed, freed bytes)"""
     removed = failed = freed = 0
-    commons = set()
+    bases = set()
     for r in rows:
         if r["action"] != "remove":
             continue
         path = Path(r["path"])
-        size = _size(path)
-        common = _git(["-C", r["path"], "rev-parse", "--git-common-dir"])[1].strip()
-        rc, out = _git(["--git-dir", common, "worktree", "remove", r["path"]])
+        if r.get("stale"):
+            if _remove_stale(path):
+                events.emit("worktree_cleanup", r["card"], path=r["path"], by=by)
+                removed, freed = removed + 1, freed + (r.get("size") or 0)
+            else:
+                failed += 1
+            continue
+        size = (r["size"] if r.get("size") is not None else _size(path)) if by == "gc" else 0
+        cwd, prefix = _git_base(path)
+        rc, out = _in(cwd, *prefix, "worktree", "remove", r["path"])
         if rc:
             failed += 1
-            print(f"pl worktrees: could not remove {r['name']}: {out.strip() or 'git worktree remove failed'}")
+            print(f"worktree {r['name']}: cleanup failed: {out.strip() or 'git worktree remove failed'}", file=sys.stderr)
             continue
-        events.emit("worktree_cleanup", r["card"], path=r["path"], by="gc")
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        if path.exists():
+            print(f"worktree {path}: removed from git but the folder is still there; delete it by hand")
+        events.emit("worktree_cleanup", r["card"], path=r["path"], by=by)
         removed, freed = removed + 1, freed + size
-        commons.add(common)
-    for common in commons:
-        _git(["--git-dir", common, "worktree", "prune"])
+        bases.add((cwd, tuple(prefix)))
+    for cwd, prefix in bases:
+        _in(cwd, *prefix, "worktree", "prune")
     return removed, failed, freed
+
+
+def _remove_stale(path):
+    """Delete one set-aside folder. Only a real folder directly under the worktrees folder with a stale name; True when it is gone."""
+    root = Path(C.WORKTREES_DIR) if C.WORKTREES_DIR else None
+    if root is None or path.parent != root or path.is_symlink() or not path.is_dir() or not _STALE.search(path.name):
+        print(f"worktree {path.name}: not deleted, it is not a set-aside folder of the worktrees folder", file=sys.stderr)
+        return False
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        print(f"worktree {path}: could not delete the folder; delete it by hand")
+        return False
+    return True
+
+
+def _git_base(path):
+    """Where to run worktree commands: the work folder when it is a repository, else the worktree's own common git dir."""
+    if C.WORK_DIR and Path(C.WORK_DIR).is_dir():
+        return C.WORK_DIR, ()
+    common = _in(path, "rev-parse", "--git-common-dir")[1].strip()
+    return C.WORKTREES_DIR, ("--git-dir", common)
+
+
+def _gc_stale(rows, yes):
+    """Old folders with no saved-state record: listed, and deleted only with --yes. Nothing else is touched."""
+    chosen = [{**r, "action": "remove"} for r in rows if r.get("stale") and r["reason"] == "stale, state unknown" and r["expired"]]
+    for r in chosen:
+        print(f"{r['name']:<50} {_human(r['size']):>9} {r['card'] or '-'}")
+    if not yes:
+        print(f"\n{len(chosen)} to remove; nothing changed (pl worktrees gc --stale --yes removes them)")
+        return
+    removed, failed, freed = _remove(chosen, by="gc")
+    for r in chosen:
+        if not Path(r["path"]).exists():
+            print(f"removed {r['name']}")
+    print(f"removed {removed}, failed {failed}, freed {_human(freed)}")
 
 
 def cmd_worktrees(a):
@@ -103,12 +242,18 @@ def cmd_worktrees(a):
             raise SystemExit("pl worktrees bootstrap: give the new worktree's PATH")
         return commands.cmd_worktrees_bootstrap(a)
     rows = inventory()
+    if a.action == "gc" and getattr(a, "stale", False):
+        return _gc_stale(rows, a.yes)
     if a.action == "gc" and a.json:
         print(json.dumps(rows, indent=1))
+    elif a.action == "list" and a.json:
+        print(json.dumps({"rows": rows, "total": _totals(rows)}, indent=1))
     elif a.action == "list" or not a.yes:
         for r in rows:
             verdict = "remove" if r["action"] == "remove" else f"keep: {r['reason']}"
-            print(f"{r['name']:<50} {r['card'] or '-':<28} {r['column'] or '-':<12} {verdict}")
+            print(f"{r['name']:<50} {_human(r['size']):>9} {r['card'] or '-':<28} {r['column'] or '-':<12} {verdict}")
+        t = _totals(rows)
+        print(f"{t['folders']} folders, {_human(t['size'])}, {_human(t['removable'])} can be removed")
         if a.action == "gc":
             print(f"\n{sum(r['action'] == 'remove' for r in rows)} to remove; nothing changed (pl worktrees gc --yes removes them)")
     if a.action == "gc" and a.yes:
@@ -119,6 +264,15 @@ def cmd_worktrees(a):
 
 _run = subprocess.run
 GIT_TIMEOUT = 60
+
+
+def _in(cwd, *args):
+    """(returncode, stdout) of one git command in cwd; a timeout is 124, which reads as cannot inspect."""
+    try:
+        r = _run(["git", *args], capture_output=True, text=True, cwd=str(cwd), timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    return r.returncode, r.stdout or ""
 
 
 def _list_worktrees(work_dir: Path) -> list[dict]:
@@ -154,6 +308,37 @@ def _stamp() -> str:
     return f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
 
 
+RECORD = ".pl-set-aside.json"
+
+
+def _write_stale_record(path: Path, card_id: str) -> Path | None:
+    """Save what the folder held before it is renamed, so a later cleanup can tell saved work from unsaved. None when git cannot say."""
+    if not (path / ".git").exists():
+        return None
+    got = [_in(path, *a) for a in (("branch", "--show-current"), ("rev-parse", "HEAD"), ("status", "--porcelain"),
+                                   ("rev-list", "--count", "HEAD", "--not", "--remotes"))]
+    if any(rc for rc, _ in got) or not got[3][1].strip().isdigit():
+        return None
+    record = {"card": card_id, "branch": got[0][1].strip(), "head": got[1][1].strip(), "uncommitted": bool(got[2][1].strip()),
+              "unpushed": int(got[3][1]), "at": datetime.now(timezone.utc).isoformat()}
+    target = path / RECORD
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(record, f)
+    except OSError:
+        return None
+    return target
+
+
+def _read_stale_record(folder: Path) -> dict | None:
+    try:
+        record = json.loads((folder / RECORD).read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
 def _set_aside(path: Path, card_id: str) -> str | None:
     """Move a plain folder out of the way, keeping its contents; an empty one is just removed. Returns an error or None."""
     try:
@@ -165,7 +350,13 @@ def _set_aside(path: Path, card_id: str) -> str | None:
         while target.exists() or target.is_symlink():
             n += 1
             target = path.with_name(f"{path.name}.stale-{_stamp()}-{n}")
-        os.rename(path, target)
+        record = _write_stale_record(path, card_id)
+        try:
+            os.rename(path, target)
+        except OSError:
+            if record:
+                record.unlink(missing_ok=True)
+            raise
     except OSError as e:
         return f"could not set aside {path}: {e.strerror or e}"
     events.emit("worktree_set_aside", card_id, path=str(path), moved_to=str(target))
@@ -250,159 +441,100 @@ def _settled() -> dict:
         return {}
 
 
-def _pr_info(url: str) -> dict | None:
+_PR_FIELDS = "state,mergedAt,headRefName,headRefOid"
+BRANCH_MISS_SECONDS = 24 * 3600
+
+
+def _settle(key, value):
     known = _settled()
-    if url in known:
-        return known[url]
-    r = ghquota.gh(_run, ["pr", "view", url, "--json", "state,mergedAt,headRefName"],
-                   capture_output=True, text=True, env=C.gh_env())
+    known[key] = value
+    try:
+        _settled_path().parent.mkdir(parents=True, exist_ok=True)
+        _settled_path().write_text(json.dumps(known))
+    except OSError:
+        pass
+
+
+def _pr_info(url: str) -> dict | None:
+    cached = _settled().get(url)
+    if cached and "headRefOid" in cached:
+        return cached
+    r = ghquota.gh(_run, ["pr", "view", url, "--json", _PR_FIELDS], capture_output=True, text=True, env=C.gh_env())
     if r.returncode != 0:
-        return None
+        return cached
     try:
         info = json.loads(r.stdout)
     except Exception:
-        return None
+        return cached
     if isinstance(info, dict) and (info.get("state") in ("MERGED", "CLOSED") or info.get("mergedAt")):
-        try:
-            known[url] = info
-            _settled_path().parent.mkdir(parents=True, exist_ok=True)
-            _settled_path().write_text(json.dumps(known))
-        except OSError:
-            pass
+        info.setdefault("headRefOid", None)
+        _settle(url, info)
     return info
 
 
-def _is_dirty(path: Path) -> bool:
-    r = _run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=str(path))
-    return r.returncode != 0 or bool(r.stdout.strip())
+def _pr_for_branch(branch: str) -> dict | None:
+    """The merged PR that came from this branch, for a card with no recorded PR; a hit is kept for good, a miss for a day."""
+    key = f"branch:{branch}"
+    known = _settled().get(key)
+    if known and "miss_at" not in known:
+        return known
+    if known and time.time() - known["miss_at"] < BRANCH_MISS_SECONDS:
+        return None
+    r = ghquota.gh(_run, ["pr", "list", "--head", branch, "--state", "merged", "--limit", "1", "--json", _PR_FIELDS],
+                   capture_output=True, text=True, env=C.gh_env(), cwd=str(C.WORK_DIR))
+    try:
+        found = json.loads(r.stdout) if r.returncode == 0 else None
+    except ValueError:
+        found = None
+    if not isinstance(found, list):
+        return None
+    hit = found[0] if found else None
+    if hit:
+        hit.setdefault("headRefOid", None)
+    _settle(key, hit or {"miss_at": time.time()})
+    return hit
 
 
-def _has_unpushed(path: Path, branch: str | None) -> bool:
-    if not branch:
-        return False
-    ref = f"origin/{branch}"
-    r = _run(["git", "rev-parse", "--verify", ref], capture_output=True, text=True, cwd=str(path))
-    if r.returncode != 0:
-        r_head = _run(["git", "rev-list", "--count", "origin/HEAD..HEAD"], capture_output=True, text=True, cwd=str(path))
-        if r_head.returncode != 0:
-            r_head = _run(["git", "rev-list", "--count", "origin/main..HEAD"], capture_output=True, text=True, cwd=str(path))
-        return r_head.returncode != 0 or int(r_head.stdout.strip() or "0") > 0
-    r_diff = _run(["git", "rev-list", "--count", f"{ref}..HEAD"], capture_output=True, text=True, cwd=str(path))
-    return r_diff.returncode != 0 or int(r_diff.stdout.strip() or "0") > 0
-
-
-def _find_card(wt: dict, all_cards: list[dict], pr_cache: dict) -> dict | None:
-    wt_path = wt["path"].resolve()
-    branch = wt.get("branch") or ""
-    branch_short = branch.removeprefix("pl/")
-    repo_name = Path(C.WORK_DIR).name if C.WORK_DIR else ""
-
-    for c in all_cards:   # the free matches first, over every card: a PR lookup costs a GitHub call
-        m = c.get("metadata") or {}
-        if m.get("worktree") and Path(m["worktree"]).resolve() == wt_path:
-            return c
-        if m.get("branch") and m["branch"] in (branch, branch_short):
-            return c
-
-        slug = slug_of(c)
-        clean_dir = wt_path.name
-        if repo_name:
-            clean_dir = clean_dir.removeprefix(f"{repo_name}-pl-").removeprefix("pl-")
-        if branch_short and (branch_short == slug or branch_short.startswith(slug[:20]) or slug.startswith(branch_short)):
-            return c
-        if clean_dir and (clean_dir == slug or clean_dir.startswith(slug[:20]) or slug.startswith(clean_dir)):
-            return c
-
-        cid = str(c.get("id") or "").split("#")[-1]
-        if cid:
-            parts = {branch_short, clean_dir, *branch_short.split("-"), *clean_dir.split("-")}
-            if cid in parts or f"card-{cid}" in parts or f"pl-{cid}" in parts:
-                return c
-
-    for c in all_cards:
-        for url in (c.get("metadata") or {}).get("pr_urls") or []:
-            if url not in pr_cache:
-                pr_cache[url] = _pr_info(url)
-            pr = pr_cache.get(url)
-            if pr and pr.get("headRefName") in (branch, branch_short):
-                return c
-
+def _match_card(path, branch, all_cards):
+    """The card that owns this worktree, by the recorded path, the recorded branch, the folder's slug or pl/<slug>[-sN];
+    a live card wins over a finished one with the same slug."""
+    name = path.name.split("-pl-", 1)[-1]
+    own = re.fullmatch(r"pl/(.+?)(?:-s\d+)?", branch or "")
+    tests = (lambda c, m: m.get("worktree") and Path(m["worktree"]).resolve() == path.resolve(),
+             lambda c, m: m.get("branch") and m["branch"] == branch,
+             lambda c, m: slug_of(c) == name,
+             lambda c, m: own and slug_of(c) in (own.group(1), (branch or "").removeprefix("pl/")))
+    for test in tests:
+        found = [c for c in all_cards if test(c, c.get("metadata") or {})]
+        if found:
+            return next((c for c in found if _column(c) != "Done"), found[0])
     return None
 
 
+def _column(c):
+    return c.get("column") or col_name(c["list_id"])
+
+
 def sweep(all_cards: list[dict], dry: bool = False) -> None:
-    """Safely remove clean worktrees of finished and dropped cards under WORKTREES_DIR."""
+    """Remove exactly the worktrees the report marks remove."""
     if not (C.WORKTREES or {}).get("cleanup", True):
         return
     if not C.WORKTREES_DIR or not Path(C.WORKTREES_DIR).is_dir():
         return
     if not C.WORK_DIR or not Path(C.WORK_DIR).is_dir():
         return
-
-    wt_base = Path(C.WORKTREES_DIR).resolve()
-    pr_cache: dict[str, dict | None] = {}
-
-    for wt in _list_worktrees(C.WORK_DIR):
-        try:
-            wt_path = wt["path"].resolve()
-            if wt_path == wt_base or not wt_path.is_relative_to(wt_base):
-                continue
-        except Exception:
-            continue
-
-        card = _find_card(wt, all_cards, pr_cache)
-        if not card:
-            continue
-
-        if hold := agent_hold(card):
+    by_id = {c["id"]: c for c in all_cards}
+    rows = inventory(all_cards, sizes=False)
+    for r in rows:
+        if r["reason"].startswith("agent") and (hold := agent_hold(by_id[r["card"]])):
             why = f" ({hold[1]})" if hold[1] else ""
-            print(f"worktree {wt_path} {card['id']} skipped: agent {hold[0]}{why}")
-            continue
-
-        col = card.get("column") or (col_name(card.get("list_id")) if card.get("list_id") else None)
-        if col != "Done":
-            continue
-
-        meta = card.get("metadata") or {}
-        pr_urls = meta.get("pr_urls") or []
-        is_dropped = bool(meta.get("dropped_at"))
-
-        merged = False
-        closed_unmerged = False
-        for url in pr_urls:
-            if url not in pr_cache:
-                pr_cache[url] = _pr_info(url)
-            pr = pr_cache.get(url)
-            if pr:
-                if pr.get("state") == "MERGED" or pr.get("mergedAt"):
-                    merged = True
-                    break
-                elif pr.get("state") == "CLOSED":
-                    closed_unmerged = True
-
-        if merged:
-            if _is_dirty(wt_path):
-                continue
-        elif is_dropped or closed_unmerged:
-            if _is_dirty(wt_path) or _has_unpushed(wt_path, wt.get("branch")):
-                continue
-        else:
-            continue
-
-        if dry:
-            print(f"  would remove worktree {wt_path}")
-            continue
-
-        try:
-            _run(["git", "worktree", "remove", str(wt_path)], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
-            _run(["git", "worktree", "prune"], capture_output=True, text=True, cwd=str(C.WORK_DIR), check=True)
-            if wt_path.exists():
-                shutil.rmtree(wt_path, ignore_errors=True)
-            if wt_path.exists():
-                print(f"worktree {wt_path}: removed from git but the folder is still there; delete it by hand")
-            events.emit("worktree_cleanup", card["id"], path=str(wt_path), by="sweep")
-        except (subprocess.CalledProcessError, OSError) as e:
-            print(f"worktree {wt_path.name}: cleanup failed: {e}", file=sys.stderr)
+            print(f"worktree {r['path']} {r['card']} skipped: agent {hold[0]}{why}")
+    if dry:
+        for r in rows:
+            if r["action"] == "remove":
+                print(f"  would remove worktree {r['path']}")
+        return
+    _remove(rows, by="sweep")
 
 
 def check_missing(all_cards: list[dict]) -> None:

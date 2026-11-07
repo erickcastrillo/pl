@@ -305,6 +305,13 @@ def test_pl_review_runs_the_review_test_set():
     assert version >= 9
 
 
+def test_pl_review_says_no_mapping_is_not_a_pass():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    for phrase in ("no mapping", "not a pass", "not tested", "only `affected: 0 files`", "mapped:"):
+        assert phrase in text
+    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 13
+
+
 # ---------- pl section: read and write one card section ----------
 
 @pytest.fixture
@@ -817,6 +824,11 @@ def test_pl_run_runs_affected_tests_per_package():
         assert words in step, words
 
 
+def test_pl_run_runs_every_command_in_commands():
+    step = _step3()
+    assert 'every command in "commands"' in step and "`full` true" in step and "not JSON" in step
+
+
 def test_pl_run_has_no_final_full_suite_step():
     text = _flat("pl-run")
     assert "run the full test suite once more" not in text
@@ -852,12 +864,12 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v14_is_updated_to_v15(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 14, 15)
+def test_an_unedited_pl_run_v15_is_updated_to_v16(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 15, 16)
 
 
-def test_an_unedited_pl_review_v10_is_updated_to_v11(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 10, 11)
+def test_an_unedited_pl_review_v13_is_updated_to_v14(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 13, 14)
 
 
 def test_a_mockup_binds_design_plan_run_and_review():
@@ -1061,3 +1073,9 @@ def test_pl_run_stacked_plans_says_how_to_resume():
     for words in ("Resume: run `pl slices <id>` first", "Do not rebuild or reopen a slice it shows as merged or open",
                   "lowest slice with no pull request or closed unmerged"):
         assert words in stacked, words
+
+
+def test_run_and_review_skills_declare_manual_steps():
+    for name in ("pl-run", "pl-review"):
+        text = _shipped(name)
+        assert "## Manual steps remaining" in text and "pl done" in text, name

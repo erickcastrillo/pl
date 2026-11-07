@@ -10,6 +10,7 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Static
 
+from pl import manager
 from pl.tui.review import ConfirmScreen
 from pl.tui.chrome import close
 
@@ -70,7 +71,8 @@ class DetailsScreen(Screen):
 
     def _show(self, data):
         self.data = data
-        disp_state = self.summary.get("disp") or self.summary.get("running_state") or "stopped"
+        lock = Path.home() / f".pl-{self.profile}" / "state" / "pl-dispatch.lock"
+        disp_state = "running" if manager.dispatcher_alive(lock) else "stopped"
 
         head = Text()
         head.append(f"Pipeline details: {self.profile}", style="bold")

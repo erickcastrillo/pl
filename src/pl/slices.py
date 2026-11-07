@@ -27,7 +27,7 @@ def planned(c):
 
 
 def pr_state(url, seen):
-    """{"url", "repo", "number", "state": merged|open|closed, "at", "sha", "title"}, or None when it cannot be read."""
+    """{"url", "repo", "number", "state": merged|open|closed, "at", "sha", "title", "body"}, or None when it cannot be read."""
     if url in seen:
         return seen[url]
     m = rework.PR_URL.match(url)
@@ -37,7 +37,7 @@ def pr_state(url, seen):
             pr = json.loads(github._gh(["api", f"repos/{m.group(1)}/pulls/{m.group(2)}"]))
             got = {"url": url, "repo": m.group(1), "number": int(m.group(2)),
                    "state": "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open",
-                   "at": pr.get("merged_at") or "", "sha": pr.get("merge_commit_sha") or "", "title": pr.get("title") or ""}
+                   "at": pr.get("merged_at") or "", "sha": pr.get("merge_commit_sha") or "", "title": pr.get("title") or "", "body": pr.get("body") or ""}
         except (SystemExit, ValueError, AttributeError):   # RateLimited and OverBudget are SystemExits
             got = None
     seen[url] = got
