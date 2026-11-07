@@ -1,0 +1,3 @@
+title = "pl worktrees shows every folder's size and why it is kept"
+where = "pl worktrees; pl worktrees list --json"
+try = "pl worktrees"

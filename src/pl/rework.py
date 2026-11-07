@@ -13,6 +13,7 @@ import urllib.parse
 
 from pl import config as C
 from pl import alerts, events, heldwrites, jobs, notifications
+from pl.agents import held_steps
 from pl.board import card, col_name, update
 from pl.trackers import github
 from pl.util import now_iso, parse_iso, short_id
@@ -47,6 +48,8 @@ def rounds():
 
 def _prs(c):
     """[(repo, number, url)] of the pull requests recorded on the card, in the order they were recorded."""
+    if held_steps(c):   # merged and waiting for a person: no pass reads its pull requests again
+        return []
     return [(m.group(1), int(m.group(2)), u) for u in ((c.get("metadata") or {}).get("pr_urls") or [])
             if (m := PR_URL.match(u))]
 

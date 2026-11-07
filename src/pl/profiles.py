@@ -11,6 +11,7 @@ from pathlib import Path
 import tomlkit
 
 from pl import config as C
+from pl import manager
 from pl.jsonout import emit
 from pl.util import BadInput
 
@@ -36,7 +37,7 @@ def _is_locked(lock: Path) -> bool:
 
 
 def _row(name, d, lock, session, tracker, accounts, check_lock=True):
-    running = check_lock and _is_locked(lock)
+    running = check_lock and manager.dispatcher_alive(lock)
     try:
         holder = lock.read_text().strip() if running else ""
     except OSError:
@@ -47,7 +48,7 @@ def _row(name, d, lock, session, tracker, accounts, check_lock=True):
 
 
 def list_profiles(check_lock=True) -> list[dict]:
-    """Every ~/.pl-* folder with a config.toml. check_lock=False: never touch the dispatch locks (running is False)."""
+    """Every ~/.pl-* folder with a config.toml. check_lock=False skips the running check (running is False). The check never takes a dispatch lock."""
     home = Path.home()
     base = C._defaults()
     rows = []

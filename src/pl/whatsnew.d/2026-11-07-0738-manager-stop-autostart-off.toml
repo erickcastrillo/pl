@@ -1,0 +1,3 @@
+title = "pl manager stop now stops a dispatcher whose autostart is off"
+where = "pl manager stop NAME"
+try = "pl manager stop NAME"
