@@ -253,3 +253,37 @@ def test_gc_yes_writes_worktree_cleanup_event(env, tmp_path, monkeypatch):
     found = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
     assert [(e["card"], e["by"]) for e in found] == [("o/r#fin", "gc")]
     assert found[0]["path"] == str(C.WORKTREES_DIR / "r-pl-fin")
+
+
+def _stale(env, age_days, record="saved"):
+    import datetime as dt
+    when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=age_days)
+    name = f"r-pl-fin.stale-{when:%Y%m%d-%H%M%S}"
+    env["make"](name)
+    if record == "saved":
+        (C.WORKTREES_DIR / name / ".pl-set-aside.json").write_text(json.dumps({"uncommitted": False, "unpushed": 0}))
+    elif record == "unsaved":
+        (C.WORKTREES_DIR / name / ".pl-set-aside.json").write_text(json.dumps({"uncommitted": True, "unpushed": 0}))
+    elif record == "bad":
+        (C.WORKTREES_DIR / name / ".pl-set-aside.json").write_text("{nope")
+    return worktrees.inventory(sizes=False)[0]
+
+
+def test_young_saved_stale_shows_days_left(env, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    row = _stale(env, 10)
+    assert (row["action"], row["reason"]) == ("keep", "stale, 4 days left")
+
+
+def test_expired_saved_stale_has_zero_days_left_until_slice_5(env, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    assert _stale(env, 20)["reason"] == "stale, 0 days left"
+
+
+def test_unsaved_record_shows_unsaved_at_any_age(env):
+    assert _stale(env, 1, "unsaved")["reason"] == "stale, unsaved work"
+    assert _stale(env, 400, "unsaved")["reason"] == "stale, unsaved work"
+
+
+def test_malformed_record_is_state_unknown(env):
+    assert _stale(env, 20, "bad")["reason"] == "stale, state unknown"

@@ -1,0 +1,3 @@
+title = "A set-aside worktree folder now remembers whether its work was saved"
+where = "pl worktrees; [worktrees] stale_days"
+try = "pl worktrees"

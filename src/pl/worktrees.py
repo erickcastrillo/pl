@@ -1,6 +1,7 @@
 """pl worktrees [list] | gc [--yes] [--json]: the worktrees pl-run made in the profile's worktrees folder, and which are safe to remove.
 sweep(): the same cleanup on dispatcher passes, with the [worktrees] settings."""
 import json
+import math
 import os
 import re
 import shutil
@@ -87,9 +88,22 @@ def _unpushed(path, prs):
 
 def _stale_row(d, name, cs):
     c = _match_card(d.with_name(_STALE.sub("", name)), "", cs)
+    record = _read_stale_record(d)
+    if record is None:
+        reason = "stale, state unknown"
+    elif record.get("uncommitted") or record.get("unpushed"):
+        reason = "stale, unsaved work"
+    else:
+        reason = f"stale, {_days_left(name)} days left"
     return {"name": name, "path": str(d), "card": c["id"] if c else None,
-            "column": _column(c) if c else None,
-            "action": "keep", "reason": "stale, state unknown", "stale": True}
+            "column": _column(c) if c else None, "action": "keep", "reason": reason, "stale": True}
+
+
+def _days_left(name):
+    m = _STALE.search(name)
+    set_aside = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - set_aside).total_seconds() / 86400
+    return max(0, math.ceil((C.WORKTREES or {}).get("stale_days", 14) - age))
 
 
 def inventory(cs=None, sizes=True):
@@ -247,6 +261,37 @@ def _stamp() -> str:
     return f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
 
 
+RECORD = ".pl-set-aside.json"
+
+
+def _write_stale_record(path: Path, card_id: str) -> Path | None:
+    """Save what the folder held before it is renamed, so a later cleanup can tell saved work from unsaved. None when git cannot say."""
+    if not (path / ".git").exists():
+        return None
+    got = [_in(path, *a) for a in (("branch", "--show-current"), ("rev-parse", "HEAD"), ("status", "--porcelain"),
+                                   ("rev-list", "--count", "HEAD", "--not", "--remotes"))]
+    if any(rc for rc, _ in got) or not got[3][1].strip().isdigit():
+        return None
+    record = {"card": card_id, "branch": got[0][1].strip(), "head": got[1][1].strip(), "uncommitted": bool(got[2][1].strip()),
+              "unpushed": int(got[3][1]), "at": datetime.now(timezone.utc).isoformat()}
+    target = path / RECORD
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(record, f)
+    except OSError:
+        return None
+    return target
+
+
+def _read_stale_record(folder: Path) -> dict | None:
+    try:
+        record = json.loads((folder / RECORD).read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
 def _set_aside(path: Path, card_id: str) -> str | None:
     """Move a plain folder out of the way, keeping its contents; an empty one is just removed. Returns an error or None."""
     try:
@@ -258,7 +303,13 @@ def _set_aside(path: Path, card_id: str) -> str | None:
         while target.exists() or target.is_symlink():
             n += 1
             target = path.with_name(f"{path.name}.stale-{_stamp()}-{n}")
-        os.rename(path, target)
+        record = _write_stale_record(path, card_id)
+        try:
+            os.rename(path, target)
+        except OSError:
+            if record:
+                record.unlink(missing_ok=True)
+            raise
     except OSError as e:
         return f"could not set aside {path}: {e.strerror or e}"
     events.emit("worktree_set_aside", card_id, path=str(path), moved_to=str(target))

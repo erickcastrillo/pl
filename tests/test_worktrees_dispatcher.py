@@ -744,3 +744,22 @@ def test_sweep_does_not_walk_sizes(wt_env, monkeypatch):
     monkeypatch.setattr(worktrees, "_size", lambda p: pytest.fail("walked"))
     worktrees.sweep([card])
     assert len(_removals(wt_env)) == 1
+
+
+# --- Slice 4: stale_days and the stale verdicts ---
+
+
+def test_stale_days_default_is_14(fake_home):
+    _profile(fake_home)
+    assert C.WORKTREES["stale_days"] == 14
+    _profile(fake_home, "[worktrees]\nstale_days = 3\n")
+    assert C.WORKTREES["stale_days"] == 3
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "1.5", '"7"', "true"])
+def test_stale_days_validation_error(bad):
+    assert "worktrees.stale_days must be a positive whole number" in C.validate(tomlkit.parse(f"[worktrees]\nstale_days = {bad}\n"))
+
+
+def test_stale_days_validation_accepts_positive_whole_number():
+    assert C.validate(tomlkit.parse("[worktrees]\nstale_days = 7\n")) == []
