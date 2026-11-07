@@ -38,6 +38,8 @@
   pl done <id> [--note] [--drop-slices REASON]
                           move a pipeline card or a Product card to Done (your call); --note appends the evidence;
                           a card with a slice not merged is refused unless --drop-slices gives the reason
+  pl slices [id]          Done cards whose plan has a slice without a merged pull request (exit 2 when one could not be
+                          read); with an id, that card's slices, checked again
   pl drop <id> [--reason TEXT]
                           a pipeline card no longer needed: stops its live agent, moves it to Done marked dropped
                           (not done) with who, when, why and the column it was in; its linked Product card goes to Done
@@ -259,7 +261,7 @@ import os
 import sys
 
 from pl import stage_models
-from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, titles, trackers
+from pl import alerts, assistant, config, events, hooks, links, loops, merges, outward, pods, profiles, retention, rework, setup, skills, slices, titles, trackers
 
 from pl import config as C
 from pl.commands import (cmd_adopt, cmd_approve, cmd_board, cmd_caps, cmd_card, cmd_section, cmd_done, cmd_drop, cmd_undrop, cmd_idea, cmd_intent, cmd_list, cmd_move,
@@ -380,7 +382,7 @@ def _main():
      "interview": lambda a: __import__("pl.interview").interview.cmd_interview(a),
      "question": lambda a: __import__("pl.questions").questions.cmd_question(a),
      "answer": lambda a: __import__("pl.questions").questions.cmd_answer(a),
-     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
+     "dispatch": cmd_dispatch, "board": cmd_board, "card": cmd_card, "caps": cmd_caps, "loops": loops.cmd_loops, "section": cmd_section, "pull": cmd_pull, "adopt": cmd_adopt, "done": cmd_done, "slices": slices.cmd_slices, "drop": cmd_drop, "undrop": cmd_undrop, "move": cmd_move, "retry": cmd_retry, "link": links.cmd_link,
      "restart": cmd_restart, "hold": cmd_hold, "unhold": cmd_unhold,
      "profiles": profiles.cmd_profiles, "accounts": cmd_accounts, "watch": cmd_watch, "pause": cmd_pause, "resume": cmd_resume, "intent": cmd_intent, "rework": rework.cmd_rework, "merges": merges.cmd_merges,
      "standup": cmd_standup, "activity": cmd_activity, "usage": cmd_usage, "alerts": alerts.cmd_alerts, "move-agent": cmd_move_agent,
@@ -450,6 +452,7 @@ def build_parser():
     p.add_argument("--max-prep", type=int, default=None, help="max spec/design/plan agents in flight"); p.add_argument("--no-pull", action="store_true", help="do not pull from the Product board")
     p = sub.add_parser("pull"); p.add_argument("id", nargs="?"); p.add_argument("--list", action="store_true"); p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("adopt"); p.add_argument("id"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
+    p = sub.add_parser("slices"); p.add_argument("id", nargs="?", help="one card, checked again; without it every Done card with a gap")
     p = sub.add_parser("done"); p.add_argument("id"); p.add_argument("--note", help="evidence appended to the card as '## Closed <date>'"); p.add_argument("--drop-slices", metavar="REASON", help="close a card whose plan has slices without a merged pull request, recording the reason"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("drop"); p.add_argument("id"); p.add_argument("--reason", help="why it is no longer needed (kept on the card)"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p = sub.add_parser("undrop"); p.add_argument("id"); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")

@@ -237,3 +237,135 @@ def test_tui_finish_shows_the_refusal(host):
     with pytest.raises(SystemExit) as e:
         commands.done(c["id"])
     assert "--drop-slices" in str(e.value)
+
+
+# ---------- slice 2: off-card merges, pl card, pl slices ----------
+
+def run(fn, **kw):
+    import argparse
+    import contextlib
+    import io
+    out = io.StringIO()
+    code = 0
+    with contextlib.redirect_stdout(out):
+        try:
+            fn(argparse.Namespace(**kw))
+        except SystemExit as e:
+            code = e.code
+    return out.getvalue(), code
+
+
+def search_hit(n, k, total=3, base="Card"):
+    return {"number": n, "title": title(k, total, base), "url": URL.format(n)}
+
+
+def test_ac7_merged_pr_off_the_card_is_linked_and_counts(host):
+    c = make(nums=(1, 2))
+    merged_two(host)
+    host.found = [search_hit(3, 3)]
+    host.prs[3] = ("merged", title(3))
+    sweep()
+    got = fresh(c)
+    assert got["metadata"]["pr_urls"][-1] == URL.format(3) and board.col_name(got["list_id"]) == "Done"
+
+
+def test_ac7_other_title_same_slice_number_is_not_adopted(host):
+    c = make(nums=(1, 2))
+    merged_two(host)
+    host.found = [{"number": 3, "title": "Other card (slice 3 of 3)", "url": URL.format(3)}]
+    sweep()
+    got = fresh(c)
+    assert got["metadata"]["pr_urls"] == [URL.format(1), URL.format(2)] and board.col_name(got["list_id"]) == "PR open"
+
+
+def test_ac17_search_passes_the_title_as_one_argv_item(host):
+    c = make(nums=(1, 2))
+    trackers.get("tracker").update(c["id"], title="$(reboot); `x`")
+    merged_two(host)
+    host.prs[1] = ("merged", title(1, 3, "$(reboot); `x`"))
+    sweep()
+    (args,) = host.searches
+    assert args[-2:] == ["--", "$(reboot); `x`"] and args.count("$(reboot); `x`") == 1
+
+
+def test_ac16_failed_search_leaves_the_card_for_the_next_pass(host, monkeypatch):
+    c = make(nums=(1, 2))
+    merged_two(host)
+    real = github._gh
+
+    def boom(args):
+        if args[0] == "search":
+            raise SystemExit("budget")
+        return real(args)
+
+    monkeypatch.setattr(github, "_gh", boom)
+    sweep()
+    got = fresh(c)
+    assert board.col_name(got["list_id"]) == "PR open" and "slice_hold" not in got["metadata"]
+
+
+def test_ac9_card_prints_one_line_per_slice_for_each_state(host):
+    c = make(nums=(1, 2, 4), plan=PLAN + "\n\n### Slice 4: fourth\nw\n\n### Slice 5: fifth\nv", dropped_slices={"numbers": [5]})
+    host.prs[1] = ("merged", title(1))
+    host.prs[2] = ("open", title(2))
+    host.prs[4] = ("closed", title(4))
+    out, _ = run(commands.cmd_card, id=c["id"], delete=False, json=False)
+    assert "slice 1  first: merged (o/r#1)" in out and "slice 2  second: open (o/r#2)" in out
+    assert "slice 3  third: no pull request" in out and "slice 4  fourth: closed unmerged (o/r#4)" in out
+    assert "slice 5  fifth: dropped" in out
+
+
+def test_ac9_card_json_and_unsliced_card_make_no_pr_reads(host):
+    c = make(plan="nothing")
+    run(commands.cmd_card, id=c["id"], delete=False, json=False)
+    assert host.calls == []
+
+
+def test_ac10_pl_slices_id_checks_again(host):
+    c = make()
+    merged_two(host)
+    sweep()
+    assert fresh(c)["metadata"]["slice_hold"]
+    out, code = run(slices.cmd_slices, id=c["id"])
+    assert "slice 3  third: no pull request" in out and code == 0
+    assert not fresh(c)["metadata"]["slice_hold"]
+
+
+def done_card(nums=(1, 2), plan=PLAN, **meta):
+    return make(column="Done", nums=nums, plan=plan, **meta)
+
+
+def test_ac14_lists_gaps_leaves_out_clean_dropped_and_dropped_slices_and_changes_nothing(host):
+    gap = done_card()
+    clean = done_card(nums=(1, 2, 3))
+    dropped = done_card(dropped_at="2026-11-01T00:00:00Z")
+    part = done_card(dropped_slices={"numbers": [3]})
+    merged_two(host)
+    host.prs[3] = ("merged", title(3))
+    before = [fresh(x) for x in (gap, clean, dropped, part)]
+    out, code = run(slices.cmd_slices, id=None)
+    assert code == 0 and short(gap) in out and "slice 3  third: no pull request" in out
+    assert all(short(x) not in out for x in (clean, dropped, part))
+    assert [fresh(x) for x in (gap, clean, dropped, part)] == before
+
+
+def short(c):
+    return c["id"][:8]
+
+
+def test_ac15_audit_shape(host):
+    done_card(nums=(1, 2, 3), plan=PLAN + "\n\n### Slice 4: fourth\nw\n\n### Slice 5: fifth\nv")
+    for n in (1, 2, 3):
+        host.prs[n] = ("merged", title(n, 5))
+    host.found = [search_hit(4, 4, 5)]
+    out, code = run(slices.cmd_slices, id=None)
+    assert "slice 4  fourth: merged, not on the card (o/r#4)" in out and "slice 5  fifth: no pull request" in out
+    assert "slice 1" not in out and code == 0
+
+
+def test_ac16_unreadable_pr_named_and_exit_2(host):
+    c = done_card()
+    host.prs[1] = ("merged", title(1))
+    host.prs[2] = (SystemExit("budget"), "")
+    out, code = run(slices.cmd_slices, id=None)
+    assert code == 2 and "could not check" in out and short(c) in out

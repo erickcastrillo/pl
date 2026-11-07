@@ -78,7 +78,8 @@ Moving work (rule 1 applies):
 - `pl outbox cancel <id>`: cancel a queued send before the undo window expires.
 - `pl question <id> "text"`: ask the owner a question; ends the agent's step and waits.
 - `pl answer <id> "text"`: answer an open question on a card so its stage restarts.
-- `pl done <id>` (`--note`): move a card to Done.
+- `pl done <id>` (`--note`, `--drop-slices "<reason>"`): move a card to Done; a card with an unmerged slice is refused without `--drop-slices`.
+- `pl slices [<id>]`: list Done cards with an unmerged slice; with an id, check that card again.
 - `pl drop <id>` (`--reason`): a card no longer needed: stop its agent, move it to Done marked dropped.
 - `pl undrop <id>`: put a dropped card back in the column it came from.
 - `pl move <id> "<column>"`: move a card to a column.

@@ -723,6 +723,8 @@ def cmd_card(a):
         parts["INPUT"] = _strip_email_block(parts["INPUT"])
     for k, v in parts.items():
         print(f"-- section {k or '(preamble)'}: {len(v)} chars, first line: {v.strip().splitlines()[0][:80] if v.strip() else ''}")
+    if slices.planned(c):
+        print("\n".join(slices.lines(slices.view(c))))
 
 
 def _caps_value(flag, raw, parse):

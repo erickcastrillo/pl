@@ -48,9 +48,24 @@ def _ref(p):
     return f"{p['repo']}#{p['number']}"
 
 
-def view(c, seen=None):
-    """{"slices": [{"k", "name", "state", "pr"}], "strays": [refs], "unread": bool}. State: merged, open, closed,
-    none or dropped, from the card's recorded pull requests titled for the slice; the best state wins."""
+def find_merged(c, repo):
+    """{k: url} of merged pull requests in repo titled exactly as the card's title plus " (slice k of n)"."""
+    base = c["title"]
+    found = json.loads(github._gh(["search", "prs", "--repo", repo, "--merged", "--match", "title",
+                                   "--json", "number,title,url", "--limit", "100", "--", base[:200]]))
+    exact = re.compile(re.escape(base) + r" \(slice (\d+) of \d+\)", re.I)
+    return {int(m.group(1)): pr["url"] for pr in found if (m := exact.fullmatch(pr.get("title") or ""))}
+
+
+def _ref_of(url):
+    m = rework.PR_URL.match(url)
+    return f"{m.group(1)}#{m.group(2)}" if m else url
+
+
+def view(c, seen=None, search=False):
+    """{"slices": [{"k", "name", "state", "pr", "off_card"}], "strays": [refs], "unread": bool}. State: merged, open,
+    closed, none or dropped, from the card's recorded pull requests titled for the slice; the best state wins.
+    search: a slice with no pull request is looked for among the repo's merged ones; one found is merged and off_card."""
     seen = {} if seen is None else seen
     prs = [pr_state(u, seen) for u in (c.get("metadata") or {}).get("pr_urls") or []]
     best, strays = {}, []
@@ -63,7 +78,18 @@ def view(c, seen=None):
     dropped = set(((c.get("metadata") or {}).get("dropped_slices") or {}).get("numbers") or [])
     rows = [{"k": k, "name": name, "pr": best.get(k, {}).get("pr"),
              "state": "dropped" if k in dropped else best.get(k, {}).get("state", "none")} for k, name in planned(c)]
-    return {"slices": rows, "strays": strays, "unread": None in prs}
+    unread = None in prs
+    repo = next((p["repo"] for p in prs if p), None)
+    if search and repo and any(r["state"] == "none" for r in rows):
+        try:
+            found = find_merged(c, repo)
+        except (SystemExit, ValueError, AttributeError, TypeError):
+            unread = True
+        else:
+            for r in rows:
+                if r["state"] == "none" and r["k"] in found:
+                    r.update(state="merged", off_card=found[r["k"]], pr=_ref_of(found[r["k"]]))
+    return {"slices": rows, "strays": strays, "unread": unread}
 
 
 def unmerged(v):
@@ -113,3 +139,53 @@ def sweep_alerts(active):
 def keep_alert(c, active):
     """A pass that could not read the card's pull requests neither opens nor clears its alert."""
     active.add(f"{KEY}{c['id']}")
+
+
+def adopt(c, v):
+    """Add the merged pull requests found off the card to its pr_urls."""
+    urls = [r["off_card"] for r in v["slices"] if r.get("off_card")]
+    if not urls:
+        return
+    new = [*(c.get("metadata") or {}).get("pr_urls", []), *urls]
+    board.update(c["id"], metadata={"pr_urls": new})
+    c["metadata"] = {**(c.get("metadata") or {}), "pr_urls": new}
+
+
+def line(s):
+    k = f"slice {s['k']}  {s['name']}: "
+    ref = f" ({s['pr']})"
+    if s.get("off_card"):
+        return k + "merged, not on the card" + ref
+    return k + {"merged": "merged" + ref, "open": "open" + ref, "closed": "closed unmerged" + ref,
+                "none": "no pull request", "dropped": "dropped"}[s["state"]]
+
+
+def lines(v):
+    return [line(s) for s in v["slices"]] + (["could not read one or more pull requests"] if v["unread"] else [])
+
+
+def cmd_slices(a):
+    """pl slices [id]: Done cards whose plan has a slice without a merged pull request on the card; with an id, that
+    card's slices, checked again. Writes nothing but the cleared hold of an open card. Exit 2 when a card could not be read."""
+    if a.id:
+        c = board.find_card(a.id)
+        v = view(c, search=True)
+        print("\n".join(lines(v)) or "no slices in its plan")
+        if board.col_name(c["list_id"]) != "Done" and held(c):
+            board.update(c["id"], metadata={"slice_hold": None})
+        raise SystemExit(2 if v["unread"] else 0)
+    seen, unread = {}, []
+    for c in board.cards():
+        m = c.get("metadata") or {}
+        if c.get("unreadable") or board.col_name(c["list_id"]) != "Done" or m.get("dropped_at") or not planned(c):
+            continue
+        v = view(c, seen, search=True)
+        gaps = [s for s in v["slices"] if s["state"] not in ("dropped",) and (s["state"] != "merged" or s.get("off_card"))]
+        if v["unread"]:
+            unread.append(short_id(c["id"]))
+        elif gaps:
+            print(f"{short_id(c['id'])}  {_clean(c['title'], 70)}")
+            print("\n".join(f"  {line(s)}" for s in gaps))
+    if unread:
+        print("could not check: " + ", ".join(unread))
+        raise SystemExit(2)
