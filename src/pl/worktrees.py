@@ -91,9 +91,9 @@ def _stale_row(d, name, cs):
     record = _read_stale_record(d)
     left = _days_left(name)
     action = "keep"
-    if record is None:
+    if record is None or not _is_complete(record):
         reason = "stale, state unknown"
-    elif record.get("uncommitted") or record.get("unpushed"):
+    elif record["uncommitted"] or record["unpushed"]:
         reason = "stale, unsaved work"
     elif left:
         reason = f"stale, {left} days left"
@@ -101,6 +101,12 @@ def _stale_row(d, name, cs):
         action, reason = "remove", "stale, saved and past retention"
     return {"name": name, "path": str(d), "card": c["id"] if c else None, "column": _column(c) if c else None,
             "action": action, "reason": reason, "stale": True, "expired": not left}
+
+
+def _is_complete(record):
+    """Only a record shaped the way pl writes it can vouch for a folder; anything else fails closed."""
+    unpushed = record.get("unpushed")
+    return isinstance(record.get("uncommitted"), bool) and type(unpushed) is int and unpushed >= 0
 
 
 def _days_left(name):

@@ -848,3 +848,14 @@ def test_report_and_sweep_agree_with_stale_folders(wt_env):
     worktrees.sweep([])
     left = {p.name for p in C.WORKTREES_DIR.iterdir()}
     assert expected == {gone.name} and gone.name not in left and len(left) == 2
+
+
+@pytest.mark.parametrize("record", [{}, {"uncommitted": False}, {"unpushed": 0}, {"uncommitted": 0, "unpushed": 0},
+                                    {"uncommitted": False, "unpushed": False}, {"uncommitted": False, "unpushed": "0"}])
+def test_incomplete_stale_record_fails_closed(wt_env, record):
+    from pl import worktrees
+    d = _stale_folder("repo-pl-x", 90, record)
+    [row] = [r for r in worktrees.inventory([], sizes=False) if r["path"] == str(d)]
+    assert (row["action"], row["reason"]) == ("keep", "stale, state unknown")
+    worktrees.sweep([])
+    assert d.exists()
