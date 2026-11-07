@@ -34,7 +34,7 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def host(monkeypatch):
     """The fake code host: pull request number -> (state, title) or an exception; every read is logged."""
-    h = types.SimpleNamespace(prs={}, calls=[], searches=[], found=[])
+    h = types.SimpleNamespace(prs={}, calls=[], searches=[], found=[], bodies={})
 
     def gh(args):
         if args[0] == "search":
@@ -47,7 +47,7 @@ def host(monkeypatch):
         if isinstance(state, BaseException):
             raise state
         return json.dumps({"merged": state == "merged", "state": "open" if state == "open" else "closed", "title": title,
-                           "merged_at": "2026-11-03T10:00:00Z", "merge_commit_sha": "abcdef0123456789"})
+                           "body": h.bodies.get(int(args[1].rsplit("/", 1)[1]), ""), "merged_at": "2026-11-03T10:00:00Z", "merge_commit_sha": "abcdef0123456789"})
 
     monkeypatch.setattr(github, "_gh", gh)
     return h
@@ -267,6 +267,29 @@ def test_ac7_merged_pr_off_the_card_is_linked_and_counts(host):
     sweep()
     got = fresh(c)
     assert got["metadata"]["pr_urls"][-1] == URL.format(3) and board.col_name(got["list_id"]) == "Done"
+
+
+def test_adopted_pr_with_manual_steps_holds_the_card_and_is_named_in_the_note(host):
+    c = make(nums=(1, 2))
+    merged_two(host)
+    host.found = [search_hit(3, 3)]
+    host.prs[3] = ("merged", title(3))
+    host.bodies[3] = "Done.\n\n## Manual steps remaining\n- install the timer\n"
+    sweep()
+    got = fresh(c)
+    assert board.col_name(got["list_id"]) != "Done"
+    assert got["metadata"]["manual_steps"]["steps"] == [{"pr": "o/r#3", "text": "install the timer"}]
+
+
+def test_adopted_pr_is_listed_in_the_all_merged_note(host, monkeypatch):
+    make(nums=(1, 2))
+    merged_two(host)
+    host.found = [search_hit(3, 3)]
+    host.prs[3] = ("merged", title(3))
+    notes = []
+    monkeypatch.setattr(pr_done, "_close", lambda c, note, dry: notes.append(note))
+    sweep()
+    assert len(notes) == 1 and "o/r#3" in notes[0]
 
 
 def test_ac7_other_title_same_slice_number_is_not_adopted(host):

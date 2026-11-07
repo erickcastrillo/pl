@@ -201,7 +201,11 @@ def _close_or_hold(c, states, seen, slice_held, active, dry):
     if not dry:
         slices.adopt(c, v)
     if not slices.unmerged(v):
-        return _close_or_steps(c, states, active, dry)
+        adopted = [_state(s["off_card"], seen) for s in v["slices"] if s.get("off_card")]
+        if None in adopted:
+            active.add(f"{KEY}{c['id']}")
+            return
+        return _close_or_steps(c, states + adopted, active, dry)
     if dry:
         print(f"would hold {short_id(c['id'])}: slices {', '.join(str(s['k']) for s in slices.unmerged(v))} not merged")
         return
