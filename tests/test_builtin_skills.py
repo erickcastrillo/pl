@@ -852,12 +852,12 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v13_is_updated_to_v14(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 13, 14)
+def test_an_unedited_pl_run_v14_is_updated_to_v15(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 14, 15)
 
 
-def test_an_unedited_pl_review_v10_is_updated_to_v11(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 10, 11)
+def test_an_unedited_pl_review_v11_is_updated_to_v12(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 11, 12)
 
 
 def test_a_mockup_binds_design_plan_run_and_review():
@@ -1054,3 +1054,9 @@ def test_pl_run_rework_relabels_only_changed_stack_prs():
 
 def test_pl_run_v13_ships_stacked_plans():
     assert skills._builtin("pl-run")[1] >= 13
+
+
+def test_run_and_review_skills_declare_manual_steps():
+    for name in ("pl-run", "pl-review"):
+        text = _shipped(name)
+        assert "## Manual steps remaining" in text and "pl done" in text, name

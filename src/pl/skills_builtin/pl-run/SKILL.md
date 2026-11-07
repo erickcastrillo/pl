@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 14
+pl-builtin-version: 15
 ---
 
 # pl-run: build the approved plan for one card
@@ -74,7 +74,7 @@ such choice in the pull request description.
 
    `<review label>` is the `review=<label>` argument; leave out `--label` when there is none. The body says what
    changed, which acceptance criteria it meets, how it was tested (the affected test files you ran, or that you ran the full
-   suite and why: `full` true, or `pl tests affected` failed), and every choice you made where the plan was unclear, with the card id.
+   suite and why: `full` true, or `pl tests affected` failed), and every choice you made where the plan was unclear, with the card id. Anything a person must do after merge, or any criterion you could not prove, goes under `## Manual steps remaining` as a list; pl then holds the card open. Never run `pl done` to clear them.
 
 6. Move the card and record the pull request on it:
 
