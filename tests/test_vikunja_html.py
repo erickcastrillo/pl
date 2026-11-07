@@ -91,7 +91,7 @@ def test_bad_comment_payload_is_ignored():
     assert text.startswith("x") and meta == {}
 
 
-def test_markdown_it_comes_from_existing_deps():
+def test_markdown_it_is_a_declared_dep():
     import markdown_it  # noqa: F401
     deps = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["dependencies"]
-    assert not [d for d in deps if "markdown-it" in d]
+    assert [d for d in deps if "markdown-it" in d]

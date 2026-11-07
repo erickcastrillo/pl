@@ -2,6 +2,6 @@
 [tests]
 # review and merge runs read the worker count through `pl tests full`
 workers = 4   # capped: several builds and reviews run at once on one machine
-always = ["tests/test_whatsnew.py", "tests/test_worktrees_skill_integration.py"]
+always = ["tests/test_whatsnew.py", "tests/test_worktrees_skill_integration.py", "tests/test_declared_deps.py"]
 # files with no tests: `*` crosses folders (fnmatch), so "*.md" covers every markdown file
 no_tests = ["*.md", "LICENSE", "src/pl/whatsnew.d/*", ".github/*"]

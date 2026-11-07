@@ -5,10 +5,15 @@ description = "The feature funnel: idea -> spec -> plan -> your yes -> PR -> rev
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp[ws]>=1.10,<3",
+    "httpx>=0.28.1",
+    "markdown-it-py>=4.2.0",
+    "mcp[ws]>=1.10,<2",
     "pyyaml>=6.0.3",
+    "rich>=15.0.0",
     "textual>=8.2.8",
     "tomlkit>=0.15.1",
+    "uvicorn>=0.54.0",
+    "websockets>=17.3",
 ]
 
 [project.scripts]
