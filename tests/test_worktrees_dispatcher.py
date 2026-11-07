@@ -66,6 +66,10 @@ class FakeGitRunner:
         self.dirty_paths = set()
         self.unpushed_branches = set()
         self.fail_removals = False
+        self.heads = {}       # path -> HEAD sha
+        self.pr_lists = {}    # branch -> merged PR dict found by `gh pr list --head`
+        self.gh_fails = False
+        self.status_fails = set()
 
     def __call__(self, argv, capture_output=True, text=True, cwd=None, check=False, **kw):
         self.commands.append((list(argv), cwd))
@@ -95,12 +99,19 @@ class FakeGitRunner:
 
             elif sub == "status":
                 p = Path(cwd) if cwd else None
+                if p in self.status_fails:
+                    return types.SimpleNamespace(returncode=128, stdout="", stderr="fatal")
                 if p and p in self.dirty_paths:
                     return types.SimpleNamespace(returncode=0, stdout=" M dirty.txt\n", stderr="")
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
             elif sub == "rev-parse":
-                return types.SimpleNamespace(returncode=0, stdout="hash\n", stderr="")
+                return types.SimpleNamespace(returncode=0, stdout=self.heads.get(Path(cwd), "hash") + "\n", stderr="")
+
+            elif sub == "rev-list" and argv[-1] == "--remotes":
+                branch = next((w.get("branch") for w in self.worktrees if w["path"] == Path(cwd)), None)
+                n = 2 if branch in self.unpushed_branches else 0
+                return types.SimpleNamespace(returncode=0, stdout=f"{n}\n", stderr="")
 
             elif sub == "rev-list":
                 spec = argv[-1]
@@ -111,6 +122,11 @@ class FakeGitRunner:
                 return types.SimpleNamespace(returncode=0, stdout="0\n", stderr="")
 
         elif cmd == "gh":
+            if self.gh_fails:
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="boom")
+            if argv[1] == "pr" and argv[2] == "list":
+                hit = self.pr_lists.get(argv[argv.index("--head") + 1])
+                return types.SimpleNamespace(returncode=0, stdout=json.dumps([hit] if hit else []), stderr="")
             if argv[1] == "pr" and argv[2] == "view":
                 url = argv[3]
                 data = self.pr_views.get(url, {"state": "OPEN", "headRefName": "some-branch"})
@@ -349,7 +365,7 @@ def test_a_merged_pr_is_asked_about_once_across_passes(wt_env, monkeypatch):
     wt_env.worktrees = [{"path": wt_path, "branch": "pl/c1"}]
     url = "https://github.com/org/repo/pull/1"
     wt_env.pr_views[url] = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z", "headRefName": "pl/c1"}
-    monkeypatch.setattr(worktrees, "_is_dirty", lambda p: True)   # kept, so the next pass looks at it again
+    wt_env.unpushed_branches.add("pl/c1")   # kept, so the next pass looks at it again
     card = {"id": "c1", "title": "C1", "list_id": "Done", "metadata": {"branch": "pl/c1", "pr_urls": [url]}}
     worktrees.sweep([card])
     worktrees.sweep([card])
@@ -492,7 +508,7 @@ def test_sweep_runs_only_worktree_commands_in_the_main_checkout(wt_env):
     allowed = (["git", "worktree", "list"], ["git", "worktree", "remove"], ["git", "worktree", "prune"])
     in_main = [cmd for cmd, cwd in wt_env.commands if str(cwd) == str(C.WORK_DIR)]
     assert any(cmd[:3] == ["git", "worktree", "remove"] for cmd in in_main)
-    assert all(cmd[:3] in allowed for cmd in in_main)
+    assert all(cmd[:3] in allowed for cmd in in_main), in_main
     assert not [cmd for cmd, _ in wt_env.commands if {"reset", "checkout", "stash", "clean"} & set(cmd)]
 
 
@@ -571,3 +587,160 @@ def test_no_match_asks_github_nothing(wt_env):
     others = [_c(f"o{i}", f"Other {i}", pr_urls=[f"https://github.com/org/repo/pull/{i}"]) for i in range(5)]
     worktrees.sweep(others)
     assert _gh_views(wt_env) == []
+
+
+# --- Slice 3: one decision for report, gc and the dispatcher ---
+
+MERGED = {"state": "MERGED", "mergedAt": "2026-10-23T00:00:00Z"}
+
+
+def _gh_lists(runner):
+    return [cmd for cmd, _ in runner.commands if cmd[:3] == ["gh", "pr", "list"]]
+
+
+def _verdict_of(card):
+    from pl import worktrees
+    rows = worktrees.inventory([card], sizes=False)
+    return rows[0]["action"], rows[0]["reason"]
+
+
+def test_commit_after_pr_last_commit_is_unpushed(wt_env):
+    path, card = _merged_done_card(wt_env)
+    wt_env.unpushed_branches.add("pl/c1")
+    assert _verdict_of(card) == ("keep", "unpushed commits")
+
+
+def test_squash_merged_deleted_branch_head_equals_pr_is_removed(wt_env):
+    path, card = _merged_done_card(wt_env)
+    wt_env.unpushed_branches.add("pl/c1")   # the branch was deleted, so every commit looks unpushed
+    wt_env.heads[path] = "abc123"
+    url = card["metadata"]["pr_urls"][0]
+    wt_env.pr_views[url]["headRefOid"] = "abc123"
+    assert _verdict_of(card) == ("remove", "finished card")
+
+
+def test_old_cache_entry_without_oid_is_asked_once_more(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    path, card = _merged_done_card(wt_env)
+    url = card["metadata"]["pr_urls"][0]
+    worktrees._settled_path().parent.mkdir(parents=True)
+    worktrees._settled_path().write_text(json.dumps({url: {"state": "MERGED", "headRefName": "pl/c1"}}))
+    worktrees.inventory([card], sizes=False)
+    worktrees.inventory([card], sizes=False)
+    assert len(_gh_views(wt_env)) == 1
+
+
+def test_done_card_without_pr_finds_merged_pr_by_branch(wt_env):
+    path, card = _merged_done_card(wt_env)
+    card["metadata"]["pr_urls"] = []
+    wt_env.pr_lists["pl/c1"] = {**MERGED, "headRefName": "pl/c1", "headRefOid": "x"}
+    assert _verdict_of(card) == ("remove", "finished card")
+
+
+def test_done_card_with_no_pr_anywhere_keeps_with_reason(wt_env):
+    path, card = _merged_done_card(wt_env)
+    card["metadata"]["pr_urls"] = []
+    assert _verdict_of(card) == ("keep", "no merged PR on the card")
+
+
+def test_branch_miss_is_not_asked_again_within_a_day(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    path, card = _merged_done_card(wt_env)
+    card["metadata"]["pr_urls"] = []
+    worktrees.inventory([card], sizes=False)
+    worktrees.inventory([card], sizes=False)
+    assert len(_gh_lists(wt_env)) == 1
+
+
+def test_gh_failure_keeps_the_worktree(wt_env):
+    path, card = _merged_done_card(wt_env)
+    wt_env.gh_fails = True
+    assert _verdict_of(card)[0] == "keep"
+
+
+def test_several_repos_keeps_every_row(wt_env):
+    path, card = _merged_done_card(wt_env)
+    (C.WORK_DIR / "a").mkdir()
+    (C.WORK_DIR / "a" / ".git").write_text("x")
+    assert _verdict_of(card) == ("keep", "several repositories in the work folder")
+
+
+def test_sweep_removes_merged_clean_worktree_and_names_card_and_path(wt_env, tmp_path):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    path, card = _merged_done_card(wt_env)
+    worktrees.sweep([card])
+    assert len(_removals(wt_env)) == 1 and str(path) in _removals(wt_env)[0]
+    ev = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
+    assert (ev[0]["card"], ev[0]["path"]) == ("c1", str(path))
+
+
+def test_sweep_leaves_dirty_and_untracked(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    wt_env.dirty_paths.add(path)
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+
+
+def test_sweep_leaves_card_not_done_and_live_agent(wt_env, monkeypatch):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    card["list_id"] = "PR open"
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+
+
+def test_sweep_leaves_uninspectable(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    wt_env.status_fails.add(path)
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+
+
+def test_cleanup_false_removes_nothing_and_report_still_shows(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    C.WORKTREES = {"cleanup": False}
+    worktrees.sweep([card])
+    assert _removals(wt_env) == []
+    assert worktrees.inventory([card], sizes=False)[0]["action"] == "remove"
+
+
+def test_report_and_sweep_agree_on_every_case(wt_env):
+    from pl import worktrees
+    cases = {"fin": {}, "dirty": {"dirty": 1}, "ahead": {"ahead": 1}, "live": {"col": "In progress"},
+             "nopr": {"nopr": 1}, "broken": {"broken": 1}, "dropped": {"dropped": 1}}
+    cards, registered = [], []
+    for name, how in cases.items():
+        path, card = _merged_done_card(wt_env, name)
+        registered += wt_env.worktrees
+        if how.get("dirty"):
+            wt_env.dirty_paths.add(path)
+        if how.get("ahead"):
+            wt_env.unpushed_branches.add(f"pl/{name}")
+        if how.get("col"):
+            card["list_id"] = how["col"]
+        if how.get("nopr"):
+            card["metadata"]["pr_urls"] = []
+        if how.get("broken"):
+            wt_env.status_fails.add(path)
+        if how.get("dropped"):
+            card["metadata"] = {"dropped_at": "2026-10-23T00:00:00Z"}
+        cards.append(card)
+    wt_env.worktrees = registered
+    expected = {r["name"] for r in worktrees.inventory(cards, sizes=False) if r["action"] == "remove"}
+    worktrees.sweep(cards)
+    removed = {Path(cmd[-1]).name for cmd in _removals(wt_env)}
+    assert removed == expected == {"repo-pl-fin", "repo-pl-dropped"}
+
+
+def test_sweep_does_not_walk_sizes(wt_env, monkeypatch):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    monkeypatch.setattr(worktrees, "_size", lambda p: pytest.fail("walked"))
+    worktrees.sweep([card])
+    assert len(_removals(wt_env)) == 1

@@ -8,7 +8,7 @@ from pl import worktrees
 
 
 def card(name, column, worker=None):
-    return {"id": f"o/r#{name}", "title": name, "list_id": column, "metadata": {"spec_slug": name, "worker": worker}}
+    return {"id": f"o/r#{name}", "title": name, "list_id": column, "metadata": {"spec_slug": name, "worker": worker, "dropped_at": "2026-11-01T00:00:00Z"}}
 
 
 @pytest.fixture
@@ -29,8 +29,8 @@ def env(tmp_path, monkeypatch):
         name = d.rsplit("/", 1)[-1] if d else None
         if argv[2:4] == ["status", "--porcelain"]:
             return state.get("status_rc", 0), " M f\n" if name in state["dirty"] else ""
-        if argv[2:3] == ["log"]:
-            return state.get("log_rc", 0), "abc commit\n" if name in state["unpushed"] else ""
+        if argv[2:3] == ["rev-list"]:
+            return state.get("log_rc", 0), "3\n" if name in state["unpushed"] else "0\n"
         if argv[2:3] == ["rev-parse"]:
             return 0, str(root / "common.git") + "\n"
         return 0, ""
@@ -101,7 +101,7 @@ def test_status_failure_is_cannot_inspect_never_remove(env):
     assert (row["action"], row["reason"]) == ("keep", "cannot inspect")
 
 
-def test_log_failure_is_cannot_inspect(env):
+def test_rev_list_failure_is_cannot_inspect(env):
     env["make"]("r-pl-fin")
     env["cards"] = [card("fin", "Done")]
     env["log_rc"] = 128
