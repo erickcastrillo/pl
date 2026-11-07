@@ -1530,3 +1530,75 @@ def test_manager_restart_on_autostart_off_exits_non_zero_when_the_start_fails(tm
     _lock_after(monkeypatch, [False])
     assert manager.cmd_manager(["restart", "off"]) == 1
     assert "tmux: no server" in capsys.readouterr().err
+
+
+# ---------- one answer for "is this dispatcher running?" on every surface ----------
+
+def _snapshot(monkeypatch, tmux_command):
+    """watch_snapshot with the board, registry and tmux faked; `tmux_command` is what the dispatch window runs."""
+    from pl import watch
+    monkeypatch.setattr(watch, "cards", lambda: [])
+    monkeypatch.setattr(watch, "registry", lambda: {})
+    monkeypatch.setattr(watch, "pr_counts", lambda: None)
+    monkeypatch.setattr(watch, "paused", lambda: None)
+    monkeypatch.setattr(watch.subprocess, "run", lambda argv, *a, **k: subprocess.CompletedProcess(
+        argv, 0, tmux_command if "list-panes" in argv and any(":dispatch" in x for x in argv) else "", ""))
+    return watch.watch_snapshot()
+
+
+def _dispatch_lock(pid=9):
+    C.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    C.LOCK_FILE.write_text(f"pid {pid} on h since 2026-09-30T10:00:00+00:00")
+
+
+def test_status_line_is_not_stopped_for_a_live_dispatcher_with_no_dispatch_window(machine, monkeypatch):
+    from pl.tui.chrome import status_sentence
+    C.load("work")
+    _dispatch_lock()
+    machine["alive"].add(9)
+    snap = _snapshot(monkeypatch, "")
+    assert snap["disp"] == "running" and status_sentence(snap).startswith("Running")
+
+
+def test_status_line_is_stopped_with_another_python_program_in_the_dispatch_window(machine, monkeypatch):
+    from pl.tui.chrome import status_sentence
+    C.load("work")
+    snap = _snapshot(monkeypatch, "python3")
+    assert snap["disp"] == "NOT RUNNING" and status_sentence(snap) == "Stopped"
+
+
+def test_status_line_still_says_stopped_by_you_at_the_time(machine, monkeypatch):
+    from pl.tui.chrome import status_sentence, stopped_at
+    C.load("work")
+    snap = _snapshot(monkeypatch, "python3")
+    at = time.time()
+    data = {"machine": {"profiles": [{"name": "work", "stopped": True, "stopped_by": "you", "stopped_at": at}]}}
+    assert status_sentence(snap, stopped_at(data)) == f"Stopped (by you at {time.strftime('%H:%M', time.localtime(at))})"
+
+
+@pytest.mark.parametrize("state", ["live", "stopped-old-summary", "reused-pid", "never-started"])
+def test_every_surface_gives_the_same_answer(machine, monkeypatch, state):
+    from pl import pipeline, profiles
+    from pl.tui import switcher
+    from pl.tui.chrome import status_sentence
+    from pl.tui.home import home_rows, read
+    d = machine["home"] / ".pl-work"
+    C.load("work")
+    if state != "never-started":
+        _dispatch_lock(9)
+    if state == "stopped-old-summary":
+        (d / "state" / "summary.json").write_text(json.dumps({"running": True, "at": 1}))
+    if state == "live":
+        machine["alive"].add(9)
+    want = state == "live"
+    pipelines_row = next(r for r in pipeline._list_rows() if r["profile"] == "work")
+    managed_row = next(r for r in manager.managed() if r["name"] == "work")
+    profiles_row = next(r for r in profiles.list_profiles() if r["name"] == "work")
+    summaries = [read(d)]
+    snap = _snapshot(monkeypatch, "python3")
+    answers = {
+        "pipelines": pipelines_row["running"], "profiles": profiles_row["running"], "manager": managed_row["running"],
+        "home": home_rows(summaries)[0]["running"], "picker": switcher.picker_rows({"home": summaries})[0]["running"],
+        "status line": not status_sentence(snap).startswith("Stopped"),
+    }
+    assert set(answers.values()) == {want}, answers

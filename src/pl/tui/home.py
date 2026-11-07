@@ -9,7 +9,7 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Static
 
 from pl import config as C
-from pl import pipeline, util
+from pl import manager, pipeline, util
 from pl.tui import getstarted
 from pl.tui.chrome import NEW_ROW, empty_state, new_row
 from pl.tui.dashboard import copy_text
@@ -22,34 +22,36 @@ def read(profile_dir: Path | str) -> dict | None:
     p = Path(profile_dir)
     f = p / "state" / "summary.json"
     name = p.name.removeprefix(".pl-")
+    running = manager.dispatcher_alive(p / "state" / "pl-dispatch.lock")
+    missing = {"name": name, "missing": True, "running": running}
     if not f.is_file():
-        return {"name": name, "missing": True}
+        return missing
     try:
         data = json.loads(f.read_text("utf-8"))
         if not isinstance(data, dict):
-            return {"name": name, "missing": True}
+            return missing
         data.setdefault("name", name)
+        data["running"] = running
         return data
     except Exception:
-        return {"name": name, "missing": True}
+        return missing
 
 
 def home_rows(summaries) -> list[dict]:
-    """One dict per pipeline from summary dicts. Handles stale or missing summaries."""
-    now = time.time()
+    """One dict per pipeline from summary dicts. Handles missing summaries; "running" is whatever read() set."""
     out = []
     for s in summaries or []:
         if not s or not isinstance(s, dict):
             continue
         name = s.get("name") or s.get("pipeline") or "unknown"
         if s.get("missing"):
-            out.append({"name": name, "running": False, "status": "no summary yet: its dispatcher has not run",
+            up = bool(s.get("running"))
+            out.append({"name": name, "running": up,
+                        "status": "running" if up else "no summary yet: its dispatcher has not run",
                         "cards": "", "needs_you": 0, "live_agents": 0, "oldest_wait": "-", "alerts": 0})
             continue
 
-        at, interval = s.get("at"), s.get("interval", 30) or 30
-        is_stale = (now - at > 3 * interval) if isinstance(at, (int, float)) else False
-        is_running = False if is_stale else bool(s.get("running", False))
+        is_running = bool(s.get("running", False))
 
         cols = s.get("columns", [])
         if isinstance(cols, list):
