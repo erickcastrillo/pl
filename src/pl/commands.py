@@ -72,6 +72,8 @@ def cmd_idea(a):
     t = trackers.get("tracker" if direct else "intake")
     item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []),
                     metadata=meta, assigned_to=trackers.me(t) if a.start and not from_loop else None)
+    if trackers.dry_run():   # DryRun.create printed the preview; its placeholder id is not a card
+        return
     if not item.get("id"):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
     events.emit("idea_approved", item["id"])
