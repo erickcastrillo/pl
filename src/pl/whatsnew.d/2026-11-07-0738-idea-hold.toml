@@ -1,0 +1,3 @@
+title = "pl idea --hold files an idea no agent starts on"
+where = "pl idea --hold; pl unhold"
+try = "pl idea \"your idea\" --hold"

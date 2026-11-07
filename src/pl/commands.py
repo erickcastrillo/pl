@@ -28,6 +28,9 @@ def cmd_idea(a):
     if getattr(a, "interview", False):
         from pl import interview
         return interview.cmd_idea_interview(a)
+    want_hold = getattr(a, "hold", False)
+    if want_hold and a.start:
+        raise BadInput("pl idea: --hold and --start conflict: --hold keeps agents off the card, --start starts it")
     text = a.text.strip()
     if not text:
         raise BadInput("pl idea: the idea text is empty")
@@ -40,6 +43,7 @@ def cmd_idea(a):
             raise SystemExit("pl idea: --plan and --slice go together, both whole numbers from 1")
         title = ideas.plan_title(plan, slice_no, a.title or line)
     from_loop = os.environ.get("PL_LOOP_WRITES") == "0"   # a read-only loop only proposes: unstarted, tagged
+    held = direct and (want_hold or from_loop)   # parked card: the dispatcher starts no agent until pl unhold
     if os.environ.get("PL_DRY_RUN") == "1":
         print(f"would file: {title}")
         return
@@ -66,18 +70,27 @@ def cmd_idea(a):
             **({"plan": plan, "slice": slice_no} if plan is not None else {})}
     desc = "\n".join(["## Where this came from", f"`pl idea`{f' by {C.USER_EMAIL}' if C.USER_EMAIL else ''} on {now_iso()[:10]}.", "", "## The idea"] + body)
     if direct:
-        meta = {**meta, "pipeline_mode": "auto", **({"profile": a.account} if a.account else {})}
+        # a held card gets pipeline_mode only once its parked tag is confirmed (below), so no pass can start it before
+        meta = {**meta, **({"held_at": now_iso(), "held_by": C.USER_EMAIL} if held else {"pipeline_mode": "auto"}),
+                **({"profile": a.account} if a.account else {})}
         desc, title = render({"INPUT": ideas._plain(desc)}), ideas.clean_title(title)
     check_size(desc)
     t = trackers.get("tracker" if direct else "intake")
-    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []),
+    item = t.create("Inbox" if direct else "Triage", title=title, description=desc, tags=["idea", "from-pl-idea"] + list(a.repo) + (["proposed", f"loop:{os.environ.get('PL_LOOP', '')}"] if from_loop else []) + (["parked"] if held else []),
                     metadata=meta, assigned_to=trackers.me(t) if a.start and not from_loop else None)
     if not item.get("id"):
         raise SystemExit(f"pl idea: create failed: {json.dumps(item)[:300]}")
+    if trackers.dry_run():
+        return
+    if held:
+        if "parked" not in (card(item["id"]).get("tags") or []):
+            raise SystemExit(f"pl idea: the parked tag could not be set on {item['id']}; the card stays out of the pipeline, so no agent starts (pl adopt {item['id']} takes it in)")
+        update(item["id"], metadata={"pipeline_mode": "auto"})
     events.emit("idea_approved", item["id"])
     where = "pipeline board, Inbox" if direct else "intake board, Triage"
     print(f"created {item['id'] if direct else short_id(item['id'])}  {title}\n  {where}, {len(docs)} document(s)\n  {t.url(item['id'])}")
-    print("  the dispatcher writes its spec on its next pass" if direct
+    print(f"  held: no agent starts on it until you run pl unhold {item['id']}" if held
+          else "  the dispatcher writes its spec on its next pass" if direct
           else "  assigned to you: the pipeline pulls it in within a few minutes" if a.start
           else "  unassigned, waiting to be assessed; assign it to yourself (or rerun with --start) to start the pipeline")
 

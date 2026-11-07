@@ -18,6 +18,7 @@ SCRIPTABLE = 'pl interview start "text" --json, then pl interview answer and pl 
 NOT_WITH_INTERVIEW = (
     ("doc", "--doc", "a card filed from an interview holds only the brief; put what matters in your answers"),
     ("start", "--start", "the card goes to the pipeline's Inbox, where the dispatcher takes it up on its own"),
+    ("hold", "--hold", "nothing is filed until your yes; pl hold <id> holds the card after that"),
     ("plan", "--plan/--slice", "interview cards are not numbered into a plan; use plain pl idea for those"),
     ("slice", "--plan/--slice", "interview cards are not numbered into a plan; use plain pl idea for those"),
     ("dry_run", "--dry-run", "each question is a real harness run; pl interview file --dry-run checks a filing"),

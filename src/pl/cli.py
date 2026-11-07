@@ -1,13 +1,16 @@
 """pl - the feature funnel: idea -> spec -> plan -> your yes -> PR -> review -> merge-ready.
 
-  pl idea "text" [--doc PATH]... [--title T] [--account NAME] [--repo NAME]... [--start] [--plan N --slice M]
-                          drop an idea (and files) into Triage on the intake board, unassigned, to be
-                          assessed; --start assigns it to you so the pipeline pulls it in;
+  pl idea "text" [--doc PATH]... [--title T] [--account NAME] [--repo NAME]... [--start | --hold] [--plan N --slice M]
+                          with an intake board the idea waits in Triage, unassigned, until --start or someone assigns it,
+                          and then the pipeline pulls it in. With no intake board it goes to the pipeline Inbox and its
+                          spec starts on the dispatcher's next pass, with or without --start. --hold files it there with the
+                          parked tag, so no agent starts until pl unhold <id>; with an intake board it changes nothing, and it
+                          cannot go with --start.
                           --plan/--slice title the card 'Plan N slice M: <--title or first line>' and record both in its metadata
   pl idea --interview "text" [--title T] [--account NAME] [--repo NAME]...
                           on a terminal: the harness asks one question at a time until the brief is clear, then it files to
                           the Inbox only on your yes; Ctrl-C leaves a draft. --account picks who interviews (the card's stage
-                          agents are chosen as usual); --repo pins a repo tag; --doc, --start, --plan, --slice and --dry-run are refused
+                          agents are chosen as usual); --repo pins a repo tag; --doc, --start, --hold, --plan, --slice and --dry-run are refused
   pl interview start "text" [--title T] [--account NAME] [--repo NAME]... [--json] | answer <idea-id> ["answer"] [--json]
              | resume <idea-id> | show <idea-id> [--json] | file <idea-id> [--dry-run] [--json] | list [--all] [--json]
                           the same interview step by step, and the same drafts as the Ideas tab: start and answer each run one
@@ -418,14 +421,18 @@ def cmd_help(a):
     jsonout.emit({"commands": jsonout.commands(build_parser(), PRE_COMMANDS)})
 
 
+IDEA_HELP = __doc__[__doc__.index('  pl idea "text"'):__doc__.index("  pl idea --interview")]
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="pl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--profile", metavar="NAME", help=PROFILE_HELP)
     ap.add_argument("--version", action=VersionAction, nargs=0, help="show program's version number and exit")
     sub = ap.add_subparsers(dest="cmd")
-    p = sub.add_parser("idea"); p.add_argument("text"); p.add_argument("--doc", action="append", default=[])
+    p = sub.add_parser("idea", description=IDEA_HELP, formatter_class=argparse.RawDescriptionHelpFormatter); p.add_argument("text"); p.add_argument("--doc", action="append", default=[])
     p.add_argument("--title"); p.add_argument("--account", choices=list(C.PROFILES)); p.add_argument("--repo", action="append", default=[])
-    p.add_argument("--start", action="store_true", help="assign it to yourself so the pipeline pulls it in now")
+    p.add_argument("--start", action="store_true", help="with an intake board: assign it to yourself so the pipeline pulls it in. With no intake board it only assigns it: the spec starts anyway.")
+    p.add_argument("--hold", action="store_true", help="with no intake board: no agent starts on it until pl unhold <id>. With an intake board it waits in Triage anyway.")
     p.add_argument("--plan", type=int); p.add_argument("--slice", type=int); p.add_argument("--dry-run", action="store_true", help="say what would change and change nothing")
     p.add_argument("--interview", action="store_true", help="on a terminal: be questioned until the brief is clear, then file on your yes")
     p = sub.add_parser("interview"); pi = p.add_subparsers(dest="interview_cmd", required=True)
