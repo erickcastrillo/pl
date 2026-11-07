@@ -140,10 +140,9 @@ def test_a_changed_non_python_file_lists_tests_that_mention_it(repo, monkeypatch
     assert r["reasons"] == {"tests/test_skill.py": "mentions skills/pl-run/SKILL.md"}
 
 
-def test_a_repo_without_python_files_needs_the_full_suite(tmp_path, monkeypatch):
+def test_a_repo_without_python_files_is_not_a_full_run(tmp_path, monkeypatch):
     r = result(monkeypatch, tmp_path, ["Program.cs"])
-    assert r["full"] is True and r["tests"] == []
-    assert "no Python files" in r["full_reason"]
+    assert r["full"] is False and r["tests"] == [] and r["unmapped"] == ["Program.cs"]
 
 
 def test_a_git_failure_prints_on_stderr_and_falls_back_to_full(repo, monkeypatch, capsys):
@@ -172,7 +171,7 @@ def test_json_has_tests_reasons_and_full(repo, monkeypatch, capsys):
     fake_git(monkeypatch, repo, ["src/app/core.py"])
     assert T.cmd_tests(["affected", "--json", "--base", "abc"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert set(out) == {"tests", "reasons", "full", "command"}
+    assert set(out) == {"tests", "reasons", "full", "command", "unmapped", "commands"}
     assert out["tests"] == sorted(out["tests"])
 
 
@@ -393,7 +392,7 @@ def test_json_adds_command_and_keeps_its_fields(repo, budget, monkeypatch, capsy
     fake_git(monkeypatch, repo, ["src/app/core.py"])
     T.cmd_tests(["affected", "--json", "--base", "abc"])
     out = json.loads(capsys.readouterr().out)
-    assert set(out) == {"tests", "reasons", "full", "command"}
+    assert set(out) == {"tests", "reasons", "full", "command", "unmapped", "commands"}
     assert out["command"].startswith("pl tests run -- ") and "tests/test_direct.py" in out["command"]
 
 
@@ -495,7 +494,7 @@ def select(monkeypatch, repo, changed, labels=(), **kw):
 
 def test_select_one_module_runs_its_affected_tests(repo, monkeypatch):
     r = select(monkeypatch, repo, ["src/app/core.py"])
-    assert r == {"full": False, "tests": ["tests/test_core.py", "tests/test_direct.py"], "reason": "affected: 2 files", "e2e_ui": False}
+    assert r == {"full": False, "tests": ["tests/test_core.py", "tests/test_direct.py"], "reason": "affected: 2 files", "e2e_ui": False, "unmapped": []}
 
 
 @pytest.mark.parametrize("changed,reason", [
@@ -559,9 +558,11 @@ def test_select_other_change_has_no_e2e_ui(repo, monkeypatch):
     assert select(monkeypatch, repo, ["src/app/core.py"])["e2e_ui"] is False
 
 
-def test_select_docs_only_change_selects_zero_files(repo, monkeypatch):
+def test_select_docs_only_change_is_no_mapping_or_zero_with_no_tests(repo, monkeypatch):
     r = select(monkeypatch, repo, ["README.md"])
-    assert r == {"full": False, "tests": [], "reason": "affected: 0 files", "e2e_ui": False}
+    assert r == {"full": False, "tests": [], "reason": "no mapping for 1 file: README.md", "e2e_ui": False, "unmapped": ["README.md"]}
+    settings(repo, '[tests]\nno_tests = ["*.md"]\n')
+    assert select(monkeypatch, repo, ["README.md"])["reason"] == "affected: 0 files"
 
 
 # ---------- pl tests review ----------
@@ -586,6 +587,7 @@ def test_review_full_prints_full_suite_reason_and_full_command(repo, budget, mon
 
 
 def test_review_zero_files_prints_no_command(repo, budget, monkeypatch, capsys):
+    settings(repo, '[tests]\nno_tests = ["*.md"]\n')
     _, cap = review(monkeypatch, repo, capsys, ["README.md"])
     assert cap.out.strip() == "affected: 0 files"
 
@@ -618,6 +620,104 @@ def test_review_bad_full_over_exits_2_naming_tests_toml(repo, budget, monkeypatc
 def test_review_json_fields(repo, budget, monkeypatch, capsys):
     _, cap = review(monkeypatch, repo, capsys, ["src/pl/tui/app.py"], "--json")
     out = json.loads(cap.out)
-    assert set(out) == {"full", "tests", "reason", "e2e_ui", "command", "e2e_command"}
+    assert set(out) == {"full", "tests", "reason", "e2e_ui", "command", "e2e_command", "unmapped", "commands"}
     assert out["command"] is None
     assert out["e2e_command"].endswith("-m e2e_ui -q tests/e2e_ui")
+
+
+# ---------- no mapping: files nothing judged ----------
+
+NO_MAP = ["App/A.cs", "scripts/s.sh"]
+
+
+def test_ac1_unrelated_python_and_unmapped_files_say_no_mapping(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, NO_MAP)
+    assert cap.out.strip() == "no mapping for 2 files: App/A.cs, scripts/s.sh"
+
+
+def test_ac2_no_python_no_settings_says_no_mapping_and_no_pytest(tmp_path, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, tmp_path, capsys, NO_MAP)
+    assert cap.out.strip() == "no mapping for 2 files: App/A.cs, scripts/s.sh" and "pytest" not in cap.out
+    fake_git(monkeypatch, tmp_path, NO_MAP)
+    assert T.cmd_tests(["affected", "--base", "abc"]) == 0
+    out = capsys.readouterr().out
+    assert out.strip() == "no mapping for 2 files: App/A.cs, scripts/s.sh"
+
+
+def test_ac6_no_tests_pattern_reports_zero(repo, budget, monkeypatch, capsys):
+    settings(repo, '[tests]\nno_tests = ["*.md"]\n')
+    _, cap = review(monkeypatch, repo, capsys, ["docs/a.md"])
+    assert cap.out.strip() == "affected: 0 files"
+
+
+def test_ac6_without_no_tests_the_same_change_is_no_mapping(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["docs/a.md"])
+    assert cap.out.strip() == "no mapping for 1 file: docs/a.md"
+
+
+def test_ac7_python_file_no_test_imports_is_not_unmapped(repo, monkeypatch):
+    r = result(monkeypatch, repo, ["src/app/other.py", "src/app/boom.py"])
+    assert r["unmapped"] == []
+
+
+def test_ac7_empty_affected_cmd_stays_zero(repo, budget, monkeypatch, capsys):
+    settings(repo, '[tests]\naffected_cmd = ["tool"]\n')
+    fake_git(monkeypatch, repo, NO_MAP, cmd=(0, "", ""))
+    assert T.cmd_tests(["review", "--base", "abc"]) == 0
+    assert capsys.readouterr().out.strip() == "affected: 0 files"
+
+
+def test_ac9_python_only_change_prints_as_today(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["src/app/core.py"])
+    assert cap.out.splitlines()[0] == "affected: 2 files"
+
+
+def test_ac9_python_and_unmapped_file_adds_no_mapping_text(repo, budget, monkeypatch, capsys):
+    _, cap = review(monkeypatch, repo, capsys, ["src/app/core.py", "scripts/s.sh"])
+    lines = cap.out.strip().splitlines()
+    assert lines[0] == "affected: 2 files; no mapping for 1 file: scripts/s.sh"
+    assert "pytest" in lines[1]
+
+
+def test_file_a_test_mentions_is_not_unmapped(repo, monkeypatch):
+    (repo / "tests" / "test_two.py").write_text("open('x/one.txt'); open('x/two.txt')\n")
+    r = result(monkeypatch, repo, ["x/one.txt", "x/two.txt", "skills/pl-run/SKILL.md"])
+    assert r["unmapped"] == []
+    assert r["reasons"]["tests/test_two.py"] == "mentions x/one.txt"
+
+
+@pytest.mark.parametrize("action", ["affected", "review"])
+@pytest.mark.parametrize("flags", [[], ["--label", "pl:full-tests"]])
+def test_ac10_bad_no_tests_exits_2_naming_file_and_key(repo, budget, monkeypatch, capsys, action, flags):
+    settings(repo, '[tests]\nno_tests = "*.md"\n')
+    fake_git(monkeypatch, repo, ["docs/a.md"])
+    cmd = [action, "--base", "abc", *(flags if action == "review" else [])]
+    assert T.cmd_tests(cmd) == 2
+    cap = capsys.readouterr()
+    assert ".pl/tests.toml" in cap.err and "no_tests" in cap.err
+    assert "affected: 0 files" not in cap.out and "no mapping" not in cap.out
+
+
+@pytest.mark.parametrize("action", ["affected", "review"])
+def test_ac11_json_has_unmapped_and_commands_and_keeps_existing_keys(repo, budget, monkeypatch, capsys, action):
+    fake_git(monkeypatch, repo, ["src/app/core.py", "scripts/s.sh"])
+    T.cmd_tests([action, "--base", "abc", "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["unmapped"] == ["scripts/s.sh"] and out["commands"] == [out["command"]]
+    assert {"tests", "full", "command"} <= set(out)
+
+
+def test_affected_wording_for_no_mapping(repo, budget, monkeypatch, capsys):
+    fake_git(monkeypatch, repo, ["scripts/s.sh"])
+    T.cmd_tests(["affected", "--base", "abc"])
+    assert capsys.readouterr().out.strip() == "no mapping for 1 file: scripts/s.sh"
+    fake_git(monkeypatch, repo, ["src/app/core.py", "scripts/s.sh"])
+    T.cmd_tests(["affected", "--base", "abc"])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-3] == "tests/test_direct.py  imports app.core"
+    assert lines[-2] == "no mapping for 1 file: scripts/s.sh" and lines[-1].startswith("pl tests run -- ")
+
+
+def test_pl_repo_declares_no_tests_for_docs():
+    from pathlib import Path
+    assert "*.md" in T._no_tests(Path(__file__).parents[1])

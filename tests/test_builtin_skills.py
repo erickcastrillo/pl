@@ -305,6 +305,13 @@ def test_pl_review_runs_the_review_test_set():
     assert version >= 9
 
 
+def test_pl_review_says_no_mapping_is_not_a_pass():
+    text = (skills.BUILTIN_DIR / "pl-review" / "SKILL.md").read_text()
+    for phrase in ("no mapping", "not a pass", "not tested", "only `affected: 0 files`"):
+        assert phrase in text
+    assert int(re.search(r"pl-builtin-version: (\d+)", text).group(1)) >= 12
+
+
 # ---------- pl section: read and write one card section ----------
 
 @pytest.fixture
@@ -856,8 +863,8 @@ def test_an_unedited_pl_run_v13_is_updated_to_v14(lib, shipped):
     _older_copy_is_updated(lib, shipped, "pl-run", 13, 14)
 
 
-def test_an_unedited_pl_review_v10_is_updated_to_v11(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-review", 10, 11)
+def test_an_unedited_pl_review_v11_is_updated_to_v12(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-review", 11, 12)
 
 
 def test_a_mockup_binds_design_plan_run_and_review():

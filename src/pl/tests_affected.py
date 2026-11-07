@@ -138,7 +138,7 @@ def _importers(root, files):
     return graph
 
 
-def python_affected(root, changed, files):
+def python_affected(root, changed, files, mentioned=None):
     tests = {}
     by_module = {_module_name(f): f for f in files}
     changed_py = [p for p in changed if p.endswith(".py")]
@@ -161,10 +161,12 @@ def python_affected(root, changed, files):
             continue
         name, folder = Path(p).name, Path(p).parent.name
         for f in files:
-            if f not in tests and _is_test(f):
+            if _is_test(f):
                 text = (Path(root) / f).read_text(errors="replace")
                 if name in text and folder in text:
-                    tests[f] = f"mentions {p}"
+                    if mentioned is not None:
+                        mentioned.add(p)
+                    tests.setdefault(f, f"mentions {p}")
     return tests
 
 
@@ -235,7 +237,7 @@ def _full_on_reason(changed, patterns):
 
 def _fallback(reason):
     print(f"pl tests: {reason}", file=sys.stderr)
-    return {"tests": [], "reasons": {}, "full": True, "full_reason": reason, "changed": []}
+    return {"tests": [], "reasons": {}, "full": True, "full_reason": reason, "changed": [], "unmapped": []}
 
 
 def affected(root, ref=None):
@@ -244,10 +246,8 @@ def affected(root, ref=None):
     except SettingsError as e:
         return _fallback(str(e))
     files = _python_files(root)
-    if not cfg and not files:
-        return {"tests": [], "reasons": {}, "full": True, "full_reason": "no Python files and no .pl/tests.toml", "changed": []}
     changed = changed_paths(root, base_ref(root, ref))
-    reasons, reason = {}, None
+    reasons, reason, mentioned = {}, None, set()
     if "affected_cmd" in cfg:
         try:
             reasons = _from_cmd(root, cfg["affected_cmd"], base_ref(root, ref))
@@ -255,11 +255,17 @@ def affected(root, ref=None):
             print(f"pl tests: {e}", file=sys.stderr)
             reason = str(e)
     elif files:
-        reasons = python_affected(root, changed, files)
+        reasons = python_affected(root, changed, files, mentioned)
         reason = _full_reason(changed)
     reason = reason or _full_on_reason(changed, cfg.get("full_on", []))
     reasons.update({p: "always rule" for p in cfg.get("always", [])})
-    return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason, "changed": changed}
+    unmapped = []
+    if "affected_cmd" not in cfg and not reason:
+        no_tests = _no_tests(root)
+        unmapped = [p for p in changed if not (files and p.endswith(".py")) and p not in mentioned
+                    and not any(fnmatch.fnmatch(p, pat) for pat in no_tests)]
+    return {"tests": sorted(reasons), "reasons": reasons, "full": bool(reason), "full_reason": reason,
+            "changed": changed, "unmapped": unmapped}
 
 
 def _tests_table(root):
@@ -290,12 +296,33 @@ def _full_over(root):
     raise TestsConfigError(f"{path}: [tests] full_over must be a whole number of at least 1, got {value!r}")
 
 
+def _no_tests(root):
+    path, tests = _tests_table(root)
+    value = tests.get("no_tests", [])
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return value
+    raise TestsConfigError(f"{path}: [tests] no_tests must be a list of strings, got {value!r}")
+
+
+def _summary(tests, unmapped):
+    parts = []
+    if tests or not unmapped:
+        parts.append(f"affected: {len(tests)} files")
+    if unmapped:
+        parts.append(f"no mapping for {len(unmapped)} {'file' if len(unmapped) == 1 else 'files'}: {', '.join(unmapped)}")
+    return "; ".join(parts)
+
+
 def _full(reason, e2e_ui):
-    return {"full": True, "tests": [], "reason": f"full suite: {reason}", "e2e_ui": e2e_ui}
+    return {"full": True, "tests": [], "reason": f"full suite: {reason}", "e2e_ui": e2e_ui, "unmapped": []}
 
 
 def select(root, base, labels=()):
-    """The test set review and the merge check run for a change: {"full", "tests", "reason", "e2e_ui"}."""
+    """The test set review and the merge check run for a change: {"full", "tests", "reason", "e2e_ui", "unmapped"}."""
+    try:
+        _no_tests(root)
+    except UnreadableTestsConfig:
+        pass
     if FULL_LABEL in labels:
         try:
             e2e_ui = any(p.startswith(E2E_UI_PATHS) for p in changed_paths(root, base))
@@ -314,7 +341,8 @@ def select(root, base, labels=()):
     modules = [p for p in changed if p.endswith(".py") and not TEST_DIRS & set(Path(p).parts[:-1])]
     if len(modules) > limit:
         return _full(f"{len(modules)} modules changed (over {limit})", e2e_ui)
-    return {"full": False, "tests": res["tests"], "reason": f"affected: {len(res['tests'])} files", "e2e_ui": e2e_ui}
+    return {"full": False, "tests": res["tests"], "reason": _summary(res["tests"], res["unmapped"]),
+            "e2e_ui": e2e_ui, "unmapped": res["unmapped"]}
 
 
 def _sets_workers(token):
@@ -346,7 +374,7 @@ def _review(root, args):
         e2e.insert(e2e.index("-q"), "e2e_ui")
     command, e2e = (shlex.join(c) if c else None for c in (command, e2e))
     if args.json:
-        jsonout.emit({**sel, "command": command, "e2e_command": e2e})
+        jsonout.emit({**sel, "command": command, "e2e_command": e2e, "commands": [c for c in (command, e2e) if c]})
         return 0
     print(sel["reason"] + ("; plus e2e_ui" if sel["e2e_ui"] else ""))
     for c in (command, e2e):
@@ -386,7 +414,7 @@ def cmd_tests(argv):
         res = affected(root, args.base)
     except GitError as e:
         print(f"pl tests: {e}", file=sys.stderr)
-        root, res = ".", {"tests": [], "reasons": {}, "full": True, "full_reason": str(e)}
+        root, res = ".", {"tests": [], "reasons": {}, "full": True, "full_reason": str(e), "unmapped": []}
     except (SettingsError, TestsConfigError) as e:
         print(f"pl tests: {e}", file=sys.stderr)
         return 2
@@ -397,14 +425,17 @@ def cmd_tests(argv):
         return 2
     command = shlex.join(command) if command else None
     if args.json:
-        jsonout.emit({**{k: res[k] for k in ("tests", "reasons", "full")}, "command": command})
+        jsonout.emit({**{k: res[k] for k in ("tests", "reasons", "full", "unmapped")}, "command": command,
+                      "commands": [command] if command else []})
         return 0
     if res["full"]:
         print(f"full suite: {res['full_reason']}")
-    elif not res["tests"]:
+    elif not res["tests"] and not res["unmapped"]:
         print("no tests affected")
     else:
         print("\n".join(f"{t}  {res['reasons'][t]}" for t in res["tests"]))
+        if res["unmapped"]:
+            print(_summary([], res["unmapped"]))
     if command:
         print(command)
     return 0
