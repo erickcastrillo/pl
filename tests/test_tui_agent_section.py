@@ -182,6 +182,8 @@ async def test_ac8_heading_row_or_empty_list_has_no_agent_section_and_no_tmux(mo
         await _tick(pilot, app)
         assert app.query_one("#cards-agent").display
         monkeypatch.setattr(view, "_current", lambda: ("group:Plan for review", None))   # the cursor skips headings; a move can pass over one
+        await settle(pilot, lambda: not any(w.group == "cards-agent" and w.is_running for w in app.workers),
+                     "the agent read already running")
         tmux.calls.clear()
         await _tick(pilot, app)
         assert not app.query_one("#cards-agent").display and not tmux.calls
