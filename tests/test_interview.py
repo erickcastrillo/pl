@@ -596,3 +596,65 @@ async def test_a_console_draft_continues_from_the_command_line(monkeypatch, caps
     code, out, _ = pl(monkeypatch, capsys, "interview", "resume", iid)
     assert code == 0 and "Which channel first?" in out
     assert only_idea()["status"] == "approved" and len(board.created) == 1
+
+
+# ---------- show and list are reads ----------
+
+def _draft(monkeypatch, capsys, harness):
+    harness.out += [reply("Which channel first?")]
+    monkeypatch.setattr(sys, "stdin", Closed())
+    code, out, err = pl(monkeypatch, capsys, "interview", "start", "Auto reply", "--json")
+    assert code == 0, err
+    return json.loads(out)["id"]
+
+
+@pytest.mark.parametrize("flags", [[], ["--json"]], ids=["text", "json"])
+@pytest.mark.parametrize("sub", ["show", "list"])
+def test_show_and_list_work_in_a_read_only_loop(monkeypatch, capsys, harness, sub, flags):
+    iid = _draft(monkeypatch, capsys, harness)
+    argv = ["interview", sub, *([iid] if sub == "show" else []), *flags]
+    code, normal, _ = pl(monkeypatch, capsys, *argv)
+    calls = len(harness.calls)
+    monkeypatch.setenv("PL_LOOP_WRITES", "0")
+    code2, ro, err = pl(monkeypatch, capsys, *argv)
+    assert code == 0 and code2 == 0, err
+    assert ro == normal and len(harness.calls) == calls
+
+
+@pytest.mark.parametrize("argv", [["start", "x"], ["answer", "ID", "x"], ["resume", "ID"], ["file", "ID"], ["file", "ID", "--dry-run"]],
+                         ids=["start", "answer", "resume", "file", "file-dry-run"])
+def test_a_read_only_loop_refuses_every_step_that_changes_something(monkeypatch, capsys, harness, board, terminal, argv):
+    iid = _draft(monkeypatch, capsys, harness)
+    before = ideas.list_ideas()
+    calls = len(harness.calls)
+    monkeypatch.setenv("PL_LOOP_WRITES", "0")
+    code, _, err = pl(monkeypatch, capsys, "interview", *[iid if x == "ID" else x for x in argv])
+    assert code == 2 and "read-only loop" in err
+    assert ideas.list_ideas() == before and len(harness.calls) == calls and board.created == []
+
+
+def test_the_ask_rules_prompt_for_steps_and_not_for_reads():
+    from fnmatch import fnmatchcase
+
+    def rules(cmd, patterns):
+        return [p for p in patterns if fnmatchcase(f"Bash({cmd})", p)]
+    for cmd in ("pl interview show x", "pl interview show x --json", "pl interview list", "pl interview list --json"):
+        assert rules(cmd, assistant.ASK_RULES) == [], cmd
+        assert len(rules(cmd, assistant.READ_ONLY)) == 1, cmd
+    for cmd in ("pl interview", "pl interview --help", "pl interview start x", "pl interview answer x y", "pl interview resume x",
+                "pl interview file x", "pl interview discard x"):
+        assert rules(cmd, assistant.ASK_RULES), cmd
+        assert rules(cmd, assistant.READ_ONLY) == [], cmd
+
+
+@pytest.mark.parametrize("sub,recorded", [("show", False), ("list", False), ("answer", True), ("resume", True)])
+def test_reads_record_no_assistant_action_and_steps_do(monkeypatch, capsys, harness, board, terminal, sub, recorded):
+    iid = _draft(monkeypatch, capsys, harness)
+    harness.out += [reply("Next?")]
+    events = []
+    monkeypatch.setattr(cli.events, "emit", lambda *a, **k: events.append((a, k)))
+    monkeypatch.setenv("PL_ASSISTANT", "1")
+    argv = {"show": [iid], "list": [], "answer": [iid, "email"], "resume": [iid]}[sub]
+    terminal.typed += [KeyboardInterrupt()]
+    pl(monkeypatch, capsys, "interview", sub, *argv)
+    assert any(k.get("command") == "interview" for _, k in events) is recorded
