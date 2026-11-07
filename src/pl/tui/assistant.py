@@ -288,7 +288,7 @@ class AssistantView(Widget):
             self._read_started = None
         if status:
             self.status = status
-        if chat is not None:
+        if chat is not None and key != self._key:
             self._key = key
             self.query_one(f"#{self.prefix}-screen", Static).update(chat)
             self.query_one(f"#{self.prefix}-scroll", VerticalScroll).scroll_end(animate=False)

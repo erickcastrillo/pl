@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from rich.console import Console
+from rich.text import Text
 from textual.widgets import DataTable, Select, Tabs, TabbedContent
 
 from pl import cli, harnesses, trackers, watch
@@ -159,6 +160,15 @@ async def test_pull_requests_groups():
         for s in ("NEED YOUR DECISION 1", "READY TO MERGE 2", "NEED REWORK 1", "AWAITING MERGE CHECK 1",
                   "frontend#1200  feat: merge me first", "api#1300  feat: waiting for the gate"):
             assert s in text, s
+
+
+async def test_a_pr_read_after_the_table_is_gone_does_nothing():
+    async with view_app(tui_prs.PrsView).run_test(size=(176, 48)) as pilot:
+        view = pilot.app.query_one(tui_prs.PrsView)
+        await view.query_one(tui_prs.FitTable).remove()
+        await pilot.pause()    # let the removal finish before the late read lands
+        view._loaded(("u", "t"), ("ok", {}, ""))
+        assert ("u", "t") not in view._cache
 
 
 async def test_refresh_failure_keeps_numbers_and_shows_the_error():
@@ -1971,6 +1981,21 @@ async def test_an_unchanged_transcript_is_not_redrawn(monkeypatch):
         view.tick()
         await settle(pilot)
         assert view.redraws == before + 1 and "more" in _chat_text(app)
+
+
+async def test_a_second_read_of_the_same_change_does_not_redraw(monkeypatch):
+    fa = FakeAssistant(monkeypatch)
+    _chat(fa, [_user("hi"), _said({"type": "text", "text": "hello"})])
+    app = PlApp(snapshot_provider=Provider())
+    async with app.run_test(size=(176, 48)) as pilot:
+        await _open_assistant(pilot)
+        view = app.query_one("#assistant-view")
+        before = view.redraws
+        key = ("changed",)
+        for _ in range(2):
+            view._seq += 1
+            view._show_screen((view._seq, None, [], key, Text("more"), None, None, None))
+        assert view.redraws == before + 1
 
 
 async def test_a_permission_menu_is_a_card_and_a_digit_sends_just_that_digit(monkeypatch):

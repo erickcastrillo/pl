@@ -282,6 +282,8 @@ class PrsView(Horizontal):
         self._paint(overview_text(pr, hit, self._method.get(pr["repo"], "squash")), hit[2] if hit and hit[0] == "ok" else "")
 
     def _loaded(self, ck, hit):
+        if not self.query(FitTable):    # a read that lands while the app closes
+            return
         self._pending.discard(ck)
         if hit[0] == "ok":
             self._cache[ck] = hit
