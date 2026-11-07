@@ -1,0 +1,3 @@
+title = "Old set-aside worktree folders are cleaned up after stale_days"
+where = "pl worktrees gc --stale; [worktrees] stale_days"
+try = "pl worktrees gc --stale"

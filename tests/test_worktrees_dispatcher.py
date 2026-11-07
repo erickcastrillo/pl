@@ -763,3 +763,88 @@ def test_stale_days_validation_error(bad):
 
 def test_stale_days_validation_accepts_positive_whole_number():
     assert C.validate(tomlkit.parse("[worktrees]\nstale_days = 7\n")) == []
+
+
+# --- Slice 5: stale retention and gc --stale ---
+
+
+def _stale_folder(name="repo-pl-c1", age_days=20, record=None):
+    import datetime as dt
+    when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=age_days)
+    d = C.WORKTREES_DIR / f"{name}.stale-{when:%Y%m%d-%H%M%S}"
+    d.mkdir()
+    (d / "f").write_text("x")
+    if record is not None:
+        (d / ".pl-set-aside.json").write_text(json.dumps(record))
+    return d
+
+
+SAVED = {"uncommitted": False, "unpushed": 0}
+
+
+def test_sweep_deletes_expired_saved_stale_and_emits_event(wt_env, tmp_path):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    d = _stale_folder(record=SAVED)
+    worktrees.sweep([_c("c1", "c1", "Done")])
+    assert not d.exists()
+    [ev] = [e for e in events._read() if e["kind"] == "worktree_cleanup"]
+    assert (ev["card"], ev["path"], ev["by"]) == ("c1", str(d), "sweep")
+
+
+def test_sweep_keeps_young_unsaved_and_unknown_stale(wt_env):
+    from pl import worktrees
+    young = _stale_folder("repo-pl-a", 2, SAVED)
+    unsaved = _stale_folder("repo-pl-b", 90, {"uncommitted": True, "unpushed": 0})
+    unknown = _stale_folder("repo-pl-c", 90)
+    worktrees.sweep([])
+    assert young.exists() and unsaved.exists() and unknown.exists()
+
+
+def test_cleanup_false_keeps_stale(wt_env):
+    from pl import worktrees
+    d = _stale_folder(record=SAVED)
+    C.WORKTREES = {"cleanup": False, "stale_days": 14}
+    worktrees.sweep([])
+    assert d.exists()
+
+
+def test_remove_stale_refuses_path_outside_worktrees_dir(wt_env, tmp_path, capsys):
+    from pl import worktrees
+    outside = tmp_path / "elsewhere.stale-20260101-000000"
+    outside.mkdir()
+    row = {"name": outside.name, "path": str(outside), "card": None, "action": "remove", "stale": True}
+    assert worktrees._remove([row]) == (0, 1, 0)
+    assert outside.exists()
+
+
+def test_remove_stale_never_follows_a_symlink(wt_env, tmp_path):
+    from pl import worktrees
+    target = tmp_path / "precious"
+    target.mkdir()
+    (target / "f").write_text("x")
+    link = C.WORKTREES_DIR / "repo-pl-c1.stale-20260101-000000"
+    link.symlink_to(target)
+    worktrees._remove([{"name": link.name, "path": str(link), "card": None, "action": "remove", "stale": True}])
+    assert (target / "f").exists() and link.is_symlink()
+
+
+def test_rmtree_failure_is_reported_and_emits_nothing(wt_env, tmp_path, monkeypatch, capsys):
+    from pl import events, worktrees
+    C.STATE_DIR = tmp_path / "state"
+    d = _stale_folder(record=SAVED)
+    monkeypatch.setattr(worktrees.shutil, "rmtree", lambda *a, **k: None)
+    worktrees.sweep([_c("c1", "c1", "Done")])
+    assert d.exists() and str(d) in capsys.readouterr().out
+    assert [e for e in events._read() if e["kind"] == "worktree_cleanup"] == []
+
+
+def test_report_and_sweep_agree_with_stale_folders(wt_env):
+    from pl import worktrees
+    gone = _stale_folder("repo-pl-a", 20, SAVED)
+    _stale_folder("repo-pl-b", 20)
+    _stale_folder("repo-pl-c", 1, SAVED)
+    expected = {r["name"] for r in worktrees.inventory([], sizes=False) if r["action"] == "remove"}
+    worktrees.sweep([])
+    left = {p.name for p in C.WORKTREES_DIR.iterdir()}
+    assert expected == {gone.name} and gone.name not in left and len(left) == 2

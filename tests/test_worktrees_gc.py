@@ -275,9 +275,10 @@ def test_young_saved_stale_shows_days_left(env, monkeypatch):
     assert (row["action"], row["reason"]) == ("keep", "stale, 4 days left")
 
 
-def test_expired_saved_stale_has_zero_days_left_until_slice_5(env, monkeypatch):
+def test_expired_saved_stale_is_marked_remove(env, monkeypatch):
     monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
-    assert _stale(env, 20)["reason"] == "stale, 0 days left"
+    row = _stale(env, 20)
+    assert (row["action"], row["expired"]) == ("remove", True)
 
 
 def test_unsaved_record_shows_unsaved_at_any_age(env):
@@ -287,3 +288,53 @@ def test_unsaved_record_shows_unsaved_at_any_age(env):
 
 def test_malformed_record_is_state_unknown(env):
     assert _stale(env, 20, "bad")["reason"] == "stale, state unknown"
+
+
+def _gc(yes=False, stale=True):
+    return SimpleNamespace(action="gc", yes=yes, json=False, stale=stale)
+
+
+def test_gc_stale_lists_with_size_and_changes_nothing(env, capsys, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    row = _stale(env, 20, "none")
+    worktrees.cmd_worktrees(_gc())
+    out = capsys.readouterr().out
+    assert row["name"] in out and "109 B" in out and "nothing changed" in out
+    assert (C.WORKTREES_DIR / row["name"]).exists()
+
+
+def test_gc_stale_yes_deletes_only_expired_unknown(env, capsys, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    row = _stale(env, 20, "none")
+    worktrees.cmd_worktrees(_gc(yes=True))
+    assert not (C.WORKTREES_DIR / row["name"]).exists()
+    assert row["name"] in capsys.readouterr().out
+
+
+def test_gc_stale_yes_keeps_young_unknown(env, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    row = _stale(env, 2, "none")
+    worktrees.cmd_worktrees(_gc(yes=True))
+    assert (C.WORKTREES_DIR / row["name"]).exists()
+
+
+def test_gc_yes_keeps_unknown(env, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    row = _stale(env, 20, "none")
+    worktrees.cmd_worktrees(_gc(yes=True, stale=False))
+    assert (C.WORKTREES_DIR / row["name"]).exists()
+
+
+def test_gc_stale_yes_keeps_unsaved_record(env, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    row = _stale(env, 20, "unsaved")
+    worktrees.cmd_worktrees(_gc(yes=True))
+    assert (C.WORKTREES_DIR / row["name"]).exists()
+
+
+def test_gc_stale_yes_does_not_remove_other_remove_rows(env, monkeypatch):
+    monkeypatch.setattr(C, "WORKTREES", {"cleanup": True, "stale_days": 14})
+    env["make"]("r-pl-fin")
+    env["cards"] = [card("fin", "Done")]
+    worktrees.cmd_worktrees(_gc(yes=True))
+    assert not any("remove" in c for c in env["calls"])

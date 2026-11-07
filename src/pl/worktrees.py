@@ -89,14 +89,18 @@ def _unpushed(path, prs):
 def _stale_row(d, name, cs):
     c = _match_card(d.with_name(_STALE.sub("", name)), "", cs)
     record = _read_stale_record(d)
+    left = _days_left(name)
+    action = "keep"
     if record is None:
         reason = "stale, state unknown"
     elif record.get("uncommitted") or record.get("unpushed"):
         reason = "stale, unsaved work"
+    elif left:
+        reason = f"stale, {left} days left"
     else:
-        reason = f"stale, {_days_left(name)} days left"
-    return {"name": name, "path": str(d), "card": c["id"] if c else None,
-            "column": _column(c) if c else None, "action": "keep", "reason": reason, "stale": True}
+        action, reason = "remove", "stale, saved and past retention"
+    return {"name": name, "path": str(d), "card": c["id"] if c else None, "column": _column(c) if c else None,
+            "action": action, "reason": reason, "stale": True, "expired": not left}
 
 
 def _days_left(name):
@@ -163,6 +167,13 @@ def _remove(rows, by="gc"):
         if r["action"] != "remove":
             continue
         path = Path(r["path"])
+        if r.get("stale"):
+            if _remove_stale(path):
+                events.emit("worktree_cleanup", r["card"], path=r["path"], by=by)
+                removed, freed = removed + 1, freed + (r.get("size") or 0)
+            else:
+                failed += 1
+            continue
         size = (r["size"] if r.get("size") is not None else _size(path)) if by == "gc" else 0
         cwd, prefix = _git_base(path)
         rc, out = _in(cwd, *prefix, "worktree", "remove", r["path"])
@@ -182,12 +193,40 @@ def _remove(rows, by="gc"):
     return removed, failed, freed
 
 
+def _remove_stale(path):
+    """Delete one set-aside folder. Only a real folder directly under the worktrees folder with a stale name; True when it is gone."""
+    root = Path(C.WORKTREES_DIR) if C.WORKTREES_DIR else None
+    if root is None or path.parent != root or path.is_symlink() or not path.is_dir() or not _STALE.search(path.name):
+        print(f"worktree {path.name}: not deleted, it is not a set-aside folder of the worktrees folder", file=sys.stderr)
+        return False
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        print(f"worktree {path}: could not delete the folder; delete it by hand")
+        return False
+    return True
+
+
 def _git_base(path):
     """Where to run worktree commands: the work folder when it is a repository, else the worktree's own common git dir."""
     if C.WORK_DIR and Path(C.WORK_DIR).is_dir():
         return C.WORK_DIR, ()
     common = _in(path, "rev-parse", "--git-common-dir")[1].strip()
     return C.WORKTREES_DIR, ("--git-dir", common)
+
+
+def _gc_stale(rows, yes):
+    """Old folders with no saved-state record: listed, and deleted only with --yes. Nothing else is touched."""
+    chosen = [{**r, "action": "remove"} for r in rows if r.get("stale") and r["reason"] == "stale, state unknown" and r["expired"]]
+    for r in chosen:
+        print(f"{r['name']:<50} {_human(r['size']):>9} {r['card'] or '-'}")
+    if not yes:
+        print(f"\n{len(chosen)} to remove; nothing changed (pl worktrees gc --stale --yes removes them)")
+        return
+    removed, failed, freed = _remove(chosen, by="gc")
+    for r in chosen:
+        if not Path(r["path"]).exists():
+            print(f"removed {r['name']}")
+    print(f"removed {removed}, failed {failed}, freed {_human(freed)}")
 
 
 def cmd_worktrees(a):
@@ -197,6 +236,8 @@ def cmd_worktrees(a):
             raise SystemExit("pl worktrees bootstrap: give the new worktree's PATH")
         return commands.cmd_worktrees_bootstrap(a)
     rows = inventory()
+    if a.action == "gc" and getattr(a, "stale", False):
+        return _gc_stale(rows, a.yes)
     if a.action == "gc" and a.json:
         print(json.dumps(rows, indent=1))
     elif a.action == "list" and a.json:
