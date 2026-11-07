@@ -176,7 +176,7 @@ pl manager start          # start it by hand; a console does this for you
 pl manager status         # each profile's dispatcher, agents and GitHub points used and allowed, why it is held
 pl manager stop [--all]   # --all also stops the dispatchers
 pl manager restart NAME   # start a profile's dispatcher again (after a give-up or a stop), or restart a running one; with autostart off it starts one that is stopped
-pl manager stop NAME      # stop one profile's dispatcher; the manager leaves it alone until restart
+pl manager stop NAME      # stop one profile's dispatcher; the manager leaves it alone until restart; with autostart off it stops it at once and exits non-zero if it cannot
 ```
 
 The settings live in `~/.local/state/pl-machine/machine.toml`, which `pl setup` and `pl manager start` create. Without the file the defaults apply:

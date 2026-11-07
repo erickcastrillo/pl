@@ -1511,3 +1511,134 @@ def test_manager_restart_on_autostart_off_exits_non_zero_when_the_start_fails(tm
     _lock_after(monkeypatch, [False])
     assert manager.cmd_manager(["restart", "off"]) == 1
     assert "tmux: no server" in capsys.readouterr().err
+
+
+def _requests(*pairs):
+    for kind, name in pairs:
+        (manager._path(kind)).mkdir(parents=True, exist_ok=True)
+        (manager._path(kind) / name).write_text("cli")
+
+
+def _sends(log, window="=pl-off:dispatch"):
+    return [c for c in log if c == ["tmux", "send-keys", "-t", window, "C-c"]]
+
+
+def _off(tmp_path, monkeypatch):
+    return _profile(tmp_path, monkeypatch, "off", "[dispatch]\nautostart = false\n")
+
+
+def test_manager_stop_on_autostart_off_stops_it_directly(machine, tmp_path, monkeypatch, capsys):
+    _off(tmp_path, monkeypatch)
+    _lock_after(monkeypatch, [True, False])
+    assert manager.cmd_manager(["stop", "off"]) == 0
+    assert "stopped" in capsys.readouterr().out
+    assert len(_sends(machine["log"])) == 1
+    assert not (manager._path("stop") / "off").exists()
+
+
+def test_manager_stop_on_autostart_off_not_running_says_so(machine, tmp_path, monkeypatch, capsys):
+    _off(tmp_path, monkeypatch)
+    _lock_after(monkeypatch, [False])
+    assert manager.cmd_manager(["stop", "off"]) == 0
+    assert "not running" in capsys.readouterr().out
+    assert not _sends(machine["log"]) and not (manager._path("stop") / "off").exists()
+
+
+def test_manager_stop_on_autostart_off_that_ignores_ctrl_c_exits_non_zero(machine, tmp_path, monkeypatch, capsys):
+    _off(tmp_path, monkeypatch)
+    monkeypatch.setattr("pl.dispatch.LOCK_WAIT", 0.05)
+    _lock_after(monkeypatch, [True])
+    assert manager.cmd_manager(["stop", "off"]) == 1
+    err = capsys.readouterr().err
+    assert "off" in err and "Ctrl-C" in err and "pl-off:dispatch" in err
+    assert len(_sends(machine["log"])) == 5 and not (manager._path("stop") / "off").exists()
+
+
+def _tmux_fails(monkeypatch, how):
+    def run(argv, timeout=None):
+        if how == "code":
+            return subprocess.CompletedProcess(argv, 1, "", "can't find window")
+        raise OSError("can't find window") if how == "oserror" else subprocess.TimeoutExpired(argv, 10)
+    monkeypatch.setattr(manager, "_run", run)
+
+
+@pytest.mark.parametrize("how", ["code", "oserror", "timeout"])
+def test_manager_stop_on_autostart_off_reports_a_tmux_failure(tmp_path, monkeypatch, capsys, how):
+    _off(tmp_path, monkeypatch)
+    _lock_after(monkeypatch, [True])
+    _tmux_fails(monkeypatch, how)
+    assert manager.cmd_manager(["stop", "off"]) == 1
+    err = capsys.readouterr().err
+    assert "off" in err and "pl-off:dispatch" in err and ("find window" in err or "timed out" in err)
+
+
+def test_stop_unmanaged_counts_a_window_gone_after_the_lock_freed_as_stopped(tmp_path, monkeypatch, capsys):
+    _off(tmp_path, monkeypatch)
+    _lock_after(monkeypatch, [True, False])
+    _tmux_fails(monkeypatch, "code")
+    assert manager.cmd_manager(["stop", "off"]) == 0
+    assert "stopped" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("result", ["stopped", "not running", "failed"])
+def test_manager_stop_on_autostart_off_clears_both_requests_whatever_the_result(tmp_path, monkeypatch, result):
+    _off(tmp_path, monkeypatch)
+    monkeypatch.setattr("pl.dispatch.LOCK_WAIT", 0.05)
+    _lock_after(monkeypatch, {"stopped": [True, False], "not running": [False], "failed": [True]}[result])
+    _requests(("stop", "off"), ("restart", "off"))
+    manager.cmd_manager(["stop", "off"])
+    assert not (manager._path("stop") / "off").exists() and not (manager._path("restart") / "off").exists()
+
+
+def test_manager_stop_on_autostart_off_leaves_other_profiles_alone(machine, tmp_path, monkeypatch):
+    _off(tmp_path, monkeypatch)
+    _lock_after(monkeypatch, [True, False])
+    _requests(("stop", "work"), ("restart", "home"))
+    manager.cmd_manager(["stop", "off"])
+    assert (manager._path("stop") / "work").exists() and (manager._path("restart") / "home").exists()
+    assert all(c[3].startswith("=pl-off") for c in machine["log"] if c[:2] == ["tmux", "send-keys"])
+
+
+def test_manager_stop_on_autostart_on_still_writes_the_request(machine, capsys):
+    assert manager.cmd_manager(["stop", "work"]) == 0
+    assert "on the next tick" in capsys.readouterr().out
+    assert (manager._path("stop") / "work").read_text() == "cli"
+    assert not [c for c in machine["log"] if c[:2] == ["tmux", "send-keys"]]
+
+
+def test_a_tick_discards_requests_for_an_autostart_off_profile(machine, capsys):
+    _requests(("stop", "off"), ("restart", "off"))
+    manager.tick({})
+    out = capsys.readouterr().out
+    assert not (manager._path("stop") / "off").exists() and not (manager._path("restart") / "off").exists()
+    assert [l for l in out.splitlines() if "off: discarded stop request" in l] and \
+        [l for l in out.splitlines() if "off: discarded restart request" in l]
+    assert not [c for c in starts(machine["log"]) if "pl-off" in " ".join(c)]
+    assert not _sends(machine["log"])
+
+
+def test_a_discarded_stop_never_stops_it_once_autostart_is_on(machine, tmp_path):
+    _requests(("stop", "off"))
+    state = {}
+    manager.tick(state)
+    (tmp_path / ".pl-off" / "config.toml").write_text(TR)
+    running_dispatcher(machine, "off", 4444)
+    manager.tick(state)
+    assert not _sends(machine["log"])
+    row = next(r for r in manager.read_status()["profiles"] if r["name"] == "off")
+    assert row["running"] and not row.get("stopped")
+    assert "stopped" not in manager.show()
+
+
+def test_a_discarded_request_clears_a_stop_the_manager_remembers(machine):
+    _requests(("stop", "off"))
+    state = {"off": {**manager._fresh(), "stopped": True}}
+    manager.tick(state)
+    assert "off" not in state
+
+
+def test_a_tick_keeps_a_request_for_an_autostart_on_profile(machine):
+    _requests(("stop", "work"))
+    state = {}
+    manager.tick(state)
+    assert state["work"]["stopped"]

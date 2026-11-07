@@ -443,6 +443,20 @@ def _kick(p, r, installed):
               f"(Ctrl-C in tmux window {p['session']}:dispatch)", flush=True)
 
 
+def _discard_ignored_requests(state):
+    """Stop and restart requests for an autostart-off profile are never acted on: remove them so one cannot stop
+    the dispatcher later, when autostart is turned on."""
+    for kind in ("stop", "restart"):
+        if not _path(kind).is_dir():
+            continue
+        for f in sorted(_path(kind).iterdir()):
+            if autostart_off(f.name):
+                f.unlink(missing_ok=True)
+                state.pop(f.name, None)
+                print(f"{f.name}: discarded {kind} request: its autostart is off, so the manager does not run it",
+                      flush=True)
+
+
 def tick(state):
     """One pass: start each managed dispatcher that does not run (with backoff after an exit), write status.json.
     A dispatcher on an older build than the one installed now restarts itself at the end of its pass (or on a
@@ -453,6 +467,10 @@ def tick(state):
     build, installed = update.build_id(), update.build_id(fresh=True)
     bad, profs = [p for p in profs if "error" in p], [p for p in profs if "error" not in p]
     machine_error = _machine_check(state)
+    try:
+        _discard_ignored_requests(state)
+    except Exception as e:  # noqa: BLE001 - a bad request file never stops the tick
+        print(f"discarding requests failed: {type(e).__name__}: {e}", flush=True)
     try:
         from pl.chat.gates import post_gates
         post_gates()
@@ -610,6 +628,39 @@ def start_unmanaged(name):
             raise RuntimeError(f"no lock after {dispatch.LOCK_WAIT:g} s; see tmux window {row['tmux_session']}:dispatch")
         time.sleep(0.1)
     return f"{name}: dispatcher started; its autostart is off, so the manager does not restart it if it exits"
+
+
+def stop_unmanaged(name, tries=5):
+    """Stop an autostart-off profile's dispatcher now with Ctrl-C to its dispatch window, as the console's D key does.
+    Clears its old requests, as the newest request wins. A status line, or RuntimeError when it did not stop."""
+    from pl import dispatch
+    from pl.profiles import _is_locked, list_profiles
+    row = next((r for r in list_profiles(check_lock=False) if r["name"] == name), None)
+    if row is None:
+        raise RuntimeError(f"no profile {name}")
+    for kind in ("stop", "restart"):
+        (_path(kind) / name).unlink(missing_ok=True)
+    lock = Path(row["dir"]) / "state" / "pl-dispatch.lock"
+    window = f"{row['tmux_session']}:dispatch"
+    if not _is_locked(lock):
+        return f"{name}: its dispatcher is not running"
+    stopped = f"{name}: dispatcher stopped; its autostart is off, so the manager does not start it again"
+    for _ in range(tries):
+        reason = None
+        try:
+            r = _run(["tmux", "send-keys", "-t", f"={window}", "C-c"], timeout=10)
+            if r.returncode:
+                reason = (r.stderr or "").strip() or f"exit {r.returncode}"
+        except (OSError, subprocess.SubprocessError) as e:
+            reason = str(e) or type(e).__name__
+        end = time.monotonic() + dispatch.LOCK_WAIT / tries
+        while _is_locked(lock) and time.monotonic() < end and reason is None:
+            time.sleep(0.1)
+        if not _is_locked(lock):
+            return stopped
+        if reason:
+            raise RuntimeError(f"tmux: {reason}; check tmux window {window}")
+    raise RuntimeError(f"still running after {tries} Ctrl-C; check tmux window {window}")
 
 
 def _same_install(st):
@@ -821,7 +872,7 @@ def cmd_manager(argv):
                                  "every profile whose [dispatch] autostart is not false")
     ap.add_argument("action", choices=["start", "stop", "status", "run", "restart"])
     ap.add_argument("profile", nargs="?", help="restart: start this profile's dispatcher again; stop: stop only "
-                    "this profile's dispatcher, not restarted until restart")
+                    "this profile's dispatcher, not restarted until restart (with autostart off, stopped at once)")
     ap.add_argument("--all", action="store_true", help="stop: also stop every managed dispatcher")
     ap.add_argument("--json", action="store_true", help="status: print one JSON document (shape in docs/cli-json.md)")
     a = ap.parse_args(argv)
@@ -832,6 +883,13 @@ def cmd_manager(argv):
             print(start_unmanaged(a.profile))
         except RuntimeError as e:
             print(f"pl manager restart: {a.profile}: failed to start its dispatcher: {e}", file=sys.stderr)
+            return 1
+        return 0
+    if a.action == "stop" and a.profile and autostart_off(a.profile):
+        try:
+            print(stop_unmanaged(a.profile))
+        except RuntimeError as e:
+            print(f"pl manager stop: {a.profile}: failed to stop its dispatcher: {e}", file=sys.stderr)
             return 1
         return 0
     if a.action == "restart" or a.action == "stop" and a.profile:
