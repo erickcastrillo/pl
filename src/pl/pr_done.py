@@ -54,9 +54,11 @@ def _closed_alert(c, closed, active):
 def _close_or_hold(c, states, seen, active, dry):
     if not slices.planned(c):
         return _close(c, _note(states), dry)
-    v = slices.view(c, seen)
+    v = slices.view(c, seen, search=True)
     if v["unread"]:
         return slices.keep_alert(c, active)
+    if not dry:
+        slices.adopt(c, v)
     if not slices.unmerged(v):
         return _close(c, _note(states), dry)
     if dry:
