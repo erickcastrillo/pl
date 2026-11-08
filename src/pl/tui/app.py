@@ -119,9 +119,10 @@ def default_provider():
     ghquota.set_role("console")   # a periodic reader: it yields first when GitHub's budget runs low
     board.share("read")   # reuse the dispatcher's board read while it is young
     snap = watch.watch_snapshot()
+    evs = events._read()   # the event log is megabytes: parsed once per refresh, not once per window and series
     return {"snapshot": snap,
-            "metrics_by_window": {key: events.metrics(seconds) for key, _, seconds in WINDOWS},
-            "daily": {"specs": events.daily("Spec ready"), "plans": events.daily("Plan for review")},
+            "metrics_by_window": {key: events.metrics(seconds, evs=evs) for key, _, seconds in WINDOWS},
+            "daily": {"specs": events.daily("Spec ready", evs=evs), "plans": events.daily("Plan for review", evs=evs)},
             "pr_activity": watch.pr_activity(), "memory": memory.status(), "usage": _usage(),
             "machine": manager.read_status(), "now": _now(snap["rows"]), "alerts": _alerts(), "watchdog": _watchdog(),
             "queued_moves": _queued_moves(), "kill": outward.state(),

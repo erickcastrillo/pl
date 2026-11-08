@@ -1,4 +1,5 @@
 """pl watch: the data behind the console, the plain-text frame, and PR activity from GitHub."""
+import ctypes
 import json
 import os
 import re
@@ -342,6 +343,27 @@ def render_watch(snap):
     return "\n".join(out)
 
 
+M_ARENA_MAX = -8   # glibc's mallopt parameter
+CONSOLE_ARENAS = 2
+
+
+def _libc():
+    return ctypes.CDLL(None)   # the C library already loaded into this process; tests fake this
+
+
+def cap_malloc_arenas(n=CONSOLE_ARENAS):
+    """Cap glibc's malloc arenas before the console starts its worker threads. glibc gives each busy thread an arena
+    of its own and seldom hands freed memory back to the system; the console's pool threads parse megabytes of
+    board JSON and events on every refresh, so with one arena per thread a console grew to 1.6 GB in 3 days (2
+    arenas: flat). MALLOC_ARENA_MAX in the environment wins; anywhere without glibc's mallopt this does nothing."""
+    if os.environ.get("MALLOC_ARENA_MAX") or not sys.platform.startswith("linux"):
+        return False
+    try:
+        return bool(_libc().mallopt(M_ARENA_MAX, n))
+    except (OSError, AttributeError):
+        return False
+
+
 def cmd_watch(a):
     if a.once:
         print(render_watch(watch_snapshot()))
@@ -361,6 +383,7 @@ def cmd_watch(a):
                 return
     from pl import update
     from pl.tui import app as tui
+    cap_malloc_arenas()
     while True:   # a console that left for a new pl build execs the same command line; a failed exec opens this one again
         app = tui.PlApp(interval=a.interval, open_card=getattr(a, "open", None), tab=getattr(a, "tab", None),
                          back=getattr(a, "back", False))
