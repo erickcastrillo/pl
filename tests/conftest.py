@@ -92,6 +92,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     from pl import ghquota
     monkeypatch.setattr(ghquota, "_ask_token", lambda: "")   # no test asks gh for a token; test_gh_rate_limit.py fakes gh
     ghquota._TOKENS.clear()
+    # Who this process is (cli.main, the console and the dispatcher each set it for the process): a fresh copy per
+    # test, or one test's `pl loops` is the next test's caller and its GitHub spend lands under "p pl loops".
+    monkeypatch.setattr(ghquota, "ROLE", {"name": "command"})
 
 
 PY = re.compile(r"python[\d.]*$")

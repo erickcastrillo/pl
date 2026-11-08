@@ -22,8 +22,6 @@ def ledger(monkeypatch, tmp_path):
     reset = int(time.time()) + 1800
     ghquota._write(ghquota._path(), {"limit": 5000, "remaining": 5000, "reset": reset, "at": time.time(),
                                      "window": reset, "spent": {}, "by": {}, "subs": {}})
-    yield
-    ghquota.set_role("command")
 
 
 class Runner:

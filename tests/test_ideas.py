@@ -656,3 +656,35 @@ async def test_pilot_an_idea_from_the_new_row_is_filed_through_ideas_approve(har
         await settle(pilot, lambda: not view.approving and calls, "the idea to be filed")
     assert len(calls) == 1
     assert [c["list_id"] for c in board.created] == ["col-Inbox"]
+
+
+
+
+async def test_pilot_a_reload_that_lands_while_the_console_quits_is_dropped(harness, monkeypatch):
+    """Quitting removes the view's widgets before the view itself; a list read that comes back in that gap must not
+    reach into the removed widgets (it raised NoMatches inside the worker, which failed the app)."""
+    import asyncio
+    import time
+    from textual.containers import Horizontal
+    app = PlApp(snapshot_provider=_no_data)
+    release = threading.Event()
+
+    def slow_list():
+        release.wait(5)
+        return []
+
+    async def row_unmounted(self):   # the view's widgets are gone, the view (and so its worker) is not yet
+        if self.parent is view:
+            release.set()
+            deadline = time.monotonic() + 5
+            while not worker.is_finished and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+    async with app.run_test(size=(176, 48)) as pilot:
+        await pilot.press("3")
+        view = app.query_one("IdeasView")
+        await settle(pilot)
+        monkeypatch.setattr(ideas, "list_ideas", slow_list)
+        monkeypatch.setattr(Horizontal, "on_unmount", row_unmounted, raising=False)
+        view.reload()
+        worker = next(w for w in app.workers if w.group == "idea-list" and not w.is_finished)
+    assert release.is_set() and worker.is_finished
