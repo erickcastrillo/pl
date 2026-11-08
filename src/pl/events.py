@@ -200,12 +200,12 @@ def clear_demo():
         os.close(lock)
 
 
-def metrics(window_seconds, now=None):
+def metrics(window_seconds, now=None, evs=None):
     """Counts of events inside the last `window_seconds`; an event exactly at the edge does not count.
-    `errors_last` is the most recent error event of all time (or None)."""
+    `errors_last` is the most recent error event of all time (or None). `evs` is an earlier _read() to reuse."""
     now = now or datetime.now(timezone.utc)
     start = now - timedelta(seconds=window_seconds)
-    evs = _read()
+    evs = _read() if evs is None else evs
     inside = [e for e in evs if start < e["_t"] <= now]
     moved = lambda col: sum(1 for e in inside if e["kind"] == "moved" and e.get("to") == col)  # noqa: E731
     errors = [e for e in evs if e["kind"] == "error"]
@@ -215,11 +215,12 @@ def metrics(window_seconds, now=None):
             "errors_last": {k: v for k, v in last.items() if k != "_t"} if last else None}
 
 
-def daily(column, days=14, now=None):
-    """Moves into `column` per UTC day for the last `days` days, oldest first; the last item is today."""
+def daily(column, days=14, now=None, evs=None):
+    """Moves into `column` per UTC day for the last `days` days, oldest first; the last item is today.
+    `evs` is an earlier _read() to reuse."""
     today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
     counts = [0] * days
-    for e in _read():
+    for e in _read() if evs is None else evs:
         if e["kind"] == "moved" and e.get("to") == column:
             ago = (today - e["_t"].astimezone(timezone.utc).date()).days
             if 0 <= ago < days:
