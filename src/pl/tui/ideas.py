@@ -153,8 +153,19 @@ class IdeasView(Widget):
             try:
                 fn()
             except (SystemExit, Exception) as e:  # noqa: BLE001
-                self.app.call_from_thread(self._failed, str(e))
+                self._ui(self._failed, str(e))
         self.run_worker(run, thread=True, group=group)
+
+    def _ui(self, fn, *args):
+        """From a worker thread, run fn(*args) on the UI thread, unless this view is being torn down by then.
+
+        Removing the view (or quitting the console) prunes its widgets before the view itself, and only unmounting
+        the view cancels its workers; a result landing in that gap found no widgets, raised NoMatches, and the
+        worker's error took the app down."""
+        def guarded():
+            if self.is_attached and not (self._pruning or self._closing or self._closed):
+                fn(*args)
+        self.app.call_from_thread(guarded)
 
     def _failed(self, msg):
         self.busy = False
@@ -165,7 +176,7 @@ class IdeasView(Widget):
     def reload(self, select=None):
         def fn():
             items = ideas.list_ideas()
-            self.app.call_from_thread(self._fill, items, select)
+            self._ui(self._fill, items, select)
         self._bg(fn, "idea-list")
 
     def _fill(self, items, select=None):
@@ -294,9 +305,9 @@ class IdeasView(Widget):
                 try:
                     ideas.save(new)
                 except SystemExit:           # saved elsewhere meanwhile (the Assistant): show the newer draft
-                    self.app.call_from_thread(self.reload, new["id"])
+                    self._ui(self.reload, new["id"])
                     raise
-            self.app.call_from_thread(self._turn_done, new, err)
+            self._ui(self._turn_done, new, err)
         self._bg(fn, "idea-turn")
 
     def _turn_done(self, new, err):
@@ -333,7 +344,7 @@ class IdeasView(Widget):
 
         def fn():
             ideas.save({**ideas.load(new["id"]), **fields})   # reload first: the Assistant may have saved it since
-            self.app.call_from_thread(self.reload, None if gone else new["id"])
+            self._ui(self.reload, None if gone else new["id"])
         self.current = None if gone else new
         self._bg(fn, "idea-save")
         self._redraw()
@@ -424,9 +435,9 @@ class IdeasView(Widget):
                     disk = ideas.load(cur["id"])
                 except SystemExit:
                     disk = cur
-                self.app.call_from_thread(self._approve_failed, disk, str(e))
+                self._ui(self._approve_failed, disk, str(e))
                 return
-            self.app.call_from_thread(self._approved, done)
+            self._ui(self._approved, done)
         self.approving = True
         self.current = {**cur, "status": "approving"}
         self._redraw()
