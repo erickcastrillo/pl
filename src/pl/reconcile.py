@@ -36,6 +36,12 @@ def _branch_pr(c):
     return None
 
 
+def _no_new_commit(pr, m):
+    """A rework round started (metadata.rework.at) and the PR has no commit since: the agent stopped without pushing."""
+    since = parse_iso((m.get("rework") or {}).get("at") or "")
+    return bool(since) and max((parse_iso(x.get("committedDate") or "") for x in pr.get("commits") or []), default=0) < since
+
+
 def _labels(url, m):
     """(label to add, label to remove) for the PR, None for each already right; none for a closed PR or a rework with no new commit."""
     pr = json.loads(github._gh(["pr", "view", url, "--json", "state,labels,commits"]))
@@ -45,8 +51,7 @@ def _labels(url, m):
     wanted = rework.labels()
     add = wanted["review"] if wanted["review"] and wanted["review"] not in have else None
     drop = wanted["rework"] if wanted["rework"] in have else None
-    since = parse_iso((m.get("rework") or {}).get("at") or "")
-    if (add or drop) and since and max((parse_iso(x.get("committedDate") or "") for x in pr.get("commits") or []), default=0) < since:
+    if (add or drop) and _no_new_commit(pr, m):
         return None, None
     return add, drop
 
@@ -131,6 +136,8 @@ def _card(c, reg, done, active, empty):
     elif stage == "run" and col in ("Approved", "In progress", C.STAGE_DONE_AT["run"]):
         if not _finished(w, reg) or not (url := (m.get("pr_urls") or [None])[-1] or _lookup(c, col, empty)):
             return
+        if (m.get("rework") or {}).get("active") and _no_new_commit(json.loads(github._gh(["pr", "view", url, "--json", "commits"])), m):
+            return   # an active rework round waits for its push: moving now ends the round with nothing done
         ok = _link(c, url, changes, active)
         built = ok and slices.built(c)   # a part-built stack stays In progress; None: unread, try again
         if built and col != C.STAGE_DONE_AT["run"]:

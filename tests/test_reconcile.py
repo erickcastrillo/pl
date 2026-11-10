@@ -120,6 +120,18 @@ def test_rework_run_without_new_commits_keeps_labels(world):
     assert _edits(world) == [] and _reconciled(world) == []
 
 
+def test_active_rework_without_a_new_commit_stays_in_progress_until_one_lands(world):
+    world.word = "finished"
+    world.commits = [{"committedDate": "2026-10-26T10:00:00Z"}]
+    card = _card(pr_urls=[PR], rework={"at": "2026-10-26T12:00:00+00:00", "active": True, "round": 3})
+    st = {}
+    reconcile.sweep([card], {}, st)
+    assert world.moves == [] and _reconciled(world) == [] and st["reconciled"] == {}
+    world.commits.append({"committedDate": "2026-10-26T13:00:00Z"})
+    reconcile.sweep([card], {}, st)
+    assert world.moves == [("o/r#7", "PR open")]
+
+
 def test_plan_section_moves_card_to_plan_for_review(world):
     world.word = "finished"
     reconcile.sweep([_card(col="Spec ready", desc="# PIPELINE: PLAN\nWP1")], {}, {})
