@@ -278,6 +278,7 @@ WATCHES = {
     "exited_window": "agents that finished without moving their card",
     "foreign_window": "tmux windows pl did not start",
     "gh_hold": "the GitHub budget hold",
+    "held_long": "cards held over 24 h",
     "loop_dead": "loops that burn no tokens",
     "loop_failed": "loops that keep failing",
     "loop_stale": "loops that stopped firing",

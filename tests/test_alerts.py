@@ -288,6 +288,32 @@ def test_a_pr_waiting_over_24_hours_opens_and_resolves(monkeypatch):
     assert not _open("pr_waiting:card0001aaaa")
 
 
+def test_a_card_held_over_24_hours_opens_an_urgent_alert_and_resolves_on_unhold(monkeypatch):
+    c = _card("card0001aaaa", "Approved", hold_reason="waits on C", held_at=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()))
+    c["tags"] = ["parked"]
+    _pass(monkeypatch, [c])
+    assert not _open("held_long:card0001aaaa")                 # held just now
+    c["metadata"]["held_at"] = "2020-01-01T00:00:00+00:00"
+    DESKTOP.clear()
+    _pass(monkeypatch, [c])
+    a = alerts.get("held_long:card0001aaaa")
+    assert _open("held_long:card0001aaaa") and a["severity"] == "error" and len(DESKTOP) == 1
+    assert "held over 24 h" in a["title"] and "waits on C" in a["title"] and "pl unhold card0001" in a["fix"]
+    c["tags"] = []
+    _pass(monkeypatch, [c])
+    assert not _open("held_long:card0001aaaa")
+
+
+def test_an_old_hold_without_held_at_uses_the_card_update_time_and_done_or_split_cards_never_alert(monkeypatch):
+    old = "2020-01-01T00:00:00+00:00"
+    legacy = {**_card("card0001aaaa", "Approved", hold_reason="x"), "tags": ["parked"], "updated_at": old}
+    done = {**_card("card0002aaaa", "Done", hold_reason="x", held_at=old), "tags": ["parked"], "updated_at": old}
+    split = {**_card("card0003aaaa", "Spec ready"), "tags": ["split"], "updated_at": old}
+    _pass(monkeypatch, [legacy, done, split])
+    assert _open("held_long:card0001aaaa")
+    assert not _open("held_long:card0002aaaa") and not _open("held_long:card0003aaaa")
+
+
 def test_alert_titles_name_a_github_card_by_repo_and_number(monkeypatch):
     stale = _card("your-org/your-repo#43", "PR open")
     stale["updated_at"] = "2020-01-01T00:00:00+00:00"
