@@ -1683,6 +1683,7 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
 
 
 PR_WAIT = 86400   # seconds a card may sit in the PR column before its PR raises an alert
+HOLD_WAIT = 86400   # seconds a card may stay held (pl hold) before it raises an urgent alert
 
 
 _PR_STATE = {}   # url -> (checked_at, "open" | "merged" | "closed")
@@ -1891,6 +1892,16 @@ def check_alerts(all_cards, failed, st=None):
             waiting.add(key)
             alerts.open(key, "warn", f"Card {short_id(c['id'])}: its PR waits over 24 h", "review and merge it, or move the card on")
     alerts.sweep("pr_waiting:", waiting, notify)
+    held = set()
+    for c in all_cards:
+        m = c.get("metadata") or {}
+        t = parse_iso(m.get("held_at") or c.get("updated_at") or "")   # holds made before held_at existed: last update
+        if "parked" in (c.get("tags") or []) and col_name(c["list_id"]) != "Done" and t and now - t > HOLD_WAIT:
+            key, head = f"held_long:{c['id']}", short_id(c["id"])
+            held.add(key)
+            alerts.open(key, "error", f"Card {head}: held over 24 h: {str(m.get('hold_reason') or 'no reason given')[:80]}",
+                        f"pl unhold {head} if the blocker is gone, or pl drop {head}", [c["id"]])
+    alerts.sweep("held_long:", held, notify)
     check_pr_person_alerts(all_cards)
     check_deps(all_cards)
     ci_watch.check(all_cards, notify)
