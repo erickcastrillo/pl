@@ -32,6 +32,7 @@ class Harness:
     resume: list = field(default_factory=list)   # relaunch a session by id in place (pl move-agent); empty = cannot
     unattended: bool = True                      # [harnesses.<name>] unattended = false: pipeline agents ask first
     skip_permissions: bool = False               # [harnesses.<name>] skip_permissions = true: SKIP_PERMISSIONS, opt-in
+    trust_worktrees: bool = False                # [harnesses.<name>] trust_worktrees = true: TRUST_FILES, opt-in
     permission_patterns: list | None = None      # its permission prompt on screen; None = PERMISSION_PATTERNS[name]
 
 
@@ -291,6 +292,43 @@ ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CACHE = {}   # config path -> validated [harnesses] table, parsed once per process
 
 
+# Where a harness keeps its list of trusted folders, under the account's config_dir: (file, JSON key). With
+# [harnesses.<name>] trust_worktrees = true, pl adds each worktree it starts an agent in, so the agent does not stop
+# at "Do you trust the contents of this project?" (agy trusts exact folders only, and has no flag for it).
+TRUST_FILES = {"antigravity": ("antigravity-cli/settings.json", "trustedWorkspaces")}
+
+
+def trust_worktree(h, account, folder):
+    """Add folder to h's trusted folders for account when the profile opts in and folder is inside the profile's
+    worktrees folder (never the folder itself, never anything else). True when it was added. Leaves an unreadable
+    settings file alone, with a warning."""
+    if not h.trust_worktrees or h.name not in TRUST_FILES or not C.WORKTREES_DIR:
+        return False
+    root, wt = Path(C.WORKTREES_DIR).expanduser().resolve(), Path(folder).expanduser().resolve()
+    if wt == root or root not in wt.parents:
+        return False
+    cfg = (C.ACCOUNTS.get(account) or {}).get("config_dir") or C.PROFILES.get(account)
+    if not cfg:
+        return False
+    rel, key = TRUST_FILES[h.name]
+    f = Path(cfg).expanduser() / rel
+    try:
+        data = json.loads(f.read_text()) if f.exists() else {}
+        if not isinstance(data, dict) or not isinstance(data.get(key, []), list):
+            raise ValueError(f"{key} is not a list")
+    except (OSError, ValueError) as e:
+        print(f"trust_worktrees: {f} left alone ({e}); the agent may ask to trust {wt}", flush=True)
+        return False
+    if str(wt) in data.get(key, []):
+        return False
+    data[key] = [*data.get(key, []), str(wt)]
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f".{f.name}.pl-tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(f)
+    return True
+
+
 def skip_permissions_error(name, ov):
     """Why [harnesses.<name>] skip_permissions is wrong, else None."""
     v = ov.get("skip_permissions", False)
@@ -319,6 +357,10 @@ def _overrides():
                 raise SystemExit(f"pl: [harnesses.{name}] unattended must be true or false ({p})")
             if err := skip_permissions_error(name, ov):
                 raise SystemExit(f"pl: [harnesses.{name}] {err} ({p})")
+            if not isinstance(ov.get("trust_worktrees", False), bool):
+                raise SystemExit(f"pl: [harnesses.{name}] trust_worktrees must be true or false ({p})")
+            if ov.get("trust_worktrees") and name not in TRUST_FILES:
+                raise SystemExit(f"pl: [harnesses.{name}] trust_worktrees works only for {', '.join(TRUST_FILES)} ({p})")
             for k in ("interactive", "headless", "resume", "limit_patterns", "permission_patterns"):
                 if k in ov and not (isinstance(ov[k], list) and all(isinstance(x, str) for x in ov[k])):
                     raise SystemExit(f"pl: [harnesses.{name}] {k} must be a list of strings ({p})")

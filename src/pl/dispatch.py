@@ -641,6 +641,11 @@ def start_worker(c, stage, attempts, dry):
         host_mcp = C.STATE_DIR / f"mcp-{sid}.json"
         connectors_proxy.write_mcp_config(host_mcp, connectors_proxy.make_mcp_config(f"http://{bridge}:{srv.port}", scope.bearer))
         sandbox.transfer_in(sandbox.vm_name(), host_mcp, f"/tmp/mcp-{sid}.json")
+    try:   # [harnesses.<name>] trust_worktrees: the agent's worktree on its harness's trusted list, so it does not stop
+        if harnesses.trust_worktree(h, profile, folder):   # at a "trust this folder?" prompt; never blocks the start
+            print(f"{short_id(c['id'])}  trusted {folder} for {h.name}")
+    except Exception as e:  # noqa: BLE001 - a trust file problem must never stop an agent from starting
+        print(f"{short_id(c['id'])}  trust_worktrees: {e}")
     _launch(pane, name, harnesses.launch_script(harnesses.unattended(h), profile, prompt, sid, label,
                                                          stage=stage, hooks=(c["id"], win), small=small,
                                                          servers=None if C.SANDBOX.get("enabled") else stage_servers(profile, stage), **agent_kw), script)
