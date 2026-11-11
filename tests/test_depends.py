@@ -276,3 +276,50 @@ def test_depends_without_id_or_from_plans_refuses(board):
 
 
 
+
+
+# ---------- [dispatch] deps_gate: dependencies gate every stage, not only the build ----------
+
+
+def _spec_stage():
+    C.STAGES = {**C.STAGES, "spec": {"account": "claude"}}
+    C.PROMPTS = {**C.PROMPTS, "spec": "/pl-spec {id}"}
+
+
+def test_by_default_a_dependent_card_still_gets_its_spec(monkeypatch):
+    _spec_stage()
+    r1 = _card("o/r#1", col="In progress", profile="claude")
+    r2 = _card("o/r#2", col="Inbox", profile="claude", depends_on=["o/r#1"])
+    started = _pass_dispatch(monkeypatch, [r1, r2], max_runs=2)
+    assert "o/r#2" in [c["id"] for c in started]
+
+
+def test_deps_gate_all_makes_the_spec_wait_and_says_why(monkeypatch, capsys):
+    _spec_stage()
+    C.DISPATCH = {**C.DISPATCH, "deps_gate": "all"}
+    r1 = _card("o/r#1", col="In progress", profile="claude")
+    r2 = _card("o/r#2", col="Inbox", profile="claude", depends_on=["o/r#1"])
+    started = _pass_dispatch(monkeypatch, [r1, r2], max_runs=2)
+    assert "o/r#2" not in [c["id"] for c in started]
+    assert "r#2  spec waiting: needs r#1 merged" in capsys.readouterr().out
+
+
+def test_deps_gate_all_starts_the_spec_once_the_dependency_is_done(monkeypatch):
+    _spec_stage()
+    C.DISPATCH = {**C.DISPATCH, "deps_gate": "all"}
+    r1 = _card("o/r#1", col="Done", profile="claude")
+    r2 = _card("o/r#2", col="Inbox", profile="claude", depends_on=["o/r#1"])
+    started = _pass_dispatch(monkeypatch, [r1, r2], max_runs=1)
+    assert [c["id"] for c in started] == ["o/r#2"]
+
+
+@pytest.mark.parametrize("value", ['"build"', "1", "true"])
+def test_deps_gate_accepts_only_run_or_all(value):
+    import tomlkit
+    assert any("dispatch.deps_gate" in e for e in C.validate(tomlkit.parse(f"[dispatch]\ndeps_gate = {value}\n")))
+
+
+@pytest.mark.parametrize("value", ['"run"', '"all"'])
+def test_deps_gate_run_and_all_are_valid(value):
+    import tomlkit
+    assert not any("dispatch.deps_gate" in e for e in C.validate(tomlkit.parse(f"[dispatch]\ndeps_gate = {value}\n")))

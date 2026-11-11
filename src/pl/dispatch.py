@@ -1504,8 +1504,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
             continue
         if attempts == 0:
             st["notified"].pop(f"{c['id']}:{stage}_failed", None)   # a fresh start (pl retry): a new failure notifies again
-        if stage == "run" and col == "Approved" and (why := deps_waiting(c, all_cards)):
-            print(f"{short_id(c['id'])}  run {why}")
+        gate_all = (C.DISPATCH or {}).get("deps_gate") == "all"   # [dispatch] deps_gate: "all" holds every stage
+        if ((stage == "run" and col == "Approved") or gate_all) and (why := deps_waiting(c, all_cards)):
+            print(f"{short_id(c['id'])}  {stage} {why}")
             continue
         todo.append((c, stage, attempts + 1, col))
     st["run_waits"] = seen_waits   # a card no longer waiting starts a new clock next time

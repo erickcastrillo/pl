@@ -77,8 +77,10 @@ def _defaults():
     # autostart: the console starts the dispatcher. account_checks: minutes between health checks of a parked account
     # (the last repeats; [] is off). hooks: false adds no Claude Code hooks to stage agents. stall_minutes: minutes a run
     # agent may sit idle while its card has not moved on before pl opens a "stalled" alert and notifies (0 is off)
+    # deps_gate: which stages wait for a card's dependencies to be Done: "run" (the build only; spec, design and plan
+    # may start early) or "all" (no stage starts before every dependency is Done)
     DISPATCH = {"max_runs": 3, "max_prep": 2, "interval": 120, "autostart": True, "account_checks": [10, 30, 60],
-                "stall_minutes": 20, "rework_rounds": 3, "hooks": True, **MEMORY_DEFAULTS}
+                "stall_minutes": 20, "rework_rounds": 3, "hooks": True, "deps_gate": "run", **MEMORY_DEFAULTS}
     # [watchdog] job_minutes: a background job of a stage agent running longer is "overrun" (0 is off)
     WATCHDOG = {"job_minutes": 45}
     GATES = {"spec": False}
@@ -381,6 +383,8 @@ def validate(doc) -> list[str]:
         days = doc["worktrees"]["stale_days"]
         if isinstance(days, bool) or not isinstance(days, int) or days < 1:
             errs.append("worktrees.stale_days must be a positive whole number")
+    if doc.get("dispatch", {}).get("deps_gate", "run") not in ("run", "all"):
+        errs.append('dispatch.deps_gate must be "run" (only the build waits for dependencies) or "all" (every stage waits)')
     for key in ("autostart", "kill_runaway"):
         if not isinstance(doc.get("dispatch", {}).get(key, True), bool):
             errs.append(f"dispatch.{key} must be true or false")
