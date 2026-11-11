@@ -138,6 +138,7 @@ autostart = true                # the console starts this dispatcher in tmux; D 
 account_checks = [10, 30, 60]   # minutes between health checks of a parked account; the last repeats; [] turns them off
 stall_minutes = 20              # minutes a run agent may sit idle while its card has not moved on before pl opens a "stalled" alert and notifies; 0 turns it off
 rework_rounds = 3               # times a PR the review labeled rework goes back to a run agent (docs/github.md); 0 turns it off
+deps_gate = "run"               # "run": only the build waits for a card's dependencies; "all": no stage (spec, design, plan, build) starts before they are Done
 
 [code_host]                     # PR labels pl reads (set by your review tools)
 owner = "your-org"
