@@ -311,6 +311,15 @@ skip_permissions = true     # pipeline agents and loops run agy --dangerously-sk
 
 Nothing is blocked then: the agent can run any command your user can, and only its instructions keep it to the card's work. Use it on a machine or in a sandbox (`[sandbox]`) where that is acceptable. `[permissions] unattended = false` and `[harnesses.antigravity] unattended = false` still turn it off. The Assistant is never affected. Any other harness refuses the setting.
 
+**Trust each worktree (Antigravity only, opt-in).** Antigravity asks "Do you trust the contents of this project?" for every new folder; it trusts exact folders only, so each card's new worktree stops at that prompt. To have pl add the worktree to Antigravity's trusted workspaces just before it starts the agent there:
+
+```toml
+[harnesses.antigravity]
+trust_worktrees = true      # pl adds each worktree it creates (inside [paths] worktrees_dir) to agy's trustedWorkspaces
+```
+
+Only folders inside the profile's worktrees folder are ever added, one per agent start; nothing else changes in the settings file, and a file pl cannot read is left alone. Any other harness refuses the setting.
+
 An agent that still waits at a permission prompt, with no change on its screen for 2 minutes, opens an alert: "agent waiting for permission in <window>: <the tool line>". This includes Claude Code's "Allow this read outside the working directories?" prompt, where the tool line is the `Read(<path>)` it asked about. Its card shows "waiting for permission". pl never answers the prompt. The alert clears once the prompt is gone.
 
 **Run slots.** `max_runs` run agents work at once. A free slot goes first to In progress cards whose agent must start again (for example after a usage limit), oldest first, then to Approved cards that have not started. A run agent that is waiting does not take a slot: its screen shows a /run-plan `GATE:` line (for example `GATE: nothing-runnable` while a PR it depends on is unmerged), or its screen has not changed for 10 minutes. For Antigravity, which redraws its screen every second, pl compares the screen text from one pass to the next. Waiting agents still count toward the hard cap of 2 × `max_runs` live run agents. pl never stops a waiting run agent: when one stays idle with its card unmoved, the stall watchdog (`[dispatch] stall_minutes`) nudges it, then starts its stage again. An agent waiting at a gate a person must act on (`not-approved`, `before-push`, `outside-worktree`), or at a permission or trust prompt, is left for you. An agent on a usage limit screen holds no run or prep slot. Once a card reaches PR open (or later), its run agent's window closes after 5 idle minutes; for Antigravity, after its screen has not changed for 5 minutes. A run window of a card in Approved or In progress is never closed this way.
