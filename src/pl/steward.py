@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from pl import accounts, agent_screen, agents, alerts, board, events, inbox, schedule, usage
 from pl import config as C
+from pl.agent_alerts import CARD_RE
 from pl.util import load_state, parse_iso, save_state, short_id
 
 THRESHOLDS = {"Spec": 60, "Design": 60, "Plan": 60, "Approved": 30, "In progress": 120, "PR open": 240,
@@ -128,6 +129,40 @@ def fix_loops(st, now):
     return rows
 
 
+def fix_dead(c, st, now):
+    """pl retry for a dead agent, at most [steward] retries times a day for each card; "needs you" past that."""
+    from pl import commands
+    tries = st.setdefault("steward", {}).setdefault("retries", {})
+    recent = [t for t in tries.get(c["id"], []) if now - t < 86400]
+    tries[c["id"]] = recent
+    if len(recent) >= C.STEWARD["retries"]:
+        return "needs you"
+    commands.retry(c["id"])
+    recent.append(now)
+    return "retry"
+
+
+def fix_held(c, all_cards):
+    """Unhold a card whose dependencies are all met; replace a hold reason that names cards now done."""
+    from pl import commands
+    m = c.get("metadata") or {}
+    if not m.get("depends_on"):
+        return None
+    still = agents.deps_open(c, all_cards)
+    if not still:
+        commands.unhold(c["id"])
+        events.emit("steward", c["id"], reason="blocked", action="unhold", by="rule")
+        return "unhold"
+    old = str(m.get("hold_reason") or "")
+    named = {x["id"] for x in all_cards for ref in CARD_RE.findall(old) if x["id"] == ref or x["id"].endswith("/" + ref)}
+    if not named or named & set(still):
+        return None
+    new = f"waiting on {', '.join(short_id(x) for x in still)}"
+    commands.update(c["id"], metadata={"hold_reason": new})
+    events.emit("steward", c["id"], reason="blocked", action="refresh reason", old_reason=old[:80], new_reason=new[:80], by="rule")
+    return "refresh reason"
+
+
 def run_pass(all_cards, st, act=True, reg=None, now=None):
     from pl import dispatch
     now = time.time() if now is None else now
@@ -138,12 +173,16 @@ def run_pass(all_cards, st, act=True, reg=None, now=None):
         col = c.get("col") or dispatch.col_name(c.get("list_id"))
         if col in EXCLUDED or not (col in THRESHOLDS or dispatch.stage_for(c, col) or inbox.gate_of(c, col)):
             continue
+        if act and "parked" in (c.get("tags") or []) and (action := fix_held(c, all_cards)):
+            rows.append({"card": c["id"], "column": col, "reason": "blocked", "action": action, "by": "rule"})
+            continue
         if now - stuck_since(c, col, evs) < threshold(col):
             continue
         reason = classify(c, col, st, all_cards, kinds[c["id"]], reg)
-        rows.append({"card": c["id"], "column": col, "reason": reason or "unsettled", "action": "none", "by": "rule"})
+        action = fix_dead(c, st, now) if reason == "dead" and act else "none"
+        rows.append({"card": c["id"], "column": col, "reason": reason or "unsettled", "action": action, "by": "rule"})
         if reason and act:
-            events.emit("steward", c["id"], reason=reason, action="none", by="rule")
+            events.emit("steward", c["id"], reason=reason, action=action, by="rule")
     if act:
         rows += fix_accounts(now) + fix_loops(st, now)
         st["steward"]["ran_at"] = now
