@@ -81,6 +81,9 @@ def temp_home(monkeypatch, tmp_path_factory):
     def no_model(url, payload, timeout):
         raise OSError("tests never reach a local model")
     monkeypatch.setattr(local_model, "_request", no_model)   # a test that needs answers fakes _request itself
+    from types import SimpleNamespace
+    from pl import dispatch
+    monkeypatch.setattr(dispatch, "steward", SimpleNamespace(due=lambda st, now: False))   # the steward pass belongs to tests/test_steward*.py
     from pl import accounts
 
     def no_probe(argv, env, timeout, cwd):
