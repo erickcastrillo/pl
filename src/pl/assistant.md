@@ -89,6 +89,7 @@ Moving work (rule 1 applies):
 - `pl retention run` (`--dry-run`, `--json`): run email data retention pass now
   (the dispatcher also does this daily).
 - `pl retry <id|all>` (`--stage`): start a failed agent fresh.
+- `pl steward --once` (`--dry-run`, `--json`): look for cards stuck past their column's wait and print one reason for each.
 - `pl caps set <id> [--minutes M] [--tokens 4M]` / `pl caps reset <id>`: give one card its own caps; `pl retry <id>` then restarts a card stopped at a cap.
 - `pl loops run <name> [--wait] [--json]`: run a scheduled loop (one with `every`) once now; the dispatcher starts it on its next pass.
 - `pl restart <id>` (`--stage`): stop a card's agent even while it runs, so its stage starts fresh (attempt 1).

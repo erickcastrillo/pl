@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pl import config as C
-from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, pr_done, questions, recall, reconcile, rework, schedule, skills, slowwork, summary, sync, trackers, usage, worktrees
+from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, pr_done, questions, recall, reconcile, rework, schedule, skills, slowwork, steward, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
 from pl.agents import (GATE_RE, held_steps, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
                        run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
@@ -1624,6 +1624,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
         except Exception as e:  # noqa: BLE001 - a failed check never stops the pass
             print(f"account check failed: {e}", file=sys.stderr)
             events.failure("account_check_failed", "warning", f"account check failed: {e}")
+        try:   # its own clock inside the pass, so a dead loop cannot stop it
+            if steward.due(st, time.time()):
+                steward.run_pass(all_cards, st, reg=reg)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - a failed steward pass never stops the dispatcher
+            print(f"steward skipped this pass: {e}", file=sys.stderr)
+            events.emit("error", message=f"steward: {e}")
         _sync_pass()
     ms = None if dry else manager.read_status()   # a status older than 15 s is ignored: a dead manager freezes nothing
     mhold = f"new starts paused by pl manager: {ms['hold']}" if ms and ms.get("hold") else None
