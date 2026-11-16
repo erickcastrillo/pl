@@ -304,6 +304,27 @@ def test_a_card_held_over_24_hours_opens_an_urgent_alert_and_resolves_on_unhold(
     assert not _open("held_long:card0001aaaa")
 
 
+SLICE_REASON = "Slice 2 of 3 is 640 lines, over max_lines 400; not opened"
+
+
+def test_the_held_over_24_h_alert_names_the_slice_reason(monkeypatch):
+    c = _card("card0001aaaa", "In progress", hold_reason=SLICE_REASON, held_at="2020-01-01T00:00:00+00:00")
+    c["tags"] = ["parked"]
+    _pass(monkeypatch, [c])
+    assert "Slice 2 of 3 is 640 lines, over max_lines 400" in alerts.get("held_long:card0001aaaa")["title"]
+
+
+def test_a_held_run_card_gets_no_agent_and_is_not_moved(monkeypatch):
+    c = _card("card0001aaaa", "In progress", hold_reason=SLICE_REASON, held_at="2020-01-01T00:00:00+00:00")
+    c["tags"] = ["parked"]
+    started, moved = [], []
+    _pass(monkeypatch, [c])
+    monkeypatch.setattr(dispatch, "start_worker", lambda *a, **k: started.append(a))
+    monkeypatch.setattr(dispatch, "move", lambda *a, **k: moved.append(a), raising=False)
+    dispatch.dispatch_once(1, False, pull=False)
+    assert started == [] and moved == [] and c["list_id"] == "In progress"
+
+
 def test_an_old_hold_without_held_at_uses_the_card_update_time_and_done_or_split_cards_never_alert(monkeypatch):
     old = "2020-01-01T00:00:00+00:00"
     legacy = {**_card("card0001aaaa", "Approved", hold_reason="x"), "tags": ["parked"], "updated_at": old}

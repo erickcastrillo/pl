@@ -326,6 +326,8 @@ def _approve_gate(c, a):
     gates = {**(m.get("gates") or {}), name: approval}
     target = pipeline.approved_column(stage)
     update(c["id"], list_id=col_id(target), metadata={"gates": gates, "worker": None, "approval_pending": None})
+    if trackers.dry_run():
+        return
     events.emit("gate_approved", c["id"])
     audit.append("gate_approved", card=c["id"], stage=name)
     if not send:
@@ -340,6 +342,8 @@ def _approve_gate(c, a):
 def _hold_for_owner(c):
     """An agent session's outward approval: record it pending, send the owner a one-time code, move nothing."""
     update(c["id"], metadata={"approval_pending": {"by": "agent session", "at": now_iso()}})
+    if trackers.dry_run():
+        return
     events.emit("approval_pending", c["id"])
     audit.append("approval_pending", card=c["id"])
     code = confirm.new_code(c)
@@ -374,6 +378,8 @@ def cmd_approve(a):
         approved = sections(c.get("description")).get("SPEC") or ""
         pods.learn(c["id"], "SPEC", draft, approved)
         update(c["id"], metadata={"spec_approved_at": now_iso(), "spec_approved_by": C.USER_EMAIL, "approval_pending": None})
+        if trackers.dry_run():
+            return
         events.emit("spec_approved", c["id"])
         audit.append("spec_approved", card=c["id"])
         print(f"spec approved {short_id(c['id'])}  {c['title']}\n  the dispatcher starts the plan (or design) on its next pass")
@@ -397,11 +403,14 @@ def cmd_approve(a):
             raise SystemExit(f"pl approve: your local plan {path} is bigger than this card's part; nothing was "
                              f"written. Trim it to this card's work packages, then approve again ({e})")
         update(c["id"], description=desc)
-        print(f"synced your edits from {path} to the card")
+        if not trackers.dry_run():
+            print(f"synced your edits from {path} to the card")
     approved = parts.get("PLAN") or ""
     pods.learn(c["id"], "PLAN", draft, approved)
     update(c["id"], list_id=col_id("Approved"),
            metadata={"approved_by": C.USER_EMAIL, "approved_at": now_iso(), "worker": None, "approval_pending": None})
+    if trackers.dry_run():
+        return
     if outbound.has_reply(c):
         outbound.enqueue(c)
     events.emit("approved", c["id"])
@@ -429,6 +438,8 @@ def cmd_reject(a):
         parts["INPUT"] = (parts.get("INPUT") or "").rstrip() + f"\n\n## Spec review notes {now_iso()[:10]} round {n}\n{a.notes.strip()}"
         update(c["id"], description=check_size(render(parts)))
         update(c["id"], list_id=col_id("Inbox"), metadata={"spec_round": n, "worker": None, "spec_approved_at": None})
+        if trackers.dry_run():
+            return
         events.emit("spec_rejected", c["id"])
         recall.note(a.notes.strip(), "rejection", f"rejection:{c['id']}#{n}", c["id"])
         audit.append("spec_rejected", card=c["id"])
@@ -441,6 +452,8 @@ def cmd_reject(a):
     then = "the stage runs again" if back_to else "the planner re-plans"
     back_to = back_to or "Spec ready"
     update(c["id"], list_id=col_id(back_to), metadata={"review_round": n, "worker": None})
+    if trackers.dry_run():
+        return
     events.emit("rejected", c["id"])
     recall.note(a.notes.strip(), "rejection", f"rejection:{c['id']}#{n}", c["id"])
     audit.append("rejected", card=c["id"])
@@ -467,6 +480,8 @@ def cmd_done(a):
     if a.note:
         body["description"] = check_size((pc.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{a.note.strip()}\n")
     got = trackers.get("intake").update(pc["id"], verify=False, **body)
+    if trackers.dry_run():
+        return
     if got.get("list_id") != product_lists()["Done"]:
         raise SystemExit(f"pl done: move did not persist for {short_id(pc['id'])}")
     print(f"done {short_id(pc['id'])}  {pc['title'][:70]}  (Product board, was in {product_col(pc['list_id'])})")
@@ -514,6 +529,8 @@ def done(ref, cs=None, note=None, reason=None, drop_slices=None, checked=False):
     if text and not _closed_with(c.get("description") or "", text):   # a retried move must not add a second section
         fields["description"] = check_size((c.get("description") or "").rstrip() + f"\n\n## Closed {now_iso()[:10]}\n{text}\n")
     update(c["id"], list_id=col_id("Done"), metadata=meta, **fields)
+    if trackers.dry_run():
+        return []
     m, out = c.get("metadata") or {}, []
     if m.get("product_card") and intake_configured() and "Done" in product_lists():
         try:
@@ -553,6 +570,8 @@ def drop(ref, reason=None):
     finally:
         if live:
             move_agent.unlock(c["id"])
+    if trackers.dry_run():
+        return []
     events.emit("dropped", c["id"], **{"from": col})   # the reason is card text: never in the event log
     if m.get("product_card") and intake_configured() and "Done" in product_lists():
         try:
@@ -575,6 +594,8 @@ def undrop(ref):
         raise SystemExit(f"pl undrop: {head} is not in Done any more (it is in {col_name(c['list_id'])}); move it with pl move")
     back = m.get("dropped_from") if m.get("dropped_from") in C.COLUMNS and m.get("dropped_from") != "Done" else "Inbox"
     update(c["id"], list_id=col_id(back), metadata=dict.fromkeys(DROP_KEYS))
+    if trackers.dry_run():
+        return []
     events.emit("undropped", c["id"], to=back)
     out = [f"undropped {head}  (back in {back})"]
     if m.get("product_card"):
@@ -633,9 +654,11 @@ def move_card(ref, column, pr=None):
         urls = list((card(cid).get("metadata") or {}).get("pr_urls") or [])
         if pr not in urls:
             update(cid, metadata={"pr_urls": urls + [pr]})
-        print(f"recorded {pr}")
+        if not trackers.dry_run():
+            print(f"recorded {pr}")
     cid = move_to(ref, column, cid)
-    print(f"moved {cid} to {column}")
+    if not trackers.dry_run():
+        print(f"moved {cid} to {column}")
     return cid
 
 
@@ -733,7 +756,8 @@ def cmd_card(a):
     c = find_card(a.id)
     if a.delete:
         trackers.get("tracker").delete(c["id"])
-        print(f"deleted {short_id(c['id'])}  {c['title']}")
+        if not trackers.dry_run():
+            print(f"deleted {short_id(c['id'])}  {c['title']}")
         return
     used = card_caps(c, load_state(), time.time(), col_name(c["list_id"]))
     if getattr(a, "json", False):
@@ -852,7 +876,9 @@ def cmd_section(a):
             print(text.rstrip("\n"))
         return
     text = _section_source(a.from_)
-    print(write_section(a.id, name, text, force=getattr(a, "force", False)))
+    line = write_section(a.id, name, text, force=getattr(a, "force", False))
+    if not trackers.dry_run():
+        print(line)
 
 
 def write_section(card_id, name, text, force=False) -> str:
@@ -943,6 +969,8 @@ def adopt(ref, account=None):
         return [f"{short_id(c['id'])} is already a funnel card (profile {m.get('profile')})"]
     update(c["id"], metadata={"pipeline_mode": "auto", "profile": account or m.get("profile") or next_profile(cards()),
                               "adopted_at": now_iso(), "adopted_by": C.USER_EMAIL})
+    if trackers.dry_run():
+        return []
     return [f"adopted {short_id(c['id'])}  {c['title']}  ({col_name(c['list_id'])}); the dispatcher takes it from here"]
 
 
@@ -964,6 +992,8 @@ def restart(ref, stage=None):
     if why := stop_worker(c, w, live=live):
         raise SystemExit(f"pl restart: {head}: its {w.get('stage')} agent could not be stopped ({why}); "
                          "stop it in its window, then restart again")
+    if trackers.dry_run():
+        return []
     events.emit("agent_restarted", c["id"], stage=w.get("stage"), reason="by hand")
     return [f"{head}: " + (f"stopped its {w.get('stage')} agent (Ctrl-C in its window); " if live else "")
             + f"the dispatcher starts the {w.get('stage')} stage fresh (attempt 1)"]
@@ -986,6 +1016,8 @@ def hold(ref, reason=None):
     if "parked" in tags:
         raise SystemExit(f"pl hold: {head} is already held (pl unhold {short_id(c['id'])} releases it)")
     update(c["id"], tags=tags + ["parked"], metadata={"hold_reason": reason, "held_at": now_iso(), "held_by": C.USER_EMAIL})
+    if trackers.dry_run():
+        return []
     events.emit("held", c["id"])   # the reason is card text: never in the event log
     w = (c.get("metadata") or {}).get("worker") or {}
     return [f"held {head}: the dispatcher starts no agent on it (pl unhold {short_id(c['id'])} releases it)"
@@ -1000,6 +1032,8 @@ def unhold(ref):
     if "parked" not in tags:
         raise SystemExit(f"pl unhold: {head} is not held")
     update(c["id"], tags=[t for t in tags if t != "parked"], metadata=dict.fromkeys(HOLD_KEYS))
+    if trackers.dry_run():
+        return []
     events.emit("unheld", c["id"])
     return [f"unheld {head}: the dispatcher takes it again"]
 
@@ -1156,6 +1190,8 @@ def retry(ref, stage=None):
         if not w and meta.get("cap_stopped") and col_name(c["list_id"]) == "Manual" and not stage:
             back = meta.get("manual_from_column") or "Approved"
             update(c["id"], column=back, metadata=dict.fromkeys(("cap_stopped", "manual_from_column", "cap_note", "manual_reason", "worker")))
+            if trackers.dry_run():
+                continue
             out.append(f"{head}: stopped at a cap; back to {back}, the dispatcher starts the stage fresh")
             continue
         if not w or (stage and w.get("stage") != stage):
@@ -1167,6 +1203,8 @@ def retry(ref, stage=None):
                 out.append(f"{head}: its {w.get('stage')} agent is running; nothing reset")
             continue
         update(c["id"], metadata={"worker": None})
+        if trackers.dry_run():
+            continue
         out.append(f"{head}: reset the {w.get('stage')} agent ({int(w.get('attempts') or 0)} attempts); the dispatcher starts it fresh")
     return out or ["no card hit the attempt limit or is blocked"]
 
