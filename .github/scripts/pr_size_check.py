@@ -3,13 +3,17 @@
 Usage: pr_size_check.py BASE_REF
 Runs git diff --numstat BASE_REF...HEAD, prints ok or the reasons, and exits 1 when over a limit.
 Lines under tests/ do not count toward the line limit. Every file counts toward the file limit.
+Generated lockfiles (Cargo.lock, uv.lock, ...) count as files but not lines.
 A binary file counts as a file with no lines.
 """
+import re
 import subprocess
 import sys
 
 MAX_LINES = 300
 MAX_FILES = 10
+# same list as pl.merges.LOCKFILE
+LOCKFILE = re.compile(r"(^|/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|uv\.lock|poetry\.lock|go\.sum)$")
 
 
 def _git(args):
@@ -24,7 +28,7 @@ def check(numstat):
             continue
         added, deleted, name = row.split("\t", 2)
         files += 1
-        if name.startswith("tests/") or added == "-":
+        if name.startswith("tests/") or added == "-" or LOCKFILE.search(name):
             continue
         lines += int(added) + int(deleted)
     why = []

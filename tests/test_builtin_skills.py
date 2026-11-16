@@ -760,7 +760,7 @@ def test_pl_plan_splits_into_vertical_slices():
     for phrase in ("vertical", "60 lines", "Depends on"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 9" in text
+    assert "pl-builtin-version: 10" in text
 
 
 def test_pl_plan_stacks_slices_that_share_a_file():
@@ -864,8 +864,8 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v15_is_updated_to_v16(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 15, 16)
+def test_an_unedited_pl_run_v16_is_updated_to_v17(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 16, 17)
 
 
 def test_an_unedited_pl_review_v13_is_updated_to_v14(lib, shipped):
@@ -1042,8 +1042,20 @@ def test_pl_run_counts_each_slice_against_the_branch_below():
 
 def test_pl_run_stops_a_stack_on_an_oversized_slice():
     stacked = _stacked()
-    for words in ("Run notes", "pl section <id> INPUT", "Open no pull request", "do not move the card"):
+    for words in ('pl hold <id> --reason "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened"',
+                  "Open no pull request", "do not move the card", "last message"):
         assert words in stacked, words
+    for words in ("Run notes", "pl section <id> INPUT --from"):
+        assert words not in stacked, words
+
+
+def test_no_builtin_skill_writes_a_section_pl_section_refuses():
+    from pl import pipeline
+    for n in NAMES:
+        text = " ".join((skills.BUILTIN_DIR / n / "SKILL.md").read_text().split())
+        for name in re.findall(r'pl section <id> ("[^"]+"|\S+) --from', text):
+            name = name.strip('"')
+            assert name in pipeline.writable() or name == "<SECTION>", f"{n}: pl section <id> {name} --from"
 
 
 def test_pl_run_opens_each_slice_on_the_branch_below():
@@ -1079,3 +1091,32 @@ def test_run_and_review_skills_declare_manual_steps():
     for name in ("pl-run", "pl-review"):
         text = _shipped(name)
         assert "## Manual steps remaining" in text and "pl done" in text, name
+
+
+LOCKFILES = ("Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "go.sum")
+
+
+def test_pl_run_counts_lines_without_lockfiles():
+    text = _shipped("pl-run")
+    step = text.split("4. Count the change")[1].split("5. Push")[0]
+    bullet = text.split("- Build and count:")[1].split("- Over `max_lines`")[0]
+    for name in LOCKFILES:
+        assert name in step, name
+    assert "still count as files" in step
+    assert "outside lockfiles" in bullet
+    assert "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened" in text
+
+
+def test_pl_plan_estimates_lines_without_lockfiles():
+    text = _shipped("pl-plan")
+    step = text.split("3. Size the change")[1].split("4. Write the plan")[0]
+    for name in LOCKFILES:
+        assert name in text, name
+    assert "outside `tests/` and lockfiles" in step
+
+
+def test_pl_plan_puts_a_new_dependency_in_its_own_slice():
+    text = _shipped("pl-plan")
+    step = text.split("3. Size the change")[1].split("4. Write the plan")[0]
+    for phrase in ("new third-party dependency", "own slice", "ahead of the code that uses it"):
+        assert phrase in step, phrase

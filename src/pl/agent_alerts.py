@@ -5,7 +5,7 @@ import time
 
 from pl import agent_screen, agents, alerts, board, events, stuck_jobs
 from pl import config as C
-from pl.util import cmd_id, short_id
+from pl.util import cmd_id, mask, now_iso, short_id
 
 BLOCK_RE = re.compile(r"missing prerequisite|not (?:yet )?merged|needs? .* merged|depends on|prerequisite slice", re.I)
 CARD_RE = re.compile(r"[\w.-]+/[\w.-]+#\d+|[\w.-]+#\d+")
@@ -13,7 +13,10 @@ SLICE_RE = re.compile(r"slice (\d+)", re.I)
 WAIT_MINUTES = 30   # minutes an agent waits for a person before agent_waiting opens
 BLOCK_LINES = 8
 TITLE_WIDTH = 80
-NUDGE = "pl: this stage looks stalled. Finish it now, or write one line saying what blocks you."
+NUDGE = "pl: this stage looks stalled. Finish it now, or write one line starting 'Blocked:' saying what blocks you."
+BLOCKED_RE = re.compile(r"^[\s●⏺•*-]*blocked:\s*(\S.*)$", re.I)
+BLOCKED_LINES = 12
+BLOCKED_WIDTH = 200
 STALL_RETRIES = 2   # restarts of a stalled stage per card per day, then the alert only
 NUDGE_ECHO_SLACK = 60   # idle this close to the time since the nudge means only the nudge's own echo moved the pane
 KINDS = ("agent_waiting:", "agent_blocked_dep:")
@@ -126,6 +129,34 @@ def _excused(c, w, word):
     return gate or word in ("waiting for you", "finished")
 
 
+def blocked_reason(text):
+    """The masked reason (first line, at most BLOCKED_WIDTH characters) of the last "Blocked: ..." line among the
+    last BLOCKED_LINES lines of a screen, else None."""
+    lines = [agents.BOX_RE.sub(" ", ln).strip() for ln in agent_screen.plain(text or "").splitlines()]
+    tail = [ln for ln in lines if ln][-BLOCKED_LINES:]
+    hits = [m for ln in tail if (m := BLOCKED_RE.match(ln))]
+    return mask(hits[-1].group(1).strip())[:BLOCKED_WIDTH] if hits else None
+
+
+def _unblock(c, w):
+    _dispatch().update(c["id"], metadata={"worker": {k: v for k, v in w.items() if k not in ("blocked", "blocked_at")}})
+    events.emit("agent_unblocked", c["id"], stage=w.get("stage"))
+    for k in ("blocked", "blocked_at"):
+        w.pop(k, None)
+
+
+def _record_block(c, w, reason, rec):
+    d = _dispatch()
+    for k in ("nudged_at", "reported", "missing"):
+        rec.pop(k, None)
+    if w.get("blocked") == reason:
+        return
+    w["blocked"], w["blocked_at"] = reason, now_iso()
+    d.update(c["id"], metadata={"worker": w})
+    events.emit("agent_blocked", c["id"], stage=w.get("stage"))
+    d.notify(f"Blocked: {c['title'][:40]}", f"Card {short_id(c['id'])}: its {w.get('stage')} agent is blocked: {reason}")
+
+
 def stall(c, w, reg, st, seen):
     """Watch a live agent of the card's current stage that is idle. Past [dispatch] stall_minutes it gets one nudge;
     idle that long again after the nudge, it is stopped so its stage starts again (at most STALL_RETRIES a day).
@@ -154,8 +185,15 @@ def stall(c, w, reg, st, seen):
         rec.pop("nudged_at", None)
         rec.pop("reported", None)
         rec.pop("missing", None)
+        if w.get("blocked"):
+            _unblock(c, w)
         return False
-    word = agent_screen.read(w["pane"])[1]
+    text, word = agent_screen.read(w["pane"])[:2]
+    if reason := blocked_reason(text):
+        _record_block(c, w, reason, rec)
+        return False
+    if w.get("blocked"):
+        _unblock(c, w)
     missing = missing_section(c, w, word)
     if _excused(c, w, "" if missing else word) or (
             idle < limit and idle < now - rec.get("nudged_at", now) - NUDGE_ECHO_SLACK):
