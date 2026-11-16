@@ -5,7 +5,7 @@ import re
 import time
 from collections import defaultdict
 
-from pl import agent_screen, agents, alerts, board, events, inbox, schedule
+from pl import accounts, agent_screen, agents, alerts, board, events, inbox, schedule, usage
 from pl import config as C
 from pl.util import load_state, parse_iso, save_state, short_id
 
@@ -77,6 +77,57 @@ def classify(c, col, st, all_cards, kinds, reg):
     return "slow" if status == "alive" and changed else None
 
 
+def fix_accounts(now):
+    """Check each account whose park is past its reset time, even when its next_check says to wait."""
+    rows = []
+    for name in sorted(C.PROFILES):
+        until = accounts.parking(name).get("until")
+        if not (until and parse_iso(until) < now and accounts.checkable(name)):
+            continue
+        with accounts._check_lock(name) as mine:
+            if not mine:
+                continue
+            kind = accounts._check(name)
+        events.emit("steward", None, account=name, reason="dead", action="account check", result=kind, by="rule")
+        rows.append({"card": None, "subject": name, "column": "account", "reason": "dead", "action": f"account check: {kind}", "by": "rule"})
+    return rows
+
+
+def _loop_every(name, svc):
+    if name == "auto-merge":
+        return _minutes(C.AUTO_MERGE.get("every", "15m"), 15) * 60 if C.AUTO_MERGE.get("enabled") is True else None
+    if svc.get("enabled") is False:
+        return None
+    return usage.loop_every(svc.get("prompt")) or (_minutes(svc["every"], 0) * 60 if svc.get("every") else None)
+
+
+def _window_id(name):
+    from pl import dispatch
+    out = dispatch.tmux("list-windows", "-t", C.TMUX_SESSION, "-F", "#{window_id} #{window_name}", check=False) or ""
+    return next((wid for wid, _, wname in (l.partition(" ") for l in out.splitlines()) if wname == name), None)
+
+
+def fix_loops(st, now):
+    """Restart a loop with no run for 2 x its interval, once for each stale ran_at."""
+    from pl import dispatch
+    rows, done = [], st.setdefault("steward", {}).setdefault("loop_restarts", {})
+    for name, svc in {**C.SERVICES, "auto-merge": {}}.items():
+        s = (st.get("services") or {}).get(name) or {}
+        every, ran = _loop_every(name, svc), s.get("ran_at")
+        if not (every and ran and now - parse_iso(ran) > 2 * every) or done.get(name) == ran:
+            continue
+        done[name] = ran
+        if svc.get("every") or name == "auto-merge":
+            s["run_now"] = True
+            s.pop("next_at", None)
+        elif wid := _window_id(name):
+            dispatch.tmux("kill-window", "-t", wid, check=False)
+        why = f"no run for {int((now - parse_iso(ran)) // 3600)} h (every {every // 60} min)"
+        events.emit("steward", None, loop=name, reason="dead", action="restart", message=f"restarted loop {name}: {why}", by="rule")
+        rows.append({"card": None, "subject": name, "column": "loop", "reason": "dead", "action": "restart", "by": "rule"})
+    return rows
+
+
 def run_pass(all_cards, st, act=True, reg=None, now=None):
     from pl import dispatch
     now = time.time() if now is None else now
@@ -94,6 +145,7 @@ def run_pass(all_cards, st, act=True, reg=None, now=None):
         if reason and act:
             events.emit("steward", c["id"], reason=reason, action="none", by="rule")
     if act:
+        rows += fix_accounts(now) + fix_loops(st, now)
         st["steward"]["ran_at"] = now
     return rows
 
@@ -110,4 +162,4 @@ def cmd_steward(a):
         print(json.dumps({"rows": rows}))
         return
     for r in rows:
-        print(f"{short_id(r['card'])}  {r['column']:<16} {r['reason']:<14} {r['action']}")
+        print(f"{short_id(r['card']) if r['card'] else r['subject']}  {r['column']:<16} {r['reason']:<14} {r['action']}")
