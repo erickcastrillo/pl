@@ -37,10 +37,10 @@ def _card(col="In progress", **meta):
 
 @pytest.fixture
 def fake(monkeypatch):
-    ns = types.SimpleNamespace(started=[], stops=[], events=[], keys=[], notified=[], idle=21 * 60, word="", now=1_000_000.0)
+    ns = types.SimpleNamespace(started=[], stops=[], events=[], keys=[], notified=[], updates=[], idle=21 * 60, word="", now=1_000_000.0, screen="some screen")
     monkeypatch.setattr(agent_alerts, "time", types.SimpleNamespace(time=lambda: ns.now))
     monkeypatch.setattr(agents, "idle_seconds", lambda w, reg, st=None: ns.idle)
-    monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: ("some screen", ns.word, None))
+    monkeypatch.setattr(agent_screen, "read", lambda pane, lines=20: (ns.screen, ns.word, None))
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: None)
     monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: None)
     monkeypatch.setattr(dispatch, "registry", lambda: {"s1": {"status": "idle"}})
@@ -51,7 +51,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(dispatch, "pane_exists", lambda pane: False)
     monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: ns.keys.append(a) or "")
     monkeypatch.setattr(dispatch, "start_worker", lambda c, stage, attempts, dry: ns.started.append((c["id"], attempts)))
-    monkeypatch.setattr(dispatch, "update", lambda cid, **f: None)
+    monkeypatch.setattr(dispatch, "update", lambda cid, **f: ns.updates.append((cid, f)))
     for name in ("sweep_untracked", "ensure_services", "mirror_to_product", "screen_hit_limit"):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     monkeypatch.setattr(dispatch, "notify", lambda *a, **k: ns.notified.append(a))
@@ -289,3 +289,157 @@ def test_a_finished_run_agent_is_not_restarted(fake):
     fake.now += 60
     fake.run([_card()])
     assert not fake.stops and not fake.kinds("stalled")
+
+
+BLOCK = "● Blocked: slice 2 is 651 lines"
+
+
+def _blocked_card(reason="slice 2 is 651 lines", **w):
+    c = _card()
+    c["metadata"]["worker"].update(blocked=reason, **w)
+    return c
+
+
+def test_a_blocked_line_stops_the_nudge_and_restart(fake):
+    fake.screen = f"work\n{BLOCK}\n"
+    for _ in range(3):
+        fake.run([_card()])
+        fake.now += C.DISPATCH["stall_minutes"] * 60
+    assert fake.stops == [] and fake.started == [] and fake.nudges() == []
+    assert not (load_state().get("stall_retries") or {}).get(CID)
+    assert fake.updates[0][1]["metadata"]["worker"]["blocked"] == "slice 2 is 651 lines"
+
+
+def test_blocked_after_the_nudge_is_honoured(fake):
+    fake.run([_card()])
+    assert len(fake.nudges()) == 1
+    fake.screen = "blocked: need a person\n"
+    fake.now += C.DISPATCH["stall_minutes"] * 60
+    fake.run([_card()])
+    fake.run([_card()])
+    assert fake.stops == [] and len(fake.nudges()) == 1
+
+
+def test_the_block_reason_is_masked_first_line_and_capped():
+    secret = "ghp_" + "a" * 36
+    reason = agent_alerts.blocked_reason(f"Blocked: {secret} " + "x" * 300)
+    assert secret not in reason and len(reason) <= 200
+
+
+def test_a_block_notifies_once(fake):
+    fake.screen = BLOCK
+    fake.run([_card()])
+    for _ in range(2):
+        fake.run([_blocked_card()])
+    assert len([n for n in fake.notified if n[0].startswith("Blocked")]) == 1
+    assert fake.kinds("agent_blocked") and "slice 2" not in str(fake.kinds("agent_blocked"))
+
+
+def test_a_busy_agent_clears_its_block_and_gets_a_fresh_nudge(fake):
+    fake.screen = BLOCK
+    fake.run([_card()])
+    fake.idle = None
+    fake.run([_blocked_card()])
+    assert fake.kinds("agent_unblocked")
+    fake.idle, fake.screen = 21 * 60, "plain"
+    fake.run([_card()])
+    assert len(fake.nudges()) == 1
+
+
+def test_a_card_on_another_stage_loses_its_block(fake):
+    c = _blocked_card()
+    c["metadata"]["worker"]["stage"] = "plan"
+    fake.run([c])
+    assert any(f["metadata"]["worker"].get("blocked") is None for _, f in fake.updates)
+
+
+def test_no_blocked_line_restarts_as_today(fake):
+    fake.screen = f"pl: {agent_alerts.NUDGE}"
+    fake.run([_card()])
+    fake.now += C.DISPATCH["stall_minutes"] * 60
+    fake.run([_card()])
+    assert fake.stops == [("%1", "s1")]
+
+
+def test_the_nudge_echo_is_not_a_block():
+    assert agent_alerts.blocked_reason(agent_alerts.NUDGE) is None
+    assert agent_alerts.blocked_reason("> " + agent_alerts.NUDGE) is None
+
+
+def _blocked_alert(fake, col="Spec ready", stage="plan"):
+    c = _blocked_card()
+    c["list_id"] = col
+    c["metadata"]["worker"]["stage"] = stage
+    dispatch.check_stalled([c], {})
+    return c
+
+
+def test_a_blocked_card_alert_names_the_reason_and_the_fix(fake):
+    _blocked_alert(fake)
+    a = alerts.get(KEY)
+    assert a["title"] == "Card aaaa0001: its plan agent is blocked: slice 2 is 651 lines"
+    assert "pl retry" in a["fix"] and "pl drop" in a["fix"] and "watchdog nudges" not in a["fix"]
+    assert fake.notified == []
+
+
+def test_the_alert_closes_when_the_block_clears(fake):
+    _blocked_alert(fake)
+    assert _open()
+    dispatch.check_stalled([_card()], {})
+    assert not _open()
+
+
+def test_person_wait_reads_needs_you_with_the_reason_truncated():
+    c = _blocked_card("x" * 200)
+    out = agents.person_wait(c, "alive")
+    assert out.startswith("needs you: x") and out.endswith("…")
+    assert len(out) == len("waiting for you: ") + agents.WAIT_WIDTH
+    assert agents.person_wait(_blocked_card("short"), "alive") == "needs you: short"
+
+
+def test_inbox_lists_a_blocked_card_with_kind_and_reason(fake_home, monkeypatch, capsys):
+    from pl import inbox
+    c = _blocked_card(blocked_at="2026-11-11T00:00:00+00:00")
+    c["col"] = "In progress"
+    rows = inbox.rows_here([c])
+    assert [(r["kind"], r["reason"]) for r in rows] == [("blocked", "slice 2 is 651 lines")]
+    assert rows[0]["command"].endswith(f"retry {CID}")
+    monkeypatch.setattr(inbox, "cards", lambda: [c])
+    monkeypatch.setattr(inbox.profiles, "list_profiles", lambda check_lock=False: [])
+    inbox.cmd_inbox(types.SimpleNamespace(json=True))
+    assert '"kind": "blocked"' in capsys.readouterr().out
+    inbox.cmd_inbox(types.SimpleNamespace(json=False))
+    assert "blocked: slice 2 is 651 lines" in capsys.readouterr().out
+
+
+def _retry_env(monkeypatch, c, stopped):
+    from pl import commands
+    monkeypatch.setattr(commands, "fresh_next", lambda: None)
+    monkeypatch.setattr(commands, "cards", lambda: [c])
+    monkeypatch.setattr(commands, "registry", lambda: {})
+    monkeypatch.setattr(commands, "col_name", lambda lid: lid)
+    monkeypatch.setattr(commands, "worker_status", lambda w, reg: ("alive", "s1"))
+    monkeypatch.setattr(commands, "stop_worker", lambda c, w, **k: stopped.append(c["id"]))
+    return commands
+
+
+def test_retry_stops_a_blocked_live_agent(monkeypatch):
+    stopped = []
+    out = _retry_env(monkeypatch, _blocked_card(), stopped).retry(CID)
+    assert stopped == [CID] and "blocked" in out[0] and "fresh" in out[0]
+
+
+def test_retry_still_leaves_a_working_agent_alone(monkeypatch):
+    stopped = []
+    out = _retry_env(monkeypatch, _card(), stopped).retry(CID)
+    assert stopped == [] and "nothing reset" in out[0]
+
+
+def test_pl_card_prints_needs_you(monkeypatch, capsys):
+    from pl import commands
+    c = _blocked_card()
+    monkeypatch.setattr(commands, "find_card", lambda ref: c)
+    monkeypatch.setattr(commands, "col_name", lambda lid: lid)
+    monkeypatch.setattr(commands, "card_caps", lambda *a: {"caps": None})
+    commands.cmd_card(types.SimpleNamespace(id=CID, delete=False, json=False))
+    assert "needs you: slice 2 is 651 lines" in capsys.readouterr().out
