@@ -20,7 +20,7 @@ from pathlib import Path
 from pl import config as C
 from pl import accounts, agent_alerts, agent_defs, agent_screen, agents, alerts, backup, board, checkout_watch, ci_watch, context, events, ghquota, harnesses, heldwrites, hooks, inbox, jobs, local_jobs, loops, manager, memory, move_agent, notifications, outbox, pipeline, pods, pr_done, questions, recall, reconcile, rework, schedule, skills, slowwork, steward, summary, sync, trackers, usage, worktrees
 from pl.accounts import healthy_profile, mark_exhausted, screen_hit_limit
-from pl.agents import (GATE_RE, held_steps, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, registry,
+from pl.agents import (GATE_RE, held_steps, MAX_ATTEMPTS, RELEASE_KEYS, api_error_wait, death_line, dep_broken, deps_open, deps_waiting, hold_reason, pane_exists, permission_wait, question_wait, registry,
                        run_waiting, screen_quiet, slice_order, trust_wait, worker_status)
 from pl.board import card, cards, col_name, sections
 from pl.product import mirror_to_product, pull_new
@@ -1472,11 +1472,12 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 w = {**w, "trust_wait": trust} if trust else {k: v for k, v in w.items() if k != "trust_wait"}
                 update(c["id"], metadata={"worker": w})
             ask = None if trust else permission_wait(wh, w.get("pane")) or hooks.hook_permission(w)
-            if ask and w.get("window"):
+            q = None if trust or ask else question_wait(wh, w.get("pane"))
+            if (ask or q) and w.get("window"):
                 waiting.append(w["window"])
             word = agent_screen.read(w.get("pane"))[1] if w.get("pane") else ""
             detail = {"window": w.get("window"), "stage": w.get("stage")}
-            if trust or ask or word == "waiting for you":
+            if trust or ask or q or word == "waiting for you":
                 slow[f"prompt:{c['id']}"] = ("agent_waiting_prompt", c["id"], "prompt_minutes", detail)
             elif w.get("finished_turn") or word == "finished":
                 slow[f"finished:{c['id']}"] = ("finished_window_open", c["id"], "finished_minutes", detail)
@@ -1491,6 +1492,15 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                     events.emit("state_transition", c["id"], source="screen", transition="permission_wait")
                 w = {**w, "permission_wait": ask} if ask else {k: v for k, v in w.items() if k != "permission_wait"}
                 update(c["id"], metadata={"worker": w})
+            if q != w.get("question_wait"):
+                if q and not w.get("question_wait"):
+                    events.emit("state_transition", c["id"], source="screen", transition="question_wait")
+                if q:
+                    w = {**w, "question_wait": q, "question_since": w.get("question_since") or now_iso()}
+                else:
+                    w = {k: v for k, v in w.items() if k not in ("question_wait", "question_since")}
+                update(c["id"], metadata={"worker": w})
+                c["metadata"] = {**(c.get("metadata") or {}), "worker": w}
         if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
                 and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
                 and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh

@@ -1040,3 +1040,45 @@ def test_a_reniced_script_really_lowers_the_shell_and_its_children(tmp_path):
     path.write_text(harnesses._nice_line(10) + "\nexec sh -c 'ps -o ni= -p $$; sh -c \"ps -o ni= -p \\$\\$\"'\n")
     out = subprocess.run(["sh", str(path)], capture_output=True, text=True, check=True).stdout.split()
     assert len(out) == 2 and all(int(v) >= 10 for v in out)
+
+
+# ---------- question_patterns ----------
+
+def test_question_patterns_default_per_harness():
+    for name in ("claude", "codex", "antigravity"):
+        assert harnesses.question_patterns(harnesses.get(name))
+    assert harnesses.question_patterns(harnesses.Harness("nope", "nope")) == []
+
+
+def _question_config(tmp_path, monkeypatch, text):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PL_CONFIG_DIR", raising=False)
+    d = tmp_path / ".pl-q"
+    d.mkdir(exist_ok=True)
+    (d / "config.toml").write_text(text)
+    saved = {k: v for k, v in vars(C).items() if k.isupper()}
+    C.load("q")
+    harnesses._CACHE.clear()
+    return saved
+
+
+def test_question_patterns_override_from_profile(tmp_path, monkeypatch):
+    saved = _question_config(tmp_path, monkeypatch, '[harnesses.antigravity]\nquestion_patterns = ["Pick one"]\n')
+    try:
+        assert harnesses.question_patterns(harnesses.get("antigravity")) == ["Pick one"]
+    finally:
+        harnesses._CACHE.clear()
+        for k, v in saved.items():
+            setattr(C, k, v)
+
+
+@pytest.mark.parametrize("value", ['"x"', "[1]"])
+def test_question_patterns_not_a_list_of_strings_stops(tmp_path, monkeypatch, value):
+    saved = _question_config(tmp_path, monkeypatch, f"[harnesses.antigravity]\nquestion_patterns = {value}\n")
+    try:
+        with pytest.raises(SystemExit, match=r"\[harnesses.antigravity\] question_patterns must be a list of strings"):
+            harnesses.get("antigravity")
+    finally:
+        harnesses._CACHE.clear()
+        for k, v in saved.items():
+            setattr(C, k, v)

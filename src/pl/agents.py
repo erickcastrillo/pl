@@ -208,6 +208,8 @@ def person_wait(c, status):
         reason = f"trust {w['trust_wait']}"
     elif w.get("permission_wait"):
         reason = "permission" if w["permission_wait"] == "waiting: permission" else f"permission {w['permission_wait']}"
+    elif w.get("question_wait"):
+        reason = w["question_wait"]
     elif w.get("blocked"):
         reason, prefix = w["blocked"], "needs you: "
     elif w.get("run_waiting") and w.get("stage") == "run" and status == "alive":
@@ -306,6 +308,38 @@ def permission_wait(h, pane):
     return mask(" · ".join(near) or lines[at])[:120]
 
 
+QUESTION_OPTION_RE = re.compile(r"^\s*(?:[\u276f\u203a>\u25cb\u25cf\u25ef\u25c9]\s*)?\d[.)]\s+\S")
+
+
+def question_wait(h, pane):
+    """The question line of a multiple-choice question on the pane's screen, masked and short, once the pane has been
+    idle PERMISSION_IDLE seconds; else None. A permission prompt is permission_wait's, never a question. pl only
+    reads the screen: it never answers."""
+    pats = harnesses.question_patterns(h)
+    if not pats or not pane:
+        return None
+    lines = [BOX_RE.sub(" ", ln).strip() for ln in
+             (harnesses._run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-40"]).stdout or "").splitlines()]
+    lines = [ln for ln in lines if ln][-20:]
+    if any(re.search(p, ln, re.I) for ln in lines for p in harnesses.permission_patterns(h)):
+        return None
+    if not any(re.search(p, ln, re.I) for ln in lines for p in pats):
+        return None
+    options = [i for i, ln in enumerate(lines) if QUESTION_OPTION_RE.match(ln)]
+    if not options:
+        return None
+    first = options[-1]
+    while first - 1 in options:
+        first -= 1
+    question = next((ln for ln in reversed(lines[max(0, first - 4):first]) if ln.endswith("?")), None)
+    if question is None:
+        return None
+    act = (harnesses._run(["tmux", "display-message", "-p", "-t", pane, "#{window_activity}"]).stdout or "").strip()
+    if not act.isdigit() or time.time() - int(act) < PERMISSION_IDLE:
+        return None
+    return mask(question)[:120]
+
+
 def trust_wait(h, pane):
     """The folder a harness asks the person to trust on this pane's screen ("this folder" when the screen does not
     name it), else None. A first run in a new folder stops here, so the session never registers. pl only reads the
@@ -355,6 +389,8 @@ def worker_view(c, reg):
         return f"{w['stage']} agent waiting: trust the folder ({w.get('profile')})"
     if w.get("permission_wait"):   # set by the dispatcher while the agent sits at a permission prompt
         return f"{w['stage']} agent waiting for permission ({w.get('profile')})"
+    if w.get("question_wait"):   # set by the dispatcher while the agent sits at a question for a person
+        return person_wait(c, "alive")
     sid = w.get("session_id")
     rec = reg.get(sid)
     h = _harness(w)

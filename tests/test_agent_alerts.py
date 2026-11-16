@@ -390,3 +390,39 @@ def test_dispatch_pass_survives_a_failing_agent_check(monkeypatch, capsys):
         monkeypatch.setattr(dispatch, name, lambda *a, **k: None)
     dispatch.dispatch_once(1, False, pull=False)
     assert seen and any(k == "error" and "tmux hiccup" in d["message"] for k, d in events_seen)
+
+
+# ---------- a question on the agent's screen ----------
+
+QUESTION = "Slice 3 of 5 is 499 lines, over max_lines 300. How should this be handled?"
+
+
+def test_question_wait_opens_agent_waiting_with_question_after_limit(clock, sent, screen):
+    screen.update(text="", word="working", why="")
+    c = _card("o/r#7", worker=_worker(question_wait=QUESTION))
+    st = _pass([c])
+    assert _open_keys() == []
+    clock["now"] += 31 * MIN
+    _pass([c], st)
+    (a,) = alerts.listing()
+    assert a["key"] == "agent_waiting:o/r#7" and QUESTION[:40] in a["title"]
+    assert len(sent) == 1
+    clock["now"] += MIN
+    _pass([c], st)
+    assert len(sent) == 1
+
+
+def test_question_wait_alert_resolves_when_cleared(clock, sent, screen):
+    screen.update(text="", word="working", why="")
+    c = _card("o/r#7", worker=_worker(question_wait=QUESTION))
+    st = _pass([c])
+    clock["now"] += 31 * MIN
+    _pass([c], st)
+    assert _open_keys() == ["agent_waiting:o/r#7"]
+    _pass([_card("o/r#7", worker=_worker())], st)
+    assert _open_keys() == []
+
+
+def test_question_wait_is_excused_from_stall(screen):
+    screen.update(text="", word="working", why="")
+    assert agent_alerts._excused(_card("o/r#7"), _worker(question_wait=QUESTION), "working")

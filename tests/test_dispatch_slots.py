@@ -627,3 +627,50 @@ def test_the_gate_never_writes_or_repeats_claude_json(gate, monkeypatch, capsys)
     assert (f.read_bytes(), f.stat().st_mtime_ns) == before
     assert "marker-218" not in capsys.readouterr().out
     assert "marker-218" not in json.dumps(alerts.listing(all=True))
+
+
+# ---------- a question on the agent's screen ----------
+
+QUESTION = "Slice 3 of 5 is 499 lines, over max_lines 300. How should this be handled?"
+
+
+def _question_agent(monkeypatch, question, permission=None, **worker):
+    w = {"stage": "spec", "pane": "%1", "window": "@1", "session_id": "s", "profile": "claude", "harness": "claude",
+         "started_at": now_iso(), **worker}
+    monkeypatch.setattr(dispatch, "tmux", lambda *a, **k: None)
+    monkeypatch.setattr(dispatch, "notify", lambda t, m: None)
+    monkeypatch.setattr(dispatch, "worker_status", lambda w, reg: ("alive", w["session_id"]))
+    monkeypatch.setattr(dispatch, "screen_hit_limit", lambda pane, h=None: None)
+    monkeypatch.setattr(dispatch, "trust_wait", lambda h, pane: None)
+    monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: permission)
+    monkeypatch.setattr(dispatch, "question_wait", lambda h, pane: question)
+    return _card(1, profile="claude", worker=w)
+
+
+def test_question_on_screen_sets_question_wait_and_board_says_waiting_for_you(monkeypatch):
+    c = _question_agent(monkeypatch, QUESTION)
+    _, writes = _pass(monkeypatch, [c])
+    w = writes[-1][1]["metadata"]["worker"]
+    assert w["question_wait"] == QUESTION and w["question_since"]
+    monkeypatch.setattr(agents, "col_name", lambda lid: "Inbox")
+    c2 = {**c, "metadata": {**c["metadata"], "worker": w}}
+    assert agents.worker_view(c2, {}).startswith("waiting for you: Slice 3 of 5")
+    assert agents.person_wait(c2, "alive").startswith("waiting for you: Slice 3 of 5")
+
+
+def test_question_answered_clears_question_wait(monkeypatch):
+    c = _question_agent(monkeypatch, None, question_wait=QUESTION, question_since="2026-11-01T00:00:00+00:00")
+    _, writes = _pass(monkeypatch, [c])
+    w = writes[-1][1]["metadata"]["worker"]
+    assert "question_wait" not in w and "question_since" not in w
+    monkeypatch.setattr(agents, "col_name", lambda lid: "Inbox")
+    monkeypatch.setattr(agents, "pane_exists", lambda pane: True)
+    assert not agents.worker_view({**c, "metadata": {**c["metadata"], "worker": w}}, {}).startswith("waiting for you")
+
+
+def test_permission_prompt_wins_over_question(monkeypatch):
+    c = _question_agent(monkeypatch, QUESTION, permission="Bash(rm -rf build)")
+    _, writes = _pass(monkeypatch, [c])
+    w = writes[-1][1]["metadata"]["worker"]
+    assert w["permission_wait"] and "question_wait" not in w
+    assert alerts.get("permission_wait:o/r#1")
