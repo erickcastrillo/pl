@@ -1,7 +1,7 @@
 """The steward pass: when it runs, and the one reason it gives a stuck card."""
 import pytest
 
-from pl import agent_screen, alerts, dispatch, events, steward
+from pl import agent_screen, alerts, commands, dispatch, events, steward
 from pl import config as C
 
 NOW = 1_000_000.0
@@ -19,6 +19,7 @@ def profile(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
     monkeypatch.setattr(steward.inbox, "col_name", lambda lid: lid)
     monkeypatch.setattr(events, "_read", lambda: [])
+    monkeypatch.setattr(commands, "retry", lambda ref, stage=None: [])
     monkeypatch.setattr(alerts, "_clock", lambda: NOW)
     yield
     for k, v in saved.items():

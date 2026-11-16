@@ -108,3 +108,62 @@ def test_auto_merge_stale_gets_run_now(loops, emitted):
     st = _st("auto-merge", 3 * 3600)
     steward.fix_loops(st, NOW)
     assert st["services"]["auto-merge"]["run_now"] is True and "next_at" not in st["services"]["auto-merge"]
+
+
+from pl import agents, commands  # noqa: E402
+
+
+@pytest.fixture
+def acts(monkeypatch):
+    calls = []
+    monkeypatch.setattr(commands, "retry", lambda ref, stage=None: calls.append(("retry", ref)) or [])
+    monkeypatch.setattr(commands, "unhold", lambda ref: calls.append(("unhold", ref)) or [])
+    monkeypatch.setattr(commands, "update", lambda cid, **k: calls.append(("update", cid, k)))
+    monkeypatch.setattr(dispatch, "col_name", lambda lid: lid)
+    return calls
+
+
+def _dead(st, n=1, now=NOW):
+    return [steward.fix_dead({"id": "o/r#1"}, st, now + i) for i in range(n)]
+
+
+def test_dead_card_retried(acts):
+    assert _dead({}) == ["retry"] and acts == [("retry", "o/r#1")]
+
+
+def test_third_death_escalates_not_retries(acts):
+    assert _dead({}, 3) == ["retry", "retry", "needs you"] and len(acts) == 2
+
+
+def test_retry_count_resets_after_a_day(acts):
+    st = {}
+    _dead(st, 2)
+    assert steward.fix_dead({"id": "o/r#1"}, st, NOW + 86401 + 2) == "retry"
+
+
+def _held(reason="waiting on o/r#9", deps=("o/r#9",)):
+    return {"id": "o/r#1", "tags": ["parked"], "list_id": "Approved",
+            "metadata": {"depends_on": list(deps), "hold_reason": reason}}
+
+
+def test_held_card_with_merged_deps_unheld(acts, monkeypatch):
+    monkeypatch.setattr(agents, "deps_open", lambda c, cs: [])
+    assert steward.fix_held(_held(), []) == "unhold" and acts == [("unhold", "o/r#1")]
+
+
+def test_held_card_with_open_dep_kept(acts, monkeypatch):
+    monkeypatch.setattr(agents, "deps_open", lambda c, cs: ["o/r#9"])
+    assert steward.fix_held(_held(), [{"id": "o/r#9", "list_id": "In progress"}]) is None and acts == []
+
+
+def test_stale_hold_reason_replaced_and_logged(acts, monkeypatch, emitted):
+    monkeypatch.setattr(agents, "deps_open", lambda c, cs: ["o/r#8"])
+    others = [{"id": "o/r#9", "list_id": "Done"}, {"id": "o/r#8", "list_id": "In progress"}]
+    assert steward.fix_held(_held(deps=("o/r#9", "o/r#8")), others) == "refresh reason"
+    assert acts == [("update", "o/r#1", {"metadata": {"hold_reason": "waiting on r#8"}})]
+    assert emitted[-1][2]["old_reason"] == "waiting on o/r#9" and emitted[-1][2]["new_reason"] == "waiting on r#8"
+
+
+def test_held_card_without_deps_left_alone(acts, monkeypatch):
+    monkeypatch.setattr(agents, "deps_open", lambda c, cs: [])
+    assert steward.fix_held(_held(deps=()), []) is None and acts == []
