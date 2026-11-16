@@ -5,7 +5,7 @@ import re
 import time
 from collections import defaultdict
 
-from pl import accounts, agent_screen, agents, alerts, board, events, inbox, schedule, usage
+from pl import accounts, local_jobs, notifications, agent_screen, agents, alerts, board, events, inbox, usage
 from pl import config as C
 from pl.agent_alerts import CARD_RE
 from pl.util import load_state, parse_iso, save_state, short_id
@@ -20,8 +20,9 @@ BLOCKED_ALERTS = ("agent_blocked_dep", "dep_broken")
 
 
 def _minutes(text, default):
-    spec = schedule.parse_every(text)
-    return spec.get("minutes", default) if isinstance(spec, dict) else default
+    """Minutes in a "30m", "4h" or "1d" setting, else default."""
+    m = re.fullmatch(r"\s*(\d+)\s*([mhd])\s*", str(text))
+    return int(m[1]) * {"m": 1, "h": 60, "d": 1440}[m[2]] if m else default
 
 
 def due(st, now):
@@ -56,26 +57,35 @@ def _screen_hash(text):
 
 
 def classify(c, col, st, all_cards, kinds, reg):
-    """waiting_owner, blocked, dead or slow, else None (the rules cannot settle it)."""
+    """(reason, line): the reason is waiting_owner, blocked, dead or slow, else None (the rules cannot settle it);
+    the line is a fixed phrase for the inbox, never card or screen text."""
     from pl import dispatch
     m = c.get("metadata") or {}
-    if inbox.gate_of(c, col):
-        return "waiting_owner"
-    if kinds.intersection(WAITING_ALERTS) or m.get("question"):
-        return "waiting_owner"
+    if gate := inbox.gate_of(c, col):
+        return "waiting_owner", f"{gate} waiting for approval"
+    if m.get("question"):
+        return "waiting_owner", "question on the agent screen"
+    if "pr_person" in kinds:
+        return "waiting_owner", "PR needs a person"
+    if kinds.intersection(WAITING_ALERTS):
+        return "waiting_owner", "agent is waiting for an answer"
     w = m.get("worker") or {}
     text = agent_screen.read(w["pane"])[0] if w.get("pane") else None
-    if kinds.intersection(BLOCKED_ALERTS) or agents.deps_open(c, all_cards) or (text and SIZE_RE.search(text)):
-        return "blocked"
+    if text and SIZE_RE.search(text):
+        return "blocked", "size limit (max_lines)"
+    if unmet := agents.deps_open(c, all_cards):
+        return "blocked", f"unmerged dependency {', '.join(short_id(x) for x in unmet)}"
+    if kinds.intersection(BLOCKED_ALERTS):
+        return "blocked", "unmerged dependency"
     status = dispatch.worker_status(w, reg)[0] if w else None
     if "stage_failed" in kinds or (w and status not in ("alive", "starting")):
-        return "dead"
+        return "dead", "agent died"
     seen = st["steward"].setdefault("screens", {})
     digest = _screen_hash(text) if text else None
     changed = digest is not None and seen.get(c["id"]) not in (None, digest)
     if digest:
         seen[c["id"]] = digest
-    return "slow" if status == "alive" and changed else None
+    return ("slow", "agent is still working") if status == "alive" and changed else (None, None)
 
 
 def fix_accounts(now):
@@ -163,6 +173,84 @@ def fix_held(c, all_cards):
     return "refresh reason"
 
 
+REUSED_ALERTS = ("agent_waiting", "agent_blocked_dep", "pr_person", "pr_waiting", "stalled", "stage_failed")
+ESCALATE = ("waiting_owner", "blocked", "dead")
+
+
+def _existing_alert(card):
+    for a in alerts.listing():
+        kind = a["key"].partition(":")[0]
+        if kind in REUSED_ALERTS and card in a.get("cards", []):
+            return a["key"]
+    return None
+
+
+def items_update(rows, st, now):
+    """One needs-you item and one alert for each card and reason no fix settled; cleared when the card or reason changes."""
+    items = st.setdefault("steward", {}).setdefault("items", {})
+    current = {r["card"]: r for r in rows if r.get("card") and r["reason"] in ESCALATE and r["action"] in ("none", "needs you")}
+    for cid in [k for k, it in items.items() if k not in current or (it["reason"], it["column"]) != (current[k]["reason"], current[k]["column"])]:
+        del items[cid]
+    for cid, r in current.items():
+        if cid in items:
+            continue
+        head, key = short_id(cid), f"steward:{cid}:{r['reason']}"
+        item = {"reason": r["reason"], "line": r["line"], "column": r["column"], "opened_at": now, "pushed": False, "notified": False}
+        if other := _existing_alert(cid):
+            item["attached_to"] = other
+            with alerts._locked() as d:
+                d[other]["tried"] = f"steward: {r['reason']}"
+        else:
+            alerts.open(key, "warn", f"Card {head}: {r['line']}", f"pl card {head} shows where it stands", cards=[cid])
+        items[cid] = item
+    own = {f"steward:{cid}:{it['reason']}" for cid, it in items.items() if "attached_to" not in it}
+    alerts.sweep("steward:", own, lambda title, fix: None)
+
+
+def _past(now_local, hhmm):
+    hour, _, minute = hhmm.partition(":")
+    return (now_local.hour, now_local.minute) >= (int(hour), int(minute or 0))
+
+
+def notify_items(st, now):
+    """One notification for each new item, one digest a day after digest_at, one push once an item is old."""
+    from pl import dispatch
+    state = st.setdefault("steward", {})
+    items = state.setdefault("items", {})
+    for cid, it in items.items():
+        if not it["notified"]:
+            notifications.send("alert_opened", f"needs you: {short_id(cid)}", it["line"])
+            it["notified"] = True
+        elif not it["pushed"] and now - it["opened_at"] > _minutes(C.STEWARD["push_after"], 240) * 60:
+            notifications.send("alert_opened", f"still needs you: {short_id(cid)}", it["line"])
+            it["pushed"] = True
+    today = dispatch._local_now()
+    if items and state.get("digest_on") != today.date().isoformat() and _past(today, C.STEWARD["digest_at"]):
+        notifications.send("alert_opened", f"{len(items)} cards need you", "\n".join(f"{short_id(c)}: {it['line']}" for c, it in items.items()))
+        state["digest_on"] = today.date().isoformat()
+
+
+REASONS = ("waiting_owner", "blocked", "dead", "slow")
+ACTIONS = ("none", "retry", "unhold", "needs_you")
+
+
+def classify_by_model(c, col, minutes, kinds, status):
+    """(reason, action) from the steward_classify job, or the "unclear" escalation when it gives no valid answer.
+    The prompt holds only facts the rules already computed, never card or screen text."""
+    facts = f"column: {col}\nminutes stuck: {minutes}\nworker: {status}\nopen alerts: {', '.join(sorted(kinds)) or 'none'}"
+    value, _ = local_jobs.run("steward_classify", facts)
+    reason, _, action = (value or "").partition("/")
+    return (reason, action) if reason in REASONS and action in ACTIONS else ("waiting_owner", "needs_you")
+
+
+def _apply_model_action(c, action, st, now, all_cards):
+    if action == "retry":
+        return fix_dead(c, st, now)
+    if action == "unhold":
+        return fix_held(c, all_cards) or "needs you"
+    return "needs you" if action == "needs_you" else "none"
+
+
 def run_pass(all_cards, st, act=True, reg=None, now=None):
     from pl import dispatch
     now = time.time() if now is None else now
@@ -178,13 +266,25 @@ def run_pass(all_cards, st, act=True, reg=None, now=None):
             continue
         if now - stuck_since(c, col, evs) < threshold(col):
             continue
-        reason = classify(c, col, st, all_cards, kinds[c["id"]], reg)
-        action = fix_dead(c, st, now) if reason == "dead" and act else "none"
-        rows.append({"card": c["id"], "column": col, "reason": reason or "unsettled", "action": action, "by": "rule"})
+        reason, line = classify(c, col, st, all_cards, kinds[c["id"]], reg)
+        by = "rule"
+        if reason is None:
+            w = (c.get("metadata") or {}).get("worker")
+            status = dispatch.worker_status(w, reg)[0] if w else "none"
+            reason, choice = classify_by_model(c, col, int((now - stuck_since(c, col, evs)) // 60), kinds[c["id"]], status)
+            by, line = "model", "unclear" if (reason, choice) == ("waiting_owner", "needs_you") else f"model: {reason}"
+            action = _apply_model_action(c, choice, st, now, all_cards) if act else "none"
+        else:
+            action = fix_dead(c, st, now) if reason == "dead" and act else "none"
+        if reason == "dead" and action == "needs you":
+            line = f"agent died, retried {C.STEWARD['retries']} times today"
+        rows.append({"card": c["id"], "column": col, "reason": reason or "unsettled", "line": line or "unclear", "action": action, "by": by})
         if reason and act:
-            events.emit("steward", c["id"], reason=reason, action=action, by="rule")
+            events.emit("steward", c["id"], reason=reason, action=action, by=by)
     if act:
         rows += fix_accounts(now) + fix_loops(st, now)
+        items_update(rows, st, now)
+        notify_items(st, now)
         st["steward"]["ran_at"] = now
     return rows
 

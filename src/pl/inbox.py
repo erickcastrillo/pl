@@ -8,7 +8,7 @@ from pathlib import Path
 from pl import config as C
 from pl import board, events, manager, profiles
 from pl.board import cards, col_name
-from pl.util import card_url, cmd_id, mask, parse_iso, short_id
+from pl.util import card_url, cmd_id, load_state, mask, parse_iso, short_id
 
 
 def gate_of(c, col=None):
@@ -54,6 +54,18 @@ def _question_row(c, w, prof, now):
         "window": window,
         "command": f"tmux select-window -t {shlex.quote(f'{C.TMUX_SESSION}:{window}')}",
     }
+
+
+def steward_items():
+    """The steward's open needs-you items for this profile: {card id: item}."""
+    return (load_state().get("steward") or {}).get("items") or {}
+
+
+def _steward_rows(prof):
+    return [{"pipeline": prof, "card": cid, "gate": "needs you", "summary": it["line"],
+             "since": datetime.fromtimestamp(it["opened_at"], timezone.utc).isoformat(timespec="seconds"),
+             "age_seconds": max(0, int(time.time() - it["opened_at"])), "url": "", "command": f"pl card {cmd_id(cid)}"}
+            for cid, it in steward_items().items()]
 
 
 def rows_here(cs):
@@ -109,7 +121,7 @@ def rows_here(cs):
             "url": url,
             "command": cmd,
         })
-    return rows
+    return rows + _steward_rows(prof)
 
 
 def write(rows):
@@ -169,5 +181,8 @@ def cmd_inbox(a):
         return
     for r in items:
         stale = " (stale)" if r.get("stale") else ""
+        if r["gate"] == "needs you":
+            print(f"needs you: {short_id(r['card'])} {r['summary']}{stale}")
+            continue
         print(f"{r['pipeline']:<12} {short_id(r['card']):<16} {r['gate']:<8} {r['summary']:<40} {r['command']}{stale}"
               + (f"  blocked: {r['reason']}" if r.get("reason") else ""))

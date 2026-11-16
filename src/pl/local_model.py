@@ -16,7 +16,7 @@ from pl import jsonout
 
 DEFAULTS = {"enabled": False, "url": "http://localhost:11434", "model": "gemma4", "timeout": 30}
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
-JOBS = ("route", "summarise", "title", "embed")
+JOBS = ("route", "summarise", "title", "embed", "steward_classify")
 JOB_DEFAULTS = {"timeout": 30, "allow_lan": False, "route_min_confidence": 0.7}
 FALLBACK_DEFAULTS = {"route": "person", "summarise": "skip", "title": "skip", "embed": "skip"}
 PRIVATE_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10")]

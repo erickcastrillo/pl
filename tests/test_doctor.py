@@ -246,7 +246,7 @@ def test_doctor_lists_watchdog_alerts_under_needs_you(capsys, tmp_path, monkeypa
     _open_each_kind(tmp_path, monkeypatch)
     _, out = run(capsys)
     section = out.split("Needs you", 1)[1]
-    assert len(section.strip().splitlines()) == 5
+    assert len(section.strip().splitlines()) == len(__import__("pl.alerts", fromlist=["x"]).WATCHDOG)
     assert "r#1  stalled  0m  nothing yet" in section and "queued, replay failed" in section
 
 
@@ -271,7 +271,7 @@ def test_doctor_json_has_needs_you_and_unchanged_checks(capsys, tmp_path, monkey
     _, after = run(capsys, json=True)
     got = json.loads(after)
     assert got["checks"] == json.loads(before)["checks"] and json.loads(before)["needs_you"] == []
-    assert len(got["needs_you"]) == 5
+    assert len(got["needs_you"]) == len(__import__("pl.alerts", fromlist=["x"]).WATCHDOG)
     assert set(got["needs_you"][0]) == {"card", "kind", "opened_at", "age_seconds", "tried", "acked"}
 
 
