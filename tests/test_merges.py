@@ -1015,3 +1015,35 @@ def test_all_slices_merged_finishes_as_before(passing, monkeypatch):
     monkeypatch.setattr(merges.slices, "view", lambda c: _view("merged", "merged"))
     merges.run_pass(passing.cards, dry=False)
     assert passing.cards[0]["list_id"] == "Done"
+
+
+LOCKFILE_NAMES = ["Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "go.sum"]
+
+
+def test_lockfile_lines_do_not_count_toward_size(host):
+    files = (("src/x.py", 140, 0), ("uv.lock", 180, 0)) + tuple((f"src/f{i}.py", 0, 0) for i in range(3))
+    card, _ = _add(host, _card("c1"), _pr(1, files=files))
+    rules, _ = _rules(host, card)
+    assert rules["size"]["ok"] is True
+    assert rules["size"]["why"] == "140 lines outside tests (limit 150), 5 files (limit 6)"
+
+
+@pytest.mark.parametrize("name", LOCKFILE_NAMES)
+def test_lockfiles_in_subfolders_are_left_out(host, name):
+    card, _ = _add(host, _card("c1"), _pr(1, files=(("src/x.py", 10, 0), (f"web/{name}", 500, 0))))
+    rules, _ = _rules(host, card)
+    assert rules["size"]["ok"] is True and "10 lines" in rules["size"]["why"]
+
+
+def test_lockfile_still_counts_as_a_file(host):
+    files = tuple((f"src/f{i}.py", 1, 0) for i in range(6)) + (("Cargo.lock", 50, 0),)
+    card, _ = _add(host, _card("c1"), _pr(1, files=files))
+    rules, _ = _rules(host, card)
+    assert rules["size"]["ok"] is False and "7 files (limit 6)" in rules["size"]["why"]
+
+
+@pytest.mark.parametrize("path", ["src/Cargo.lock.rs", "docs/yarn.lock.md", "Cargo.lock.bak"])
+def test_a_name_that_only_looks_like_a_lockfile_counts(host, path):
+    card, _ = _add(host, _card("c1"), _pr(1, files=((path, 200, 0),)))
+    rules, _ = _rules(host, card)
+    assert rules["size"]["ok"] is False

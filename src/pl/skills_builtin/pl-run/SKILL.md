@@ -1,7 +1,7 @@
 ---
 name: pl-run
 description: Build a pl card's approved PLAN in its own git worktree, one work package at a time with tests first, then open a pull request with the profile's review label and move the card to PR open. Use as the run stage of the pl pipeline, with the card id as the argument.
-pl-builtin-version: 16
+pl-builtin-version: 17
 ---
 
 # pl-run: build the approved plan for one card
@@ -53,7 +53,7 @@ You are the run stage of a pl pipeline. A person approved this plan. Nobody is w
       one run at a time, in the foreground under `timeout 1200`, inside the card's own worktree, never in the main checkout; then run the project's lint command and read both results before going on.
    4. Check `git diff --stat` against the plan's "Minimum change" budget (remove code if over), then commit with a message naming the work package.
 
-4. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file):
+4. Count the change the way CI does (lines: added plus deleted outside `tests/`; files: every changed file). Leave out the lines of generated lockfiles, matched by file name in any folder: `Cargo.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `go.sum`. They still count as files. A file that only starts with such a name (for example `Cargo.lock.rs`) counts as usual:
 
    ```
    git diff --numstat origin/<default branch>...HEAD
@@ -97,8 +97,8 @@ Only when the PLAN has a `## Slices` section whose slices are headed `### Slice 
 
 - Resume: run `pl slices <id>` first. Do not rebuild or reopen a slice it shows as merged or open. Start at the lowest slice with no pull request or closed unmerged. Its previous branch is slice k-1's branch when that is open, and `origin/<default branch>` when it is merged.
 - Branches: build every slice in the worktree pl started you in (steps 1 and 2 as usual), never a new worktree. Slice 1 is built on the card's branch `pl/<short-name>`. Slice k (k > 1) is built on a new branch `pl/<short-name>-s<k>`, made with `git switch -c pl/<short-name>-s<k>` from slice k-1's branch once slice k-1 is pushed.
-- Build and count: for each slice in order, build its work packages as step 3 says. Count slice k with `git diff --numstat <previous branch>...HEAD` and `git diff --name-only <previous branch>...HEAD`, where the previous branch is slice k-1's branch, and `origin/<default branch>` for slice 1. Add added plus deleted lines outside `tests/` and compare the total with `max_lines`.
-- Over `max_lines`: stop. Open no pull request for slice k or any slice above it, and do not move the card. Write "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened" as one note under a "Run notes" heading in the card's INPUT (`pl section <id> INPUT` to read it, `pl section <id> INPUT --from <file>` to write it back whole), and make the same text your last message. Pull requests already open for lower slices stay open.
+- Build and count: for each slice in order, build its work packages as step 3 says. Count slice k with `git diff --numstat <previous branch>...HEAD` and `git diff --name-only <previous branch>...HEAD`, where the previous branch is slice k-1's branch, and `origin/<default branch>` for slice 1. Add added plus deleted lines outside `tests/` and outside lockfiles (step 4) and compare the total with `max_lines`.
+- Over `max_lines`: stop. Open no pull request for slice k or any slice above it, and do not move the card. Hold the card with the reason: `pl hold <id> --reason "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened"`, and make the same text your last message. Pull requests already open for lower slices stay open.
 - Open: `git push -u origin HEAD`, then `gh pr create --base <previous branch> --title "<card title> (slice k of n)" --body-file <file> --assignee @me --label <review label>`, with `--base <default branch>` for slice 1 and the label as in step 5. Record it with `pl move <id> "In progress" --pr <pull request URL>`.
 - Body: as step 5, plus a first line "slice k of n" and a link to the pull request below it (none for slice 1). Once slice k+1 is open, edit slice k's body to add the link to the pull request above it (`gh pr edit <number> --body-file <file>`).
 - Finish: after the last slice's pull request is open, run `pl move <id> "PR open" --pr <last pull request URL>` once, and not before. Then stop.

@@ -149,6 +149,31 @@ def test_hold_adds_the_parked_tag_keeps_the_others_and_records_why(board):
         commands.hold(A_ID[:8])
 
 
+SLICE_REASON = "Slice 2 of 3 is 640 lines, over max_lines 400; not opened"
+
+
+def test_pl_hold_with_a_slice_reason_tags_parked_and_records_it(board):
+    board.items[A_ID] = mk("In progress")
+    assert "held" in run_cli(commands.cmd_hold, id=A_ID[:8], reason=SLICE_REASON)
+    c = board.items[A_ID]
+    assert "parked" in c["tags"] and c["metadata"]["hold_reason"] == SLICE_REASON
+
+
+def test_a_held_run_card_with_a_live_waiting_agent_shows_the_hold_reason(board):
+    w = {**W, "stage": "run", "finished_turn": True}
+    c = mk("In progress", tags=("parked",), hold_reason=SLICE_REASON, worker=w)
+    view = agents.worker_view(c, {})
+    assert view.startswith("held: Slice 2 of 3 is 640 lines, over max_lines 400")
+    assert "waiting (finished turn)" not in view and "agent alive" not in view
+
+
+def test_unhold_clears_the_slice_reason(board):
+    board.items[A_ID] = mk("In progress", tags=("parked",), hold_reason=SLICE_REASON, held_at="t", held_by="me")
+    commands.unhold(A_ID[:8])
+    c = board.items[A_ID]
+    assert "parked" not in c["tags"] and c["metadata"]["hold_reason"] is None
+
+
 def test_unhold_removes_only_the_parked_tag(board):
     board.items[A_ID] = mk("Approved", tags=("api", "parked"), hold_reason="x", held_at="t", held_by="me")
     lines = commands.unhold(A_ID[:8])

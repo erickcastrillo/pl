@@ -198,6 +198,7 @@ def person_wait(c, status):
     (no tmux call): an open question, then a trust prompt, a permission prompt, a run agent at a GATE."""
     m = c.get("metadata") or {}
     w = m.get("worker") or {}
+    prefix = "waiting for you: "
     if worktree_failed(c):
         return WORKTREE_FAILED
     if m.get("question"):
@@ -209,11 +210,13 @@ def person_wait(c, status):
         reason = "permission" if w["permission_wait"] == "waiting: permission" else f"permission {w['permission_wait']}"
     elif w.get("question_wait"):
         reason = w["question_wait"]
+    elif w.get("blocked"):
+        reason, prefix = w["blocked"], "needs you: "
     elif w.get("run_waiting") and w.get("stage") == "run" and status == "alive":
         reason = w["run_waiting"]
     else:
         return None
-    text = "waiting for you: " + mask(str(reason).splitlines()[0] if str(reason).strip() else "open question")
+    text = prefix + mask(str(reason).splitlines()[0] if str(reason).strip() else "open question")
     limit = len("waiting for you: ") + WAIT_WIDTH
     return text if len(text) <= limit else text[:limit - 1] + "…"
 

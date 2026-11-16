@@ -183,15 +183,19 @@ async def test_item_6_dirty_main_checkout_alert_in_console(console, tmp_path, mo
 
 
 def test_item_14_unsent_prompt_text_is_sent_or_shown(profile, monkeypatch):
-    keys = []
+    keys, box = [], ["half-typed note"]
 
     def tmux(*argv, check=True, **kw):
         if argv[0] == "capture-pane":
-            return "❯ half-typed note\n"
+            return f"❯ {box[0]}\n"
+        if "C-u" in argv:
+            box[0] = ""
         keys.append(argv)
         return ""
 
     monkeypatch.setattr(dispatch, "tmux", tmux)
+    monkeypatch.setattr(dispatch, "TYPE_SETTLE", 0)
+    dispatch._SENT.clear()
     seen = []
     monkeypatch.setattr(events, "emit", lambda kind, *a, **k: seen.append((kind, a, k)))
     c = _card("In progress", "rework card", rework={"active": True, "round": 1},

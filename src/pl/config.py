@@ -83,6 +83,8 @@ def _defaults():
                 "stall_minutes": 20, "rework_rounds": 3, "hooks": True, "deps_gate": "run", **MEMORY_DEFAULTS}
     # [watchdog] job_minutes: a background job of a stage agent running longer is "overrun" (0 is off)
     WATCHDOG = {"job_minutes": 45}
+    # [steward] every: how often the steward looks for stuck cards; thresholds: {"<column>": "<n>m"} overrides a column's wait
+    STEWARD = {"enabled": True, "every": "30m", "retries": 2, "digest_at": "09:00", "push_after": "4h", "cloud_fallback": False, "thresholds": {}}
     GATES = {"spec": False}
     # [notify] events: the moments pl tells the owner about (desktop attention_cmd and chat connectors routed for alerts)
     NOTIFY = {"events": list(NOTIFY_EVENTS)}
@@ -231,6 +233,7 @@ def _apply(g, t):
         g["GH_CONFIG_DIR"] = (g["CONFIG_DIR"] or Path()) / x(ch["gh_config_dir"])
     g["DISPATCH"] = {**g["DISPATCH"], **t.get("dispatch", {})}
     g["WATCHDOG"] = {**g["WATCHDOG"], **t.get("watchdog", {})}
+    g["STEWARD"] = {**g["STEWARD"], **t.get("steward", {})}
     g["GATES"] = {**g["GATES"], **t.get("gates", {})}
     g["NOTIFY"] = {**g["NOTIFY"], **t.get("notify", {})}
     from pl import pipeline

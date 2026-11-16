@@ -75,7 +75,8 @@ def rows_here(cs):
         if m.get("pipeline_mode") == "auto" and w.get("question_wait"):
             rows.append(_question_row(c, w, prof, now))
             continue
-        gate = gate_of(c, col)
+        blocked = w.get("blocked") if m.get("pipeline_mode") == "auto" else None
+        gate = gate_of(c, col) or ("blocked" if blocked else None)
         if not gate:
             continue
         card_events = [e for e in evs if e.get("kind") == "moved" and e.get("card") == cid and e.get("to") == col]
@@ -84,6 +85,8 @@ def rows_here(cs):
             since = newest.get("ts") or ""
         else:
             since = c.get("updated_at") or ""
+        if gate == "blocked":
+            since = (m.get("worker") or {}).get("blocked_at") or since
         since_ts = parse_iso(since) if since else 0
         age_seconds = max(0, int(now - since_ts)) if since_ts else 0
         summary = (c.get("title") or "")[:80]
@@ -92,11 +95,14 @@ def rows_here(cs):
         except (Exception, SystemExit):
             url = ""
         c_hint = cmd_id(cid)
-        cmd = f"pl --profile {prof} approve {c_hint}" if prof else f"pl approve {c_hint}"
+        verb = "retry" if gate == "blocked" else "approve"
+        cmd = f"pl --profile {prof} {verb} {c_hint}" if prof else f"pl {verb} {c_hint}"
         rows.append({
             "pipeline": prof,
             "card": cid,
             "gate": gate,
+            "kind": gate,
+            "reason": mask(blocked) if gate == "blocked" else None,
             "summary": summary,
             "since": since,
             "age_seconds": age_seconds,
@@ -163,4 +169,5 @@ def cmd_inbox(a):
         return
     for r in items:
         stale = " (stale)" if r.get("stale") else ""
-        print(f"{r['pipeline']:<12} {short_id(r['card']):<16} {r['gate']:<8} {r['summary']:<40} {r['command']}{stale}")
+        print(f"{r['pipeline']:<12} {short_id(r['card']):<16} {r['gate']:<8} {r['summary']:<40} {r['command']}{stale}"
+              + (f"  blocked: {r['reason']}" if r.get("reason") else ""))

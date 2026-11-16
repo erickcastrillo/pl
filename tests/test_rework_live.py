@@ -44,11 +44,18 @@ def _iso(t):
 
 @pytest.fixture
 def fake(monkeypatch):
+    monkeypatch.setattr(dispatch, "TYPE_SETTLE", 0)
+    dispatch._SENT.clear()
     ns = types.SimpleNamespace(started=[], writes=[], stops=[], events=[], tmux=[], screen="", waiting="waiting (finished turn)",
-                               reg={"s1": {"status": "idle"}}, ask=None, trust=None, locked=False)
+                               reg={"s1": {"status": "idle"}}, swallow=False, ask=None, trust=None, locked=False)
 
     def tmux(*a, **k):
         ns.tmux.append(a)
+        if a[0] == "send-keys":
+            if "C-u" in a or ("Enter" in a and not ns.swallow):
+                ns.screen = "│ > │"
+            elif "-l" in a:
+                ns.screen = f"│ ❯ {a[-1]} │"
         return ns.screen if a[0] == "capture-pane" else ""
     monkeypatch.setattr(dispatch, "tmux", tmux)
     monkeypatch.setattr(dispatch, "permission_wait", lambda h, pane: ns.ask)
@@ -134,14 +141,15 @@ def test_unsent_text_in_the_prompt_box_is_cleared_first(fake):
     fake.screen = "│ > half typed │"
     fake.run([_card(dict(RUN_W))])
     sends = [a for a in fake.tmux if a[0] == "send-keys"]
-    assert sends[0][-1] == "C-u" and "-l" in sends[1] and sends[2][-1] == "Enter"
+    flat = [a[-1] if "-l" not in a else "-l" for a in sends]
+    assert flat[:3] == ["C-e", "C-u", "BSpace"] and flat[-2:] == ["-l", "Enter"]
     assert [d["cleared"] for k, _, d in fake.events if k == "rework_sent"] == [True]
 
 
-def test_an_empty_prompt_box_is_still_cleared_but_not_reported(fake):
+def test_an_empty_prompt_box_is_not_reported(fake):
     fake.screen = "│ > │"
     fake.run([_card(dict(RUN_W))])
-    assert [a for a in fake.tmux if a[0] == "send-keys"][0][-1] == "C-u"
+    assert "C-u" not in [a[-1] for a in fake.tmux if a[0] == "send-keys"]
     assert [d["cleared"] for k, _, d in fake.events if k == "rework_sent"] == [False]
 
 
@@ -213,3 +221,33 @@ def test_carried_text_with_shell_characters_is_typed_literally(fake):
     assert len(fake.typed()) == 1
     assert fake.typed()[0][-1].endswith("$(rm -rf ~); echo hi")
     assert fake.typed()[0][-3:-1] == ("-l", "--")
+
+
+def test_a_rework_retry_does_not_duplicate_the_owner_text(fake, monkeypatch):
+    fake.swallow = True
+    fake.screen = "│ ❯ half-typed note │"
+    clock = [time.time()]
+    monkeypatch.setattr(dispatch.time, "time", lambda: clock[0])
+    fake.run([_card(dict(RUN_W))])
+    first = fake.typed()[0][-1]
+    clock[0] += 31
+    fake.run([_card(dict(RUN_W), sent_round=1, sent_at=_iso(clock[0] - 31), started=False)])
+    assert len(fake.typed()) == 2 and fake.typed()[1][-1] == first
+    assert first.count("half-typed note") == 1
+
+
+def test_an_unsent_rework_message_alerts_before_the_stall_restart(fake, monkeypatch):
+    fake.swallow = True
+    opened = []
+    monkeypatch.setattr(dispatch.alerts, "open", lambda key, *a, **k: opened.append(key))
+    clock = [time.time()]
+    monkeypatch.setattr(dispatch.time, "time", lambda: clock[0])
+    fake.run([_card(dict(RUN_W))])
+    sent_at = _iso(clock[0])
+    for _ in range(2):
+        clock[0] += 31
+        fake.run([_card(dict(RUN_W), sent_round=1, sent_at=sent_at, started=False)])
+    assert len(fake.typed()) == 2 and opened == ["prompt_unsent:aaaa0001"] and fake.started == []
+    clock[0] += 21 * 60
+    fake.run([_card(dict(RUN_W), sent_round=1, sent_at=sent_at, started=False)])
+    assert "rework_restarted" in fake.kinds()

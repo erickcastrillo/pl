@@ -1,0 +1,3 @@
+title = "A stalled agent that says 'Blocked:' is no longer restarted; pl shows 'needs you'"
+where = "pl inbox; pl card; pl alerts; the board"
+try = "pl inbox"

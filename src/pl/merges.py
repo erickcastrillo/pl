@@ -16,6 +16,8 @@ SENSITIVE = ["**/migrations/**", "**/*.sql", "**/*.designer.cs", "**/schema*", "
              "**/uv.lock", "**/package-lock.json", "**/yarn.lock", "**/poetry.lock", "**/Gemfile.lock", "**/go.sum", "**/Cargo.lock"]
 HUMAN_TAG = "Requires Human Review"
 TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*$|_test\.[^/]+$")
+# generated lockfiles: count as files, not lines
+LOCKFILE = re.compile(r"(^|/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|uv\.lock|poetry\.lock|go\.sum)$")
 NOT_CHECKED = {"ok": None, "why": "not checked yet"}
 MARK = "<!-- pl:merge-loop head={} -->"
 _LABELS = set()
@@ -98,7 +100,7 @@ def candidates(all_cards, base=None):
 
 def rule_size(pr):
     files = pr.get("files") or []
-    lines = sum(f["additions"] + f["deletions"] for f in files if not TEST_PATH.search(f["path"]))
+    lines = sum(f["additions"] + f["deletions"] for f in files if not TEST_PATH.search(f["path"]) and not LOCKFILE.search(f["path"]))
     max_lines, max_files = C.PR_LIMITS["pr_auto_merge_lines"], C.PR_LIMITS["pr_auto_merge_files"]
     return {"ok": lines <= max_lines and len(files) <= max_files,
             "why": f"{lines} lines outside tests (limit {max_lines}), {len(files)} files (limit {max_files})"}
