@@ -864,8 +864,8 @@ def _older_copy_is_updated(lib, shipped, name, old, new):
     assert skills.install_builtins() == [f"updated built-in {name} to version {new}"]
 
 
-def test_an_unedited_pl_run_v15_is_updated_to_v16(lib, shipped):
-    _older_copy_is_updated(lib, shipped, "pl-run", 15, 16)
+def test_an_unedited_pl_run_v16_is_updated_to_v17(lib, shipped):
+    _older_copy_is_updated(lib, shipped, "pl-run", 16, 17)
 
 
 def test_an_unedited_pl_review_v13_is_updated_to_v14(lib, shipped):
@@ -1042,8 +1042,20 @@ def test_pl_run_counts_each_slice_against_the_branch_below():
 
 def test_pl_run_stops_a_stack_on_an_oversized_slice():
     stacked = _stacked()
-    for words in ("Run notes", "pl section <id> INPUT", "Open no pull request", "do not move the card"):
+    for words in ('pl hold <id> --reason "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened"',
+                  "Open no pull request", "do not move the card", "last message"):
         assert words in stacked, words
+    for words in ("Run notes", "pl section <id> INPUT --from"):
+        assert words not in stacked, words
+
+
+def test_no_builtin_skill_writes_a_section_pl_section_refuses():
+    from pl import pipeline
+    for n in NAMES:
+        text = " ".join((skills.BUILTIN_DIR / n / "SKILL.md").read_text().split())
+        for name in re.findall(r'pl section <id> ("[^"]+"|\S+) --from', text):
+            name = name.strip('"')
+            assert name in pipeline.writable() or name == "<SECTION>", f"{n}: pl section <id> {name} --from"
 
 
 def test_pl_run_opens_each_slice_on_the_branch_below():
