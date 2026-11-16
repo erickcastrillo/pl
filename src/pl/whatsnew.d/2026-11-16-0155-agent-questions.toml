@@ -1,3 +1,3 @@
-title = "A stage agent's own question shows as waiting for you on the board, in pl inbox and as an alert"
+title = "An agent's own question now shows as waiting for you"
 where = "pl list; pl inbox; pl alerts; [harnesses.<name>] question_patterns"
 try = "pl inbox"

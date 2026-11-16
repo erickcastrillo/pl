@@ -1,5 +1,6 @@
 """pl inbox: list waiting gates across profiles, and persist this profile's gates."""
 import json
+import shlex
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,7 +52,7 @@ def _question_row(c, w, prof, now):
         "age_seconds": max(0, int(now - since_ts)) if since_ts else 0,
         "url": url,
         "window": window,
-        "command": f"tmux select-window -t {C.TMUX_SESSION}:{window}",
+        "command": f"tmux select-window -t {shlex.quote(f'{C.TMUX_SESSION}:{window}')}",
     }
 
 

@@ -2,6 +2,7 @@
 import argparse
 import json
 import stat
+import shlex
 import time
 
 import pytest
@@ -307,6 +308,11 @@ def test_question_wait_lists_a_question_row_with_window_and_age(monkeypatch):
     assert row["gate"] == "question" and row["summary"].startswith("Slice 3 of 5")
     assert 290 <= row["age_seconds"] <= 330 and row["window"] == "@87"
     assert row["command"] == f"tmux select-window -t {C.TMUX_SESSION}:@87"
+
+
+def test_question_row_command_quotes_the_window_name(monkeypatch):
+    (row,) = _rows(monkeypatch, [_question_card(window="a b; rm -rf x")])
+    assert row["command"] == "tmux select-window -t " + shlex.quote(f"{C.TMUX_SESSION}:a b; rm -rf x")
 
 
 def test_question_row_in_another_profile_is_listed(fake_home, monkeypatch):
