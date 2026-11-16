@@ -327,19 +327,94 @@ def _note_wait(waits, seen, c, w):
     seen[c["id"]] = rec
 
 
-def _prompt_text(pane):
-    """The unsent text on the agent's prompt line (after > or ❯), or '' when it is empty or unreadable."""
-    screen = tmux("capture-pane", "-p", "-t", pane, "-S", "-20", check=False) or ""
+TYPE_SETTLE = 0.5   # seconds for paste detection and the slash-command menu to settle before Enter
+PROMPT_CHECK = 30   # seconds a typed prompt may sit in the box before it is retried
+_SENT = {}          # alert key -> {"text", "at", "tries", "alerted"}: prompts typed and not yet seen to start a turn
+
+
+def _box_text(pane):
+    """The unsent text in the agent's input box (the last > or ❯ line and the lines under it), or ''."""
+    screen = tmux("capture-pane", "-p", "-t", pane, "-S", "-40", check=False) or ""
     lines = [agents.BOX_RE.sub(" ", ln).strip() for ln in screen.splitlines()]
-    marked = [ln for ln in lines if ln[:1] in (">", "❯")]
-    return marked[-1][1:].strip() if marked else ""
+    marked = [i for i, ln in enumerate(lines) if ln[:1] in (">", "❯")]
+    if not marked:
+        return ""
+    got = [lines[marked[-1]][1:].strip()]
+    for ln in lines[marked[-1] + 1:]:
+        if not ln:
+            break
+        got.append(ln)
+    return " ".join(x for x in got if x)
+
+
+def _clear_box(pane, limit=12):
+    """Empty the input box, however many lines it holds: end of line, clear the line, join the line above, until it reads empty."""
+    for _ in range(limit):
+        if not _box_text(pane):
+            return True
+        for key in ("C-e", "C-u", "BSpace"):
+            tmux("send-keys", "-t", pane, key, check=False)
+    return not _box_text(pane)
 
 
 def _type_into(pane, text):
-    """Clear the prompt box (Ctrl-U), type text literally and press Enter."""
-    tmux("send-keys", "-t", pane, "C-u", check=False)
+    """Clear the input box, type text literally, press Enter (twice if the box still holds it). True when the box ends empty."""
+    if not _clear_box(pane):
+        return False
     tmux("send-keys", "-t", pane, "-l", "--", harnesses._typeable(text), check=False)
+    time.sleep(TYPE_SETTLE)
     tmux("send-keys", "-t", pane, "Enter", check=False)
+    time.sleep(TYPE_SETTLE)
+    if _box_text(pane):
+        tmux("send-keys", "-t", pane, "Enter", check=False)
+    return not _box_text(pane)
+
+
+def _own_leftover(box, text):
+    """True when the box holds nothing but (copies of, or part of) the prompt pl typed."""
+    b, t = "".join(box.split()), "".join(text.split())
+    return not b if not t else (not b.replace(t, "") or b in t)
+
+
+def _typed_turn(key, pane, text, busy, own=True, what=None):
+    """One dispatcher pass over a prompt typed into an idle session. Returns "waiting", "typed", "done" or "alerted".
+    The first try types; a prompt still in the box after PROMPT_CHECK seconds is retried once; after that a
+    prompt_unsent alert opens and nothing more is typed until the session goes busy or the box is emptied."""
+    what = what or key.partition(":")[2]
+    rec = _SENT.get(key)
+    if busy:
+        if not rec:
+            return "waiting"
+        _SENT.pop(key, None)
+        alerts.resolve(key)
+        return "done"
+    box = _box_text(pane)
+    if rec and rec.get("alerted"):
+        if box:
+            return "alerted"
+        alerts.resolve(key)
+        _SENT.pop(key, None)
+        rec = None
+    if rec:
+        if time.time() - rec["at"] < PROMPT_CHECK:
+            return "waiting"
+        if not box:
+            _SENT.pop(key, None)
+            return "done"
+    if own and box and not _own_leftover(box, rec["text"] if rec else text):
+        alerts.open(key, "warn", f"{what}: the input box holds text pl did not put there",
+                    "clear the box or send that text yourself; pl types the prompt once the box is empty")
+        _SENT[key] = {**(rec or {"text": text, "at": time.time(), "tries": 0}), "alerted": True}
+        return "alerted"
+    if rec and rec["tries"] >= 2:
+        alerts.open(key, "warn", f"{what}: the prompt was typed twice but not submitted",
+                    "open the window, clear the input box (Ctrl-U) or press Enter; the alert closes once the session goes busy")
+        rec["alerted"] = True
+        return "alerted"
+    sent = rec["text"] if rec else text
+    _type_into(pane, sent)
+    _SENT[key] = {"text": sent, "at": time.time(), "tries": (rec["tries"] if rec else 0) + 1}
+    return "typed"
 
 
 def rework_live(c, w, why, reg, dry):
@@ -362,8 +437,11 @@ def rework_live(c, w, why, reg, dry):
         if dry:
             print(f"{head}  would type the rework message into the run agent")
             return None
-        draft = _prompt_text(w["pane"])
-        _type_into(w["pane"], rework.live_message(c) + (f" The owner had also typed (not yet sent): {draft}" if draft else ""))
+        draft = _box_text(w["pane"])
+        _SENT.pop(f"prompt_unsent:{c['id']}", None)
+        _typed_turn(f"prompt_unsent:{c['id']}", w["pane"],
+                    rework.live_message(c) + (f" The owner had also typed (not yet sent): {draft}" if draft else ""),
+                    busy=False, own=False, what=f"card {head}")
         record(sent_round=n, sent_at=now_iso(), started=False)
         events.emit("rework_sent", c["id"], round=n, cleared=bool(draft), carried=bool(draft))
         along = ", with the owner's unsent prompt text sent along" if draft else ""
@@ -372,10 +450,14 @@ def rework_live(c, w, why, reg, dry):
     if rw.get("started"):
         return None
     rec = reg.get(w.get("session_id"))
+    key = f"prompt_unsent:{c['id']}"
     if (rec.get("status") == "busy") if rec else why is None:
         if not dry:
+            _typed_turn(key, w["pane"], "", busy=True)
             record(started=True)
         return None
+    if key in _SENT and not dry:
+        _typed_turn(key, w["pane"], "", busy=False, what=f"card {head}")
     limit = C.DISPATCH.get("stall_minutes", 20)
     if not limit:
         return None
@@ -726,12 +808,17 @@ def ensure_services(st, all_cards, reg, dry, pause, hold=None):
                 _loop_waits(svc_state, name, hold)
             continue
         if svc_state.get(name, {}).get("run_now") and w and w["cmd"] not in harnesses.SHELLS:
-            if rec and rec.get("status") == "idle":
-                print(f"starting {name} loop run in its idle session")
-                if not dry:
-                    _type_into(w["pane"], re.sub(r"^/loop\s+\S+\s+", "", loop_prompt(svc)))
+            if rec and not dry:
+                busy = rec.get("status") == "busy"
+                r = _typed_turn(f"prompt_unsent:{name}", w["pane"], re.sub(r"^/loop\s+\S+\s+", "", loop_prompt(svc)),
+                                busy=busy, what=f"{name} loop")
+                if r == "typed":
+                    print(f"starting {name} loop run in its idle session")
+                elif r == "done":
                     svc_state[name].pop("run_now", None)
-            continue   # busy: the flag waits for the session to go idle
+            elif rec and rec.get("status") == "idle":
+                print(f"starting {name} loop run in its idle session")
+            continue   # the flag stays until the session goes busy
         pin = svc["profile"]   # a loop's own account; while it is parked the loop runs on another (unless fallback = false)
         prof = svc_state.get(name, {}).get("profile") or pin   # the account its window runs under now
         if w:

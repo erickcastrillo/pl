@@ -419,14 +419,18 @@ def test_an_idle_long_lived_review_session_gets_one_turn_typed(profile, tmux_cal
     calls, panes = tmux_calls
     C.SERVICES = {"auto-review": {"prompt": "/loop 30m /pl-review repo=x", "profile": "cx", "every": None}}
     panes["text"] = "@7 %9 claude auto-review\n"
-    typed = []
-    monkeypatch.setattr(dispatch, "_type_into", lambda pane, text: typed.append((pane, text)))
+    turns, result = [], {"r": "waiting"}
+    monkeypatch.setattr(dispatch, "_typed_turn", lambda key, pane, text, busy, **k: turns.append((key, pane, text, busy)) or result["r"])
     st = _state([])
     cards = [_pr_card("c1", "https://github.com/o/r/pull/1")]
     busy = {"s": {"tmux": "x:%9", "sessionId": "s", "status": "busy"}}
     dispatch.ensure_services(st, cards, busy, False, None)
-    assert typed == [] and st["services"]["auto-review"]["run_now"]
+    assert st["services"]["auto-review"]["run_now"]
     idle = {"s": {"tmux": "x:%9", "sessionId": "s", "status": "idle"}}
+    result["r"] = "typed"
     dispatch.ensure_services(st, cards, idle, False, None)
-    assert typed == [("%9", "/pl-review repo=x")]
+    assert turns[-1] == ("prompt_unsent:auto-review", "%9", "/pl-review repo=x", False)
+    assert st["services"]["auto-review"]["run_now"]   # stays set until the session goes busy
+    result["r"] = "done"
+    dispatch.ensure_services(st, cards, busy, False, None)
     assert "run_now" not in st["services"]["auto-review"]
