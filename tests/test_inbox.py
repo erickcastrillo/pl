@@ -285,3 +285,48 @@ def test_approve_and_reject_from_an_inbox_row_move_the_card_as_the_console_does(
     assert rejected_card["list_id"] == "col-Spec ready"
     assert "needs changes" in rejected_card["description"]
 
+
+
+# ---------- question rows ----------
+
+def _question_card(question="Slice 3 of 5 is over max_lines. How should this be handled?", **worker):
+    since = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 300))
+    w = {"stage": "run", "window": "@87", "question_wait": question, "question_since": since, **worker}
+    return _card("repo#7", "A card", "In progress", worker=w)
+
+
+def _rows(monkeypatch, cs):
+    from pl.inbox import rows_here
+    C.PROFILE_NAME = "p1"
+    monkeypatch.setattr("pl.inbox.card_url", lambda cid: f"https://example.test/{cid}")
+    return rows_here(cs)
+
+
+def test_question_wait_lists_a_question_row_with_window_and_age(monkeypatch):
+    (row,) = _rows(monkeypatch, [_question_card()])
+    assert row["gate"] == "question" and row["summary"].startswith("Slice 3 of 5")
+    assert 290 <= row["age_seconds"] <= 330 and row["window"] == "@87"
+    assert row["command"] == f"tmux select-window -t {C.TMUX_SESSION}:@87"
+
+
+def test_question_row_in_another_profile_is_listed(fake_home, monkeypatch):
+    from pl import inbox
+    rows = _rows(monkeypatch, [_question_card()])
+    d2 = fake_home / ".pl-p2"
+    (d2 / "state").mkdir(parents=True)
+    (d2 / "config.toml").write_text("")
+    (d2 / "state" / "inbox.json").write_text(json.dumps({"at": time.time(), "items": rows}))
+    monkeypatch.setattr("pl.inbox.cards", lambda: [])
+    (item,) = inbox.listing()
+    assert item["gate"] == "question" and item["window"] == "@87"
+
+
+def test_no_question_row_once_question_wait_is_cleared(monkeypatch):
+    c = _question_card()
+    del c["metadata"]["worker"]["question_wait"]
+    assert _rows(monkeypatch, [c]) == []
+
+
+def test_question_row_summary_is_masked(monkeypatch):
+    (row,) = _rows(monkeypatch, [_question_card("Use ghp_abcdefghijklmnopqrstuvwxyz0123456789 ok?")])
+    assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in row["summary"]

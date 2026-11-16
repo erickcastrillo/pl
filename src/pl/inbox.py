@@ -33,6 +33,28 @@ def gate_of(c, col=None):
     return None
 
 
+def _question_row(c, w, prof, now):
+    cid = c.get("id", "")
+    since = w.get("question_since") or c.get("updated_at") or ""
+    since_ts = parse_iso(since) if since else 0
+    try:
+        url = card_url(cid)
+    except (Exception, SystemExit):
+        url = ""
+    window = w.get("window") or ""
+    return {
+        "pipeline": prof,
+        "card": cid,
+        "gate": "question",
+        "summary": mask(w["question_wait"])[:80],
+        "since": since,
+        "age_seconds": max(0, int(now - since_ts)) if since_ts else 0,
+        "url": url,
+        "window": window,
+        "command": f"tmux select-window -t {C.TMUX_SESSION}:{window}",
+    }
+
+
 def rows_here(cs):
     """Rows for waiting gates in this profile, computed from cs."""
     evs = events._read()
@@ -46,10 +68,15 @@ def rows_here(cs):
                 col = col_name(c["list_id"])
             except (Exception, SystemExit):
                 col = c["list_id"]
+        cid = c.get("id", "")
+        m = c.get("metadata") or {}
+        w = m.get("worker") or {}
+        if m.get("pipeline_mode") == "auto" and w.get("question_wait"):
+            rows.append(_question_row(c, w, prof, now))
+            continue
         gate = gate_of(c, col)
         if not gate:
             continue
-        cid = c.get("id", "")
         card_events = [e for e in evs if e.get("kind") == "moved" and e.get("card") == cid and e.get("to") == col]
         if card_events:
             newest = max(card_events, key=lambda e: e.get("_t", datetime.min.replace(tzinfo=timezone.utc)))
@@ -135,4 +162,4 @@ def cmd_inbox(a):
         return
     for r in items:
         stale = " (stale)" if r.get("stale") else ""
-        print(f"{r['pipeline']:<12} {short_id(r['card']):<16} {r['gate']:<6} {r['summary']:<40} {r['command']}{stale}")
+        print(f"{r['pipeline']:<12} {short_id(r['card']):<16} {r['gate']:<8} {r['summary']:<40} {r['command']}{stale}")

@@ -29,6 +29,7 @@ def no_real_screen_reads(monkeypatch):
     import types
     from pl import dispatch
     monkeypatch.setattr(dispatch, "agent_screen", types.SimpleNamespace(read=lambda pane, lines=20: ("", "working", "")))
+    monkeypatch.setattr(dispatch, "question_wait", lambda h, pane: None)
 
 
 @pytest.fixture(autouse=True)

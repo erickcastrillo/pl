@@ -63,7 +63,7 @@ def _raise(key, severity, title, fix, cards):
 def _waiting(c, w, text, word, why, waits, seen):
     d = _dispatch()
     gate = next((g for g in agents.GATE_RE.findall(agent_screen.plain(text)) if g in d.HUMAN_GATES), None)
-    asked = w.get("permission_wait") or w.get("trust_wait")
+    asked = w.get("permission_wait") or w.get("trust_wait") or w.get("question_wait")
     if not (word == "waiting for you" or gate or asked) or alerts.get(f"permission_wait:{c['id']}"):
         return None
     rec = waits.get(c["id"]) or {}
@@ -72,7 +72,7 @@ def _waiting(c, w, text, word, why, waits, seen):
     seen[c["id"]] = rec
     if time.time() - rec["since"] < WAIT_MINUTES * 60:
         return None
-    first_line = (why or gate or (asked if isinstance(asked, str) else "") or "a prompt")[:TITLE_WIDTH]
+    first_line = (w.get("question_wait") or why or gate or (asked if isinstance(asked, str) else "") or "a prompt")[:TITLE_WIDTH]
     cid = c["id"]
     return _raise(f"agent_waiting:{cid}", "high" if gate else "warn",
                   f"Card {short_id(cid)}: its {w['stage']} agent waits for you: {first_line}",
@@ -119,7 +119,8 @@ def missing_section(c, w, word):
 def _excused(c, w, word):
     """True when the agent waits on a person or a reset, or has finished with its section written: not a stall."""
     d = _dispatch()
-    if (c.get("metadata") or {}).get("question") or w.get("limit_hit") or w.get("permission_wait") or w.get("trust_wait"):
+    if (c.get("metadata") or {}).get("question") or w.get("limit_hit") or w.get("permission_wait") or w.get("trust_wait") \
+            or w.get("question_wait"):
         return True
     text = agent_screen.read(w["pane"])[0]
     gate = any(g in d.HUMAN_GATES for g in agents.GATE_RE.findall(agent_screen.plain(text or "")))

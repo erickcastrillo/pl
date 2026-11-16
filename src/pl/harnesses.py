@@ -34,6 +34,7 @@ class Harness:
     skip_permissions: bool = False               # [harnesses.<name>] skip_permissions = true: SKIP_PERMISSIONS, opt-in
     trust_worktrees: bool = False                # [harnesses.<name>] trust_worktrees = true: TRUST_FILES, opt-in
     permission_patterns: list | None = None      # its permission prompt on screen; None = PERMISSION_PATTERNS[name]
+    question_patterns: list | None = None        # its question prompt on screen; None = QUESTION_PATTERNS[name]
 
 
 SHELLS = ("zsh", "bash", "sh", "fish")
@@ -100,6 +101,11 @@ PERMISSION_PATTERNS = {
     "antigravity": [r"Allow (?:access to this|calling this tool|creation of this file|administrator elevation)",
                     r"Approve this action\?", r"Run this command\?", r"Do you want to proceed\?"],
     "gemini": [r"Allow execution of", r"Apply this change\?", r"Do you want to proceed\?"]}
+# The hint line each CLI draws under a question with choices. Never "esc to cancel" alone: agy prints it while working.
+QUESTION_PATTERNS = {
+    "claude": [r"Enter to select", r"\u2191/\u2193 to navigate", r"Type something\.?$"],
+    "codex": [r"(?:enter|\u21b5) to (?:submit|confirm|select)", r"\u2191/\u2193 to (?:move|navigate|select)"],
+    "antigravity": [r"(?:enter|\u21b5) to (?:submit|confirm|select|choose)", r"\u2191\s*/?\s*\u2193"]}
 # A first-run folder trust prompt on screen. Only Claude Code asks it; pl never answers it (the person does, once per folder).
 TRUST_PATTERNS = {"claude": [r"Accessing workspace", r"Yes, I trust this folder", r"Quick safety check"]}
 # A template token that already chooses a permission or sandbox mode (the Assistant refuses such a template too).
@@ -288,6 +294,10 @@ def permission_patterns(h):
     return PERMISSION_PATTERNS.get(h.name, []) if h.permission_patterns is None else h.permission_patterns
 
 
+def question_patterns(h):
+    return QUESTION_PATTERNS.get(h.name, []) if h.question_patterns is None else h.question_patterns
+
+
 ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CACHE = {}   # config path -> validated [harnesses] table, parsed once per process
 
@@ -361,7 +371,7 @@ def _overrides():
                 raise SystemExit(f"pl: [harnesses.{name}] trust_worktrees must be true or false ({p})")
             if ov.get("trust_worktrees") and name not in TRUST_FILES:
                 raise SystemExit(f"pl: [harnesses.{name}] trust_worktrees works only for {', '.join(TRUST_FILES)} ({p})")
-            for k in ("interactive", "headless", "resume", "limit_patterns", "permission_patterns"):
+            for k in ("interactive", "headless", "resume", "limit_patterns", "permission_patterns", "question_patterns"):
                 if k in ov and not (isinstance(ov[k], list) and all(isinstance(x, str) for x in ov[k])):
                     raise SystemExit(f"pl: [harnesses.{name}] {k} must be a list of strings ({p})")
         _CACHE[p] = table
