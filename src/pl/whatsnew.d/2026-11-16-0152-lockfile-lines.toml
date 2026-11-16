@@ -1,0 +1,3 @@
+title = "Lockfiles no longer count toward pull request line limits"
+where = "pl-run, pl-plan, auto-merge size rule"
+try = "pl skills"

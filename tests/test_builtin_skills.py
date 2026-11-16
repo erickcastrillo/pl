@@ -760,7 +760,7 @@ def test_pl_plan_splits_into_vertical_slices():
     for phrase in ("vertical", "60 lines", "Depends on"):
         assert phrase in text
     assert "Slice 1 only" not in text
-    assert "pl-builtin-version: 9" in text
+    assert "pl-builtin-version: 10" in text
 
 
 def test_pl_plan_stacks_slices_that_share_a_file():
@@ -1091,3 +1091,32 @@ def test_run_and_review_skills_declare_manual_steps():
     for name in ("pl-run", "pl-review"):
         text = _shipped(name)
         assert "## Manual steps remaining" in text and "pl done" in text, name
+
+
+LOCKFILES = ("Cargo.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "go.sum")
+
+
+def test_pl_run_counts_lines_without_lockfiles():
+    text = _shipped("pl-run")
+    step = text.split("4. Count the change")[1].split("5. Push")[0]
+    bullet = text.split("- Build and count:")[1].split("- Over `max_lines`")[0]
+    for name in LOCKFILES:
+        assert name in step, name
+    assert "still count as files" in step
+    assert "outside lockfiles" in bullet
+    assert "Slice k of n is <counted> lines, over max_lines <max_lines>; not opened" in text
+
+
+def test_pl_plan_estimates_lines_without_lockfiles():
+    text = _shipped("pl-plan")
+    step = text.split("3. Size the change")[1].split("4. Write the plan")[0]
+    for name in LOCKFILES:
+        assert name in text, name
+    assert "outside `tests/` and lockfiles" in step
+
+
+def test_pl_plan_puts_a_new_dependency_in_its_own_slice():
+    text = _shipped("pl-plan")
+    step = text.split("3. Size the change")[1].split("4. Write the plan")[0]
+    for phrase in ("new third-party dependency", "own slice", "ahead of the code that uses it"):
+        assert phrase in step, phrase
