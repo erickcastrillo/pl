@@ -768,6 +768,8 @@ def cmd_card(a):
     print(f"{c['id']}  {c['title']}\ncolumn: {col_name(c['list_id'])}   tags: {c.get('tags')}   updated: {c.get('updated_at')}")
     if deps := (c.get("metadata") or {}).get("depends_on"):
         print(f"depends on {', '.join(short_id(d) for d in deps)}")
+    if blocked := ((c.get("metadata") or {}).get("worker") or {}).get("blocked"):
+        print(f"needs you: {mask(blocked)}")
     if col_name(c["list_id"]) == "Done":
         print(closed_line(c))
     if steps := held_steps(c):
@@ -1199,7 +1201,11 @@ def retry(ref, stage=None):
             continue
         status = worker_status(w, reg)[0]
         if status in ("alive", "starting"):
-            if ref != "all":
+            if w.get("blocked") and ref != "all":
+                no = stop_worker(c, w)
+                out.append(f"{head}: its blocked agent could not be stopped ({no})" if no else
+                           f"{head}: stopped its blocked {w.get('stage')} agent; the dispatcher starts it fresh")
+            elif ref != "all":
                 out.append(f"{head}: its {w.get('stage')} agent is running; nothing reset")
             continue
         update(c["id"], metadata={"worker": None})

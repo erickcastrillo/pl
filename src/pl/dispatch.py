@@ -1495,6 +1495,9 @@ def dispatch_once(max_runs, dry, max_prep=2, pull=True):
                 and not w.get("trust_wait") and not w.get("permission_wait") and (err := api_error_wait(w, reg)) \
                 and _api_restart(st, c, w, err, failed):   # idle after an API error: stopped, its stage starts fresh
             m, w, status = c["metadata"], {}, "none"
+        if w and w.get("blocked") and w.get("stage") != stage and not dry:
+            w = {k: v for k, v in w.items() if k not in ("blocked", "blocked_at")}
+            update(c["id"], metadata={"worker": w})
         if w and status == "alive" and not busy and not screen and not dry and w.get("stage") == stage \
                 and agent_alerts.stall(c, w, reg, st, seen_stalls):   # idle with its stage unfinished: nudged, then restarted
             m, w, status = c["metadata"], {}, "none"
@@ -1926,8 +1929,13 @@ def check_stalled(all_cards, st=None):
     waits, stalls, now, active = (st or {}).get("run_waits") or {}, (st or {}).get("stalls") or {}, time.time(), set()
     for c in all_cards:
         m, head, key = c.get("metadata") or {}, short_id(c["id"]), f"stalled:{c['id']}"
-        stall = stalls.get(c["id"]) or {}
-        if jobs_left := stall.get("jobs"):
+        stall, quiet = stalls.get(c["id"]) or {}, False
+        if blocked := (m.get("worker") or {}).get("blocked"):
+            stage = (m.get("worker") or {}).get("stage") or "stage"
+            title = f"Card {head}: its {stage} agent is blocked: {blocked}"
+            fix = f"answer the agent in tmux window {(m.get('worker') or {}).get('window')} (pl card {cmd_id(c['id'])}); or pl retry {cmd_id(c['id'])} or pl drop {cmd_id(c['id'])}"
+            severity, quiet = "warn", True   # the watchdog notified when it recorded the block
+        elif jobs_left := stall.get("jobs"):
             stage = (m.get("worker") or {}).get("stage") or "stage"
             title = f"Card {head}: its {stage} agent waits on jobs that cannot report: {'; '.join(jobs_left)}"
             fix = f"pl asked the agent to stop them and re-run in the foreground; pl card {cmd_id(c['id'])} shows the agent (pl never stops them itself)"
@@ -1947,7 +1955,7 @@ def check_stalled(all_cards, st=None):
         else:
             continue
         active.add(key)
-        if why := alerts.open(key, severity, title, fix, cards=[c["id"]], tried=_stall_tried(c["id"], st, now)):
+        if (why := alerts.open(key, severity, title, fix, cards=[c["id"]], tried=_stall_tried(c["id"], st, now))) and not quiet:
             notify(alerts.headline(why, f"Stalled: {c['title'][:40]}"), title)
     alerts.sweep("stalled:", active, notify)
 
