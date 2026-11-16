@@ -24,6 +24,7 @@ DIRECT = (
     "stalled:",
     "ci_not_running:",
     "rework_waiting:",
+    "steward:",
 )
 
 
@@ -237,7 +238,7 @@ def shown():
     return sorted((r for r in listing() if not r.get("acked")), key=lambda a: -(a.get("first_seen") or 0))
 
 
-WATCHDOG = ("stalled", "reconcile_failed", "queued_write_failed", "rework_waiting", "worktree_removed")
+WATCHDOG = ("stalled", "reconcile_failed", "queued_write_failed", "rework_waiting", "worktree_removed", "steward")
 
 
 def _tried(kind, a):
@@ -251,7 +252,7 @@ def _tried(kind, a):
         m = re.search(r"(\d+) min", title)
         return f"waited {m.group(1) if m else int((_clock() - a['first_seen']) // 60)} min for a slot"
     return {"stalled": "nothing yet", "queued_write_failed": "queued, replay failed",
-            "worktree_removed": "removed outside pl"}[kind]
+            "worktree_removed": "removed outside pl", "steward": "nothing safe to fix"}[kind]
 
 
 def needs_you(now=None):
@@ -292,6 +293,7 @@ WATCHES = {
     "stage_failed": "stages whose agent died",
     "stage_unsafe": "unsafe stage settings",
     "stalled": "stage agents idle or finished while their card has not moved",
+    "steward": "stuck cards the steward could not fix",
     "tmp_full": "temp folder space or inodes",
     "trigger_cap": "triggers at their cap",
     "trust": "folders an account does not trust",
