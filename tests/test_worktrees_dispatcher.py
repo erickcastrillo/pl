@@ -70,6 +70,7 @@ class FakeGitRunner:
         self.pr_lists = {}    # branch -> merged PR dict found by `gh pr list --head`
         self.gh_fails = False
         self.status_fails = set()
+        self.status_out = {}  # path -> raw `git status --porcelain` output
 
     def __call__(self, argv, capture_output=True, text=True, cwd=None, check=False, **kw):
         self.commands.append((list(argv), cwd))
@@ -101,9 +102,18 @@ class FakeGitRunner:
                 p = Path(cwd) if cwd else None
                 if p in self.status_fails:
                     return types.SimpleNamespace(returncode=128, stdout="", stderr="fatal")
+                if p in self.status_out:
+                    return types.SimpleNamespace(returncode=0, stdout=self.status_out[p], stderr="")
                 if p and p in self.dirty_paths:
                     return types.SimpleNamespace(returncode=0, stdout=" M dirty.txt\n", stderr="")
                 return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            elif sub == "symbolic-ref":
+                branch = next((w.get("branch") for w in self.worktrees if w["path"] == Path(cwd)), None)
+                return types.SimpleNamespace(returncode=0 if branch else 1, stdout=f"{branch or ''}\n", stderr="")
+
+            elif sub == "rev-parse" and "--git-common-dir" in argv:
+                return types.SimpleNamespace(returncode=0, stdout=str(self.repo_dir / "sub" / ".git") + "\n", stderr="")
 
             elif sub == "rev-parse":
                 return types.SimpleNamespace(returncode=0, stdout=self.heads.get(Path(cwd), "hash") + "\n", stderr="")
@@ -660,11 +670,41 @@ def test_gh_failure_keeps_the_worktree(wt_env):
     assert _verdict_of(card)[0] == "keep"
 
 
-def test_several_repos_keeps_every_row(wt_env):
+def test_several_repos_reads_the_branch_from_the_copy_and_removes_in_its_repo(wt_env, monkeypatch):
+    from pl import worktrees
     path, card = _merged_done_card(wt_env)
-    (C.WORK_DIR / "a").mkdir()
-    (C.WORK_DIR / "a" / ".git").write_text("x")
-    assert _verdict_of(card) == ("keep", "several repositories in the work folder")
+    (path / ".git").write_text("gitdir: x")
+    (C.WORK_DIR / "sub").mkdir()
+    (C.WORK_DIR / "sub" / ".git").mkdir()
+    monkeypatch.setattr(worktrees, "_list_worktrees", lambda work: [])
+    card["metadata"] = {"branch": "pl/c1", "pr_urls": card["metadata"]["pr_urls"]}
+    assert _verdict_of(card) == ("remove", "finished card")
+    worktrees.sweep([card])
+    removals = [(cmd, cwd) for cmd, cwd in wt_env.commands if cmd[:3] == ["git", "worktree", "remove"]]
+    assert len(removals) == 1 and removals[0][1] == str(C.WORK_DIR / "sub")
+
+
+def test_untracked_cache_folder_does_not_block_removal_but_other_untracked_files_do(wt_env):
+    from pl import worktrees
+    path, card = _merged_done_card(wt_env)
+    (path / ".build").mkdir()
+    (path / ".build" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    wt_env.status_out[path] = "?? .build/\n?? notes.txt\n"
+    assert _verdict_of(card) == ("keep", "uncommitted changes")
+    wt_env.status_out[path] = "?? .build/\n"
+    worktrees.sweep([card])
+    assert len(_removals(wt_env)) == 1 and "--force" in _removals(wt_env)[0]
+
+
+def test_sweep_deletes_an_empty_leftover_folder_and_leaves_one_with_files(wt_env):
+    from pl import worktrees
+    empty = C.WORKTREES_DIR / "repo-old"
+    (empty / ".devcontainer").mkdir(parents=True)
+    full = C.WORKTREES_DIR / "repo-notes"
+    full.mkdir()
+    (full / "notes.txt").write_text("keep me")
+    worktrees.sweep([])
+    assert not empty.exists() and full.exists()
 
 
 def test_sweep_removes_merged_clean_worktree_and_names_card_and_path(wt_env, tmp_path):

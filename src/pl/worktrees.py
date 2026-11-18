@@ -41,8 +41,6 @@ _STALE = re.compile(r"\.stale-(\d{8})-(\d{6})(?:-\d+)?$")
 
 def _verdict(path, branch, c):
     """(action, reason) for one worktree: the one decision the report, gc and the dispatcher share. Cheapest check first."""
-    if C.WORK_DIR and multi_repo(Path(C.WORK_DIR)):
-        return "keep", "several repositories in the work folder"
     if not c:
         return "keep", "no card on this board"
     if hold := agent_hold(c):
@@ -52,7 +50,7 @@ def _verdict(path, branch, c):
     rc, out = _in(path, "status", "--porcelain")
     if rc:
         return "keep", "cannot inspect"
-    if out.strip():
+    if _unsaved(path, out):
         return "keep", "uncommitted changes"
     dropped = bool((c.get("metadata") or {}).get("dropped_at"))
     prs = _card_prs(c, "" if dropped else branch)
@@ -62,6 +60,28 @@ def _verdict(path, branch, c):
     if unpushed is None:
         return "keep", "cannot inspect"
     return ("keep", "unpushed commits") if unpushed else ("remove", "finished card")
+
+
+def _unsaved(path, status):
+    """True when `git status --porcelain` shows work outside a commit. An untracked folder holding CACHEDIR.TAG
+    is a tool's cache, not work."""
+    for line in status.splitlines():
+        if line.startswith("?? ") and line.endswith("/") and (Path(path) / line[3:] / "CACHEDIR.TAG").is_file():
+            continue
+        if line.strip():
+            return True
+    return False
+
+
+def _own_branch(path):
+    """The branch checked out in this copy, asked of the copy itself; "" when detached or git cannot say."""
+    rc, out = _in(path, "symbolic-ref", "--short", "-q", "HEAD")
+    return "" if rc else out.strip()
+
+
+def _empty(path):
+    """True when the folder holds no files at all, only empty folders."""
+    return not any(files for _, _, files in os.walk(path))
 
 
 def _merged(pr):
@@ -128,10 +148,14 @@ def inventory(cs=None, sizes=True):
         if _STALE.search(d.name):
             row = _stale_row(d, d.name, cs)
         elif (d / ".git").exists() or d.resolve() in branches:
-            c = _match_card(d, branches.get(d.resolve(), ""), cs)
-            action, reason = _verdict(d, branches.get(d.resolve(), ""), c)
+            branch = branches.get(d.resolve()) or ((d / ".git").exists() and _own_branch(d)) or ""
+            c = _match_card(d, branch, cs)
+            action, reason = _verdict(d, branch, c)
             row = {"name": d.name, "path": str(d), "card": c["id"] if c else None,
                    "column": _column(c) if c else None, "action": action, "reason": reason}
+        elif _empty(d):
+            row = {"name": d.name, "path": str(d), "card": None, "column": None, "action": "remove",
+                   "reason": "empty folder", "empty": True}
         else:
             continue
         if sizes:
@@ -180,9 +204,21 @@ def _remove(rows, by="gc"):
             else:
                 failed += 1
             continue
+        if r.get("empty"):
+            if _empty(path) and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            if path.exists():
+                failed += 1
+                print(f"worktree {r['name']}: empty folder not deleted", file=sys.stderr)
+            else:
+                events.emit("worktree_cleanup", None, path=r["path"], by=by)
+                removed += 1
+            continue
         size = (r["size"] if r.get("size") is not None else _size(path)) if by == "gc" else 0
         cwd, prefix = _git_base(path)
-        rc, out = _in(cwd, *prefix, "worktree", "remove", r["path"])
+        status = _in(path, "status", "--porcelain")[1]
+        force = ["--force"] if status.strip() and not _unsaved(path, status) else []   # only a cache folder is left
+        rc, out = _in(cwd, *prefix, "worktree", "remove", *force, r["path"])
         if rc:
             failed += 1
             print(f"worktree {r['name']}: cleanup failed: {out.strip() or 'git worktree remove failed'}", file=sys.stderr)
@@ -214,8 +250,13 @@ def _remove_stale(path):
 
 def _git_base(path):
     """Where to run worktree commands: the work folder when it is a repository, else the worktree's own common git dir."""
-    if C.WORK_DIR and Path(C.WORK_DIR).is_dir():
+    work = Path(C.WORK_DIR) if C.WORK_DIR else None
+    if work and work.is_dir() and not multi_repo(work):
         return C.WORK_DIR, ()
+    if work and work.is_dir():   # a folder of several repos: run in the repo this copy belongs to
+        common = Path(_in(path, "rev-parse", "--path-format=absolute", "--git-common-dir")[1].strip() or ".")
+        if common.name == ".git" and common.parent.is_dir():
+            return common.parent, ()
     common = _in(path, "rev-parse", "--git-common-dir")[1].strip()
     return C.WORKTREES_DIR, ("--git-dir", common)
 
