@@ -1,6 +1,8 @@
 """Automatic worktree cleanup on dispatcher passes and [worktrees] cleanup setting."""
 import json
+import os
 import subprocess
+import time
 import types
 from pathlib import Path
 import pytest
@@ -71,6 +73,7 @@ class FakeGitRunner:
         self.gh_fails = False
         self.status_fails = set()
         self.status_out = {}  # path -> raw `git status --porcelain` output
+        self.foreign_top = set()  # paths whose `rev-parse --show-toplevel` names an enclosing repo
 
     def __call__(self, argv, capture_output=True, text=True, cwd=None, check=False, **kw):
         self.commands.append((list(argv), cwd))
@@ -111,6 +114,10 @@ class FakeGitRunner:
             elif sub == "symbolic-ref":
                 branch = next((w.get("branch") for w in self.worktrees if w["path"] == Path(cwd)), None)
                 return types.SimpleNamespace(returncode=0 if branch else 1, stdout=f"{branch or ''}\n", stderr="")
+
+            elif sub == "rev-parse" and "--show-toplevel" in argv:
+                top = self.repo_dir if Path(cwd) in self.foreign_top else Path(cwd)
+                return types.SimpleNamespace(returncode=0, stdout=f"{top}\n", stderr="")
 
             elif sub == "rev-parse" and "--git-common-dir" in argv:
                 return types.SimpleNamespace(returncode=0, stdout=str(self.repo_dir / "sub" / ".git") + "\n", stderr="")
@@ -899,3 +906,61 @@ def test_incomplete_stale_record_fails_closed(wt_env, record):
     assert (row["action"], row["reason"]) == ("keep", "stale, state unknown")
     worktrees.sweep([])
     assert d.exists()
+
+
+def _extra_copy(wt_env, tmp_path, name, branch="feat/x", age_days=10):
+    """A review or fix copy in a folder listed under [worktrees] extra_dirs, last touched age_days ago."""
+    folder = tmp_path / "extra"
+    (C.WORK_DIR / "sub" / ".git").mkdir(parents=True, exist_ok=True)   # the repo the copies belong to
+    path = folder / name
+    path.mkdir(parents=True)
+    (path / ".git").write_text("gitdir: x")
+    (path / "app.rb").write_text("x")
+    old = time.time() - age_days * 86400
+    for p in (path / "app.rb", path / ".git", path):
+        os.utime(p, (old, old))
+    C.WORKTREES = {"cleanup": True, "extra_dirs": [str(folder)], "idle_days": 3}
+    wt_env.worktrees.append({"path": path, "branch": branch})
+    if branch:
+        wt_env.pr_lists[branch] = {**MERGED, "headRefName": branch, "headRefOid": "x"}
+    return path
+
+
+def test_extra_dir_copy_that_is_saved_and_idle_is_removed_in_its_own_repo(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    done = _extra_copy(wt_env, tmp_path, "fix-done")
+    _extra_copy(wt_env, tmp_path, "fix-fresh", branch="feat/fresh", age_days=0)
+    review = _extra_copy(wt_env, tmp_path, "review-detached", branch=None)
+    worktrees.sweep([])
+    removals = [(cmd[-1], cwd) for cmd, cwd in wt_env.commands if cmd[:3] == ["git", "worktree", "remove"]]
+    assert sorted(removals) == sorted([(str(done), str(C.WORK_DIR / "sub")), (str(review), str(C.WORK_DIR / "sub"))])
+
+
+def test_extra_dir_keeps_unsaved_work_and_unfinished_branches(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    dirty = _extra_copy(wt_env, tmp_path, "dirty")
+    wt_env.dirty_paths.add(dirty)
+    _extra_copy(wt_env, tmp_path, "ahead", branch="feat/ahead")
+    wt_env.unpushed_branches.add("feat/ahead")
+    _extra_copy(wt_env, tmp_path, "open", branch="feat/open")
+    del wt_env.pr_lists["feat/open"]
+    rows = {r["name"]: r["reason"] for r in worktrees.inventory([], sizes=False)}
+    assert rows == {"dirty": "uncommitted changes", "ahead": "unpushed commits", "open": "no merged PR"}
+
+
+def test_extra_dir_never_touches_a_folder_that_is_not_its_own_worktree(wt_env, tmp_path):
+    from pl import worktrees
+    C.STATE_DIR = tmp_path / "state"
+    orphan = _extra_copy(wt_env, tmp_path, "orphan")
+    wt_env.foreign_top.add(orphan)   # no working .git link: git answers for the enclosing repo
+    clone = _extra_copy(wt_env, tmp_path, "clone")
+    (clone / ".git").unlink()
+    (clone / ".git").mkdir()   # a full clone, not a linked worktree
+    old = time.time() - 10 * 86400
+    for p in (clone / ".git", clone):
+        os.utime(p, (old, old))
+    worktrees.sweep([])
+    assert _removals(wt_env) == []
+    assert orphan.exists() and clone.exists()

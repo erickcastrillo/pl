@@ -161,7 +161,72 @@ def inventory(cs=None, sizes=True):
         if sizes:
             row["size"] = _size(d)
         rows.append(row)
+    return rows + _extra_rows(sizes)
+
+
+def _extra_rows(sizes):
+    """Copies other tools made, in the folders [worktrees] extra_dirs lists. No card owns them, so the rule is:
+    a linked worktree of its own, untouched for idle_days, nothing uncommitted or unpushed, and a merged PR
+    when it has a branch."""
+    rows = []
+    for folder in (C.WORKTREES or {}).get("extra_dirs") or []:
+        root = Path(os.path.expanduser(folder))
+        if not root.is_dir():
+            continue
+        for d in sorted(root.iterdir()):
+            if d.is_symlink() or not d.is_dir():
+                continue
+            action, reason, repo = _extra_verdict(d)
+            row = {"name": d.name, "path": str(d), "card": None, "column": None, "action": action, "reason": reason}
+            if repo:
+                row["repo"] = repo
+            if sizes:
+                row["size"] = _size(d)
+            rows.append(row)
     return rows
+
+
+def _extra_verdict(d):
+    """(action, reason, repo) for one copy outside the worktrees folder. Cheapest check first."""
+    if not (d / ".git").is_file():
+        return "keep", "not a worktree", None
+    if _touched_within(d, (C.WORKTREES or {}).get("idle_days", 3)):
+        return "keep", "used recently", None
+    rc, top = _in(d, "rev-parse", "--show-toplevel")
+    if rc or not top.strip() or Path(top.strip()).resolve() != d.resolve():
+        return "keep", "not a worktree", None   # a broken .git link: git would answer for an enclosing repo
+    rc, out = _in(d, "status", "--porcelain")
+    if rc:
+        return "keep", "cannot inspect", None
+    if _unsaved(d, out):
+        return "keep", "uncommitted changes", None
+    rc, out = _in(d, "rev-list", "--count", "HEAD", "--not", "--remotes")
+    if rc or not out.strip().isdigit():
+        return "keep", "cannot inspect", None
+    if int(out):
+        return "keep", "unpushed commits", None
+    common = Path(_in(d, "rev-parse", "--path-format=absolute", "--git-common-dir")[1].strip() or ".")
+    if common.name != ".git" or not common.parent.is_dir():
+        return "keep", "cannot inspect", None
+    if (branch := _own_branch(d)) and not _pr_for_branch(branch, common.parent):
+        return "keep", "no merged PR", None
+    return "remove", "saved and idle", str(common.parent)
+
+
+def _touched_within(d, days):
+    """True when the folder or anything two levels down changed in the last `days` days; node_modules and .git skipped."""
+    cutoff = time.time() - days * 86400
+    stack = [(d, 0)]
+    while stack:
+        p, depth = stack.pop()
+        try:
+            if p.stat().st_mtime > cutoff:
+                return True
+            if depth < 2 and p.is_dir() and not p.is_symlink():
+                stack += [(c, depth + 1) for c in p.iterdir() if c.name not in ("node_modules", ".git")]
+        except OSError:
+            continue
+    return False
 
 
 def _size(path):
@@ -215,7 +280,7 @@ def _remove(rows, by="gc"):
                 removed += 1
             continue
         size = (r["size"] if r.get("size") is not None else _size(path)) if by == "gc" else 0
-        cwd, prefix = _git_base(path)
+        cwd, prefix = (r["repo"], ()) if r.get("repo") else _git_base(path)
         status = _in(path, "status", "--porcelain")[1]
         force = ["--force"] if status.strip() and not _unsaved(path, status) else []   # only a cache folder is left
         rc, out = _in(cwd, *prefix, "worktree", "remove", *force, r["path"])
@@ -513,16 +578,17 @@ def _pr_info(url: str) -> dict | None:
     return info
 
 
-def _pr_for_branch(branch: str) -> dict | None:
-    """The merged PR that came from this branch, for a card with no recorded PR; a hit is kept for good, a miss for a day."""
-    key = f"branch:{branch}"
+def _pr_for_branch(branch: str, repo=None) -> dict | None:
+    """The merged PR that came from this branch, for a card with no recorded PR; a hit is kept for good, a miss for a day.
+    repo: the checkout to ask in, when it is not the work folder."""
+    key = f"branch:{repo}:{branch}" if repo else f"branch:{branch}"
     known = _settled().get(key)
     if known and "miss_at" not in known:
         return known
     if known and time.time() - known["miss_at"] < BRANCH_MISS_SECONDS:
         return None
     r = ghquota.gh(_run, ["pr", "list", "--head", branch, "--state", "merged", "--limit", "1", "--json", _PR_FIELDS],
-                   capture_output=True, text=True, env=C.gh_env(), cwd=str(C.WORK_DIR))
+                   capture_output=True, text=True, env=C.gh_env(), cwd=str(repo or C.WORK_DIR))
     try:
         found = json.loads(r.stdout) if r.returncode == 0 else None
     except ValueError:
