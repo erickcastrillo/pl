@@ -386,6 +386,13 @@ def validate(doc) -> list[str]:
         days = doc["worktrees"]["stale_days"]
         if isinstance(days, bool) or not isinstance(days, int) or days < 1:
             errs.append("worktrees.stale_days must be a positive whole number")
+    extra = doc.get("worktrees", {}).get("extra_dirs")
+    if extra is not None and not (isinstance(extra, list) and all(isinstance(x, str) and x.strip() for x in extra)):
+        errs.append("worktrees.extra_dirs must be a list of folder paths")
+    if "idle_days" in doc.get("worktrees", {}):
+        days = doc["worktrees"]["idle_days"]
+        if isinstance(days, bool) or not isinstance(days, int) or days < 1:
+            errs.append("worktrees.idle_days must be a positive whole number")
     if doc.get("dispatch", {}).get("deps_gate", "run") not in ("run", "all"):
         errs.append('dispatch.deps_gate must be "run" (only the build waits for dependencies) or "all" (every stage waits)')
     for key in ("autostart", "kill_runaway"):
