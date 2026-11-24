@@ -531,14 +531,26 @@ def done(ref, cs=None, note=None, reason=None, drop_slices=None, checked=False):
     update(c["id"], list_id=col_id("Done"), metadata=meta, **fields)
     if trackers.dry_run():
         return []
-    m, out = c.get("metadata") or {}, []
-    if m.get("product_card") and intake_configured() and "Done" in product_lists():
-        try:
-            trackers.get("intake").update(m["product_card"], verify=False, list_id=product_lists()["Done"])
-            out.append(f"  linked Product card {short_id(m['product_card'])} moved to Done as well")
-        except SystemExit as e:   # the pipeline card is done either way
-            out.append(f"  linked Product card {short_id(m['product_card'])} not moved ({e}); move it by hand")
+    out = _close_product_card(c)
     return out + [f"done {short_id(c['id'])}  {c['title']}  (pipeline board, was in {col_name(c['list_id'])})"]
+
+
+def _close_product_card(c):
+    """Move the Product card linked to c to Done, unless another funnel card that is not in Done links to it too
+    (one Product card split into parts closes with its last part). Returns lines to show."""
+    pc = (c.get("metadata") or {}).get("product_card")
+    if not (pc and intake_configured() and "Done" in product_lists()):
+        return []
+    left = [x for x in cards() if x["id"] != c["id"] and (x.get("metadata") or {}).get("product_card") == pc
+            and col_name(x["list_id"]) != "Done"]
+    if left:
+        return [f"  linked Product card {short_id(pc)} stays open: {len(left)} other funnel card(s) for it are not done "
+                f"({', '.join(short_id(x['id']) for x in left[:5])})"]
+    try:
+        trackers.get("intake").update(pc, verify=False, list_id=product_lists()["Done"])
+        return [f"  linked Product card {short_id(pc)} moved to Done as well"]
+    except SystemExit as e:   # the pipeline card is closed either way
+        return [f"  linked Product card {short_id(pc)} not moved ({e}); move it by hand"]
 
 
 DROP_KEYS = ("dropped_at", "dropped_by", "drop_reason", "dropped_from")
@@ -573,12 +585,7 @@ def drop(ref, reason=None):
     if trackers.dry_run():
         return []
     events.emit("dropped", c["id"], **{"from": col})   # the reason is card text: never in the event log
-    if m.get("product_card") and intake_configured() and "Done" in product_lists():
-        try:
-            trackers.get("intake").update(m["product_card"], verify=False, list_id=product_lists()["Done"])
-            out.append(f"  linked Product card {short_id(m['product_card'])} moved to Done as well")
-        except SystemExit as e:   # the pipeline card is dropped either way
-            out.append(f"  linked Product card {short_id(m['product_card'])} not moved ({e}); move it by hand")
+    out += _close_product_card(c)
     return [f"dropped {head}  (moved to Done, was in {col}; pl undrop {short_id(c['id'])} puts it back)"] + out
 
 

@@ -163,6 +163,22 @@ def test_product_card_failure_is_printed_and_the_card_is_still_done(host, monkey
     assert column(c) == "Done" and "not moved" in capsys.readouterr().out
 
 
+
+@pytest.mark.parametrize(("sibling", "moves"), [("Approved", False), ("Done", True)])
+def test_product_card_split_into_parts_closes_with_its_last_part(host, monkeypatch, capsys, sibling, moves):
+    moved = []
+    monkeypatch.setattr(commands, "intake_configured", lambda: True)
+    monkeypatch.setattr(commands, "product_lists", lambda: {"Done": "pd"})
+    monkeypatch.setattr(trackers, "get", lambda name="tracker", _g=trackers.get: _Intake(moved) if name == "intake" else _g(name))
+    make(column=sibling, urls=(PR2,), product_card="p1")
+    c = make(product_card="p1")
+    host.prs[1] = MERGED
+    sweep(c)
+    assert column(c) == "Done"
+    assert moved == ([("p1", "pd")] if moves else [])
+    assert moves or "stays open" in capsys.readouterr().out
+
+
 class _Intake:
     def __init__(self, moved):
         self.moved = moved

@@ -166,6 +166,19 @@ def test_drop_moves_the_linked_product_card_to_done(board, monkeypatch):
     assert any("Product card" in line for line in lines)
 
 
+
+def test_drop_leaves_a_product_card_open_while_another_part_is_not_done(board, monkeypatch):
+    intake = FakeTracker([{"id": "p1", "title": "p", "list_id": "pcol-Backlog", "metadata": {}}])
+    monkeypatch.setattr(trackers, "get", lambda kind: intake if kind == "intake" else board)
+    monkeypatch.setattr(commands, "intake_configured", lambda: True)
+    monkeypatch.setattr(commands, "product_lists", lambda: {"Backlog": "pcol-Backlog", "Done": "pcol-Done"})
+    board.items[A_ID] = mk(A_ID, "Approved", product_card="p1")
+    board.items[B_ID] = mk(B_ID, "Spec ready", product_card="p1")
+    lines = commands.drop(A_ID)
+    assert intake.items["p1"]["list_id"] == "pcol-Backlog"
+    assert any("stays open" in line for line in lines)
+
+
 def test_drop_stops_a_live_agent_and_leaves_its_window_for_the_dispatcher_to_close(board, agent):
     board.items[A_ID] = mk(A_ID, "In progress", worker=dict(PANE_W))
     lines = commands.drop(A_ID)
