@@ -96,6 +96,21 @@ def test_the_round_counts_up_and_after_the_last_round_a_person_decides(gh):
     assert gh.writes[-1][1]["metadata"]["rework"]["gave_up_at"]
 
 
+def test_removing_the_failed_label_after_a_give_up_sends_the_card_back_once_more(gh):
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}
+    gave_up = {"round": 3, "active": False, "gave_up_at": "2026-11-25T19:00:00+00:00"}
+    assert rework.sweep([_card("c1", rework=gave_up)], dry=False) == ["c1"]
+    assert gh.moves == [("c1", "In progress")]
+    meta = gh.writes[-1][1]["metadata"]["rework"]
+    assert meta["round"] == 4 and "gave_up_at" not in meta
+    assert not [a for a in gh.calls if "POST" in a]
+    gh.writes.clear(), gh.moves.clear(), gh.calls.clear()
+    rework._LAST["at"] = None
+    rework.sweep([_card("c1", rework={"round": 4, "active": False})], dry=False)
+    assert gh.moves == []
+    assert gh.writes[-1][1]["metadata"]["rework"]["gave_up_at"]
+
+
 def test_a_pr_already_labeled_failed_is_left_to_the_person(gh):
     gh.flagged = {"acme/app": [(1, ["pl:needs-rework", "pl:review-failed"])]}
     assert rework.sweep([_card("c1")], dry=False) == []

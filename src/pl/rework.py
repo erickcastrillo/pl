@@ -202,8 +202,10 @@ def sweep(all_cards, dry, force=False):
         todo = [p for p in _prs(c) if p[:2] in hits]
         if not todo:
             continue
-        n = int(((c.get("metadata") or {}).get("rework") or {}).get("round") or 0) + 1
-        if n > n_max:
+        rw = (c.get("metadata") or {}).get("rework") or {}
+        n = int(rw.get("round") or 0) + 1
+        # gave_up_at and a PR flagged here (so no longer labeled failed): a person removed the label, one more round
+        if n > n_max and not rw.get("gave_up_at"):
             _give_up(c, todo, n - 1, lab, dry)
         else:
             if _send_back(c, todo, n, dry, all(merge_only(_review_text(r, num)) for r, num, _ in todo)):
