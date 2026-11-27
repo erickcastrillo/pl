@@ -111,6 +111,25 @@ def test_removing_the_failed_label_after_a_give_up_sends_the_card_back_once_more
     assert gh.writes[-1][1]["metadata"]["rework"]["gave_up_at"]
 
 
+def test_a_give_up_on_one_pr_survives_a_later_round_of_another_pr_on_the_card(gh):
+    gh.flagged = {"acme/app": [(2, ["pl:needs-rework"])]}
+    rework.sweep([_card("c1", prs=(1, 2), rework={"round": 3, "active": False})], dry=False)
+    assert gh.writes[-1][1]["metadata"]["rework"]["gave_up_prs"] == [URL.format(2)]
+    gave_up = gh.writes[-1][1]["metadata"]["rework"]
+    gh.writes.clear(), gh.moves.clear(), gh.calls.clear()
+    rework._LAST["at"] = None
+    gh.flagged = {"acme/app": [(1, ["pl:needs-rework"])]}   # the person sends PR 1 back once more
+    rework.sweep([_card("c1", prs=(1, 2), rework={**gave_up, "gave_up_prs": [URL.format(1), URL.format(2)]})], dry=False)
+    after_1 = gh.writes[-1][1]["metadata"]["rework"]
+    assert after_1["prs"] == [URL.format(1)] and after_1["gave_up_prs"] == [URL.format(2)]
+    gh.writes.clear(), gh.moves.clear(), gh.calls.clear()
+    rework._LAST["at"] = None
+    gh.flagged = {"acme/app": [(2, ["pl:needs-rework"])]}   # later the person removes the failed label from PR 2
+    assert rework.sweep([_card("c1", prs=(1, 2), rework={**after_1, "active": False})], dry=False) == ["c1"]
+    assert not [a for a in gh.calls if "POST" in a]
+    assert gh.writes[-1][1]["metadata"]["rework"]["gave_up_prs"] == []
+
+
 def test_a_pr_already_labeled_failed_is_left_to_the_person(gh):
     gh.flagged = {"acme/app": [(1, ["pl:needs-rework", "pl:review-failed"])]}
     assert rework.sweep([_card("c1")], dry=False) == []
