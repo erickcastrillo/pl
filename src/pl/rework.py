@@ -129,7 +129,8 @@ def _do_give_up(c, urls, n, lab):
         github._gh(["api", "-X", "POST", f"repos/{repo}/issues/{num}/comments", "-f", f"body={note}"])
         urls.remove(url)
     rw = (c.get("metadata") or {}).get("rework") or {}
-    update(c["id"], metadata={"rework": {**rw, "active": False, "gave_up_at": now_iso()}})
+    given = sorted(set(rw.get("gave_up_prs") or []) | set(done))
+    update(c["id"], metadata={"rework": {**rw, "active": False, "gave_up_at": now_iso(), "gave_up_prs": given}})
     events.emit("rework_gave_up", c["id"], prs=done, rounds=n)
 
 
@@ -150,7 +151,10 @@ def _send_back(c, todo, n, dry, mo=False):
 
 def _do_send_back(c, n, urls, mo=False):
     from pl.commands import move_to
-    update(c["id"], metadata={"rework": {"round": n, "prs": urls, "at": now_iso(), "active": True, "merge_only": mo}})
+    # a give-up on another PR of the card stays recorded, so removing its failed label later still gets one more round
+    given = [u for u in ((c.get("metadata") or {}).get("rework") or {}).get("gave_up_prs") or [] if u not in urls]
+    update(c["id"], metadata={"rework": {"round": n, "prs": urls, "at": now_iso(), "active": True, "merge_only": mo,
+                                         "gave_up_prs": given}})
     move_to(c["id"], "In progress", c["id"])
     events.emit("rework", c["id"], prs=urls, round=n)
     notifications.send("review_rework", f"Rework: {short_id(c['id'])} {', '.join('#' + u.rsplit('/', 1)[-1] for u in urls)}",
@@ -204,8 +208,11 @@ def sweep(all_cards, dry, force=False):
             continue
         rw = (c.get("metadata") or {}).get("rework") or {}
         n = int(rw.get("round") or 0) + 1
-        # gave_up_at and a PR flagged here (so no longer labeled failed): a person removed the label, one more round
-        if n > n_max and not rw.get("gave_up_at"):
+        # a PR pl gave up on, flagged here (so no longer labeled failed): a person removed the label, one more round.
+        # Cards from before gave_up_prs have only gave_up_at.
+        given = rw.get("gave_up_prs")
+        again = all(u in given for _, _, u in todo) if given is not None else bool(rw.get("gave_up_at"))
+        if n > n_max and not again:
             _give_up(c, todo, n - 1, lab, dry)
         else:
             if _send_back(c, todo, n, dry, all(merge_only(_review_text(r, num)) for r, num, _ in todo)):
